@@ -106,7 +106,7 @@ public sealed class HostConnections
     /// </summary>
     /// <param name="abort">Closes this connection, when a newer one or a revocation needs it closed.</param>
     /// <param name="replaced">How many of the computer's older connections were closed for this one.</param>
-    public Refusal TryAdd(string connectionId, string hostId, string ownerId, Action abort, out int replaced)
+    public Refusal TryAdd(string connectionId, string hostId, string ownerId, Action abort, out int replaced, Limits? effective = null)
     {
         var closing = new List<Action>();
 
@@ -122,7 +122,7 @@ public sealed class HostConnections
             var mine = _byHost.GetValueOrDefault(hostId);
             var held = mine?.Count ?? 0;
 
-            var full = _byOwner.GetValueOrDefault(ownerId) >= _perAccount ? Refusal.AccountFull
+            var full = _byOwner.GetValueOrDefault(ownerId) >= (effective is null ? _perAccount : (long)effective.HostsPerUser * RequestLimits.ConnectionsPerComputer) ? Refusal.AccountFull
                 : _byId.Count >= _ceiling ? Refusal.GatewayFull
                 : Refusal.None;
 

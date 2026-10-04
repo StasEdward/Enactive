@@ -22,6 +22,7 @@ internal static class AdminAuthentication
         if (settings is null) return;
         services.AddSingleton(settings);
         services.AddSingleton<AdminDirectory>();
+        services.AddSingleton<Services.QuotaSettings>(sp => new(sp.GetRequiredService<Storage.Database>(), sp.GetRequiredService<Services.Limits>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<Accounts.AdministrationService>();
         services.AddAuthentication()
             .AddCookie(CookieScheme, o =>

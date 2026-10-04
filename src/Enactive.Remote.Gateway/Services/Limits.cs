@@ -38,9 +38,8 @@ public sealed record Limits(
     /// once. Only a run's end may use it, so a full account's runs still end, and the account is bounded all
     /// the same: no more than the limit and this.
     /// </summary>
-    public long EndingReserve => ActiveRunsPerUser >= long.MaxValue / EndingBytes
-        ? long.MaxValue
-        : ActiveRunsPerUser * EndingBytes;
+    // The count is an int and EndingBytes a long: the product fits in 64 bits even at the largest count.
+    public long EndingReserve => ActiveRunsPerUser * EndingBytes;
 
     /// <summary>
     /// The starting values. Guesses at what one person uses, generous enough not to be met by ordinary
@@ -151,7 +150,8 @@ internal static class Quota
             "SELECT sealed_bytes FROM users WHERE id = @owner FOR UPDATE",
             reader => reader.GetInt64(0), ("@owner", ownerId));
 
-        if (held + bytes > limits.SealedBytesPerUser)
+        limits = await QuotaSettings.ResolveAsync(connection, transaction, ownerId, limits);
+        if (bytes > limits.SealedBytesPerUser - held)
         {
             throw GatewayFault.StorageFull(limits.SealedBytesPerUser, retentionDays);
         }
@@ -173,7 +173,8 @@ internal static class Quota
     /// is refused once it would pass the limit, with <see cref="FaultCode.StorageFull"/>, which the computer
     /// drops and goes on from. What ENDS a run is admitted while it fits <see cref="Limits.EndingReserve"/>
     /// past the limit, room no other report can use; so a full account's runs still end, and the account
-    /// never holds more than its limit and that reserve. Retention gives the bytes back with the run.</para>
+    /// stays bounded by its admitted work. A later quota reduction preserves existing bytes and still
+    /// permits the bounded final reports of those existing runs. Retention gives the bytes back with the run.</para>
     /// </summary>
     /// <param name="ending">Whether this is stored for the event that ends the run.</param>
     public static async Task AdmitFromComputerAsync(
@@ -185,6 +186,7 @@ internal static class Quota
             return;
         }
 
+        limits = await QuotaSettings.ResolveAsync(connection, transaction, ownerId, limits);
         // No limit, no question - and no arithmetic on long.MaxValue.
         if (limits.SealedBytesPerUser != long.MaxValue)
         {
@@ -197,7 +199,10 @@ internal static class Quota
                 ? long.MaxValue
                 : limits.SealedBytesPerUser + reserve;
 
-            if (bytes > room - held)
+            // Reductions preserve existing bytes. Each terminal event is admitted once by
+            // the run lifecycle, with at most three bounded envelopes; existing runs must
+            // still finish even when their old usage exceeds the newly selected ceiling.
+            if (bytes > room - held && !(ending && bytes <= Limits.EndingBytes))
             {
                 throw GatewayFault.HistoryFull();
             }

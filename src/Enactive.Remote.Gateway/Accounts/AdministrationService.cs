@@ -152,7 +152,7 @@ internal sealed class AdministrationService(Database db, TimeProvider clock)
             throw new GatewayFault("admin-conflict", 409, "The record changed. Refresh and review it before trying again.");
     }
 
-    private async Task AuthorizeAsync(MySqlConnection c, MySqlTransaction tx, AdminMutation? mutation)
+    internal async Task AuthorizeAsync(MySqlConnection c, MySqlTransaction tx, AdminMutation? mutation)
     {
         if (mutation is null) return; // Trusted local CLI, with no browser identity.
         var session = mutation.Session;
@@ -171,7 +171,7 @@ internal sealed class AdministrationService(Database db, TimeProvider clock)
         if (!validSession) throw GatewayFault.Forbidden();
     }
 
-    private async Task AuditAsync(
+    internal async Task AuditAsync(
         MySqlConnection connection, MySqlTransaction transaction, string? owner, string action, string target,
         AdminMutation? mutation = null, object? detail = null)
     {

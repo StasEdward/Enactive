@@ -2,7 +2,7 @@
 
 Date: 2026-10-03
 
-Status: stages 1–4 are implemented and installed by the operator. Production login, directory data and access-control buttons are visually confirmed; production mutations are not yet verified. Quotas and final release validation (stages 5–6) remain pending.
+Status: stages 1–4 are installed by the operator. Stage 5 (persisted quotas and editor) is implemented and locally validated, awaiting operator installation. Stage 6 has local regression and Linux build validation; production upgrade, mutation/audit checks and recovery verification remain pending.
 
 ## Objective
 
@@ -151,7 +151,7 @@ Stages 1 and 2 establish the shared behavior and security boundary before admini
 - Validation: the final full Gateway run passed 669 tests with one test-only SQL collation failure. After changing that assertion to decode JSON in C#, all six access-service tests passed. Earlier full and targeted runs covered all mutation and migration paths; all 288 JavaScript tests, two Chromium desktop/mobile scenarios and ten restore-verification checks passed.
 - The operator installed the access-management package and confirmed the user detail card with Disable account and Revoke sessions controls. Actual production mutations and their audit effects have not been demonstrated. Keycloak settings remain unchanged.
 
-Next: stage 5, persisted quota defaults/overrides and enforcement across every relevant write path.
+Next: finish production validation in stage 6; the operator confirmed that quotas work.
 
 ### Compatibility with the deployed schema 3 (2026-10-03)
 
@@ -163,7 +163,7 @@ Next: stage 5, persisted quota defaults/overrides and enforcement across every r
 
 ## Deployment checkpoint — 2026-10-04
 
-Resume from stage 5 (persisted quota defaults/overrides and enforcement), not from Keycloak setup.
+Historical checkpoint before quota implementation; see the stage-5 checkpoint below for the current handoff.
 
 - Gateway host: `remoteenactive`; public origin `https://remote.enactive.dev`; admin origin `https://admin.enactive.dev`; loopback service `http://127.0.0.1:5099`; systemd unit `enactive-remote`.
 - Keycloak runs in Docker on the separate `enactive.app` host. Authority: `https://auth.enactive.app/realms/enactive`; confidential client: `enactive-admin`; required MFA ACR: `2`. Client secrets remain on the servers and are not recorded here.
@@ -173,6 +173,28 @@ Resume from stage 5 (persisted quota defaults/overrides and enforcement), not fr
 - The operator was instructed to keep `enactive-deploy.timer` stopped while preview builds are outside its tracked branch. No subsequent confirmation of its state was supplied. Re-enable only after the tracked branch contains the intended release and deployment prerequisites are checked.
 - Migration 11 requires a pre-upgrade database/key backup. Older binaries reject the newer schema: rollback needs the matching database backup, not just a symlink change. The latest installation's backup output was not supplied. The installation/recovery procedure is in `Docs/REMOTE_ADMIN_ACCESS_UPGRADE.md`.
 - Next implementation: quota defaults and per-user overrides in the database, effective-limit resolution and enforcement across instances, usage display, editing with fresh MFA/CSRF, atomic audit, and persistence/concurrency regression tests. Final release validation and deployment smoke checks remain stage 6.
+
+## Stage 5 checkpoint — 2026-10-04
+
+Implemented and installed; the operator confirmed that the quota interface works. Production enforcement and recovery checks remain below.
+
+- Migration 012 adds a singleton shared-default row and per-user quota settings with independent revisions. Resets retain revisions; account deletion cascades user settings. Existing schemas 3, 10 and 11 upgrade without losing accounts, replay protection or administrator sessions.
+- All seven resource quotas resolve user override → persisted default → startup fallback within the consuming transaction. Locking reads avoid stale transaction snapshots and work across Gateway instances. No process cache or restart is required.
+- Protected defaults/user quota APIs and desktop/mobile editor show effective values, sources, current usage, overages and queues per computer. Reasons, before/after maps and the actor are audited atomically. Fresh MFA, CSRF, live administrator/session checks and optimistic revisions protect mutations, including inherited-default changes.
+- Reductions preserve existing data. Live devices remain visible. Cancellation has at most one pending command per existing run; device-control commands keep a separate bounded budget. Terminal reports remain bounded and admitted once even after storage reductions; ordinary progress and new creation remain restricted.
+- Connection admission follows persisted host quotas on the next connection. Connection counts remain per Gateway instance, as before; resource ceilings use the shared database.
+- User quota settings are included in account exports and deleted with the account. Shared defaults and the independent administrative audit survive account deletion.
+- Validation: full Gateway suite passed 691 tests with zero failures/skips; 296 JavaScript tests, both Chromium desktop/mobile scenarios and 18 restore-verification checks passed. The final queue presentation separates cancellation counts from ordinary commands and has an additional focused quota regression run. Linux package smoke checks report schema 12 and protocol 2.
+- Package: `work/remote-quotas-release/enactive-remote-quotas-linux-x64.tar.gz` plus `.sha256` (SHA-256 `d609e738a2ca0d399c8ab473d31e6ebea2e55c75fa5517fbf0a3a90813b4163a`); installation and rollback are documented in `Docs/REMOTE_QUOTAS_UPGRADE.md`.
+- Next: verify production audit, enforcement, post-upgrade backup/restore and deployment timer state using `Docs/REMOTE_QUOTAS_VALIDATION.md`.
+
+## Stage 6 checkpoint — 2026-10-04
+
+- Live public checks: public health returned 200; admin quota API returned 401 without authentication on the admin origin and 404 on the public origin; admin page returned 200 with `Cache-Control: no-store`.
+- All 31 published panel manifest entries match the locally validated quota release, including the quota editor.
+- Five backup/key-preservation checks passed locally, in addition to the 18 restore-verifier checks recorded above. These are regression tests, not evidence of a successful production restore.
+- Production audit, enforcement and actual post-upgrade restore remain unverified: no server terminal is attached to this task. Operator commands are in `Docs/REMOTE_QUOTAS_VALIDATION.md`.
+- Local `origin/master` does not contain quota commit `68399fc`; this is not a fresh remote fetch. Inspect the configured deployment branch and its successful build before enabling automatic deployment.
 
 ## Test and release criteria
 

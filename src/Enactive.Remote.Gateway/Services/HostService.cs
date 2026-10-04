@@ -56,6 +56,13 @@ public sealed class HostService(Database database, TimeProvider? clock = null, L
     // Unlimited where none are given: a test about something else builds this without any.
     private readonly Limits _limits = limits ?? Limits.Unlimited;
 
+    internal Task<Limits> EffectiveLimitsAsync(HostAccess host, CancellationToken ct)
+        => database.InTransactionAsync(async (connection, transaction) =>
+        {
+            await AuthorizeAsync(connection, transaction, host, lockAccount: true);
+            return await QuotaSettings.ResolveAsync(connection, transaction, host.OwnerId, _limits);
+        }, ct);
+
     private const int MaxWorkspaces = 100;
 
     // A Sync carries every workspace in one hub message, and the hub refuses a message over 64 KB.

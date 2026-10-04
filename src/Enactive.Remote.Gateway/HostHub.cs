@@ -31,17 +31,19 @@ public sealed class HostHub(
     /// line now and then; a token used from two places, or a flood, makes a run of them, and without the
     /// line nothing on the operator's side showed it.</para>
     /// </summary>
-    public override Task OnConnectedAsync()
+    public override async Task OnConnectedAsync()
     {
         var access = Access;
+        // The account connection budget follows persisted host overrides on the next connection.
+        var effective = await hosts.EffectiveLimitsAsync(access, Context.ConnectionAborted);
         var refusal = connections.TryAdd(
-            Context.ConnectionId, access.HostId, access.OwnerId, Context.Abort, out var replaced);
+            Context.ConnectionId, access.HostId, access.OwnerId, Context.Abort, out var replaced, effective);
 
         if (refusal != HostConnections.Refusal.None)
         {
             log.LogWarning("A connection of computer {HostId} was refused: {Refusal}.", access.HostId, refusal);
             Context.Abort();
-            return Task.CompletedTask;
+            return;
         }
 
         for (var i = 0; i < replaced; i++)
@@ -49,7 +51,7 @@ public sealed class HostHub(
             log.LogInformation("Computer {HostId}: its oldest connection was closed for a newer one.", access.HostId);
         }
 
-        return base.OnConnectedAsync();
+        await base.OnConnectedAsync();
     }
 
     public override Task OnDisconnectedAsync(Exception? exception)

@@ -84,15 +84,16 @@ public sealed class UserService(
         await db.InTransactionAsync(async (connection, transaction) =>
         {
             await Quota.LockAccountAsync(connection, transaction, user.UserId);
+            var effective = await QuotaSettings.ResolveAsync(connection, transaction, user.UserId, limits);
 
             // A revoked computer does not count: revoking one is how the person makes room for another.
             var held = await connection.ReadOneAsync(transaction,
                 "SELECT COUNT(*) FROM hosts WHERE owner_id = @owner AND revoked = 0",
                 reader => reader.GetInt64(0), ("@owner", user.UserId));
 
-            if (held >= limits.HostsPerUser)
+            if (held >= effective.HostsPerUser)
             {
-                throw GatewayFault.QuotaExceeded("computers", limits.HostsPerUser, "revoke one to add another");
+                throw GatewayFault.QuotaExceeded("computers", effective.HostsPerUser, "revoke one to add another");
             }
 
             var now = clock.GetUtcNow();
@@ -208,6 +209,7 @@ public sealed class UserService(
         await db.InTransactionAsync(async (connection, transaction) =>
         {
             await Quota.LockAccountAsync(connection, transaction, user.UserId);
+            var effective = await QuotaSettings.ResolveAsync(connection, transaction, user.UserId, limits);
             await EnsureLiveHostAsync(connection, transaction, user.UserId, hostId);
 
             var previous = await connection.ReadOneAsync(transaction,
@@ -247,10 +249,10 @@ public sealed class UserService(
                 "SELECT COUNT(*) FROM tasks WHERE owner_id = @owner AND created_at > @since",
                 reader => reader.GetInt64(0), ("@owner", user.UserId), ("@since", now.AddDays(-1)));
 
-            if (today >= limits.TasksPerDay)
+            if (today >= effective.TasksPerDay)
             {
                 throw GatewayFault.QuotaExceeded(
-                    "tasks made in the last day", limits.TasksPerDay, "make more tomorrow");
+                    "tasks made in the last day", effective.TasksPerDay, "make more tomorrow");
             }
 
             await Quota.ChargeSealedAsync(
@@ -293,6 +295,7 @@ public sealed class UserService(
         return await db.InTransactionAsync(async (connection, transaction) =>
         {
             await Quota.LockAccountAsync(connection, transaction, user.UserId);
+            var effective = await QuotaSettings.ResolveAsync(connection, transaction, user.UserId, limits);
 
             // The computer is locked before the task, so the task's computer is read first and
             // without a lock. A task never moves to another computer: what this finds is still true
@@ -353,10 +356,10 @@ public sealed class UserService(
                 """,
                 reader => reader.GetInt64(0), ("@owner", user.UserId));
 
-            if (running >= limits.ActiveRunsPerUser)
+            if (running >= effective.ActiveRunsPerUser)
             {
                 throw GatewayFault.QuotaExceeded(
-                    "runs in progress", limits.ActiveRunsPerUser, "wait for one to end, or stop one, to start another");
+                    "runs in progress", effective.ActiveRunsPerUser, "wait for one to end, or stop one, to start another");
             }
 
             var runId = Ids.New();
@@ -688,19 +691,32 @@ public sealed class UserService(
         // a full queue, and the removal of the lost phone was the one request turned away. Their allowance is
         // two for each device the account may hold - a removal and the endorsement of its replacement - so a
         // script cannot use them to grow the queue without bound either.
+        var effective = await QuotaSettings.ResolveAsync(connection, transaction, ownerId, limits);
         var deviceCommand = kind is CommandKind.RevokeDevice or CommandKind.EndorseDevice;
-        var allowance = deviceCommand ? limits.DevicesPerUser * 2L : limits.QueuedCommandsPerHost;
+        // A lowered quota cannot strand cancellation or removal of existing resources.
+        // These have a separate bounded allowance; ordinary starts remain refused at the new limit.
+        var existingDevices = deviceCommand ? await connection.ReadOneAsync(transaction,
+            "SELECT COUNT(*) FROM devices WHERE owner_id = @owner AND revoked_at IS NULL", r => r.GetInt64(0), ("@owner", ownerId)) : 0;
+        var allowance = deviceCommand ? Math.Max(existingDevices, effective.DevicesPerUser) * 2L : effective.QueuedCommandsPerHost;
+        var cancellation = kind == CommandKind.CancelRun;
+        // At most one pending cancellation per run, even when a caller invents new command ids.
+        // Otherwise exempting cancellation from the ordinary queue would permit unlimited growth.
+        if (cancellation && await connection.ExistsAsync(transaction,
+            "SELECT 1 FROM commands WHERE owner_id = @owner AND host_id = @host AND run_id = @run AND kind = 'CancelRun' AND status = 'PendingDelivery' AND expires_at > @now",
+            ("@owner", ownerId), ("@host", hostId), ("@run", runId), ("@now", now)))
+            throw GatewayFault.Conflict("Cancellation is already waiting for this run.");
 
         var waiting = await connection.ReadOneAsync(transaction,
             $"""
             SELECT COUNT(*) FROM commands
             WHERE host_id = @host AND status = 'PendingDelivery' AND expires_at > @now AND owner_id = @owner
               AND kind {(deviceCommand ? "IN" : "NOT IN")} (@revoke, @endorse)
+              AND kind <> 'CancelRun'
             """,
             reader => reader.GetInt64(0), ("@host", hostId), ("@now", now), ("@owner", ownerId),
             ("@revoke", CommandKind.RevokeDevice), ("@endorse", CommandKind.EndorseDevice));
 
-        if (waiting >= allowance)
+        if (!cancellation && waiting >= allowance)
         {
             throw GatewayFault.QuotaExceeded(
                 deviceCommand ? "device changes waiting for this computer" : "requests waiting for this computer",

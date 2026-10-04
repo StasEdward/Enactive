@@ -63,7 +63,7 @@
         result.textContent = String(text ?? '');
         return result;
     }
-    function clearDetails() { detailGeneration++; details.hidden = true; fields.replaceChildren(); actions.replaceChildren(); cancelChange(); }
+    function clearDetails() { globalThis.adminQuotas?.closeUser(); detailGeneration++; details.hidden = true; fields.replaceChildren(); actions.replaceChildren(); cancelChange(); }
     function clear() {
         rows.replaceChildren(); head.replaceChildren(); clearDetails();
         previous.disabled = true; next.disabled = true;
@@ -101,6 +101,7 @@
                 actionButton('Revoke sessions', () => offer(accessPath,
                     { action: 'revoke-sessions', expectedVersion: data.user.version },
                     `End all browser sessions for ${data.user.displayName} (${id})? This does not revoke computer credentials or stop local work.`)));
+            actions.append(actionButton('Edit quotas', () => globalThis.adminQuotas?.open(id, data.user.displayName)));
         } catch (error) {
             if (version === detailGeneration) fields.replaceChildren(node('dt', error.message));
         }
@@ -166,6 +167,7 @@
     globalThis.adminDirectory = {
         setAuthenticated(value, token) {
             authenticated = value; csrfToken = token;
+            globalThis.adminQuotas?.setAuthenticated(value, token);
             if (!value) {
                 generation++; clear(); overview.textContent = ''; status.textContent = ''; changeStatus.textContent = ''; reauth.hidden = true;
                 element('session').hidden = true; element('signin').hidden = false;

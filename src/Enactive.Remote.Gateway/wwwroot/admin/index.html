@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Enactive administration</title>
   <link rel="stylesheet" href="/admin/admin.css">
+  <script src="/admin/quotas.js" defer></script>
   <script src="/admin/directory.js" defer></script>
   <script src="/admin/admin.js" defer></script>
 </head>
@@ -38,7 +39,23 @@
         </section>
         <p id="access-status" role="status" aria-live="polite"></p>
         <a id="access-reauth" href="/admin/auth/start" hidden>Authenticate again to make changes</a>
-        <p class="note">Quota editing is coming next. Stored bytes cover encrypted content, not database indexes, logs or backups.</p>
+        <button id="quota-defaults" type="button">Shared quota defaults</button>
+        <section id="quota-panel" hidden aria-labelledby="quota-title">
+          <h2 id="quota-title">Quotas</h2>
+          <p>Blank values inherit shared defaults for a user, or startup settings for shared defaults. Zero does not mean unlimited.</p>
+          <p>Encrypted storage excludes indexes, logs and backups. Bounded final reports for existing runs can exceed this limit so those runs can finish. Lowering limits preserves existing resources.</p>
+          <form id="quota-form">
+            <div class="table-scroll"><table><thead><tr><th>Quota</th><th>Usage</th><th>Effective limit</th><th>Override</th></tr></thead><tbody id="quota-rows"></tbody></table></div>
+            <label>Reason <input id="quota-reason" maxlength="500" required></label>
+            <button id="quota-save" type="submit">Review quota changes</button>
+            <button id="quota-reset" type="button">Clear all overrides</button>
+          </form>
+          <button id="quota-refresh" type="button">Refresh quotas</button>
+          <section id="quota-confirmation" hidden><h3>Confirm quota changes</h3><p id="quota-description"></p><button id="quota-confirm" type="button">Save quotas</button><button id="quota-cancel" type="button">Cancel quota changes</button></section>
+          <p id="quota-status" role="status" aria-live="polite"></p>
+          <a id="quota-reauth" href="/admin/auth/start" hidden>Authenticate again with MFA</a>
+          <div id="quota-queues"></div>
+        </section>
       </section>
       <a href="/admin/auth/start">Authenticate again</a>
       <button id="signout" type="button">Sign out</button>
