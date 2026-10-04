@@ -708,6 +708,16 @@ public sealed partial class AppSettings
             SaveMcpSecrets();
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
 
+            // What is written is in THIS build's schema, and says so. The number is otherwise whatever
+            // the object was born with - 1, which is what a file from before versions reads as - until
+            // a Load has migrated it. Settings that never came from a file (the defaults a host runs on
+            // when the file could not be read) were therefore saved as "version 1", and the next load
+            // treated what a person had just put right as a legacy file: an endpoint and the default
+            // team were added to it, and a worker saved with no tools was given every tool, which is
+            // what an empty list meant then. In memory the default stays 1: that is still how a file
+            // that states no version, and no file at all, are told from one this build wrote.
+            SchemaVersion = CurrentSchemaVersion;
+
             // Encrypt every provider key; plaintext is [JsonIgnore] so it never reaches disk.
             foreach (var p in Providers)
                 p.ApiKeyProtected = ProtectOrPreserve(p.ApiKey, p.ApiKeyProtected);
