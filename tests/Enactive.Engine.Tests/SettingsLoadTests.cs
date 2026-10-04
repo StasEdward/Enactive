@@ -471,4 +471,38 @@ public sealed class SettingsLoadTests : IDisposable
         Assert.NotEmpty(settings.Workers);
         Assert.Equal(AppSettings.CurrentSchemaVersion, settings.SchemaVersion);
     }
+    /// <summary>
+    /// Settings that never came from a file - the defaults a host runs on when the file could not be read - still
+    /// said "version 1" when saved, which is what a file from before versions says. So the settings a person put
+    /// right in that state and saved were read back as a legacy file: an endpoint and the default team were added
+    /// to what they had saved, and a worker they had given no tools was given every tool, which is what an empty
+    /// list meant at version 1. What is saved is written by this build, in this build's meaning, and says so.
+    /// </summary>
+    [Fact]
+    public void Settings_saved_without_ever_being_loaded_are_read_back_as_they_were_saved()
+    {
+        var path = Path.Combine(_dir, "settings.json");
+        var settings = new AppSettings();
+        settings.Providers.Add(new ProviderConfig { Id = "local", DisplayName = "Local", BaseUrl = "http://localhost:8080", Models = ["small"] });
+        settings.Workers.Add(new WorkerConfig { Id = "reader", Role = "Reader", Model = "local/small" });   // no tools, on purpose
+
+        Assert.True(settings.Save(path), settings.LastSaveError);
+        var again = AppSettings.Load(path);
+
+        Assert.Equal("local", Assert.Single(again.Providers).Id);       // nothing seeded beside it
+        Assert.Empty(Assert.Single(again.Workers).Tools);               // and not widened to "*"
+        Assert.Equal(AppSettings.CurrentSchemaVersion, again.SchemaVersion);
+    }
+
+    [Fact]
+    public void A_saved_file_states_the_schema_it_was_written_in()
+    {
+        var path = Path.Combine(_dir, "settings.json");
+
+        Assert.True(new AppSettings().Save(path));
+
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal(AppSettings.CurrentSchemaVersion, doc.RootElement.GetProperty("SchemaVersion").GetInt32());
+        Assert.Empty(AppSettings.Load(path).Providers);                 // empty as saved, not a legacy file to fill in
+    }
 }
