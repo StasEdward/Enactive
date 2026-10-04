@@ -318,6 +318,45 @@ public sealed class AdminAuthenticationTests(TestDatabase database) : IClassFixt
         Assert.Equal(1, await database.ScalarLongAsync($"SELECT COUNT(*) FROM administrator_audit WHERE actor = 'admin:{session.AdministratorId}' AND target = '{target}'"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Quota_changes_require_admin_origin_csrf_fresh_mfa_and_revisions(bool defaults)
+    {
+        await using var gateway = Gateway(); using var client = Browser(gateway, out _);
+        var user = await TestAccounts.CreateAsync(database, Ids.New());
+        var path = defaults ? "/admin/api/quotas" : "/admin/api/users/" + user.UserId + "/quotas";
+        var body = new { expectedVersion = 0, expectedDefaultsVersion = 0, values = new Dictionary<string, string?> { ["HostsPerUser"] = "2" }, reason = "Test quota" };
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(path)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync(path, body)).StatusCode);
+        using var panel = await PanelClient.SignedInAsync(gateway, Ids.New());
+        client.DefaultRequestHeaders.Add("Cookie", panel.Cookies.GetCookieHeader(panel.Http.BaseAddress!));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync(path, body)).StatusCode);
+        client.DefaultRequestHeaders.Remove("Cookie");
+        using var publicClient = gateway.CreateDefaultClient(new Uri("https://panel.example.test"));
+        Assert.Equal(HttpStatusCode.NotFound, (await publicClient.PostAsJsonAsync(path, body)).StatusCode);
+        await Store.GrantAsync(Identity, default); using var login = await LoginAsync(client);
+        var view = await client.GetFromJsonAsync<System.Text.Json.JsonElement>(path);
+        var revision = view.GetProperty("version").GetInt32();
+        var defaultsRevision = view.GetProperty("defaultsVersion").GetInt32();
+        var request = new { expectedVersion = revision, expectedDefaultsVersion = defaultsRevision, values = new Dictionary<string, string?> { ["HostsPerUser"] = "2" }, reason = "Capacity" };
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync(path, request)).StatusCode);
+        var session = await SessionAsync(client);
+        client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", "bad");
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync(path, request)).StatusCode);
+        client.DefaultRequestHeaders.Remove("X-CSRF-TOKEN"); client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", session.CsrfToken);
+        _clock.Advance(TimeSpan.FromMinutes(6));
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync(path, request)).StatusCode);
+        _fake.AuthenticationTime = _clock.GetUtcNow().ToUnixTimeSeconds(); using var again = await LoginAsync(client);
+        session = await SessionAsync(client);
+        client.DefaultRequestHeaders.Remove("X-CSRF-TOKEN"); client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", session.CsrfToken);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(path, request)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(path, request)).StatusCode);
+        await Store.RevokeAsync(Identity, default);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(path)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync(path, request)).StatusCode);
+    }
+
     private async Task AssertNoSessionAsync() => Assert.Equal(0, await database.ScalarLongAsync(
         "SELECT COUNT(*) FROM administrator_sessions WHERE administrator_id IN (SELECT id FROM administrators WHERE subject = '" + Identity.Subject + "')"));
     private WebApplicationFactory<Program> Gateway() => TestGateway.Create(database, configure: builder =>

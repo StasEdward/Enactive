@@ -305,6 +305,7 @@ public sealed class DeletionTests(TestDatabase database) : IClassFixture<TestDat
     private async Task SeedEverythingAsync(PanelClient person, string name)
     {
         var owner = person.UserId;
+        await database.ExecuteAsync("INSERT INTO user_quotas (owner_id, revision, settings) VALUES (@owner, 1, JSON_OBJECT('HostsPerUser', 5))", ("@owner", owner));
         var host = (await person.PostAsync<RegisteredHost>("/api/hosts", new { name = "Studio PC" })).Id;
         var device = Ids.New();
         var invite = Ids.New();

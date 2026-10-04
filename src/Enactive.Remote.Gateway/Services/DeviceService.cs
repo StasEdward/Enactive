@@ -148,9 +148,10 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                 "SELECT COUNT(*) FROM devices WHERE owner_id = @owner AND revoked_at IS NULL",
                 reader => reader.GetInt64(0), ("@owner", user.UserId));
 
-            if (held >= limits.DevicesPerUser)
+            var effective = await QuotaSettings.ResolveAsync(connection, transaction, user.UserId, limits);
+            if (held >= effective.DevicesPerUser)
             {
-                throw GatewayFault.DeviceLimit(limits.DevicesPerUser);
+                throw GatewayFault.DeviceLimit(effective.DevicesPerUser);
             }
 
             await PruneRemovedAsync(connection, transaction, user.UserId);
@@ -185,7 +186,8 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             "SELECT COUNT(*) FROM devices WHERE owner_id = @owner",
             reader => reader.GetInt64(0), ("@owner", ownerId));
 
-        var surplus = rows + 1 - KeptRows;
+        var effective = await QuotaSettings.ResolveAsync(connection, transaction, ownerId, limits);
+        var surplus = rows + 1 - (long)effective.DevicesPerUser * RowsPerAllowedDevice;
 
         if (surplus <= 0)
         {
@@ -209,40 +211,43 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
         }
     }
 
-    /// <summary>The rows an account keeps; in 64 bits, because the limit may be as large as an int.</summary>
-    private long KeptRows => (long)limits.DevicesPerUser * RowsPerAllowedDevice;
-
     /// <summary>
     /// The person's own devices, oldest first, removed ones included so the panel can say so.
     ///
-    /// <para>At most <see cref="RowsPerAllowedDevice"/> times the limit, the live devices and then the newest
-    /// first: pruning keeps the table to that, but rows left from before a lower limit are pruned only as
-    /// devices are added, and one answer must not be as long as the table meanwhile.</para>
+    /// <para>At most <see cref="RowsPerAllowedDevice"/> times the effective limit, or all live devices
+    /// if a reduction left more than that. Removed rows beyond the budget are omitted, but live devices
+    /// stay visible so their owner can revoke them and reduce usage.</para>
     /// </summary>
-    public async Task<IReadOnlyList<DeviceInfo>> ListAsync(UserAccess user, CancellationToken ct)
-    {
-        await using var connection = await db.OpenAsync(ct);
+    public Task<IReadOnlyList<DeviceInfo>> ListAsync(UserAccess user, CancellationToken ct)
+        => db.InTransactionAsync<IReadOnlyList<DeviceInfo>>(async (connection, transaction) =>
+        {
+            await Quota.LockAccountAsync(connection, transaction, user.UserId);
+            var effective = await QuotaSettings.ResolveAsync(connection, transaction, user.UserId, limits);
+            var live = await connection.ReadOneAsync(transaction,
+                "SELECT COUNT(*) FROM devices WHERE owner_id = @owner AND revoked_at IS NULL", r => r.GetInt64(0), ("@owner", user.UserId));
+            // A reduction must not hide live devices that their owner still needs to revoke.
+            var keptRows = Math.Max(live, (long)effective.DevicesPerUser * RowsPerAllowedDevice);
 
-        return await connection.ReadAllAsync(null,
-            $"""
-            SELECT id, label, public_key, created_at, last_seen_at, revoked_at
-            FROM (
-              SELECT id, label, public_key, created_at, last_seen_at, revoked_at
-              FROM devices WHERE owner_id = @owner
-              ORDER BY revoked_at IS NULL DESC, created_at DESC, id DESC
-              LIMIT {KeptRows}
-            ) AS kept
-            ORDER BY created_at, id
-            """,
-            reader => new DeviceInfo(
-                reader.GetString("id"),
-                reader.GetString("label"),
-                B64.Url((byte[])reader["public_key"]),
-                reader.Utc("created_at"),
-                reader.UtcOrNull("last_seen_at"),
-                !reader.IsDBNull(reader.GetOrdinal("revoked_at"))),
-            ("@owner", user.UserId));
-    }
+            return await connection.ReadAllAsync(transaction,
+                $"""
+                SELECT id, label, public_key, created_at, last_seen_at, revoked_at
+                FROM (
+                  SELECT id, label, public_key, created_at, last_seen_at, revoked_at
+                  FROM devices WHERE owner_id = @owner
+                  ORDER BY revoked_at IS NULL DESC, created_at DESC, id DESC
+                  LIMIT {keptRows}
+                ) AS kept
+                ORDER BY created_at, id
+                """,
+                reader => new DeviceInfo(
+                    reader.GetString("id"),
+                    reader.GetString("label"),
+                    B64.Url((byte[])reader["public_key"]),
+                    reader.Utc("created_at"),
+                    reader.UtcOrNull("last_seen_at"),
+                    !reader.IsDBNull(reader.GetOrdinal("revoked_at"))),
+                ("@owner", user.UserId));
+        }, ct);
 
     /// <summary>
     /// Removes a browser from the account and deletes the grants made to it, in one transaction. The
@@ -931,9 +936,10 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             "SELECT COUNT(*) FROM invites WHERE owner_id = @owner AND consumed_at IS NULL AND expires_at > @now",
             reader => reader.GetInt64(0), ("@owner", ownerId), ("@now", now));
 
-        if (open >= limits.OpenInvitesPerUser)
+        var effective = await QuotaSettings.ResolveAsync(connection, transaction, ownerId, limits);
+        if (open >= effective.OpenInvitesPerUser)
         {
-            throw GatewayFault.InviteLimit(limits.OpenInvitesPerUser);
+            throw GatewayFault.InviteLimit(effective.OpenInvitesPerUser);
         }
 
         var expires = now + InviteLifetime;

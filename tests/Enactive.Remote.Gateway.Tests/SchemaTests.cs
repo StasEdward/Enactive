@@ -73,6 +73,7 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
     [Theory]
     [InlineData(3)]
     [InlineData(10)]
+    [InlineData(11)]
     public async Task Administration_upgrades_deployed_schemas_without_losing_accounts_or_replay_protection(int oldVersion)
     {
         // Build the deployed schema from its actual SQL, not by undoing the new migration.
@@ -106,7 +107,7 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
                 INSERT INTO signin_redemptions VALUES (REPEAT('b', 64), UTC_TIMESTAMP(3));
                 """);
 
-            if (oldVersion == 10)
+            if (oldVersion >= 10)
             {
                 var name = Assert.Single(assembly.GetManifestResourceNames(), n => n.EndsWith("010_administration.sql", StringComparison.Ordinal));
                 using var reader = new StreamReader(assembly.GetManifestResourceStream(name)!);
@@ -118,7 +119,14 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
                     INSERT INTO administrator_audit (at, actor, action, target) VALUES (UTC_TIMESTAMP(3), 'operator', 'administrator.granted', REPEAT('c', 32));
                     """);
             }
-            Assert.Equal(oldVersion == 10 ? new[] { 11 } : new[] { 10, 11 }, await Migrator.ApplyAsync(connectionString));
+            if (oldVersion == 11)
+            {
+                var name = Assert.Single(assembly.GetManifestResourceNames(), n => n.EndsWith("011_access_management.sql", StringComparison.Ordinal));
+                using var reader = new StreamReader(assembly.GetManifestResourceStream(name)!);
+                await Execute(await reader.ReadToEndAsync());
+                await Execute("INSERT INTO schema_version VALUES (11, UTC_TIMESTAMP(3))");
+            }
+            Assert.Equal(oldVersion == 11 ? new[] { 12 } : oldVersion == 10 ? new[] { 11, 12 } : new[] { 10, 11, 12 }, await Migrator.ApplyAsync(connectionString));
             Assert.Empty(await Migrator.ApplyAsync(connectionString));
             await using var account = new MySqlCommand("""
                 SELECT CONCAT(display_name, '|', status, '|', security_version, '|', sealed_bytes, '|',
@@ -129,8 +137,8 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
                 "INSERT INTO signin_redemptions VALUES (REPEAT('b', 64), UTC_TIMESTAMP(3))"));
             Assert.Equal(1062, duplicate.Number);
             await using var admins = new MySqlCommand("SELECT COUNT(*) FROM administrators", connection);
-            Assert.Equal(oldVersion == 10 ? 1L : 0L, await admins.ExecuteScalarAsync());
-            if (oldVersion == 10)
+            Assert.Equal(oldVersion >= 10 ? 1L : 0L, await admins.ExecuteScalarAsync());
+            if (oldVersion >= 10)
             {
                 await using var sessions = new MySqlCommand("SELECT COUNT(*) FROM administrator_sessions WHERE revoked_at IS NULL", connection);
                 Assert.Equal(1L, await sessions.ExecuteScalarAsync());
@@ -152,7 +160,7 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
                 "administrator_audit", "administrator_sessions", "administrators",
                 "admissions", "approvals", "audit", "commands", "devices", "enrollments", "events",
                 "external_identities", "grants", "host_workspaces", "hosts", "invites", "notices", "runs",
-                "schema_version", "signin_redemptions", "tasks", "user_retention", "user_sessions",
+                "quota_defaults", "user_quotas", "schema_version", "signin_redemptions", "tasks", "user_retention", "user_sessions",
                 "user_streams", "users"
             }.Order(StringComparer.Ordinal),
             tables.Order(StringComparer.Ordinal));
@@ -191,7 +199,7 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
 
         var reapplied = await Migrator.ApplyAsync(database.ConnectionString);
 
-        Assert.Equal([1, 3, 10, 11], Migrator.KnownVersions());
+        Assert.Equal([1, 3, 10, 11, 12], Migrator.KnownVersions());
         Assert.Equal(Migrator.KnownVersions(), reapplied);
         Assert.Equal(
             Migrator.KnownVersions(),

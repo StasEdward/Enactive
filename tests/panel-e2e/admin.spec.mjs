@@ -9,7 +9,7 @@ const user = { id: 'a'.repeat(32), displayName: '<img src=x onerror=alert(1)>', 
 for (const width of [1280, 390]) {
   test(`directory search, details and logout at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 950 });
-    let authenticated = true, disabled = false, version = 1, registrationState = 'Waiting';
+    let authenticated = true, disabled = false, version = 1, registrationState = 'Waiting', quotaVersion = 0, quotaOverride = null;
     const currentUser = () => ({ ...user, status: disabled ? 'Disabled' : 'Active', version });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -30,6 +30,20 @@ for (const width of [1280, 390]) {
         registrationState = 'Approved';
         return route.fulfill({ json: { hasAccount: false } });
       }
+      if (url.pathname.endsWith('/quotas')) {
+        if (route.request().method() === 'POST') {
+          const body = route.request().postDataJSON();
+          expect(route.request().headers()['x-csrf-token']).toBe('fixture');
+          expect(body.expectedVersion).toBe(quotaVersion);
+          expect(body.expectedDefaultsVersion).toBe(0);
+          expect(body.reason).toBe('Capacity review');
+          quotaVersion++; quotaOverride = body.values.HostsPerUser;
+          return route.fulfill({ json: { saved: true } });
+        }
+        return route.fulfill({ json: { version: quotaVersion, defaultsVersion: 0, items: [{ key: 'HostsPerUser', effective: quotaOverride ?? '5',
+          override: quotaOverride, default: '5', startup: '5', source: quotaOverride ? 'user' : 'startup', usage: '2', overLimit: quotaOverride === '1' }] } });
+      }
+      if (url.pathname.endsWith('/queues')) return route.fulfill({ json: { items: [{ hostId: 'b'.repeat(32), name: 'Office', pending: 3, deviceChanges: 1 }], next: null } });
       if (url.pathname === '/admin/api/session') data = { authenticated, csrfToken: 'fixture', expiresAt: '2026-10-05T00:00:00Z' };
       else if (url.pathname === '/admin/api/overview') data = { users: 1, disabledUsers: 0, waitingRegistrations: 1 };
       else if (url.pathname === '/admin/api/users') data = { items: url.searchParams.get('search') === 'missing' ? [] : [currentUser()], next: null };
@@ -41,7 +55,7 @@ for (const width of [1280, 390]) {
         return route.fulfill({ status: 204 });
       } else {
         const file = url.pathname === '/admin/' ? 'index.html' : url.pathname.split('/').pop();
-        if (!['index.html', 'admin.js', 'directory.js', 'admin.css'].includes(file)) return route.fulfill({ status: 404 });
+        if (!['index.html', 'admin.js', 'directory.js', 'quotas.js', 'admin.css'].includes(file)) return route.fulfill({ status: 404 });
         return route.fulfill({ contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html', body: await readFile(new URL(file, root), 'utf8'),
           headers: { 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'" } });
       }
@@ -63,6 +77,25 @@ for (const width of [1280, 390]) {
     await page.getByRole('button', { name: 'Confirm', exact: true }).click();
     await expect(page.locator('#directory-rows')).toContainText('Active');
 
+    await page.getByRole('button', { name: 'View', exact: true }).click();
+    await page.getByRole('button', { name: 'Edit quotas', exact: true }).click();
+    await expect(page.locator('#quota-queues')).toContainText('Office');
+    await page.getByLabel('Computers override', { exact: true }).fill('1');
+    await page.getByLabel('Reason', { exact: true }).fill('Capacity review');
+    await page.getByRole('button', { name: 'Review quota changes', exact: true }).click();
+    await expect(page.locator('#quota-description')).toContainText('Existing resources are preserved');
+    await page.getByRole('button', { name: 'Save quotas', exact: true }).click();
+    await expect(page.locator('#quota-status')).toContainText('saved and reloaded');
+    await expect(page.locator('#quota-rows')).toContainText('Over limit');
+    await page.getByRole('button', { name: 'Refresh quotas', exact: true }).click();
+    await expect(page.getByLabel('Computers override', { exact: true })).toHaveValue('1');
+    await page.getByRole('button', { name: 'Clear all overrides', exact: true }).click();
+    await page.getByLabel('Reason', { exact: true }).fill('Capacity review');
+    await page.getByRole('button', { name: 'Review quota changes', exact: true }).click();
+    await page.getByRole('button', { name: 'Save quotas', exact: true }).click();
+    await expect(page.getByLabel('Computers override', { exact: true })).toHaveValue('');
+    await expect(page.locator('#quota-rows')).toContainText('5 (startup)');
+    if (process.env.ADMIN_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.ADMIN_SCREENSHOT_DIR}/admin-${width}.png`, fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     if (process.env.ADMIN_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.ADMIN_SCREENSHOT_DIR}/admin-${width}.png`, fullPage: true });
     await page.getByLabel('Search', { exact: true }).fill('missing');

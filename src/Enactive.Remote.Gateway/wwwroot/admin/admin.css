@@ -26,3 +26,23 @@ dt { font-weight: 600; } dd { margin: 0; overflow-wrap: anywhere; }
 
 #access-confirmation { border: 1px solid currentColor; padding: 1rem; margin-top: 1rem; border-radius: .5rem; }
 #access-status { font-weight: 600; }
+
+#quota-panel { margin-top: 2rem; padding: 1rem; border: 1px solid #70809066; border-radius: .5rem; }
+#quota-form { display: block; }
+#quota-form input { box-sizing: border-box; width: 100%; }
+#quota-confirmation { border: 1px solid currentColor; padding: 1rem; }
+#quota-status { font-weight: 600; }
+
+#quota-panel { overflow-wrap: anywhere; min-width: 0; }
+#quota-panel label { box-sizing: border-box; }
+
+/* A wide grid hid the quota inputs beyond the phone viewport; stack each quota so editing needs no horizontal scroll. */
+@media (max-width: 600px) {
+  #quota-form table { min-width: 0; }
+  #quota-form thead { display: none; }
+  #quota-form tr { display: block; padding: .75rem 0; border-bottom: 1px solid #70809066; }
+  #quota-form th, #quota-form td { display: block; border: 0; padding: .25rem 0; }
+  #quota-form td:nth-child(2)::before { content: 'Usage: '; }
+  #quota-form td:nth-child(3)::before { content: 'Effective limit: '; }
+  #quota-form td:nth-child(4)::before { content: 'Override: '; display: block; margin-bottom: .4rem; }
+}

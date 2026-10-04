@@ -130,7 +130,7 @@ the sign-in/sign-out budget. Stage 3 itself used schema 10 without new settings;
 
 Responses deliberately omit credentials, session identifiers, tasks' encrypted content and keys.
 Stored bytes describe sealed-content accounting rather than total database disk usage. Resource counts
-include retained records; they are not yet effective quota usage or editable limits.
+include retained records. The separate quota editor shows the effective quota usage and editable limits.
 
 Validation commands: the Gateway test project; `node --test "tests/panel/*.test.mjs"`; and, from
 `tests/panel-e2e`, `npx playwright test --config admin.config.mjs`. The latter uses the shipped UI
@@ -172,3 +172,60 @@ the existing 90-day retention policy. A failed audit aborts the entire transacti
 Migration 011 adds admission revisions, widens the administrator audit target for provider subjects,
 and adds JSON audit detail. It can be reapplied after partial execution. Existing accounts, administrator
 sessions and audit rows are retained. See `REMOTE_ADMIN_ACCESS_UPGRADE.md` before installation.
+
+
+## Quotas (stage 5)
+
+Open **Shared quota defaults** for settings inherited by everyone, or **View → Edit quotas** for
+one account. The editor shows active usage, effective limits, their source and per-user overrides.
+Queues are listed per computer, with bounded cursor pages and separate ordinary-command, device-change and cancellation counts. The user directory's historical task/run
+counts remain separate from the quota editor's rolling 24-hour task count and active-run count.
+
+Resolution is per-user override → shared database default → `ENACTIVE_LIMIT_*` startup fallback.
+Clearing an override restores inheritance; it does not copy a value. Values are positive whole
+numbers: 1–2147483647 for counts, 1–9223372036854775807 for bytes. Zero is refused and never means
+unlimited. Decimal strings on the API preserve 64-bit storage values without browser rounding.
+
+- `GET /admin/api/quotas`: defaults with `version`, `defaultsVersion` and the seven items.
+- `GET /admin/api/users/{id}/quotas`: the same projection plus current usage and over-limit flags.
+- `GET /admin/api/users/{id}/queues?after={hostId}`: at most 100 computers and a `next` cursor.
+- `POST /admin/api/quotas` or `POST /admin/api/users/{id}/quotas`: a partial patch, for example:
+
+```json
+{
+  "expectedVersion": 0,
+  "expectedDefaultsVersion": 0,
+  "values": { "HostsPerUser": "5", "SealedBytesPerUser": null },
+  "reason": "Restore storage inheritance and adjust computer allowance"
+}
+```
+
+Keys are `HostsPerUser`, `DevicesPerUser`, `ActiveRunsPerUser`, `QueuedCommandsPerHost`,
+`TasksPerDay`, `OpenInvitesPerUser`, `SealedBytesPerUser`. A null value removes that override.
+Use revisions from the latest GET; per-user edits also check the shared-default revision, so a
+changed inherited value cannot silently invalidate a reviewed form. Fresh MFA, CSRF and persisted
+administrator/session checks apply to both POST routes. Old/new override maps and the operator's
+reason are audited atomically. Never put credentials or task contents in the reason.
+
+Changes persist across restarts and are read under transaction locks on every relevant creation
+or storage write. Lowering a quota preserves existing resources and bytes while refusing new
+creation above the limit. All live devices remain visible so the owner can remove them. Existing
+connections remain open; the per-account connection budget follows the host quota at the next
+connection. Connection budgets remain local to each Gateway instance; resource quotas are enforced
+in the shared database.
+
+Cancellation has a separate allowance of one pending command per run, so a full ordinary queue
+does not strand an existing run. Device changes have a separate bounded allowance based on the
+larger of the device limit and the live device count. These commands do not make room for new tasks.
+Progress is refused at the storage limit. A terminal report for an existing run is still admitted
+once, with at most three bounded envelopes, even when a reduction puts existing usage above the
+new ceiling. Thus encrypted storage is an admission limit, not a promise that existing usage is
+immediately reduced to it. Retention releases stored bytes as before.
+
+Migration 012 adds `quota_defaults` and `user_quotas`; it is additive and rerunnable, preserving
+accounts, sessions and older audit data. Per-user settings are included in the account export and
+cascade on account deletion; shared defaults and independent administrator audit survive deletion.
+Before installation, back up the database and Data Protection keys and verify the restore. A rollback
+to a schema-11 binary requires the matching pre-upgrade database, not just the previous release link.
+The restore verifier now checks the quota tables, payload columns and singleton defaults row.
+Production installation remains an operator action; see `REMOTE_QUOTAS_UPGRADE.md`.

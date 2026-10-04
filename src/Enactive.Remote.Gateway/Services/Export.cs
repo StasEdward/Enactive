@@ -83,6 +83,8 @@ public sealed class Export(Database database, TimeProvider clock)
             WHERE user_id = @owner ORDER BY created_at
             """),
         ("user_streams", "SELECT value, epoch FROM user_streams WHERE owner_id = @owner"),
+        // Per-user quota decisions belong in the account export; shared defaults belong to the operator.
+        ("user_quotas", "SELECT revision, settings FROM user_quotas WHERE owner_id = @owner"),
         ("user_retention", "SELECT trimmed_before, trimmed_at FROM user_retention WHERE owner_id = @owner"),
         ("devices",
             """

@@ -897,10 +897,11 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
 
         // Not owned by ordinary users: admissions, migration bookkeeping, redeemed provider
         // answers (random IDs), and the independent administrator security domain.
+        // Shared quota defaults are operator settings, independent of any user.
         // User deletion must never cascade through that domain.
         var ownedByNobody = new HashSet<string>
         {
-            "admissions", "schema_version", "signin_redemptions",
+            "admissions", "schema_version", "signin_redemptions", "quota_defaults",
             "administrators", "administrator_sessions", "administrator_audit"
         };
 

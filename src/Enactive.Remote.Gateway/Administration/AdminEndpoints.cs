@@ -1,6 +1,7 @@
 namespace Enactive.Remote.Gateway.Administration;
 
 using System.Security.Claims;
+using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Accounts;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
@@ -105,6 +106,19 @@ internal static class AdminEndpoints
                 _ => throw GatewayFault.BadRequest("Unknown registration decision.")
             };
             return Results.Ok(await service.DecideAdmissionAsync(identity, state, ct, Mutation(context, request.ExpectedVersion)));
+        }).RequireAuthorization(AdminAuthentication.FreshPolicy);
+        api.MapGet("/quotas", (QuotaSettings quotas, CancellationToken ct) => quotas.ReadAsync(null, ct)).RequireRateLimiting(RequestLimits.AdminRead);
+        api.MapGet("/users/{id}/quotas", (QuotaSettings quotas, string id, CancellationToken ct) => quotas.ReadAsync(id, ct)).RequireRateLimiting(RequestLimits.AdminRead);
+        api.MapGet("/users/{id}/queues", (QuotaSettings quotas, string id, string? after, CancellationToken ct) => quotas.QueuesAsync(id, after, ct)).RequireRateLimiting(RequestLimits.AdminRead);
+        api.MapPost("/quotas", async (HttpContext context, QuotaSettings quotas, QuotaChange request, CancellationToken ct) =>
+        {
+            await quotas.ChangeAsync(null, request, Mutation(context, request.ExpectedVersion), ct);
+            return Results.Ok(new { saved = true });
+        }).RequireAuthorization(AdminAuthentication.FreshPolicy);
+        api.MapPost("/users/{id}/quotas", async (HttpContext context, QuotaSettings quotas, string id, QuotaChange request, CancellationToken ct) =>
+        {
+            await quotas.ChangeAsync(id, request, Mutation(context, request.ExpectedVersion), ct);
+            return Results.Ok(new { saved = true });
         }).RequireAuthorization(AdminAuthentication.FreshPolicy);
         api.MapPost("/signout", async (HttpContext context, AdminStore store, CancellationToken ct) =>
         {

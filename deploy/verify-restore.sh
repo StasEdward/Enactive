@@ -84,6 +84,10 @@ fi
 if [ "$version" -ge 10 ]; then
   expected="$expected administrators administrator_sessions administrator_audit"
 fi
+# A quota-less restore would silently fall back to startup limits and lose operator decisions.
+if [ "$version" -ge 12 ]; then
+  expected="$expected quota_defaults user_quotas"
+fi
 actual=$(ask "SELECT table_name FROM information_schema.tables
               WHERE table_schema = '$scratch' ORDER BY table_name" | tr '\n' ' ')
 
@@ -112,6 +116,22 @@ if [ "$version" -ge 11 ]; then
       *) complain "the restored database has no '$column' column" ;;
     esac
   done
+fi
+
+# A schema-12 dump needs both quota payload columns and the singleton. Otherwise
+# startup or the first quota check would fail despite this verifier claiming a usable restore.
+if [ "$version" -ge 12 ]; then
+  columns=$(ask "SELECT CONCAT(table_name, '.', column_name) FROM information_schema.columns
+                  WHERE table_schema = '$scratch' AND table_name IN ('quota_defaults', 'user_quotas')
+                    AND column_name IN ('revision', 'settings')" | tr '\n' ' ')
+  for column in quota_defaults.revision quota_defaults.settings user_quotas.revision user_quotas.settings; do
+    case " $columns " in
+      *" $column "*) ;;
+      *) complain "the restored database has no '$column' column" ;;
+    esac
+  done
+  defaults=$(ask "SELECT COUNT(*) FROM \`$scratch\`.quota_defaults WHERE id = 1")
+  [ "$defaults" = 1 ] || complain "the restored database has no quota defaults row"
 fi
 
 echo "Schema version $version, $(echo "$actual" | wc -w) tables."

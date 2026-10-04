@@ -15,6 +15,8 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 case "$query" in
+  *"column_name IN ('revision', 'settings')"*) printf '%s\n' ${TEST_QUOTA_COLUMNS:-} ;;
+  *'quota_defaults WHERE id = 1'*) echo "${TEST_QUOTA_ROWS:-1}" ;;
   *'MAX(version)'*) echo "$TEST_VERSION" ;;
   *"column_name = 'revision'"*) printf '%s\n' ${TEST_COLUMNS:-} ;;
   *'SELECT table_name FROM information_schema.tables'*) printf '%s\n' $TEST_TABLES ;;
@@ -50,4 +52,20 @@ for missing in admissions.revision administrator_audit.detail; do
   grep -q "no '$missing' column" "$scratch/out"
   TEST_COLUMNS='admissions.revision administrator_audit.detail'
 done
-echo '10 restore completeness checks passed'
+export TEST_QUOTA_COLUMNS="quota_defaults.revision quota_defaults.settings user_quotas.revision user_quotas.settings"
+check 12 "$base signin_redemptions $admins quota_defaults user_quotas" 0
+for missing in quota_defaults user_quotas; do
+  tables="$base signin_redemptions $admins quota_defaults user_quotas"
+  check 12 "${tables//$missing/}" 1
+  grep -q "no '$missing' table" "$scratch/out"
+done
+for missing in quota_defaults.revision quota_defaults.settings user_quotas.revision user_quotas.settings; do
+  TEST_QUOTA_COLUMNS=${TEST_QUOTA_COLUMNS//$missing/}
+  check 12 "$base signin_redemptions $admins quota_defaults user_quotas" 1
+  grep -q "no '$missing' column" "$scratch/out"
+  TEST_QUOTA_COLUMNS='quota_defaults.revision quota_defaults.settings user_quotas.revision user_quotas.settings'
+done
+export TEST_QUOTA_ROWS=0
+check 12 "$base signin_redemptions $admins quota_defaults user_quotas" 1
+grep -q 'no quota defaults row' "$scratch/out"
+echo '18 restore completeness checks passed'
