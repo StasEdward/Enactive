@@ -151,7 +151,7 @@ Stages 1 and 2 establish the shared behavior and security boundary before admini
 - Validation: the final full Gateway run passed 669 tests with one test-only SQL collation failure. After changing that assertion to decode JSON in C#, all six access-service tests passed. Earlier full and targeted runs covered all mutation and migration paths; all 288 JavaScript tests, two Chromium desktop/mobile scenarios and ten restore-verification checks passed.
 - The operator installed the access-management package and confirmed the user detail card with Disable account and Revoke sessions controls. Actual production mutations and their audit effects have not been demonstrated. Keycloak settings remain unchanged.
 
-Next: operator installation of the quota package, followed by production validation in stage 6.
+Next: finish production validation in stage 6; the operator confirmed that quotas work.
 
 ### Compatibility with the deployed schema 3 (2026-10-03)
 
@@ -176,7 +176,7 @@ Historical checkpoint before quota implementation; see the stage-5 checkpoint be
 
 ## Stage 5 checkpoint — 2026-10-04
 
-Implemented in the working checkout; not installed on production.
+Implemented and installed; the operator confirmed that the quota interface works. Production enforcement and recovery checks remain below.
 
 - Migration 012 adds a singleton shared-default row and per-user quota settings with independent revisions. Resets retain revisions; account deletion cascades user settings. Existing schemas 3, 10 and 11 upgrade without losing accounts, replay protection or administrator sessions.
 - All seven resource quotas resolve user override → persisted default → startup fallback within the consuming transaction. Locking reads avoid stale transaction snapshots and work across Gateway instances. No process cache or restart is required.
@@ -186,7 +186,15 @@ Implemented in the working checkout; not installed on production.
 - User quota settings are included in account exports and deleted with the account. Shared defaults and the independent administrative audit survive account deletion.
 - Validation: full Gateway suite passed 691 tests with zero failures/skips; 296 JavaScript tests, both Chromium desktop/mobile scenarios and 18 restore-verification checks passed. The final queue presentation separates cancellation counts from ordinary commands and has an additional focused quota regression run. Linux package smoke checks report schema 12 and protocol 2.
 - Package: `work/remote-quotas-release/enactive-remote-quotas-linux-x64.tar.gz` plus `.sha256` (SHA-256 `d609e738a2ca0d399c8ab473d31e6ebea2e55c75fa5517fbf0a3a90813b4163a`); installation and rollback are documented in `Docs/REMOTE_QUOTAS_UPGRADE.md`.
-- Next: the operator verifies the archive checksum, backs up database and Data Protection keys, verifies restore, installs schema 12, then exercises quota save/reset, effective enforcement and audit on a test account. Do not assume the deployment timer is enabled or production changed.
+- Next: verify production audit, enforcement, post-upgrade backup/restore and deployment timer state using `Docs/REMOTE_QUOTAS_VALIDATION.md`.
+
+## Stage 6 checkpoint — 2026-10-04
+
+- Live public checks: public health returned 200; admin quota API returned 401 without authentication on the admin origin and 404 on the public origin; admin page returned 200 with `Cache-Control: no-store`.
+- All 31 published panel manifest entries match the locally validated quota release, including the quota editor.
+- Five backup/key-preservation checks passed locally, in addition to the 18 restore-verifier checks recorded above. These are regression tests, not evidence of a successful production restore.
+- Production audit, enforcement and actual post-upgrade restore remain unverified: no server terminal is attached to this task. Operator commands are in `Docs/REMOTE_QUOTAS_VALIDATION.md`.
+- Local `origin/master` does not contain quota commit `68399fc`; this is not a fresh remote fetch. Inspect the configured deployment branch and its successful build before enabling automatic deployment.
 
 ## Test and release criteria
 
