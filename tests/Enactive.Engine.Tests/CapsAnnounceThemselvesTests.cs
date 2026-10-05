@@ -44,6 +44,13 @@ public sealed class CapsAnnounceThemselvesTests
     private static readonly Dictionary<string, string> Covered = new(StringComparer.Ordinal)
     {
         ["ModelTurn.ProgressEveryChars"] = "A_long_tool_call_says_it_is_still_being_written",
+        // The web tools: what a page or a search brings back is bounded, and every bound says so where it bites.
+        ["FetchUrlTool.MaxDownloadBytes"] = "A_download_past_its_size_is_read_only_that_far_and_says_so",
+        ["FetchUrlTool.DefaultMaxChars"] = "Without_max_chars_a_long_page_is_cut_at_the_default_and_says_so",
+        ["FetchUrlTool.LargestMaxChars"] = "Asking_for_more_than_the_most_is_given_the_most_and_told",
+        ["FetchUrlTool.SmallestMaxChars"] = "Asking_for_almost_nothing_is_given_a_readable_amount_and_told_the_rest_was_not_shown",
+        ["WebSearchTool.MaxQueryChars"] = "A_query_too_long_to_be_a_query_is_refused_and_says_why",
+        ["WebSearchTool.SnippetChars"] = "A_long_snippet_is_cut_and_marked",
         // A tool's line in the catalog: the first sentence of its description, cut at a line's length and marked.
         ["ToolBudget.SummaryChars"] = "A_first_sentence_too_long_for_a_catalog_line_is_cut_and_says_so",
         // The two halves of ProcessExec's capture ceiling: the first lines and the last ones, with the

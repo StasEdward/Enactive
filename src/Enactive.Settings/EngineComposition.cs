@@ -134,6 +134,11 @@ public static class EngineComposition
                 { SendWithoutAsking = settings.Smtp.SendWithoutAsking }
             : MailAccount.None;
 
+    /// <summary>What the person allowed of the web, as the web tools want it.</summary>
+    public static Enactive.Core.Web.WebAccess Web(AppSettings settings)
+        => new(settings.Web.Enabled, settings.Web.SearchUrl.Trim())
+            { UseWithoutAsking = settings.Web.UseWithoutAsking };
+
     /// <summary>Every configured endpoint, as the provider factory wants them.</summary>
     public static IReadOnlyList<ProviderDescriptor> Descriptors(AppSettings settings)
         => settings.Providers.Select(p => new ProviderDescriptor(

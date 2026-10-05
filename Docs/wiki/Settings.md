@@ -133,6 +133,24 @@ Configure external tool servers here, then grant the intended worker MCP access 
 
 MCP tools require Execute-level access and normally ask on every call. Their external effects are not covered by built-in staging/revert. See [MCP operations](Operations.md#mcp-external-tools) for the full workflow.
 
+## Web
+
+Whether tasks may read the web. Off until you turn it on.
+
+| Setting | Effect |
+| --- | --- |
+| **Let tasks read the web** | Adds `fetch_url`: reads a page by its address and returns its title and text, without markup, scripts or styles. Public addresses only — not this computer and not its network. |
+| **Search server** | Adds `web_search`, through a [SearXNG](https://docs.searxng.org/) server you run, e.g. `http://localhost:8888`. In its `settings.yml`, add `json` under `search.formats`. Blank: no search. Setting one up with Docker: [Operations → Web](Operations.md#web-tools-and-searxng). |
+| **Use without asking each time** | Off: every page and every search asks first, naming the address or the query, and a task nobody is watching is not offered the tools. On: they are used without a question, scheduled tasks included. |
+
+The tools are not in the default roles. Give them to a role under **AI → Team**; until a role has them, the run says that tools are registered and offered to nobody.
+
+What the tools bring back is marked as text from the web — data to work with, not instructions. A page is read up to 2 MB and returned up to 12,000 characters unless the call asks for more (at most 50,000); a cut always says so. A search server that does not answer is reported as unavailable, never as an empty result.
+
+Asking for a page sends its address out of this computer, and a search sends its query: both are written by the model from the task. Turn the question off only for tasks whose requests you trust.
+
+The limits, what the address check refuses, and troubleshooting are in [Operations → Web](Operations.md#web-tools-and-searxng).
+
 ## Environment defaults and migration
 
 The desktop seeds its initial model/endpoint from `ENACTIVE_MODEL` and `ENACTIVE_OLLAMA_URL` when a usable saved settings file is absent. Existing Providers/Workers/Bindings are authoritative after migration; editing environment variables is not a reliable way to override saved desktop bindings.
