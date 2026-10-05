@@ -783,7 +783,8 @@ public sealed partial class Orchestrator : IOrchestrator
             yield return scope.Ev(EventKind.ReviewRequested, "Planner is checking final criteria against the original request before execution…");
             plan = await InScopeAsync(runId, taskId, null, () => PlanCheckReview.RunAsync(plan with { Checks = CriteriaFor(plan) }, intent.RawText,
                 intent.Context, models.PlanProvider, models.Plan.Model, budget,
-                _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: resume is not null || _successCriteria.Count > 0 || !_proposeChecks, tools: _tools.Definitions,
+                _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: resume is not null || _successCriteria.Count > 0 || !_proposeChecks,
+                tools: _tools.Definitions.Where(d => !DeniedToThisRun(d.Name)).ToArray(),
                 workspaceRoot: _workspace.RootPath, askWhenUnsettled: true));
             yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
                 plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
@@ -842,6 +843,19 @@ public sealed partial class Orchestrator : IOrchestrator
             foreach (var check in plan.Checks)
                 yield return scope.Ev(EventKind.ContextAssembled,
                     $"Final check ({check.Origin}): {check.Command} — {check.PlanningReason}");
+        }
+
+        // A check proposed for a run that may not run commands could never be run: tried before the work it could not
+        // be, and at the end it is NOT CHECKED - two lines about a check nobody could have made (run 0a2be9, 2026-10-05,
+        // a run whose commands were all denied, given "Get-Process | Sort-Object ..." as its final check). Dropped here,
+        // with one line. A check the person ASKED for stays: that it could not be run is theirs to read at the end.
+        if (resume is null && CheckRunner() is { } runner && DeniedToThisRun(runner)
+            && plan.Checks.Where(c => c.Origin == CriterionOrigin.Proposed && c.Typed is null).ToArray() is { Length: > 0 } unrunnable)
+        {
+            plan = plan with { Checks = plan.Checks.Except(unrunnable).ToArray() };
+            foreach (var check in unrunnable)
+                yield return scope.Ev(EventKind.ContextAssembled, $"Proposed final check '{check.Name}' ({check.Command}) dropped: "
+                    + $"this run may not run commands ({runner} is denied), so it could never be run. The review judges the work.");
         }
 
         intent = intent with { Context = intent.Context with { Restrictions = plan.Restrictions, ActionPolicy = plan.ActionPolicy } };
@@ -5395,6 +5409,15 @@ public sealed partial class Orchestrator : IOrchestrator
     /// is what the permission engine already does for anything over the granted autonomy.
     /// </summary>
     private PermissionPolicy EffectivePolicyFor(Worker worker) => ToolAccess.EffectivePolicy(_policy, worker);
+
+    /// <summary>Whether this run's permissions refuse a tool outright, whoever asks and whatever the role.</summary>
+    private bool DeniedToThisRun(string tool)
+        => _permissions.Evaluate(_policy, tool, _tools.RequiredLevelOf(tool)) == PermissionDecision.Deny;
+
+    /// <summary>The tool a command check is run through - the one that declares the protocol - or null without one.</summary>
+    private string? CheckRunner()
+        => _tools.Definitions.Where(d => d.Kind == ToolKind.Command && d.RunsSuccessChecks).Select(d => d.Name).ToArray()
+            is [var only] ? only : null;
 
     /// <summary>
     /// The tools this worker's role carries, narrowed to what this run can actually do with them - see
