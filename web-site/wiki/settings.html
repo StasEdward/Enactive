@@ -278,7 +278,7 @@
 </tr>
 <tr>
 <td><strong>Search server</strong></td>
-<td>Adds <code>web_search</code>, through a <a href="https://docs.searxng.org/">SearXNG</a> server you run, e.g. <code>http://localhost:8888</code>. In its <code>settings.yml</code>, add <code>json</code> under <code>search.formats</code>. Blank: no search.</td>
+<td>Adds <code>web_search</code>, through a <a href="https://docs.searxng.org/">SearXNG</a> server you run, e.g. <code>http://localhost:8888</code>. In its <code>settings.yml</code>, add <code>json</code> under <code>search.formats</code>. Blank: no search. Setting one up with Docker: <a href="operations.html#web-tools-and-searxng">Operations → Web</a>.</td>
 </tr>
 <tr>
 <td><strong>Use without asking each time</strong></td>
@@ -288,6 +288,7 @@
 </div><p>The tools are not in the default roles. Give them to a role under <strong>AI → Team</strong>; until a role has them, the run says that tools are registered and offered to nobody.</p>
 <p>What the tools bring back is marked as text from the web — data to work with, not instructions. A page is read up to 2 MB and returned up to 12,000 characters unless the call asks for more (at most 50,000); a cut always says so. A search server that does not answer is reported as unavailable, never as an empty result.</p>
 <p>Asking for a page sends its address out of this computer, and a search sends its query: both are written by the model from the task. Turn the question off only for tasks whose requests you trust.</p>
+<p>The limits, what the address check refuses, and troubleshooting are in <a href="operations.html#web-tools-and-searxng">Operations → Web</a>.</p>
 <h2 id="environment-defaults-and-migration">Environment defaults and migration<a class="heading-anchor" href="#environment-defaults-and-migration" aria-label="Link to Environment defaults and migration">#</a></h2>
 <p>The desktop seeds its initial model/endpoint from <code>ENACTIVE_MODEL</code> and <code>ENACTIVE_OLLAMA_URL</code> when a usable saved settings file is absent. Existing Providers/Workers/Bindings are authoritative after migration; editing environment variables is not a reliable way to override saved desktop bindings.</p>
 <p><code>ENACTIVE_WORKSPACE</code> supplies a desktop workspace startup value. Storage/logging variables apply to the components that read them; the console-specific interpretation is documented in <a href="console.html#environment-configuration">Console</a>.</p>

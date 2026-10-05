@@ -113,6 +113,96 @@ MCP environment values and headers are saved through encrypted secret storage. A
 
 External tools operate with their process/account permissions. Enactive's workspace guard, staging, and rejected-step revert do not constrain or undo their external effects. Configure boundaries in the server itself when needed. The console does not connect these desktop MCP configurations.
 
+## Web tools and SearXNG
+
+Two built-in tools read the web. Both are off until a person turns them on, and neither is in a default role.
+
+| Tool | What it does | Exists when |
+| --- | --- | --- |
+| `fetch_url` | Reads one page or text file by its address. Returns the title and the text a reader sees, without markup, scripts, styles or comments | **Let tasks read the web** is on |
+| `web_search` | Searches through a [SearXNG](https://docs.searxng.org/) server you run. Returns titles, addresses and short snippets, which `fetch_url` then reads | It is on **and** a search server address is set |
+
+They replace what a worker otherwise does with `curl` or `Invoke-WebRequest` through the shell: raw HTML, mostly markup, counted against the model's window, and impossible in a run whose shell is denied.
+
+### Turn them on
+
+1. **Settings → Web**: tick **Let tasks read the web**. For search, enter the server's address, e.g. `http://localhost:8888` (the next section sets one up). Decide on **Use without asking each time** (see below). Save.
+2. **Settings → AI → Team**: tick `fetch_url` and `web_search` for each role that should use them. `*` covers them too.
+
+Until a role has them, every run warns that they are *registered and named by no role*, and no worker sees them. The bottom of the Web pane lists the roles that have them.
+
+The console reads the same `settings.json`, so the Web settings apply to console runs too.
+
+### Run a SearXNG server
+
+SearXNG is a self-hosted metasearch engine: it asks public search engines and answers in JSON. It needs no account and no key, and the queries go where you run it. The simplest way is Docker.
+
+Run it with its settings in a folder on this computer; on its first start it writes a default `settings.yml` there:
+
+```bash
+docker run -d --name searxng -p 127.0.0.1:8888:8080 -v C:/searxng:/etc/searxng --restart unless-stopped searxng/searxng:latest
+```
+
+| Part | Meaning |
+| --- | --- |
+| `-p 127.0.0.1:8888:8080` | Port 8888 on this computer leads to 8080 inside the container, where SearXNG listens. Change the left number for another port. `127.0.0.1` keeps it reachable from this computer only, not from the network |
+| `-v C:/searxng:/etc/searxng` | `settings.yml` lives in `C:\searxng`, editable with any editor and kept when the container is recreated |
+| `--restart unless-stopped` | It starts again with Docker |
+
+**Turn JSON on.** SearXNG answers only HTML by default, and `web_search` reads JSON. In `C:\searxng\settings.yml`, under `search:`, list `json` among the formats:
+
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+Then restart it:
+
+```bash
+docker restart searxng
+```
+
+**Check it** before pointing Enactive at it:
+
+```bash
+curl "http://localhost:8888/search?q=test&format=json"
+```
+
+JSON with a `"results"` array means it works. `403 Forbidden` means JSON is still off.
+
+**Ports cannot be changed on an existing container.** A container created without `-p`, or with the wrong port, has to be recreated: copy its settings out (`docker cp searxng:/etc/searxng/. C:/searxng/`), remove it (`docker rm searxng`), and run the command above. Then put the new address in Settings → Web.
+
+### Asking, and runs nobody watches
+
+With **Use without asking each time** off, every page and every search asks first, naming the address or the query. A run nobody can answer — a background or scheduled one, or a console run with `--approve deny` — is not offered the tools at all: a question nobody can answer would be a refusal on every call.
+
+With it on, they are used without a question, by every run including scheduled ones. Asking for a page sends its address out of this computer, and a search sends its query; both are written by the model from the task. Turn the question off only for tasks whose requests you trust.
+
+### What comes back, and the limits
+
+| Limit | Value | Why |
+| --- | --- | --- |
+| Addresses | `http` and `https` only, public addresses only | A URL the model writes is checked by nobody. Allowed to reach this computer or its network, `fetch_url` would read a local admin page, a router or a cloud machine's metadata endpoint |
+| Where the address check happens | At the connection, against what the name resolved to then | Checked only before the request, a name could resolve to a public address for the check and to this machine for the connection |
+| Redirects | Followed one at a time, each checked, at most 5 | Followed automatically, a public page could send the request on to this machine |
+| Proxy | None: `fetch_url` connects directly | Through a proxy the check would be of the proxy, not of the page's address |
+| Page read | Up to 2 MB | A larger page is read that far, and the result says so |
+| Text returned | 12,000 characters by default; the call may ask for 500–50,000 with `max_chars` | A cut always says how much was not shown |
+| Content | Web pages and text (`text/*`, JSON, XML, YAML, JavaScript) | A PDF or an image is refused, naming its type, rather than read as garbage |
+| Time | 30 seconds per page or search | |
+| Search results | 8 by default, at most 20; snippets cut to about 300 characters | |
+| Search query | At most 300 characters | A longer query is text being sent out of the machine, not a search |
+
+Everything the tools bring back is marked as text from the web — data to work with, not instructions. A page can say anything, including what to do next.
+
+The search server's address is not limited to public ones: it is the server you configured, usually on this computer.
+
+A search server that does not answer is reported as unavailable, never as an empty result: "no results" is a finding about the web, a stopped container is not. Search engines that SearXNG could not reach are listed under the results.
+
+Requests carry the user agent `Enactive/1.0`. Sites behind bot protection may refuse them as they refuse `curl`; search usually still finds another copy of the page.
+
 ## Filesystem and recovery boundaries
 
 Built-in path-based file tools reject absolute/escaping paths, inspect links that can lead outside the workspace, and protect reserved application-state paths. These checks are not a general sandbox for shell or external servers.
@@ -155,6 +245,12 @@ The historical AIClient → Enactive rename changed names, environment-variable 
 | Changing desktop settings does not change CLI | Separate composition roots | Console environment configuration |
 | A custom WorkerId uses another role | Unknown ID falls back to default | Team IDs and console's built-in-only team |
 | MCP failure prevents all work | An enabled server cannot initialize | Test, fix, or disable that server |
+| Run warns `fetch_url, web_search` are *named by no role* | Web is on, but no role has the tools | Tick them for the role under AI → Team |
+| Worker uses `curl` instead of `fetch_url` | Its role does not have `fetch_url` | AI → Team, and the run's warnings |
+| `web_search`: *Search is not available* | The SearXNG server is stopped, or the address/port is wrong | `docker ps`; the `curl` check in [Web](#web-tools-and-searxng) |
+| `web_search`: *answered … but not with JSON* | JSON is off in SearXNG | `search.formats` in its `settings.yml`, then restart it |
+| `fetch_url`: *not a public address* | The page is on this computer or its network | Intended; read local services with other tools |
+| Web tools missing from a scheduled or background run | The question is on, and nobody can answer it | Settings → Web → Use without asking, if those tasks are trusted |
 | App closes and background work stops | Process exited rather than hiding | Close-to-tray and explicit Quit behavior |
 
 ## Remote access
@@ -251,6 +347,7 @@ For documentation-only changes, validate relative links, headings/anchors, and e
 - [Inbox store selection](../src/Enactive.Workspace/InboxStoreFactory.cs)
 - [Logging](../src/Enactive.Workspace/LogHub.cs)
 - [MCP run connections](../src/Enactive.Tools/Mcp/McpRunTools.cs)
+- [Web tools](../src/Enactive.Tools/Web/FetchUrlTool.cs), [search](../src/Enactive.Tools/Web/WebSearchTool.cs), [address check](../src/Enactive.Core/Web.cs)
 - [Artifact recovery](../src/Enactive.Workspace/DiskArtifactStore.cs)
 - [Remote gateway](../src/Enactive.Remote.Gateway/Program.cs)
 - [Remote host inside the desktop app](../src/Enactive.App.Ui/RemoteAccessService.cs)
