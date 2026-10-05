@@ -221,6 +221,24 @@ public sealed class SmtpSettings
     };
 }
 
+/// <summary>
+/// Reading the web: fetch_url, and web_search through a search server the person runs. Off unless turned on -
+/// see <c>WebAccess</c> for why.
+/// </summary>
+public sealed class WebSettings
+{
+    /// <summary>Whether fetch_url exists.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>A SearXNG server, e.g. http://localhost:8888. Blank: no web_search.</summary>
+    public string SearchUrl { get; set; } = string.Empty;
+
+    /// <summary>Use the web tools without the approval question. Off unless a person turns it on.</summary>
+    public bool UseWithoutAsking { get; set; }
+
+    public WebSettings Clone() => new() { Enabled = Enabled, SearchUrl = SearchUrl, UseWithoutAsking = UseWithoutAsking };
+}
+
 /// <summary>One team member (role + its own model) as persisted in settings.json.</summary>
 public sealed class WorkerConfig
 {
@@ -510,6 +528,9 @@ public sealed partial class AppSettings
 
     /// <summary>Where send_email sends from, and the only addresses it may send to.</summary>
     public SmtpSettings Smtp { get; set; } = new();
+
+    /// <summary>Reading the web - see <see cref="WebSettings"/>.</summary>
+    public WebSettings Web { get; set; } = new();
 
     // ── Legacy fields (migration source only; superseded by the schema above) ──
     //
@@ -989,6 +1010,7 @@ public sealed partial class AppSettings
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),
         Smtp = Smtp.Clone(),
+        Web = Web.Clone(),
         McpServers = McpServers.Select(x => x.Clone()).ToList(),
         Providers = Providers.Select(x => x.Clone()).ToList(),
         Workers = Workers.Select(x => x.Clone()).ToList()

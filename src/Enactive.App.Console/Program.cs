@@ -262,7 +262,7 @@ var artifactStore = new DiskArtifactStore(workspace);
 var mailAccount = EngineComposition.Mail(settings);
 
 IToolRegistry toolRegistry = new LoggingToolRegistry(
-    new ToolRegistry(BuiltInTools.Create(mailAccount)), logHub);
+    new ToolRegistry(BuiltInTools.Create(mailAccount, EngineComposition.Web(settings))), logHub);
 var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), memoryStore);
 var workers = workerProvider.All;
 

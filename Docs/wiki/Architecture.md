@@ -92,6 +92,7 @@ The model receives the tools allowed for its worker and performs a streaming con
 | Remove a file | `delete_file` | Delete one file. Always asks first, at every autonomy tier |
 | Shell | `run_command`, `run_powershell` | Execute commands; PowerShell has its own script transport |
 | Development operations | `git`, `docker` | Invoke version-control and container operations |
+| Web | `fetch_url`, `web_search` | Read a public page as text; search through a SearXNG server. Only when turned on in Settings → Web and given to a role — see [Operations → Web](Operations.md#web-tools-and-searxng) |
 | External tools | `mcp__...` | Tools discovered from configured MCP servers in the desktop host |
 
 Use `edit_file` for a small change to an existing file. Asking a small model to rewrite the whole file increases the chance of losing unrelated content.

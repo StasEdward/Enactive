@@ -20,7 +20,7 @@ This wiki covers the desktop application, its shared execution engine, the conso
 | [Choosing models by phase and role](Models-and-Phases.md) | Model responsibilities, selection guidance, routing, recommended setups, and evaluation |
 | [Remote access](Remote-Access.md) | Starting tasks from a browser: signing in, pairing a computer, adding and removing devices, and what a remote run may not do |
 | [Remote security](Remote-Security.md) | What the remote service can and cannot see, the limits of its encryption, and how to compare the panel with its release |
-| [Operations and troubleshooting](Operations.md) | History, logs, storage, MCP, recovery, and common problems |
+| [Operations and troubleshooting](Operations.md) | History, logs, storage, MCP, web tools and a SearXNG server, recovery, and common problems |
 
 ## Recommended reading paths
 

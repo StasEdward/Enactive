@@ -11,7 +11,7 @@
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
 <div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><a href="remote-access.html">Remote access</a><a href="remote-security.html">Remote security</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html" aria-current="page">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
-<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Operations &amp; troubleshooting</span></div><p class="eyebrow">Reference · Enactive</p><h1>Operations and Troubleshooting</h1><div class="page-meta"><span>13 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Operations.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#run-history-and-project-memory">Run history and project memory</a><a href="#storage-layout">Storage layout</a><a href="#logs-and-diagnosis">Logs and diagnosis</a><a href="#mcp-external-tools">MCP external tools</a><a href="#filesystem-and-recovery-boundaries">Filesystem and recovery boundaries</a><a href="#backup-and-moving-installations">Backup and moving installations</a><a href="#troubleshooting-reference">Troubleshooting reference</a><a href="#remote-access">Remote access</a><a href="#maintaining-this-wiki">Maintaining this wiki</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="run-history-and-project-memory">Run history and project memory<a class="heading-anchor" href="#run-history-and-project-memory" aria-label="Link to Run history and project memory">#</a></h2>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Operations &amp; troubleshooting</span></div><p class="eyebrow">Reference · Enactive</p><h1>Operations and Troubleshooting</h1><div class="page-meta"><span>19 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Operations.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#run-history-and-project-memory">Run history and project memory</a><a href="#storage-layout">Storage layout</a><a href="#logs-and-diagnosis">Logs and diagnosis</a><a href="#mcp-external-tools">MCP external tools</a><a href="#web-tools-and-searxng">Web tools and SearXNG</a><a href="#filesystem-and-recovery-boundaries">Filesystem and recovery boundaries</a><a href="#backup-and-moving-installations">Backup and moving installations</a><a href="#troubleshooting-reference">Troubleshooting reference</a><a href="#remote-access">Remote access</a><a href="#maintaining-this-wiki">Maintaining this wiki</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="run-history-and-project-memory">Run history and project memory<a class="heading-anchor" href="#run-history-and-project-memory" aria-label="Link to Run history and project memory">#</a></h2>
 <p>The desktop records run requests, events, decisions, artifacts, outcomes, usage, and available settings/specification snapshots. Open a historical run to inspect its execution cards and timeline. Retry and Run again create additional attempts; see <a href="running-tasks.html#retry-versus-run-again">Running tasks</a>.</p>
 <p>Project memory stores durable entries such as decisions and contributes to the project timeline. It is not a full source index or a guarantee that every entry is inserted into every future model prompt.</p>
 <p>Historical artifact actions operate on current files. Opening a path shows what is there now; a Delete action on an old artifact is not equivalent to reverting the exact historical write. Inspect the current content and action label.</p>
@@ -161,6 +161,137 @@ mcp__example__*</code></pre></div>
 <p>Connections and child processes are released when the run ends or is cancelled. A transport error does not trigger automatic replay of a remote tool call: the external action may already have happened.</p>
 <p>MCP environment values and headers are saved through encrypted secret storage. Arguments and URLs are not secret fields. If decryption is unavailable, the configuration requires attention rather than silently discarding the original protected data.</p>
 <p>External tools operate with their process/account permissions. Enactive&#39;s workspace guard, staging, and rejected-step revert do not constrain or undo their external effects. Configure boundaries in the server itself when needed. The console does not connect these desktop MCP configurations.</p>
+<h2 id="web-tools-and-searxng">Web tools and SearXNG<a class="heading-anchor" href="#web-tools-and-searxng" aria-label="Link to Web tools and SearXNG">#</a></h2>
+<p>Two built-in tools read the web. Both are off until a person turns them on, and neither is in a default role.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tool / What it does / Exists when"><table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>What it does</th>
+<th>Exists when</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>fetch_url</code></td>
+<td>Reads one page or text file by its address. Returns the title and the text a reader sees, without markup, scripts, styles or comments</td>
+<td><strong>Let tasks read the web</strong> is on</td>
+</tr>
+<tr>
+<td><code>web_search</code></td>
+<td>Searches through a <a href="https://docs.searxng.org/">SearXNG</a> server you run. Returns titles, addresses and short snippets, which <code>fetch_url</code> then reads</td>
+<td>It is on <strong>and</strong> a search server address is set</td>
+</tr>
+</tbody></table>
+</div><p>They replace what a worker otherwise does with <code>curl</code> or <code>Invoke-WebRequest</code> through the shell: raw HTML, mostly markup, counted against the model&#39;s window, and impossible in a run whose shell is denied.</p>
+<h3 id="turn-them-on">Turn them on<a class="heading-anchor" href="#turn-them-on" aria-label="Link to Turn them on">#</a></h3>
+<ol>
+<li><strong>Settings → Web</strong>: tick <strong>Let tasks read the web</strong>. For search, enter the server&#39;s address, e.g. <code>http://localhost:8888</code> (the next section sets one up). Decide on <strong>Use without asking each time</strong> (see below). Save.</li>
+<li><strong>Settings → AI → Team</strong>: tick <code>fetch_url</code> and <code>web_search</code> for each role that should use them. <code>*</code> covers them too.</li>
+</ol>
+<p>Until a role has them, every run warns that they are <em>registered and named by no role</em>, and no worker sees them. The bottom of the Web pane lists the roles that have them.</p>
+<p>The console reads the same <code>settings.json</code>, so the Web settings apply to console runs too.</p>
+<h3 id="run-a-searxng-server">Run a SearXNG server<a class="heading-anchor" href="#run-a-searxng-server" aria-label="Link to Run a SearXNG server">#</a></h3>
+<p>SearXNG is a self-hosted metasearch engine: it asks public search engines and answers in JSON. It needs no account and no key, and the queries go where you run it. The simplest way is Docker.</p>
+<p>Run it with its settings in a folder on this computer; on its first start it writes a default <code>settings.yml</code> there:</p>
+<div class="code-block"><div class="code-toolbar"><span>bash</span><button class="copy-button" type="button" aria-label="Copy bash example">Copy</button></div><pre tabindex="0"><code class="language-bash">docker run -d --name searxng -p 127.0.0.1:8888:8080 -v C:/searxng:/etc/searxng --restart unless-stopped searxng/searxng:latest</code></pre></div>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Part / Meaning"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>-p 127.0.0.1:8888:8080</code></td>
+<td>Port 8888 on this computer leads to 8080 inside the container, where SearXNG listens. Change the left number for another port. <code>127.0.0.1</code> keeps it reachable from this computer only, not from the network</td>
+</tr>
+<tr>
+<td><code>-v C:/searxng:/etc/searxng</code></td>
+<td><code>settings.yml</code> lives in <code>C:\searxng</code>, editable with any editor and kept when the container is recreated</td>
+</tr>
+<tr>
+<td><code>--restart unless-stopped</code></td>
+<td>It starts again with Docker</td>
+</tr>
+</tbody></table>
+</div><p><strong>Turn JSON on.</strong> SearXNG answers only HTML by default, and <code>web_search</code> reads JSON. In <code>C:\searxng\settings.yml</code>, under <code>search:</code>, list <code>json</code> among the formats:</p>
+<div class="code-block"><div class="code-toolbar"><span>yaml</span><button class="copy-button" type="button" aria-label="Copy yaml example">Copy</button></div><pre tabindex="0"><code class="language-yaml">search:
+  formats:
+    - html
+    - json</code></pre></div>
+<p>Then restart it:</p>
+<div class="code-block"><div class="code-toolbar"><span>bash</span><button class="copy-button" type="button" aria-label="Copy bash example">Copy</button></div><pre tabindex="0"><code class="language-bash">docker restart searxng</code></pre></div>
+<p><strong>Check it</strong> before pointing Enactive at it:</p>
+<div class="code-block"><div class="code-toolbar"><span>bash</span><button class="copy-button" type="button" aria-label="Copy bash example">Copy</button></div><pre tabindex="0"><code class="language-bash">curl &quot;http://localhost:8888/search?q=test&amp;format=json&quot;</code></pre></div>
+<p>JSON with a <code>&quot;results&quot;</code> array means it works. <code>403 Forbidden</code> means JSON is still off.</p>
+<p><strong>Ports cannot be changed on an existing container.</strong> A container created without <code>-p</code>, or with the wrong port, has to be recreated: copy its settings out (<code>docker cp searxng:/etc/searxng/. C:/searxng/</code>), remove it (<code>docker rm searxng</code>), and run the command above. Then put the new address in Settings → Web.</p>
+<h3 id="asking-and-runs-nobody-watches">Asking, and runs nobody watches<a class="heading-anchor" href="#asking-and-runs-nobody-watches" aria-label="Link to Asking, and runs nobody watches">#</a></h3>
+<p>With <strong>Use without asking each time</strong> off, every page and every search asks first, naming the address or the query. A run nobody can answer — a background or scheduled one, or a console run with <code>--approve deny</code> — is not offered the tools at all: a question nobody can answer would be a refusal on every call.</p>
+<p>With it on, they are used without a question, by every run including scheduled ones. Asking for a page sends its address out of this computer, and a search sends its query; both are written by the model from the task. Turn the question off only for tasks whose requests you trust.</p>
+<h3 id="what-comes-back-and-the-limits">What comes back, and the limits<a class="heading-anchor" href="#what-comes-back-and-the-limits" aria-label="Link to What comes back, and the limits">#</a></h3>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Limit / Value / Why"><table>
+<thead>
+<tr>
+<th>Limit</th>
+<th>Value</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Addresses</td>
+<td><code>http</code> and <code>https</code> only, public addresses only</td>
+<td>A URL the model writes is checked by nobody. Allowed to reach this computer or its network, <code>fetch_url</code> would read a local admin page, a router or a cloud machine&#39;s metadata endpoint</td>
+</tr>
+<tr>
+<td>Where the address check happens</td>
+<td>At the connection, against what the name resolved to then</td>
+<td>Checked only before the request, a name could resolve to a public address for the check and to this machine for the connection</td>
+</tr>
+<tr>
+<td>Redirects</td>
+<td>Followed one at a time, each checked, at most 5</td>
+<td>Followed automatically, a public page could send the request on to this machine</td>
+</tr>
+<tr>
+<td>Proxy</td>
+<td>None: <code>fetch_url</code> connects directly</td>
+<td>Through a proxy the check would be of the proxy, not of the page&#39;s address</td>
+</tr>
+<tr>
+<td>Page read</td>
+<td>Up to 2 MB</td>
+<td>A larger page is read that far, and the result says so</td>
+</tr>
+<tr>
+<td>Text returned</td>
+<td>12,000 characters by default; the call may ask for 500–50,000 with <code>max_chars</code></td>
+<td>A cut always says how much was not shown</td>
+</tr>
+<tr>
+<td>Content</td>
+<td>Web pages and text (<code>text/*</code>, JSON, XML, YAML, JavaScript)</td>
+<td>A PDF or an image is refused, naming its type, rather than read as garbage</td>
+</tr>
+<tr>
+<td>Time</td>
+<td>30 seconds per page or search</td>
+<td></td>
+</tr>
+<tr>
+<td>Search results</td>
+<td>8 by default, at most 20; snippets cut to about 300 characters</td>
+<td></td>
+</tr>
+<tr>
+<td>Search query</td>
+<td>At most 300 characters</td>
+<td>A longer query is text being sent out of the machine, not a search</td>
+</tr>
+</tbody></table>
+</div><p>Everything the tools bring back is marked as text from the web — data to work with, not instructions. A page can say anything, including what to do next.</p>
+<p>The search server&#39;s address is not limited to public ones: it is the server you configured, usually on this computer.</p>
+<p>A search server that does not answer is reported as unavailable, never as an empty result: &quot;no results&quot; is a finding about the web, a stopped container is not. Search engines that SearXNG could not reach are listed under the results.</p>
+<p>Requests carry the user agent <code>Enactive/1.0</code>. Sites behind bot protection may refuse them as they refuse <code>curl</code>; search usually still finds another copy of the page.</p>
 <h2 id="filesystem-and-recovery-boundaries">Filesystem and recovery boundaries<a class="heading-anchor" href="#filesystem-and-recovery-boundaries" aria-label="Link to Filesystem and recovery boundaries">#</a></h2>
 <p>Built-in path-based file tools reject absolute/escaping paths, inspect links that can lead outside the workspace, and protect reserved application-state paths. These checks are not a general sandbox for shell or external servers.</p>
 <p>Tracked writes use canonical file identity and scoped sequence information. Revert can refuse when a later scope wrote the same file, the user edited it, or the operation cannot be represented safely. Read the refusal instead of assuming that Failed means all files were restored.</p>
@@ -287,6 +418,36 @@ mcp__example__*</code></pre></div>
 <td>MCP failure prevents all work</td>
 <td>An enabled server cannot initialize</td>
 <td>Test, fix, or disable that server</td>
+</tr>
+<tr>
+<td>Run warns <code>fetch_url, web_search</code> are <em>named by no role</em></td>
+<td>Web is on, but no role has the tools</td>
+<td>Tick them for the role under AI → Team</td>
+</tr>
+<tr>
+<td>Worker uses <code>curl</code> instead of <code>fetch_url</code></td>
+<td>Its role does not have <code>fetch_url</code></td>
+<td>AI → Team, and the run&#39;s warnings</td>
+</tr>
+<tr>
+<td><code>web_search</code>: <em>Search is not available</em></td>
+<td>The SearXNG server is stopped, or the address/port is wrong</td>
+<td><code>docker ps</code>; the <code>curl</code> check in <a href="#web-tools-and-searxng">Web</a></td>
+</tr>
+<tr>
+<td><code>web_search</code>: <em>answered … but not with JSON</em></td>
+<td>JSON is off in SearXNG</td>
+<td><code>search.formats</code> in its <code>settings.yml</code>, then restart it</td>
+</tr>
+<tr>
+<td><code>fetch_url</code>: <em>not a public address</em></td>
+<td>The page is on this computer or its network</td>
+<td>Intended; read local services with other tools</td>
+</tr>
+<tr>
+<td>Web tools missing from a scheduled or background run</td>
+<td>The question is on, and nobody can answer it</td>
+<td>Settings → Web → Use without asking, if those tasks are trusted</td>
 </tr>
 <tr>
 <td>App closes and background work stops</td>
@@ -436,11 +597,12 @@ compares them unless a person does
 <li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Workspace/InboxStoreFactory.cs">Inbox store selection</a></li>
 <li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Workspace/LogHub.cs">Logging</a></li>
 <li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Tools/Mcp/McpRunTools.cs">MCP run connections</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Tools/Web/FetchUrlTool.cs">Web tools</a>, <a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Tools/Web/WebSearchTool.cs">search</a>, <a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Core/Web.cs">address check</a></li>
 <li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Workspace/DiskArtifactStore.cs">Artifact recovery</a></li>
 <li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Remote.Gateway/Program.cs">Remote gateway</a></li>
 <li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.App.Ui/RemoteAccessService.cs">Remote host inside the desktop app</a></li>
 </ul>
 </article><nav class="pagination" aria-label="Adjacent chapters"><a href="architecture.html"><small>← Previous</small><strong>Architecture</strong></a><a href="index.html"><small>Back to</small><strong>Wiki home →</strong></a></nav><footer class="page-footer"><span>Enactive · Real, reviewable, recorded action.</span><a href="#main">Back to top ↑</a></footer></main>
-<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#run-history-and-project-memory">Run history and project memory</a><a href="#storage-layout">Storage layout</a><a href="#logs-and-diagnosis">Logs and diagnosis</a><a href="#mcp-external-tools">MCP external tools</a><a href="#filesystem-and-recovery-boundaries">Filesystem and recovery boundaries</a><a href="#backup-and-moving-installations">Backup and moving installations</a><a href="#troubleshooting-reference">Troubleshooting reference</a><a href="#remote-access">Remote access</a><a href="#maintaining-this-wiki">Maintaining this wiki</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Operations.md">View Markdown source ↗</a></aside></div>
+<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#run-history-and-project-memory">Run history and project memory</a><a href="#storage-layout">Storage layout</a><a href="#logs-and-diagnosis">Logs and diagnosis</a><a href="#mcp-external-tools">MCP external tools</a><a href="#web-tools-and-searxng">Web tools and SearXNG</a><a href="#filesystem-and-recovery-boundaries">Filesystem and recovery boundaries</a><a href="#backup-and-moving-installations">Backup and moving installations</a><a href="#troubleshooting-reference">Troubleshooting reference</a><a href="#remote-access">Remote access</a><a href="#maintaining-this-wiki">Maintaining this wiki</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Operations.md">View Markdown source ↗</a></aside></div>
 <dialog id="search-dialog" aria-labelledby="search-title"><div class="search-heading"><h2 id="search-title">Search the wiki</h2><button id="close-search" type="button" aria-label="Close search">Close <kbd>Esc</kbd></button></div><label for="search-input">Find a topic, setting, or command</label><input id="search-input" type="search" placeholder="Try templates, Review, or --workspace" autocomplete="off"><p id="search-status" role="status" aria-live="polite">Search across all chapters.</p><div id="search-results"></div></dialog><div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
 </body></html>
