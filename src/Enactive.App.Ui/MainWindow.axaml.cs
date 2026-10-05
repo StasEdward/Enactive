@@ -664,7 +664,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             open: () =>
             {
                 var window = new SettingsWindow(_settings, workspaceRoot: WorkspaceRootOrNull(),
-                    toolNames: _toolRegistry.Definitions.Select(d => d.Name).ToArray(),
+                    // With the web tools always among them: a role can be given them before reading the web is
+                    // turned on, and the Team list would otherwise only show them after a save and a reopen.
+                    toolNames: _toolRegistry.Definitions.Select(d => d.Name)
+                        .Union([Enactive.Tools.Web.FetchUrlTool.Name, Enactive.Tools.Web.WebSearchTool.Name]).ToArray(),
                     remoteCheck: CheckRemoteAsync,
                     remoteConnect: ConnectRemoteAsync,
                     remoteDevices: RemoteDeviceAccess,
@@ -2976,7 +2979,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         /// point of use, and a run already in flight holds the registry it started with.</para>
         /// </summary>
         private IToolRegistry BuildToolRegistry()
-            => new ToolRegistry(BuiltInTools.Create(EngineComposition.Mail(_settings)));
+            => new ToolRegistry(BuiltInTools.Create(EngineComposition.Mail(_settings), EngineComposition.Web(_settings)));
 
         private void ApplySettings()
         {

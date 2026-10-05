@@ -48,6 +48,8 @@
                                 Content="Writable folders" Command="{Binding ShowWritableRootsCommand}" />
                         <Button Classes="nav" Classes.on="{Binding IsSmtp}"
                                 Content="SMTP" Command="{Binding ShowSmtpCommand}" />
+                        <Button Classes="nav" Classes.on="{Binding IsWeb}"
+                                Content="Web" Command="{Binding ShowWebCommand}" />
                         <Button Classes="nav" Classes.on="{Binding IsAbout}"
                                 Content="About" Command="{Binding ShowAboutCommand}" />
 
@@ -198,6 +200,29 @@
                     <TextBlock Classes="label" Text="Account" />
                     <TextBlock Classes="hint"
                                Text="Nothing here yet. Enactive has no account of its own; provider credentials live under AI · Providers." />
+                </StackPanel>
+
+                <StackPanel IsVisible="{Binding IsWeb}" Margin="12" Spacing="6">
+                    <TextBlock Classes="label" Text="Web" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="Whether tasks may read the web. fetch_url reads a page by its address and returns its text; web_search searches through a search server you run. What they bring back is treated as data from the web, not as instructions." />
+
+                    <CheckBox Content="Let tasks read the web" Margin="0,8,0,0" IsChecked="{Binding WebEnabled}" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="Public addresses only: not this computer and not its network. Asking for a page sends its address out of this computer - the address can carry anything the model puts in it." />
+
+                    <TextBlock Classes="label" Text="Search server" Margin="0,8,0,0" />
+                    <TextBox Text="{Binding WebSearchUrl}" PlaceholderText="http://localhost:8888" IsEnabled="{Binding WebEnabled}" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="A SearXNG server, for example one started in Docker. In its settings.yml, add json under search.formats - that is what web_search reads. Leave empty for no web_search. A search query is written from the task and leaves this computer." />
+                    <TextBlock Classes="hint" TextWrapping="Wrap" Foreground="{DynamicResource Brand.Danger}"
+                               IsVisible="{Binding HasWebProblem}" Text="{Binding WebProblem}" />
+
+                    <CheckBox Content="Use without asking each time" Margin="0,12,0,0"
+                              IsChecked="{Binding WebUseWithoutAsking}" IsEnabled="{Binding WebEnabled}" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap" Text="{Binding WebAsking}" />
+
+                    <TextBlock Classes="hint" TextWrapping="Wrap" Margin="0,10,0,0" Text="{Binding WebState}" />
                 </StackPanel>
 
                 <StackPanel IsVisible="{Binding IsSmtp}" Margin="12" Spacing="6">

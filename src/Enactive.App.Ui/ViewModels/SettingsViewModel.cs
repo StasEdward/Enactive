@@ -204,6 +204,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
             OnPropertyChanged(nameof(IsRemote));
             OnPropertyChanged(nameof(IsWritableRoots));
             OnPropertyChanged(nameof(IsSmtp));
+            OnPropertyChanged(nameof(IsWeb));
 
             // Checked when the list is opened, once. Not on every visit: these are network calls
             // made without being asked, and a light that re-checks each time somebody passes
@@ -295,6 +296,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
         InitializeTemplates(workspaceRoot);
         InitializeRemote();
         InitializeSmtp();
+        InitializeWeb();
         InitializeWritableRoots();
 
         _numCtxText = _working.NumCtx?.ToString() ?? string.Empty;
@@ -603,6 +605,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
 
         SaveRemote();
         SaveSmtp();
+        SaveWeb();
 
         _working.Bindings.Plan = FromSelection(Plan);
         _working.Bindings.Review = FromSelection(Review);
