@@ -1,0 +1,26 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Enactive.App.Ui.TrayHintWindow"
+        Title="Enactive"
+        SizeToContent="Height" Width="360"
+        CanResize="False"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        WindowStartupLocation="Manual"
+        WindowDecorations="None"
+        Background="{DynamicResource Brand.Surface}">
+
+    <!-- Not a dialog: it takes no focus and asks nothing. It says where the window went, then goes. -->
+    <Border BorderBrush="{DynamicResource Brand.LineStrong}" BorderThickness="1" Cursor="Hand">
+        <StackPanel Margin="16,14" Spacing="6">
+            <TextBlock Text="Enactive is still running" FontSize="14" FontWeight="SemiBold"
+                       Foreground="{DynamicResource Brand.Text}" />
+            <TextBlock x:Name="DetailText" FontSize="12" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Brand.TextBody}" />
+            <TextBlock Text="Click to bring the window back." FontSize="11"
+                       Foreground="{DynamicResource Brand.TextMuted}" />
+        </StackPanel>
+    </Border>
+
+</Window>
