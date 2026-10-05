@@ -3,6 +3,7 @@ namespace Enactive.Engine.Tests;
 using Enactive.Core.Events;
 using Enactive.Core.Permissions;
 using Enactive.Core.Templates;
+using Enactive.Core.Workers;
 using Xunit;
 
 /// <summary>
@@ -39,6 +40,10 @@ public sealed class VerificationLoopTests
 
     private static SuccessCriterionDefinition Always(int exitCode, string name = "Builds", bool required = true)
         => new(name, OperatingSystem.IsWindows() ? $"cmd /c exit {exitCode}" : $"exit {exitCode}", 0, required);
+
+    /// <summary>A role that carries every tool that writes file content, so a policy alone decides which it may use.</summary>
+    private static Worker Writer
+        => EngineFixture.WorkerWith("write_file", "edit_file", "create_directory", "read_file", "list_dir", "run_command");
 
     private static int Checks(List<WorkEvent> events)
         => events.Count(e => e.IsCheck());
@@ -253,6 +258,97 @@ public sealed class VerificationLoopTests
 
         Assert.NotEqual(RunOutcomeKind.Completed, Terminal(events).Outcome());
         Assert.Equal(1, Checks(events));
+    }
+
+    /// <summary>
+    /// A run its policy keeps from writing files is not sent to fix a failed check: fixing is changing files, and
+    /// the run said it may not. On 2026-10-05 a release check - report the tests, change nothing - had its tests
+    /// fail, and a repair was dispatched with write_file, edit_file and create_directory all denied: seven and a
+    /// half minutes of reading code that ended in report_blocked. The check's verdict stands, unrepaired.
+    /// </summary>
+    [Fact]
+    public async Task A_run_that_may_not_write_files_is_not_sent_to_fix_a_failed_check()
+    {
+        using var fx = new EngineFixture();
+
+        var provider = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"do the thing"}"""),
+            Turn.Says("All done."))
+        {
+            WhenExhausted = Turn.Says("I tried.")
+        };
+
+        var policy = new PermissionPolicy(PermissionLevel.Execute, Allow: new[] { "*" }, AskBefore: Array.Empty<string>())
+        {
+            Deny = new[] { "write_file", "edit_file", "create_directory" }
+        };
+
+        var events = await fx.RunAsync(
+            fx.Build(provider, worker: Writer, policy: policy, successCriteria: new[] { Always(1) }, successRetries: 3),
+            "do the thing");
+
+        Assert.Equal(RunOutcomeKind.Failed, Terminal(events).Outcome());
+        Assert.Equal(1, Checks(events));
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.Contains(events, e => (e.Summary ?? "").Contains("No attempt to fix them: this run may not change files"));
+    }
+
+    /// <summary>
+    /// Only the tools that write file content decide it: with one of them still allowed, the repair has a way to
+    /// fix the cause, and is sent.
+    /// </summary>
+    [Fact]
+    public async Task A_run_that_may_still_write_with_one_tool_is_sent_to_fix_a_failed_check()
+    {
+        using var fx = new EngineFixture();
+
+        var provider = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"do the thing"}"""),
+            Turn.Says("All done."))
+        {
+            WhenExhausted = Turn.Says("I tried.")
+        };
+
+        var policy = new PermissionPolicy(PermissionLevel.Execute, Allow: new[] { "*" }, AskBefore: Array.Empty<string>())
+        {
+            Deny = new[] { "write_file", "create_directory" }
+        };
+
+        var events = await fx.RunAsync(
+            fx.Build(provider, worker: Writer, policy: policy, successCriteria: new[] { Always(1) }, successRetries: 1),
+            "do the thing");
+
+        Assert.Equal(RunOutcomeKind.Failed, Terminal(events).Outcome());
+        Assert.Equal(2, Checks(events));
+        Assert.DoesNotContain(events, e => (e.Summary ?? "").Contains("No attempt to fix them"));
+    }
+
+    /// <summary>
+    /// A check may pass on more than one exit code - a test runner's 1 is "some tests failed", which is the answer
+    /// a report-only check is after. Either code passes it, with no repair; any other still fails it.
+    /// </summary>
+    [Theory]
+    [InlineData(0, RunOutcomeKind.Completed, 1)]
+    [InlineData(1, RunOutcomeKind.Completed, 1)]
+    [InlineData(2, RunOutcomeKind.Failed, 2)]
+    public async Task A_check_that_passes_on_several_exit_codes_passes_on_each_of_them(int exitCode, RunOutcomeKind outcome, int checks)
+    {
+        using var fx = new EngineFixture();
+
+        var provider = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"do the thing"}"""),
+            Turn.Says("All done."))
+        {
+            WhenExhausted = Turn.Says("I tried.")
+        };
+
+        var events = await fx.RunAsync(
+            fx.Build(provider, successCriteria: new[] { Always(exitCode, "Tests ran") with { ExpectedExitCodes = [0, 1] } },
+                successRetries: 1),
+            "do the thing");
+
+        Assert.Equal(outcome, Terminal(events).Outcome());
+        Assert.Equal(checks, Checks(events));
     }
 
     /// <summary>

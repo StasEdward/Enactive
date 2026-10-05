@@ -3029,6 +3029,16 @@ public sealed partial class Orchestrator : IOrchestrator
                 }
             }
 
+            // A run that may not write cannot be fixed, so it is not sent to try: the verdict stands as the checks gave it.
+            // See WhyRepairCannotWrite.
+            if (WhyRepairCannotWrite(worker) is { } cannotWrite)
+            {
+                yield return ev(EventKind.ErrorObserved,
+                    $"Check(s) failed: {string.Join(", ", fixable.Select(r => r.Name))}. No attempt to fix them: this run "
+                    + $"may not change files ({cannotWrite}).");
+                yield break;
+            }
+
             yield return ev(EventKind.ErrorObserved,
                 $"Check(s) failed; attempt {attempt} of {_successRetries} to fix: "
                 + string.Join(", ", fixable.Select(r => r.Name)));
@@ -3439,22 +3449,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // Two gates, deliberately not merged: the role answers "may this WORKER do this", the offer
         // answers "may this RUN do this". A role is saved and belongs to the person; a run's policy
         // and its handler are chosen for the occasion.
-        var effective = EffectivePolicyFor(worker);
         var toolAccess = new ToolAccess(_tools, _permissions);
         var preflight = new ToolPreflight(_tools, toolAccess, worker, reads, store, _workspace.RootPath, _workspace.Id);
-        var offer = ToolOffers.For(
-            _tools.Definitions.Where(d => Allows(worker, d.Name)).Select(d => d.Name),
-            tool =>
-            {
-                var decision = _permissions.Evaluate(effective, tool, _tools.RequiredLevelOf(tool));
-                // Folded in HERE and not inside the rule, because it is the same upgrade the call
-                // site performs a few hundred lines below. A tool that always asks would otherwise
-                // be offered as allowed and then refused - the exact shape being fixed.
-                return decision == PermissionDecision.Allow && _tools.RequiresApprovalOf(tool)
-                    ? PermissionDecision.Ask
-                    : decision;
-            },
-            _decisions.CanApprove);
+        var offer = OfferFor(worker);
 
         // A tool that may change files without saying which cannot be held to a write boundary. The
         // engine does not claim to: where the boundary matters most - a step whose results it assembles
@@ -5295,7 +5292,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
     internal static string CheckLines(IEnumerable<SuccessCriterionDefinition> checks)
         => string.Join("\n", checks.Select(c =>
-            $"- {c.Name}: " + (c.Typed is not null ? $"{c.Command} (checked by the engine)" : $"`{c.Command}`, expected exit code {c.ExpectedExitCode}")
+            $"- {c.Name}: " + (c.Typed is not null ? $"{c.Command} (checked by the engine)" : $"`{c.Command}`, expected exit code {c.PassingExitCodesText}")
             + (c.Required ? "" : " (optional)")
             + (string.IsNullOrWhiteSpace(c.PlanningReason) ? "" : $" - why: {c.PlanningReason}")));
 
@@ -5360,6 +5357,50 @@ public sealed partial class Orchestrator : IOrchestrator
     /// is what the permission engine already does for anything over the granted autonomy.
     /// </summary>
     private PermissionPolicy EffectivePolicyFor(Worker worker) => ToolAccess.EffectivePolicy(_policy, worker);
+
+    /// <summary>
+    /// The tools this worker's role carries, narrowed to what this run can actually do with them - see
+    /// <see cref="ToolOffers"/>. One place for it, because the repair is decided by the same answer as the work.
+    /// </summary>
+    private ToolOffer OfferFor(Worker worker)
+    {
+        var effective = EffectivePolicyFor(worker);
+        return ToolOffers.For(
+            _tools.Definitions.Where(d => Allows(worker, d.Name)).Select(d => d.Name),
+            tool =>
+            {
+                var decision = _permissions.Evaluate(effective, tool, _tools.RequiredLevelOf(tool));
+                // Folded in HERE and not inside the rule, because it is the same upgrade the call
+                // site performs when the tool is called. A tool that always asks would otherwise
+                // be offered as allowed and then refused - the exact shape being fixed.
+                return decision == PermissionDecision.Allow && _tools.RequiresApprovalOf(tool)
+                    ? PermissionDecision.Ask
+                    : decision;
+            },
+            _decisions.CanApprove);
+    }
+
+    /// <summary>
+    /// Why a repair could not change a file in this run, or null when it could: every tool the worker carries that
+    /// writes file content is withheld from the run. A repair is told to find the cause of a failed check and fix
+    /// it, and fixing is changing files; a run its policy keeps from writing has said it is not to be fixed.
+    ///
+    /// <para>2026-10-05, a release check - report the build and the tests, change nothing - with write_file,
+    /// edit_file and create_directory denied: the tests failed, and a repair was dispatched anyway. Seven and a
+    /// half minutes of the worker reading the code, two answers lost to the token limit, and report_blocked naming
+    /// the tools the run had withheld before it began. Only the content-writing tools count: a role without any
+    /// is a role's choice, not the run's, and copying or deleting files fixes nothing a check failed on.</para>
+    /// </summary>
+    private string? WhyRepairCannotWrite(Worker worker)
+    {
+        var writers = _tools.Definitions.Where(d => d.Kind == ToolKind.Write && Allows(worker, d.Name)).Select(d => d.Name).ToArray();
+        if (writers.Length == 0)
+            return null;
+        var offer = OfferFor(worker);
+        if (!writers.All(offer.Withholds))
+            return null;
+        return new ToolOffer([], offer.Withheld.Where(w => writers.Contains(w.Name)).ToArray()).Because;
+    }
 
     /// <summary>
     /// Whether a worker's role is allowed to call the given tool. An EMPTY list means NO tools:

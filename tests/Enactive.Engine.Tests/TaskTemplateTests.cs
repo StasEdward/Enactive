@@ -406,6 +406,38 @@ public sealed class TaskTemplateTests : IDisposable
     }
 
     /// <summary>
+    /// The release check reports on the workspace and may not change it, so a failing test is its finding, not a
+    /// failed run: its test check passes on the runner's "some tests failed" (1) as well as on 0, and on nothing
+    /// else. And it runs the commands the person gave - with "npm test" given, it ran "dotnet test" regardless.
+    /// On 2026-10-05 a check demanding exit 0 failed the run whose report was right, then sent a repair to make the
+    /// tests pass in a run denied every file tool.
+    /// </summary>
+    [Fact]
+    public void The_release_check_runs_the_given_commands_and_reports_failing_tests_rather_than_failing()
+    {
+        var template = BuiltinTemplates.All.Single(t => t.Id == "release-check");
+        var spec = TemplateResolution.Resolve(
+            template, WorkspaceInfo.For(_root),
+            new PermissionPolicy(PermissionLevel.Execute, new[] { "*" }, Array.Empty<string>()),
+            new Dictionary<string, string> { ["build_command"] = "npm run build", ["test_command"] = "npm test" }).Spec;
+
+        Assert.NotNull(spec);
+        var build = spec!.SuccessCriteria.Single(c => c.Name == "Builds");
+        var tests = spec.SuccessCriteria.Single(c => c.Name == "Tests ran");
+
+        Assert.Equal("npm run build", build.Command);
+        Assert.Equal("npm test", tests.Command);
+
+        Assert.True(build.PassesOn(0));
+        Assert.False(build.PassesOn(1));
+
+        Assert.True(tests.PassesOn(0));
+        Assert.True(tests.PassesOn(1));
+        Assert.False(tests.PassesOn(2));
+        Assert.True(tests.Required);
+    }
+
+    /// <summary>
     /// An optional parameter nobody filled in leaves NOTHING behind, not its own name. Skipping it
     /// left the literal text "{area}" in the prompt: a token the model has no way to read as "the
     /// author left this blank", and every chance of treating as something to interpret.

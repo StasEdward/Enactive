@@ -98,7 +98,7 @@
                                         <Grid ColumnDefinitions="*,2*,Auto,Auto,Auto">
                                             <TextBox Text="{Binding Name}" PlaceholderText="Builds" Margin="0,0,6,0" />
                                             <TextBox Grid.Column="1" Text="{Binding Command}" PlaceholderText="dotnet build" Margin="0,0,6,0" />
-                                            <TextBox Grid.Column="2" Text="{Binding ExitCode}" Width="60" ToolTip.Tip="Expected exit code" />
+                                            <TextBox Grid.Column="2" Text="{Binding ExitCode}" Width="60" ToolTip.Tip="Exit codes that count as a pass, e.g. 0 or 0, 1" />
                                             <CheckBox Grid.Column="3" Content="Required" IsChecked="{Binding Required}" Margin="6,0,0,0" />
                                             <Button Grid.Column="4" Classes="rowIcon destructive" Margin="6,0,0,0"
                                                     Command="{Binding RemoveCommand}" ToolTip.Tip="Remove">

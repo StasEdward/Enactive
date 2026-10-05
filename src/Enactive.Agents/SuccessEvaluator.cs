@@ -105,7 +105,7 @@ public sealed class SuccessEvaluator : ISuccessEvaluator
                 RecommendedOptionId: "allow",
                 Subject: commandTool,
                 FullDetail: $"Success criterion '{criterion.Name}' for this run:\n\n{criterion.Command}\n\n"
-                          + $"It passes on exit code {criterion.ExpectedExitCode}. "
+                          + $"It passes on exit code {criterion.PassingExitCodesText}. "
                           + (!criterion.Required
                               ? "It is optional: skipping it records NOT CHECKED and does not block completion."
                               : criterion.Origin == CriterionOrigin.Proposed
@@ -169,11 +169,12 @@ public sealed class SuccessEvaluator : ISuccessEvaluator
                 "the check ran but reported no exit code, so there is nothing to judge it by. "
                 + Trim(result.Error ?? result.Output));
 
+        var passed = criterion.PassesOn(exitCode);
         return new CriterionResult(
             criterion.Name, criterion.Command, criterion.Required,
-            exitCode == criterion.ExpectedExitCode ? CriterionOutcome.Passed : CriterionOutcome.Failed,
+            passed ? CriterionOutcome.Passed : CriterionOutcome.Failed,
             exitCode,
-            exitCode == criterion.ExpectedExitCode ? null : Trim(result.Output ?? result.Error),
+            passed ? null : Trim(result.Output ?? result.Error),
             criterion.Origin,
             criterion.AlreadyPassing) { Output = result.Output ?? result.Error };
     }
