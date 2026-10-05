@@ -44,6 +44,8 @@ public sealed class CapsAnnounceThemselvesTests
     private static readonly Dictionary<string, string> Covered = new(StringComparer.Ordinal)
     {
         ["ModelTurn.ProgressEveryChars"] = "A_long_tool_call_says_it_is_still_being_written",
+        // A tool's line in the catalog: the first sentence of its description, cut at a line's length and marked.
+        ["ToolBudget.SummaryChars"] = "A_first_sentence_too_long_for_a_catalog_line_is_cut_and_says_so",
         // The two halves of ProcessExec's capture ceiling: the first lines and the last ones, with the
         // middle dropped and said so - driven past both, for stdout and stderr, through to evidence.
         ["CapturedStream.HeadChars"] = "The_end_of_a_long_output_survives_capture_result_and_evidence",

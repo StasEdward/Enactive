@@ -403,6 +403,11 @@ public sealed partial class AppSettings
     // passed, while another used both and was still wrong. Clamped to 0..5 by the orchestrator.
     public int ReviewRetries { get; set; } = 1;
 
+    // How many tools of its catalog one step may load. The tools of connected MCP servers are not sent with
+    // every request: they are named in a catalog and loaded by name when the work needs them, and each one
+    // loaded is a definition sent with every later turn of that step. Clamped to 1..32 by the orchestrator.
+    public int MaxLoadedToolsPerStep { get; set; } = 8;
+
     // How many times a run whose success CRITERIA failed may try to make them pass. A criterion is
     // the one thing in a run that is not somebody's opinion, and until 2026-09-08 a failed one just
     // ended the run: a build left broken was reported as broken and nothing tried to fix it, which
@@ -949,6 +954,7 @@ public sealed partial class AppSettings
         DisableThinking = DisableThinking,
         AllowImplicitToolCalls = AllowImplicitToolCalls,
         ReviewRetries = ReviewRetries,
+        MaxLoadedToolsPerStep = MaxLoadedToolsPerStep,
         SuccessRetries = SuccessRetries,
         RevertRejectedSteps = RevertRejectedSteps,
         VerifyWrites = VerifyWrites,

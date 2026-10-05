@@ -77,7 +77,14 @@ public enum EventKind
     /// item, or per batch. The payload is the step's title and the new steps' titles, numbered after
     /// every step the plan already had.
     /// </summary>
-    PlanExpanded
+    PlanExpanded,
+
+    /// <summary>
+    /// What a step's model was shown of the tools: the ones listed in full, the names in its catalog, and what
+    /// it has loaded - at the step's first request and again after each load. A call can only be judged
+    /// against what the model could see, and until this existed that was nowhere on record.
+    /// </summary>
+    ToolsExposed
 }
 
 /// <summary>
@@ -450,6 +457,17 @@ public static class WorkEventPayload
         => System.Text.Json.JsonSerializer.Serialize(new PlanExpansionShape(step, title, stepTitles), PayloadJson);
 
     private sealed record PlanExpansionShape(int Step, string Title, IReadOnlyList<string> Steps);
+
+    /// <summary>
+    /// The payload of a <see cref="EventKind.ToolsExposed"/> event: the tools listed in full for the step, the
+    /// names in its catalog, and the ones it has loaded so far, in the order it loaded them.
+    /// </summary>
+    public static string ToolsExposedPayload(int? step, string worker, IReadOnlyList<string> core,
+        IReadOnlyList<string> catalog, IReadOnlyList<string> loaded)
+        => System.Text.Json.JsonSerializer.Serialize(new ToolsExposedShape(step, worker, core, catalog, loaded), PayloadJson);
+
+    private sealed record ToolsExposedShape(int? Step, string Worker, IReadOnlyList<string> Core,
+        IReadOnlyList<string> Catalog, IReadOnlyList<string> Loaded);
 
     /// <summary>
     /// Builds the payload of an <see cref="EventKind.ArtifactProduced"/> event: what was produced and
