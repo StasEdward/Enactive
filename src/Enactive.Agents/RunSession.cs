@@ -104,6 +104,13 @@ internal sealed record StepAttemptState(
     /// <summary>Whether tools the boundary cannot check are kept from this step (a step whose results the engine assembles).</summary>
     public bool WithholdUnchecked { get; init; }
 
+    /// <summary>
+    /// The tools this step has loaded from its catalog, in the order it loaded them (see ToolBudget). Kept with the
+    /// step and not with one attempt at it: an attempt after a rejected review carries on in the same conversation,
+    /// which already uses them, and would otherwise have to load each one again before it could call it.
+    /// </summary>
+    public List<string> LoadedTools { get; } = [];
+
     /// <summary>The hand-over as the whole run offers it (see StepOutputContract.RunTool), or null for a run without one.</summary>
     public Enactive.Core.Tools.ToolDefinition? SubmitTool { get; init; }
 

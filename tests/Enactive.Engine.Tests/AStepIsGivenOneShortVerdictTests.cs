@@ -152,6 +152,22 @@ public sealed class AStepIsGivenOneShortVerdictTests
     }
 
     /// <summary>
+    /// Run 0a2be9, 2026-10-05: "the five processes that use the most memory" were picked by the worker from 370 rows in its
+    /// head, three of five wrong; the review was shown the result with its middle cut out, checked that the five values were
+    /// in it, and passed. A selection from a result is derived like a total, and where the rows it depends on are not
+    /// shown it is not shown.
+    /// </summary>
+    [Fact]
+    public async Task A_selection_from_a_result_is_checked_against_every_row_and_not_passed_on_a_shortened_one()
+    {
+        var (_, _, reviewer) = await Run([Pass(), Pass("the report matches the listing", 3)]);
+
+        var instruction = reviewer.Requests[0].Messages[0].Content!;
+        Assert.Contains("the largest, the first five, the ones that match, that none does", instruction, StringComparison.Ordinal);
+        Assert.Contains("the selection is not shown: fail it", instruction, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Benchmark scenario build-error, 2026-09-30: a change the request did not ask for, to what it said to leave alone,
     /// passed as "out of scope but harmless". The review is told that is not a detail.
     /// </summary>

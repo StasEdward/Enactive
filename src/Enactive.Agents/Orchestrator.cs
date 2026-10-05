@@ -167,6 +167,7 @@ public sealed partial class Orchestrator : IOrchestrator
     }
     private readonly IModelResolver _modelResolver;
     private readonly int _reviewRetries;
+    private readonly int _maxLoadedToolsPerStep;
     private readonly int _successRetries;
     private readonly bool _proposeChecks;
     private readonly int _maxParallelSteps;
@@ -257,6 +258,7 @@ public sealed partial class Orchestrator : IOrchestrator
         IModelRouter? router = null,
         int reviewRetries = 1,
         int successRetries = 1,
+        int maxLoadedToolsPerStep = ToolBudget.DefaultMaxLoaded,
         bool proposeChecks = true,
         int? numCtx = null,
         bool disableThinking = false,
@@ -338,6 +340,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // the cost of a run by the reviewer's price, and a stray large number would be paid for in
         // full before anyone noticed.
         _reviewRetries = Math.Clamp(reviewRetries, 0, 5);
+        // How many tools of its catalog one step may load (ToolBudget). Each one is a definition sent with every
+        // later turn of the step, so a stray large number brings back the cost the catalog exists to remove.
+        _maxLoadedToolsPerStep = Math.Clamp(maxLoadedToolsPerStep, 1, 32);
         // How many times a run whose CHECKS failed may try to make them pass. Same clamp and the
         // same reason: each attempt is a whole tool loop, paid for before anybody notices a stray
         // number. 0 restores the behaviour this had until 2026-09-08 - check once, and stop.
@@ -778,7 +783,8 @@ public sealed partial class Orchestrator : IOrchestrator
             yield return scope.Ev(EventKind.ReviewRequested, "Planner is checking final criteria against the original request before execution…");
             plan = await InScopeAsync(runId, taskId, null, () => PlanCheckReview.RunAsync(plan with { Checks = CriteriaFor(plan) }, intent.RawText,
                 intent.Context, models.PlanProvider, models.Plan.Model, budget,
-                _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: resume is not null || _successCriteria.Count > 0 || !_proposeChecks, tools: _tools.Definitions,
+                _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: resume is not null || _successCriteria.Count > 0 || !_proposeChecks,
+                tools: _tools.Definitions.Where(d => !DeniedToThisRun(d.Name)).ToArray(),
                 workspaceRoot: _workspace.RootPath, askWhenUnsettled: true));
             yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
                 plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
@@ -837,6 +843,19 @@ public sealed partial class Orchestrator : IOrchestrator
             foreach (var check in plan.Checks)
                 yield return scope.Ev(EventKind.ContextAssembled,
                     $"Final check ({check.Origin}): {check.Command} — {check.PlanningReason}");
+        }
+
+        // A check proposed for a run that may not run commands could never be run: tried before the work it could not
+        // be, and at the end it is NOT CHECKED - two lines about a check nobody could have made (run 0a2be9, 2026-10-05,
+        // a run whose commands were all denied, given "Get-Process | Sort-Object ..." as its final check). Dropped here,
+        // with one line. A check the person ASKED for stays: that it could not be run is theirs to read at the end.
+        if (resume is null && CheckRunner() is { } runner && DeniedToThisRun(runner)
+            && plan.Checks.Where(c => c.Origin == CriterionOrigin.Proposed && c.Typed is null).ToArray() is { Length: > 0 } unrunnable)
+        {
+            plan = plan with { Checks = plan.Checks.Except(unrunnable).ToArray() };
+            foreach (var check in unrunnable)
+                yield return scope.Ev(EventKind.ContextAssembled, $"Proposed final check '{check.Name}' ({check.Command}) dropped: "
+                    + $"this run may not run commands ({runner} is denied), so it could never be run. The review judges the work.");
         }
 
         intent = intent with { Context = intent.Context with { Restrictions = plan.Restrictions, ActionPolicy = plan.ActionPolicy } };
@@ -3372,7 +3391,9 @@ public sealed partial class Orchestrator : IOrchestrator
         ToolDefinition? submitTool = null,
         // Whether a reviewer judges this step when it ends: calls still open after the step was told of them then go
         // to it, marked, instead of ending the step unfinished (amendment A).
-        bool reviewed = false)
+        bool reviewed = false,
+        // What the step has loaded from its tool catalog so far - the step's, shared by its attempts (ToolBudget).
+        List<string>? loadedTools = null)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -3609,15 +3630,18 @@ public sealed partial class Orchestrator : IOrchestrator
 
         // The tool definitions are part of every request - see ToolBudget. Past their share of the
         // size this step works at, the MCP tools are offered through one search tool instead of listed.
-        var (listedTools, toolsOnRequest, definitionTokens) = ToolBudget.Split(toolDefs, working ?? statedWindow);
+        var (listedTools, toolsOnRequest) = ToolBudget.Split(toolDefs, _maxLoadedToolsPerStep, loadedTools);
+        // What the model is shown, as a record: at the step's first request, and again after each load.
+        WorkEvent Exposed() => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.ToolsExposed,
+            $"Tools shown to the step: {toolDefs.Length - toolsOnRequest!.Loaded.Count} listed, {toolsOnRequest.Count} in the catalog"
+            + $" ({string.Join(", ", toolsOnRequest.Servers)}), {toolsOnRequest.Loaded.Count} loaded.",
+            WorkEventPayload.ToolsExposedPayload(stepNo, worker.Id,
+                toolDefs.Select(d => d.Name).Except(toolsOnRequest.Loaded).ToArray(), toolsOnRequest.Catalog, toolsOnRequest.Loaded));
         if (toolsOnRequest is not null)
         {
             toolDefs = listedTools;
             toolsOverhead = toolDefs.Sum(ToolBudget.Size);
-            yield return Ev(EventKind.ContextAssembled,
-                $"The tool definitions would take about {definitionTokens} tokens ({definitionTokens * 100L / (working ?? statedWindow)!.Value}% of the "
-                + $"{working ?? statedWindow} this step works in): the {toolsOnRequest.Count} tools of {string.Join(", ", toolsOnRequest.Servers)} "
-                + $"are offered through {ToolBudget.FindToolName} instead, and each request carries about {ToolBudget.Tokens(toolDefs)}.");
+            yield return Exposed();
         }
 
         // The transcript's size when lastPromptTokens was measured, so what has been added since
@@ -4168,7 +4192,7 @@ public sealed partial class Orchestrator : IOrchestrator
             // real ratio rather than the pessimistic default.
             var sizeAtRequest = Transcript.Size(messages) + toolsOverhead;
             var cacheWatch = _cacheWatches.GetValue(messages, _ => new PrefixCacheWatch());
-            cacheWatch.Sending(messages);
+            cacheWatch.Sending(messages, $"{providerId}/{model}", toolDefs.Select(d => d.Name).ToArray());
 
             var turn = new ModelTurn();
             await foreach (var delta in provider.StreamChatAsync(request, ct))
@@ -4291,7 +4315,14 @@ public sealed partial class Orchestrator : IOrchestrator
             // nothing: the model is asked to re-emit a real tool call instead. The old behaviour stays
             // available for a weak local model that cannot emit structured calls at all, but it is
             // opt-in (AllowImplicitToolCalls) precisely because it is a way to talk the agent into acting.
-            var described = toolCalls is null && replyText is not null ? TryRecoverImplicitToolCall(replyText, _tools.Definitions) : null;
+            // Read against what this step's model was SHOWN or told the name of - the tools listed and the ones in
+            // its catalog - not against everything registered. Read against the registry, a reply that named a tool
+            // the model had never been sent, one kept back from the step, was taken for a call to it. A catalog
+            // name is still recognised, so that the call is answered with how to load the tool (below) and a model
+            // that writes its calls as text is not left with a reply nobody acted on.
+            var described = toolCalls is null && replyText is not null
+                ? TryRecoverImplicitToolCall(replyText, toolsOnRequest is null ? toolDefs : [.. toolDefs, .. toolsOnRequest.Waiting])
+                : null;
             if (described is not null && _allowImplicitToolCalls)
             {
                 toolCalls = new List<ToolCall> { described };
@@ -4635,19 +4666,40 @@ public sealed partial class Orchestrator : IOrchestrator
                     continue;
                 }
 
-                // A search of the tools offered on request: what it finds is listed from the next turn.
-                if (toolsOnRequest is not null && call.Name == ToolBudget.FindToolName)
+                // The step's catalog: a tool loaded by name, or found by a search, is listed from the next turn -
+                // at the END of the list, so nothing a provider has cached before it moves.
+                if (toolsOnRequest is not null && call.Name is ToolBudget.LoadToolName or ToolBudget.FindToolName)
                 {
                     yield return Invoked(call);
-                    var (found, searched) = toolsOnRequest.Find(call.ArgumentsJson);
+                    var (found, said) = call.Name == ToolBudget.LoadToolName
+                        ? toolsOnRequest.Load(call.ArgumentsJson)
+                        : toolsOnRequest.Find(call.ArgumentsJson);
                     if (found.Count > 0)
                     {
                         toolDefs = [.. toolDefs, .. found];
                         toolsOverhead += found.Sum(ToolBudget.Size);
+                        loadedTools?.AddRange(found.Select(d => d.Name));
                     }
-                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, searched, WorkspaceEffect.None);
-                    messages.Add(ChatMessage.Tool(call.Id, searched));
-                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {searched}");
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, said, WorkspaceEffect.None);
+                    messages.Add(ChatMessage.Tool(call.Id, said));
+                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {said}");
+                    if (found.Count > 0) yield return Exposed();
+                    continue;
+                }
+
+                // A tool still waiting in the catalog was never shown to the model: not its description, not its
+                // arguments. The gate below asks only whether a tool exists and whether the role may use it, so
+                // such a call ran - on arguments the model had made up from the name. It is answered instead, and
+                // counts as a call that failed: the step is told how to get the tool, and may not end as if it had.
+                if (toolsOnRequest?.IsWaiting(call.Name) == true)
+                {
+                    yield return Invoked(call);
+                    var notLoaded = $"'{call.Name}' is not loaded, so it did not run. Call {ToolBudget.LoadToolName} with its name first; "
+                        + "it is callable from the turn after, with its full description.";
+                    openFailures.Failed(call, notLoaded, true, null);
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notLoaded);
+                    messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + notLoaded));
+                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {notLoaded}");
                     continue;
                 }
 
@@ -5357,6 +5409,15 @@ public sealed partial class Orchestrator : IOrchestrator
     /// is what the permission engine already does for anything over the granted autonomy.
     /// </summary>
     private PermissionPolicy EffectivePolicyFor(Worker worker) => ToolAccess.EffectivePolicy(_policy, worker);
+
+    /// <summary>Whether this run's permissions refuse a tool outright, whoever asks and whatever the role.</summary>
+    private bool DeniedToThisRun(string tool)
+        => _permissions.Evaluate(_policy, tool, _tools.RequiredLevelOf(tool)) == PermissionDecision.Deny;
+
+    /// <summary>The tool a command check is run through - the one that declares the protocol - or null without one.</summary>
+    private string? CheckRunner()
+        => _tools.Definitions.Where(d => d.Kind == ToolKind.Command && d.RunsSuccessChecks).Select(d => d.Name).ToArray()
+            is [var only] ? only : null;
 
     /// <summary>
     /// The tools this worker's role carries, narrowed to what this run can actually do with them - see

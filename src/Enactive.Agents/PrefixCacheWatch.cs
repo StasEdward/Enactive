@@ -26,10 +26,26 @@ internal sealed class PrefixCacheWatch
     private ChatMessage[] _previous = [];
     private int? _previousPrompt;
     private bool _observed;
+    private string? _server;
+    private bool _sameServer;
+    private string? _tools;
+    private bool _toolsChanged;
 
     /// <summary>Records what is about to be sent.</summary>
-    public void Sending(IReadOnlyList<ChatMessage> messages)
+    /// <param name="server">The server and model the request goes to. A cache is the server's own: a request is compared
+    /// with the request before it to the SAME one. A conversation can change hands - a step on a local server, the next
+    /// routed to a cloud model - and the first request to the new server was told as a break "though the conversation
+    /// only grew", when no cache of the old one could have been there for it (run b90162, 2026-10-05).</param>
+    /// <param name="tools">The names of the tools sent with the request. A server renders them ahead of the conversation,
+    /// so a change to them - a tool loaded from the step's catalog - is read again from there on. That is the engine's own
+    /// doing, and is said as such rather than as a difference nobody can account for (runs 0a2be9 and 43cda6, 2026-10-05).</param>
+    public void Sending(IReadOnlyList<ChatMessage> messages, string? server = null, IReadOnlyList<string>? tools = null)
     {
+        var signature = tools is null ? null : string.Join('\n', tools);
+        _toolsChanged = signature is not null && _tools is not null && signature != _tools;
+        _tools = signature ?? _tools;
+        _sameServer = server is null || _server is null || string.Equals(server, _server, StringComparison.Ordinal);
+        _server = server ?? _server;
         _previous = _sent;
         _sent = messages.ToArray();
         _observed = false;
@@ -46,7 +62,7 @@ internal sealed class PrefixCacheWatch
         _observed = true;
         var previousPrompt = _previousPrompt;
         _previousPrompt = now;
-        if (previousPrompt is not { } before || _previous.Length == 0) return null;
+        if (previousPrompt is not { } before || _previous.Length == 0 || !_sameServer) return null;
 
         var reread = now - cached;
         var appended = _sent.Length >= _previous.Length && _previous.Select((m, i) => ReferenceEquals(m, _sent[i])).All(same => same);
@@ -55,6 +71,9 @@ internal sealed class PrefixCacheWatch
             // (and a little slack) is the cache breaking with nothing rewritten.
             return cached >= before - Slack
                 ? null
+                : _toolsChanged
+                ? $"Prompt cache: the tools sent with it changed since the request before (a tool was loaded), and the server "
+                  + $"re-read {reread} of {now} prompt tokens (cached {cached}) from where they come. The price of loading, paid once."
                 : $"Prompt cache: the server re-read {reread} of {now} prompt tokens (cached {cached}), though the "
                   + $"conversation only grew since the request before, whose prompt was {before} tokens. Something sent again "
                   + "differs from what the server holds - a message re-rendered, a reasoning block, or the tools.";

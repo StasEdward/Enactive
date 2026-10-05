@@ -113,8 +113,16 @@ public sealed class McpTests
         await using var connection = await McpConnection.ConnectAsync(Config(), fx.Root, default);
         var tools = new LoggingToolRegistry(new ToolRegistry(connection.Tools), NullLogSink.Instance);
         var name = McpConnection.ToolName("test", "echo");
-        var provider = new FakeChatProvider(Turn.Says("{\"disposition\":\"quick_action\",\"title\":\"MCP\"}"),
-            Turn.Calls1(name, "{\"value\":\"test\"}"), Turn.Says("done"));
+        // A role that reaches the server's tools has them in its catalog, and loads the one it wants before
+        // calling it (ToolBudget); a role that does not reach them has no catalog and nothing to load.
+        var reaches = pattern is "mcp__*" or "mcp__test__*";
+        Turn[] script = reaches
+            ? [Turn.Says("{\"disposition\":\"quick_action\",\"title\":\"MCP\"}"),
+               Turn.Calls1(ToolBudget.LoadToolName, "{\"names\":[\"" + name + "\"]}", "load_1"),
+               Turn.Calls1(name, "{\"value\":\"test\"}"), Turn.Says("done")]
+            : [Turn.Says("{\"disposition\":\"quick_action\",\"title\":\"MCP\"}"),
+               Turn.Calls1(name, "{\"value\":\"test\"}"), Turn.Says("done")];
+        var provider = new FakeChatProvider(script);
         var handler = new ScriptedDecisionHandler(answer);
         var worker = EngineFixture.WorkerWith(pattern) with { DefaultLevel = PermissionLevel.Autonomous };
         var engine = new Orchestrator(new Enactive.Workspace.WorkspaceChangesFactory(),new SingleProviderFactory(provider), new ModelResolver(), new StaticWorkerProvider(worker),
@@ -122,7 +130,9 @@ public sealed class McpTests
             new PermissionPolicy(PermissionLevel.Autonomous, ["*"], []), new Services());
         var events = await fx.RunAsync(engine, "use MCP");
         Assert.Equal(decisions, handler.Requests.Count);
-        Assert.Equal(called, events.Any(e => e.Kind == Enactive.Core.Events.EventKind.ToolInvoked));
+        Assert.Equal(called, events.Any(e => e.Kind == Enactive.Core.Events.EventKind.ToolInvoked
+                                             && e.Summary.Contains(name, StringComparison.Ordinal)
+                                             && !e.Summary.Contains(ToolBudget.LoadToolName, StringComparison.Ordinal)));
         if (decisions > 0) Assert.Null(handler.Requests[0].Subject); // no remembered bypass of 'every call'
     }
 
