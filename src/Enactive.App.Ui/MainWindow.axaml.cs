@@ -74,6 +74,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private readonly PermissionEngine _permissionEngine = new();
     private AppSettings _settings = new();
 
+    // What the close button says when it hides the window to the tray, and the note saying it, while it is up.
+    private readonly TrayHint _trayHint = new();
+    private TrayHintWindow? _trayNote;
+
     /// <summary>Everything the window shows. Nothing below touches a control - it sets a property here.</summary>
     private readonly MainWindowViewModel _vm = new();
     private readonly HashSet<string> _shownArtifacts = new(StringComparer.OrdinalIgnoreCase);
@@ -260,8 +264,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 e.Cancel = true;
                 if (HasTray && _settings.CloseToTray)
                 {
+                    // The screen it was on, while it still is on one: the note goes in that screen's corner.
+                    var screen = Screens.ScreenFromWindow(this);
                     SaveWindowBounds();
                     Hide();
+                    if (_trayHint.TakeOnHide())
+                    {
+                        var note = TrayHintWindow.ShowNote(screen, ShowFromTray);
+                        // Gone by itself or by a click: nothing left for the window's return to take down.
+                        note.Closed += (_, _) => { if (ReferenceEquals(_trayNote, note)) _trayNote = null; };
+                        _trayNote = note;
+                    }
                 }
                 else
                 {
@@ -545,6 +558,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// <summary>Brings the window back from the tray, wherever it was left.</summary>
     public void ShowFromTray()
     {
+        // Back from the tray: the next close says where the window went again, and a note still up about this
+        // one has nothing left to say.
+        _trayHint.WindowShown();
+        _trayNote?.Close();
+        _trayNote = null;
+
         Show();
         if (WindowState == WindowState.Minimized)
             WindowState = WindowState.Normal;
