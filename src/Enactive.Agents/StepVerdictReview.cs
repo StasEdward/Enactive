@@ -96,12 +96,25 @@ internal static class StepVerdictReview
     ///
     /// <para>Always told, since 2026-10-01. It was a setting - on in the application's, off in an engine built without
     /// them - so the same step was reviewed by two rules depending on who built the engine; no run had turned it off.</para>
+    ///
+    /// <para><b>A selection is derived too.</b> Run 0a2be9, 2026-10-05: "the five processes that use the most memory"
+    /// were picked by a local worker from 370 rows in its head - three of the five wrong - and the review, shown the
+    /// result with 18,776 characters cut from its middle, checked that the five values were in it and passed. Asked again
+    /// six times each (Sonnet 5): without the sentence, the wrong five passed 6 of 6 on the shortened result; with it they
+    /// failed 6 of 6. The right five failed 6 of 6 with it as well - on a shortened result a selection cannot be checked,
+    /// and that is the honest verdict; shown the whole result, the right five passed and the wrong five failed 6 of 6 under
+    /// either wording. The nineteen recorded reviews of 3-4 October, three times each, came out 42 of 57 right with the
+    /// sentence and 40 of 57 without, no review that should pass failing because of it.</para>
     /// </summary>
     private const string DerivedFigures = """
 
         A figure the work derives from other figures - a total, a difference, a percentage, an average - is a claim too:
         work it out from the values the calls show, and fail it if it is wrong. Rounding, a change of units, and figures
         copied as they are from a call's output are not derived.
+        A selection the work makes from a result - the largest, the first five, the ones that match, that none does - is
+        derived the same way: check it against every row of the result. Where the result is shortened and the rows the
+        selection depends on are not shown, the selection is not shown: fail it, and say which result has to be narrowed or
+        put in order by a call for the selection to be checked.
         """;
 
     public static async Task<ReviewResult> RunAsync(StepVerdictInput input, IChatProvider provider, string model,
