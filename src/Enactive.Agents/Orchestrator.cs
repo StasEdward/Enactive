@@ -4192,7 +4192,7 @@ public sealed partial class Orchestrator : IOrchestrator
             // real ratio rather than the pessimistic default.
             var sizeAtRequest = Transcript.Size(messages) + toolsOverhead;
             var cacheWatch = _cacheWatches.GetValue(messages, _ => new PrefixCacheWatch());
-            cacheWatch.Sending(messages, $"{providerId}/{model}");
+            cacheWatch.Sending(messages, $"{providerId}/{model}", toolDefs.Select(d => d.Name).ToArray());
 
             var turn = new ModelTurn();
             await foreach (var delta in provider.StreamChatAsync(request, ct))

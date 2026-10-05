@@ -119,4 +119,39 @@ public sealed class APrefixCacheThatBreaksIsToldTests
 
         Assert.Contains("only grew", watch.Observed(15_000, 200, true), StringComparison.Ordinal);
     }
+    /// <summary>
+    /// Runs 0a2be9 and 43cda6, 2026-10-05: a tool loaded from the step's catalog changes the list of tools, which a
+    /// server renders ahead of the conversation, and the next request is read again from there. That was told as "something
+    /// sent again differs from what the server holds" - a cause to go looking for, when the engine had just made the
+    /// change itself. It is told as what it is.
+    /// </summary>
+    [Fact]
+    public void A_cache_lost_to_a_change_in_the_tools_says_that_is_why()
+    {
+        var watch = new PrefixCacheWatch();
+        var messages = Conversation();
+        watch.Sending(messages, "local/small", ["read_file", "load_tools"]);
+        watch.Observed(4_000, 0, true);
+        messages.Add(new ChatMessage(ChatRole.Assistant, "Loading the tool."));
+        watch.Sending(messages, "local/small", ["read_file", "load_tools", "mcp__dc__list_processes"]);
+
+        var note = watch.Observed(4_500, 2_000, true);
+
+        Assert.NotNull(note);
+        Assert.Contains("the tools sent with it changed", note!, StringComparison.Ordinal);
+        Assert.DoesNotContain("Something sent again differs", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void With_the_same_tools_a_break_is_still_told_as_unexplained()
+    {
+        var watch = new PrefixCacheWatch();
+        var messages = Conversation();
+        watch.Sending(messages, "local/small", ["read_file"]);
+        watch.Observed(4_000, 0, true);
+        messages.Add(new ChatMessage(ChatRole.Assistant, "Reading."));
+        watch.Sending(messages, "local/small", ["read_file"]);
+
+        Assert.Contains("Something sent again differs", watch.Observed(4_500, 200, true), StringComparison.Ordinal);
+    }
 }
