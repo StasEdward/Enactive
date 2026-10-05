@@ -42,7 +42,11 @@ public sealed class TestDatabase : IAsyncLifetime
     /// <c>runs</c> table of its own, and a store creating <c>runs</c> "if not exists" over it would test
     /// the gateway's columns instead of its own.
     /// </param>
-    public TestDatabase(bool migrate) => _migrate = migrate;
+    /// <remarks>
+    /// Internal, not public: xunit builds a class fixture through its only public constructor, and with two
+    /// public ones it refused to build this one at all - every test that uses it failed before running.
+    /// </remarks>
+    internal TestDatabase(bool migrate) => _migrate = migrate;
 
     public async Task InitializeAsync()
     {
