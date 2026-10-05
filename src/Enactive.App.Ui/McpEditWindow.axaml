@@ -15,8 +15,10 @@
                 <StackPanel Spacing="6">
                     <TextBlock Classes="label" Text="Server ID" />
                     <TextBox Text="{Binding Id}" PlaceholderText="e.g. desktop-commander" />
-                    <CheckBox Content="Enabled for new runs" IsChecked="{Binding Enabled}" />
-                    <CheckBox Content="Ask before every tool call" IsChecked="{Binding RequireApproval}" />
+                    <StackPanel Orientation="Horizontal" Spacing="24">
+                        <CheckBox Content="Enable" IsChecked="{Binding Enabled}" />
+                        <CheckBox Content="Ask before every tool call" IsChecked="{Binding RequireApproval}" />
+                    </StackPanel>
                     <TextBlock Classes="label" Text="Transport" />
                     <ComboBox ItemsSource="{Binding Transports}" SelectedItem="{Binding Transport}" />
                     <StackPanel IsVisible="{Binding IsStdio}" Spacing="6">

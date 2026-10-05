@@ -81,7 +81,7 @@ Open **Settings → AI → MCP → Add**. Configure the server and use **Test co
 | Field | Meaning |
 | --- | --- |
 | ID | Unique lowercase identifier, 1–24 characters, starting with a letter; digits/hyphens supported |
-| Enabled | Connect this server for a new desktop run |
+| Enable | Connect this server for each new desktop run; untick to stop using it without removing its configuration |
 | Transport | Stdio local process or Http endpoint |
 | Command / Arguments | Executable plus a JSON array of arguments for Stdio |
 | Working directory | Process directory; blank uses the run workspace, while editor Test uses the app's current directory |
