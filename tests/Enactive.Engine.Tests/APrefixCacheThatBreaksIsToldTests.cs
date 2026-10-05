@@ -80,4 +80,43 @@ public sealed class APrefixCacheThatBreaksIsToldTests
         Assert.NotNull(watch.Observed(20_600, 100, true));
         Assert.Null(watch.Observed(20_600, 100, true));
     }
+    /// <summary>
+    /// Run b90162, 2026-10-05: a step on a local server was followed by a step routed to a cloud model, in the same
+    /// conversation. The first request to the cloud server was compared with the last one to the local server, whose
+    /// cache it cannot share, and was told as a break "though the conversation only grew". Each server's cache is its
+    /// own: a request is compared with the request before it to the same server and model.
+    /// </summary>
+    [Fact]
+    public void The_first_request_to_another_server_is_not_told_as_a_break()
+    {
+        var watch = new PrefixCacheWatch();
+        var messages = Conversation();
+        watch.Sending(messages, "local/small");
+        watch.Observed(12_000, 0, true);
+        messages.Add(new ChatMessage(ChatRole.Assistant, "Ran the digest."));
+        watch.Sending(messages, "local/small");
+        Assert.Null(watch.Observed(12_400, 11_900, true));
+
+        messages.Add(ChatMessage.User("now decide"));
+        watch.Sending(messages, "cloud/large");
+
+        Assert.Null(watch.Observed(14_500, 384, true));
+    }
+
+    [Fact]
+    public void A_break_on_the_same_server_after_a_change_of_server_is_still_told()
+    {
+        var watch = new PrefixCacheWatch();
+        var messages = Conversation();
+        watch.Sending(messages, "local/small");
+        watch.Observed(12_000, 0, true);
+        messages.Add(ChatMessage.User("now decide"));
+        watch.Sending(messages, "cloud/large");
+        watch.Observed(14_500, 384, true);
+
+        messages.Add(new ChatMessage(ChatRole.Assistant, "Sending the letter."));
+        watch.Sending(messages, "cloud/large");
+
+        Assert.Contains("only grew", watch.Observed(15_000, 200, true), StringComparison.Ordinal);
+    }
 }

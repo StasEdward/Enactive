@@ -26,10 +26,18 @@ internal sealed class PrefixCacheWatch
     private ChatMessage[] _previous = [];
     private int? _previousPrompt;
     private bool _observed;
+    private string? _server;
+    private bool _sameServer;
 
     /// <summary>Records what is about to be sent.</summary>
-    public void Sending(IReadOnlyList<ChatMessage> messages)
+    /// <param name="server">The server and model the request goes to. A cache is the server's own: a request is compared
+    /// with the request before it to the SAME one. A conversation can change hands - a step on a local server, the next
+    /// routed to a cloud model - and the first request to the new server was told as a break "though the conversation
+    /// only grew", when no cache of the old one could have been there for it (run b90162, 2026-10-05).</param>
+    public void Sending(IReadOnlyList<ChatMessage> messages, string? server = null)
     {
+        _sameServer = server is null || _server is null || string.Equals(server, _server, StringComparison.Ordinal);
+        _server = server ?? _server;
         _previous = _sent;
         _sent = messages.ToArray();
         _observed = false;
@@ -46,7 +54,7 @@ internal sealed class PrefixCacheWatch
         _observed = true;
         var previousPrompt = _previousPrompt;
         _previousPrompt = now;
-        if (previousPrompt is not { } before || _previous.Length == 0) return null;
+        if (previousPrompt is not { } before || _previous.Length == 0 || !_sameServer) return null;
 
         var reread = now - cached;
         var appended = _sent.Length >= _previous.Length && _previous.Select((m, i) => ReferenceEquals(m, _sent[i])).All(same => same);
