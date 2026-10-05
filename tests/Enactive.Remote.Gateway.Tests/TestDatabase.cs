@@ -32,6 +32,18 @@ public sealed class TestDatabase : IAsyncLifetime
 
     private string _serverConnectionString = "";
 
+    private readonly bool _migrate;
+
+    /// <summary>The gateway's database: created empty, then migrated to the gateway's schema.</summary>
+    public TestDatabase() : this(migrate: true) { }
+
+    /// <param name="migrate">
+    /// False for a database with nothing in it, for code that brings its own tables. The gateway has a
+    /// <c>runs</c> table of its own, and a store creating <c>runs</c> "if not exists" over it would test
+    /// the gateway's columns instead of its own.
+    /// </param>
+    public TestDatabase(bool migrate) => _migrate = migrate;
+
     public async Task InitializeAsync()
     {
         var configured = Environment.GetEnvironmentVariable(ConnectionVariable);
@@ -59,7 +71,8 @@ public sealed class TestDatabase : IAsyncLifetime
         ConnectionString = new Database(builder.ConnectionString).ConnectionString;
 
         await ExecuteOnServerAsync($"CREATE DATABASE `{Name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci");
-        await Migrator.ApplyAsync(ConnectionString);
+        if (_migrate)
+            await Migrator.ApplyAsync(ConnectionString);
     }
 
     public async Task DisposeAsync()
