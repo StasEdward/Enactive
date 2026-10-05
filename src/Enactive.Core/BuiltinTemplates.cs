@@ -35,7 +35,7 @@ public static class BuiltinTemplates
                 + "report exactly what the commands returned — the real output, never a summary you "
                 + "wrote from memory. Do not change any source file.\n\n"
                 + "Build command: {build_command}\nTest command: {test_command}",
-            Version: 1,
+            Version: 2,
             Description: "Build, test, and report what actually came back. Changes nothing.",
             Category: "DevOps",
             Parameters: new[]
@@ -50,10 +50,20 @@ public static class BuiltinTemplates
             Permissions: new PermissionCeiling(
                 MaxLevel: PermissionLevel.Execute,
                 Deny: new[] { "write_file", "edit_file", "move_file", "create_directory" }),
+            // The commands the person gave, not dotnet's: with a test command of their own, these checks ran
+            // dotnet anyway and judged a workspace by a tool it may not have.
+            //
+            // The tests are RUN, not required to pass. This task reports on the workspace and may not change it,
+            // so failing tests are the finding, not a fault in the work - and a check demanding exit 0 failed the
+            // run on 2026-10-05 for exactly the report that was asked for, then sent a repair to make the tests
+            // pass with every file tool denied. Exit 1 is how a test runner says "some failed"; anything else -
+            // a runner that is not there, a crash - still fails. Some runners also exit 1 when the build under
+            // them breaks, which is why "Builds" stays required beside it: that one says whether there was
+            // anything to test.
             SuccessCriteria: new[]
             {
-                new SuccessCriterionDefinition("Builds", "dotnet build", 0),
-                new SuccessCriterionDefinition("Tests pass", "dotnet test", 0)
+                new SuccessCriterionDefinition("Builds", "{build_command}", 0),
+                new SuccessCriterionDefinition("Tests ran", "{test_command}", 0) { ExpectedExitCodes = [0, 1] }
             },
             Limits: new ExecutionLimits(MaxSteps: 6),
             ReviewRequired: true,

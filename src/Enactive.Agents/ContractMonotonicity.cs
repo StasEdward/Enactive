@@ -48,7 +48,7 @@ public static class ContractMonotonicity
     private static (CriterionStrength, string) What(SuccessCriterionDefinition old, SuccessCriterionDefinition now)
     {
         if (old.Typed is null && now.Typed is null)
-            return old.Command == now.Command && old.ExpectedExitCode == now.ExpectedExitCode
+            return old.Command == now.Command && old.PassingExitCodes.SequenceEqual(now.PassingExitCodes)
                 ? (CriterionStrength.Same, "the same command")
                 : (CriterionStrength.Incomparable,
                     "a different command cannot be shown to check at least as much as the one it replaces");

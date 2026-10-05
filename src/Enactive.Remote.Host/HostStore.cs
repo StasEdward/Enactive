@@ -135,22 +135,41 @@ public sealed class HostStore : IDisposable
             );
             """);
 
-        // A database made before the inbox counted failed attempts is upgraded in place. SQLite has no
-        // "ADD COLUMN IF NOT EXISTS", and a duplicate column here is the success case: the column is there.
+        // A database made before the inbox counted failed attempts is upgraded in place. The table is asked
+        // first: SQLite has no "ADD COLUMN IF NOT EXISTS", and an ALTER run every time and caught as "already
+        // there" threw "duplicate column name" on every start of the app (2026-10-05) - and took any other
+        // failure of it for success too.
+        var upgraded = AddColumnIfMissing("inbox", "attempts", "INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing("inbox", "last_failure", "TEXT NULL");
+
+        // Added just now, so this database is from before the inbox was read for what it owes, when
+        // nothing but a start was ever marked carried out. Its rows past their lifetime cannot be told
+        // apart from lost ones, and can no longer be carried out either way; said one by one, each
+        // removal among them would tell the person a device they removed was never removed here.
+        if (upgraded)
+            TakeExpired(DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>
+    /// Adds a column the table lacks; true when it was added now. The names are this store's own constants: an
+    /// identifier cannot be a parameter.
+    /// </summary>
+    private bool AddColumnIfMissing(string table, string column, string definition)
+    {
+        bool Has() => Convert.ToInt64(Scalar("SELECT COUNT(*) FROM pragma_table_info($table) WHERE name = $column;",
+            ("$table", table), ("$column", column)) ?? 0L) > 0;
+
+        if (Has())
+            return false;
         try
         {
-            Execute("ALTER TABLE inbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;");
-            Execute("ALTER TABLE inbox ADD COLUMN last_failure TEXT NULL;");
-
-            // Added just now, so this database is from before the inbox was read for what it owes, when
-            // nothing but a start was ever marked carried out. Its rows past their lifetime cannot be told
-            // apart from lost ones, and can no longer be carried out either way; said one by one, each
-            // removal among them would tell the person a device they removed was never removed here.
-            TakeExpired(DateTimeOffset.UtcNow);
+            Execute($"ALTER TABLE {table} ADD COLUMN {column} {definition};");
+            return true;
         }
-        catch (SqliteException)
+        // Added by another process between the question and the ALTER; anything else is a real failure.
+        catch (SqliteException) when (Has())
         {
-            // Already has them.
+            return false;
         }
     }
 

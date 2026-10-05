@@ -31,6 +31,10 @@
     <!-- Both halves, because the end-to-end test is the first place they have to agree. Everything
          before it proved one side against a stand-in for the other. -->
     <ProjectReference Include="..\..\src\Enactive.Remote.Host\Enactive.Remote.Host.csproj" />
+
+    <!-- The workspace's MySQL stores: they need a server like everything else here, and the main suite
+         runs anywhere. -->
+    <ProjectReference Include="..\..\src\Enactive.Workspace\Enactive.Workspace.csproj" />
   </ItemGroup>
 
   <!--

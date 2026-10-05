@@ -230,38 +230,18 @@ public sealed class MySqlRunStore : IRunStore
                 """;
             await command.ExecuteNonQueryAsync(ct);
 
-            // A table created before the column existed is upgraded in place. MySQL has no
-            // "ADD COLUMN IF NOT EXISTS" before 8.0.29 either way, and a duplicate column is the
-            // success case here, not a failure.
-            using var upgrade = connection.CreateCommand();
-            upgrade.CommandText = "ALTER TABLE runs ADD COLUMN settings_json LONGTEXT;";
-            try { await upgrade.ExecuteNonQueryAsync(ct); }
-            catch (MySqlException) { /* already has it */ }
-
-            using var upgradeUsage = connection.CreateCommand();
-            upgradeUsage.CommandText = "ALTER TABLE runs ADD COLUMN usage_json LONGTEXT;";
-            try { await upgradeUsage.ExecuteNonQueryAsync(ct); }
-            catch (MySqlException) { /* already has it */ }
-
-            using var upgradeSpec = connection.CreateCommand();
-            upgradeSpec.CommandText = "ALTER TABLE runs ADD COLUMN spec_json LONGTEXT;";
-            try { await upgradeSpec.ExecuteNonQueryAsync(ct); }
-            catch (MySqlException) { /* already has it */ }
+            // A table created before these columns existed is upgraded in place - see MySqlColumns.
+            await MySqlColumns.AddIfMissingAsync(connection, "runs", "settings_json", "LONGTEXT", ct);
+            await MySqlColumns.AddIfMissingAsync(connection, "runs", "usage_json", "LONGTEXT", ct);
+            await MySqlColumns.AddIfMissingAsync(connection, "runs", "spec_json", "LONGTEXT", ct);
 
             // Rows written before this column existed keep workspace_id NULL and are therefore not
             // listed by any workspace. They are NOT backfilled to whichever folder happens to be open:
             // their artifact paths are relative, so guessing wrong would show one project's files
             // under another project's run. They are still in the table for anyone who wants to
             // reassign them with a deliberate UPDATE.
-            using var upgradeWorkspace = connection.CreateCommand();
-            upgradeWorkspace.CommandText = "ALTER TABLE runs ADD COLUMN workspace_id CHAR(36);";
-            try { await upgradeWorkspace.ExecuteNonQueryAsync(ct); }
-            catch (MySqlException) { /* already has it */ }
-
-            using var index = connection.CreateCommand();
-            index.CommandText = "CREATE INDEX ix_runs_workspace ON runs (workspace_id, started_at);";
-            try { await index.ExecuteNonQueryAsync(ct); }
-            catch (MySqlException) { /* already has it */ }
+            await MySqlColumns.AddIfMissingAsync(connection, "runs", "workspace_id", "CHAR(36)", ct);
+            await MySqlColumns.IndexIfMissingAsync(connection, "runs", "ix_runs_workspace", "workspace_id, started_at", ct);
 
             _initialized = true;
         }

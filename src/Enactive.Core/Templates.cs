@@ -48,6 +48,27 @@ public sealed record SuccessCriterionDefinition(
     public string? PlanningReason { get; init; }
 
     /// <summary>
+    /// Every exit code that counts as a pass, when more than one does; null means only
+    /// <see cref="ExpectedExitCode"/>. For a check whose job is to RUN a command and keep what it said - a
+    /// test runner exits 1 for failing tests, and that is the answer, not a fault in the check.
+    ///
+    /// <para>Without it the built-in Release Check - "report what the tests returned, change nothing" - could only
+    /// demand exit 0. On 2026-10-05 a workspace with one failing test got a correct report, then a failed run, and a
+    /// seven-minute repair told to make the tests pass in a run that was not allowed to change a file.</para>
+    /// </summary>
+    public IReadOnlyList<int>? ExpectedExitCodes { get; init; }
+
+    /// <summary>The exit codes this criterion passes on: <see cref="ExpectedExitCodes"/>, or the one expected code.</summary>
+    public IReadOnlyList<int> PassingExitCodes
+        => ExpectedExitCodes is { Count: > 0 } codes ? codes : [ExpectedExitCode];
+
+    /// <summary>Whether a command that exited with this code passed the criterion.</summary>
+    public bool PassesOn(int exitCode) => PassingExitCodes.Contains(exitCode);
+
+    /// <summary>The passing codes as a reader would write them: "0", or "0, 1".</summary>
+    public string PassingExitCodesText => string.Join(", ", PassingExitCodes);
+
+    /// <summary>
     /// What this criterion checks, as a TYPE the engine understands rather than a command it runs
     /// (Phase 3). Null for a command check. <see cref="Command"/> then holds a readable form of it,
     /// for the report; the engine does not run it.

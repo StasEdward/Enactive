@@ -169,15 +169,8 @@ public sealed class MySqlInboxStore : IInboxStore
                 """;
             await command.ExecuteNonQueryAsync(ct);
 
-            // A database created before the column existed is upgraded in place. MySQL 8 has no
-            // "ADD COLUMN IF NOT EXISTS" either, and a duplicate-column error here is the success
-            // case: the column is already there.
-            using (var upgrade = connection.CreateCommand())
-            {
-                upgrade.CommandText = "ALTER TABLE inbox ADD COLUMN schedule_id CHAR(36) NULL;";
-                try { await upgrade.ExecuteNonQueryAsync(ct); }
-                catch (MySqlException) { /* already has it */ }
-            }
+            // A database created before the column existed is upgraded in place - see MySqlColumns.
+            await MySqlColumns.AddIfMissingAsync(connection, "inbox", "schedule_id", "CHAR(36) NULL", ct);
 
             _initialized = true;
         }

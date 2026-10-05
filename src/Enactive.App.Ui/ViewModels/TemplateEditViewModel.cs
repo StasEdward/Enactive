@@ -62,7 +62,9 @@ internal sealed class CriterionRow : ObservableObject
     {
         _name = c.Name;
         _command = c.Command;
-        _exit = c.ExpectedExitCode.ToString();
+        // All of them, so that saving a template keeps a check that passes on "0, 1" - showing only the first
+        // would quietly turn it back into one that demands 0.
+        _exit = c.PassingExitCodesText;
         _required = c.Required;
     }
 
@@ -73,10 +75,16 @@ internal sealed class CriterionRow : ObservableObject
 
     public RelayCommand? RemoveCommand { get; set; }
 
-    public SuccessCriterionDefinition ToCriterion() => new(
-        Name.Trim(), Command.Trim(),
-        int.TryParse(ExitCode, out var code) ? code : 0,
-        Required);
+    public SuccessCriterionDefinition ToCriterion()
+    {
+        var codes = ExitCode.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(text => int.TryParse(text, out var code) ? (int?)code : null)
+            .OfType<int>().Distinct().ToArray();
+        return new(Name.Trim(), Command.Trim(), codes.Length > 0 ? codes[0] : 0, Required)
+        {
+            ExpectedExitCodes = codes.Length > 1 ? codes : null
+        };
+    }
 }
 
 /// <summary>

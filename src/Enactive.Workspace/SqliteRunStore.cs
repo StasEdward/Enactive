@@ -208,23 +208,10 @@ public sealed class SqliteRunStore : IRunStore
                 """;
             await command.ExecuteNonQueryAsync(ct);
 
-            // A database created before the column existed is upgraded in place; SQLite has no
-            // "ADD COLUMN IF NOT EXISTS", and a second run of this throws on a column that is
-            // already there - which is the success case, not a failure.
-            using var upgrade = connection.CreateCommand();
-            upgrade.CommandText = "ALTER TABLE runs ADD COLUMN settings_json TEXT;";
-            try { await upgrade.ExecuteNonQueryAsync(ct); }
-            catch (SqliteException) { /* already has it */ }
-
-            using var upgradeUsage = connection.CreateCommand();
-            upgradeUsage.CommandText = "ALTER TABLE runs ADD COLUMN usage_json TEXT;";
-            try { await upgradeUsage.ExecuteNonQueryAsync(ct); }
-            catch (SqliteException) { /* already has it */ }
-
-            using var upgradeSpec = connection.CreateCommand();
-            upgradeSpec.CommandText = "ALTER TABLE runs ADD COLUMN spec_json TEXT;";
-            try { await upgradeSpec.ExecuteNonQueryAsync(ct); }
-            catch (SqliteException) { /* already has it */ }
+            // A database created before these columns existed is upgraded in place - see SqliteColumns.
+            await SqliteColumns.AddIfMissingAsync(connection, "runs", "settings_json", "TEXT", ct);
+            await SqliteColumns.AddIfMissingAsync(connection, "runs", "usage_json", "TEXT", ct);
+            await SqliteColumns.AddIfMissingAsync(connection, "runs", "spec_json", "TEXT", ct);
 
             _initialized = true;
         }

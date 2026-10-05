@@ -166,15 +166,8 @@ public sealed class SqliteInboxStore : IInboxStore
                 await command.ExecuteNonQueryAsync(ct);
             }
 
-            // A database created before the column existed is upgraded in place; SQLite has no
-            // "ADD COLUMN IF NOT EXISTS", and a second run of this throws on a column that is
-            // already there - which is the success case, not a failure. Same shape as the run store.
-            using (var upgrade = connection.CreateCommand())
-            {
-                upgrade.CommandText = "ALTER TABLE inbox ADD COLUMN schedule_id TEXT;";
-                try { await upgrade.ExecuteNonQueryAsync(ct); }
-                catch (SqliteException) { /* already has it */ }
-            }
+            // A database created before the column existed is upgraded in place - see SqliteColumns.
+            await SqliteColumns.AddIfMissingAsync(connection, "inbox", "schedule_id", "TEXT", ct);
 
             await ImportLegacyJsonAsync(connection, ct);
 
