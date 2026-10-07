@@ -127,30 +127,14 @@ public sealed class ProviderConfig
     /// </summary>
     public bool SendReasoningBack { get; set; }
 
-    public ProviderConfig Clone() => new()
+    public ProviderConfig Clone()
     {
-        Id = Id,
-        DisplayName = DisplayName,
-        Kind = Kind,
-        BaseUrl = BaseUrl,
-        ApiKeyProtected = ApiKeyProtected,
-        ApiKey = ApiKey,
-        Headers = new Dictionary<string, string>(Headers),
-        Models = new List<string>(Models),
-        MaxTokens = MaxTokens,
-        StreamIdleTimeoutSeconds = StreamIdleTimeoutSeconds,
-        OpenAiReasoningProfile = OpenAiReasoningProfile,
-        CompletionTimeoutSeconds = CompletionTimeoutSeconds,
-        ReasoningTokenAllowance = ReasoningTokenAllowance,
-        OllamaKeepAliveSeconds = OllamaKeepAliveSeconds,
-        ContextWindowTokens = ContextWindowTokens,
-        AnswerReserveTokens = AnswerReserveTokens,
-        HandoverAtPercent = HandoverAtPercent,
-        WorkingContextTokens = WorkingContextTokens,
-        Effort = Effort,
-        Temperature = Temperature,
-        SendReasoningBack = SendReasoningBack
-    };
+        // Values by themselves (see AppSettings.Clone); what can be changed in place, explicitly.
+        var copy = (ProviderConfig)MemberwiseClone();
+        copy.Headers = new Dictionary<string, string>(Headers);
+        copy.Models = new List<string>(Models);
+        return copy;
+    }
 }
 
 /// <summary>
@@ -399,32 +383,32 @@ public sealed partial class AppSettings
     public string GlobalInstructions { get; set; } = string.Empty;
 
     // Ollama context window (options.num_ctx). Null = inherit whatever the model was loaded with.
-    public int? NumCtx { get; set; }
+    public int? NumCtx { get; set; } = EngineOptions.Default.NumCtx;
 
-    public Enactive.Core.Chat.GenerationBudgets GenerationBudgets { get; set; } = new();
-    public Enactive.Core.Chat.RepairConsultation RepairConsultation { get; set; } = new();
+    public Enactive.Core.Chat.GenerationBudgets GenerationBudgets { get; set; } = EngineOptions.Default.GenerationBudgets;
+    public Enactive.Core.Chat.RepairConsultation RepairConsultation { get; set; } = EngineOptions.Default.RepairConsultation;
 
     // Send think:false to the local model so a reasoning model (qwen3, ...) answers directly instead of
     // burning a whole turn in <think> with empty content. On by default; only OllamaNative honors it.
-    public bool DisableThinking { get; set; } = true;
+    public bool DisableThinking { get; set; } = EngineOptions.Default.DisableThinking;
 
     // Execute a tool call the model only DESCRIBED in its reply (a ```json block) instead of invoking it.
     // Off by default and deliberately so: a parser cannot tell an intended call from a quoted example,
     // which means anything that can put text in front of the model can put an action in front of the
     // engine. Turn it on only for a weak local model that cannot emit structured tool calls at all.
-    public bool AllowImplicitToolCalls { get; set; }
+    public bool AllowImplicitToolCalls { get; set; } = EngineOptions.Default.AllowImplicitToolCalls;
 
     // How many times a rejected step may be redone before the run gives up. 1 means two tries in
     // total, which is what the engine did when this number was hard-coded. It was worth exposing
     // because it is the dial between "the reviewer's feedback gets used" and "a weak model burns the
     // budget arguing with a strong one": in a real run one step needed exactly two attempts and
     // passed, while another used both and was still wrong. Clamped to 0..5 by the orchestrator.
-    public int ReviewRetries { get; set; } = 1;
+    public int ReviewRetries { get; set; } = EngineOptions.Default.ReviewRetries;
 
     // How many tools of its catalog one step may load. The tools of connected MCP servers are not sent with
     // every request: they are named in a catalog and loaded by name when the work needs them, and each one
     // loaded is a definition sent with every later turn of that step. Clamped to 1..32 by the orchestrator.
-    public int MaxLoadedToolsPerStep { get; set; } = 8;
+    public int MaxLoadedToolsPerStep { get; set; } = EngineOptions.Default.MaxLoadedToolsPerStep;
 
     // How many times a run whose success CRITERIA failed may try to make them pass. A criterion is
     // the one thing in a run that is not somebody's opinion, and until 2026-09-08 a failed one just
@@ -432,7 +416,7 @@ public sealed partial class AppSettings
     // is not what "done" means to anyone. 1 gives the agent one attempt with the check's own output
     // in front of it; the criteria are then re-run and they alone decide. 0 restores the old
     // behaviour - check once, and stop. Clamped to 0..5 by the orchestrator.
-    public int SuccessRetries { get; set; } = 1;
+    public int SuccessRetries { get; set; } = EngineOptions.Default.SuccessRetries;
 
     // Ask the planner, before any of the work, for commands that would PROVE the request was
     // carried out - and judge the run by them when it was given no criteria of its own.
@@ -447,47 +431,47 @@ public sealed partial class AppSettings
     // never promotes), and it can only do so by RUNNING and failing - one that the shell would not
     // start, or that the policy forbids, reports Unknown and holds nothing back, because nobody
     // asked for it. Turn it off to judge ad-hoc runs the way they were judged before.
-    public bool ProposeChecks { get; set; } = true;
+    public bool ProposeChecks { get; set; } = EngineOptions.Default.ProposeChecks;
 
     // Phase 2: a planned step may declare what it hands on as values, and must then hand it on with
     // submit_step_output; the steps after it receive the values instead of a retelling. Off until
     // runs show it helps - it changes the planner's prompt and what a declared step needs to finish.
-    public bool StepOutputs { get; set; }
+    public bool StepOutputs { get; set; } = EngineOptions.Default.StepOutputs;
 
     // Phase 3: the planner may state acceptance criteria as types the engine checks itself -
     // file_exists, file_contains, tests_pass - added to, never instead of, the run's own criteria.
     // Off until runs show it helps.
-    public bool TypedCriteria { get; set; }
+    public bool TypedCriteria { get; set; } = EngineOptions.Default.TypedCriteria;
 
     // Phase 5.3: a step may be declared "for each" item an earlier step hands on, and the plan grows
     // by one step per item once the list exists. Needs StepOutputs. Off until runs show it helps.
-    public bool DynamicSteps { get; set; }
+    public bool DynamicSteps { get; set; } = EngineOptions.Default.DynamicSteps;
 
     // Phase 5.4: how far a plan may grow without asking - per "for each", in total, and in depth.
-    public int MaxStepsPerExpansion { get; set; } = 12;
-    public int MaxTotalSteps { get; set; } = 40;
-    public int MaxFanOutDepth { get; set; } = 2;
+    public int MaxStepsPerExpansion { get; set; } = EngineOptions.Default.FanOut.MaxStepsPerExpansion;
+    public int MaxTotalSteps { get; set; } = EngineOptions.Default.FanOut.MaxTotalSteps;
+    public int MaxFanOutDepth { get; set; } = EngineOptions.Default.FanOut.MaxDepth;
 
     // Phase 6: a plan's steps are built and tested once per wave - where nothing is running - instead of
     // only at the end, and a regression is put on the step that made it, or said to be ambiguous. Off
     // until runs show it helps: it runs builds, and trial builds when something broke.
-    public bool ValidateWaves { get; set; }
+    public bool ValidateWaves { get; set; } = EngineOptions.Default.ValidateWaves;
 
     // Phase 7.2: a step may say it cannot go on (report_blocked) - advisory; the engine finds the blocks it can
     // see without it. Off until runs show a local model uses it for real blocks and not for hard work.
-    public bool ReportBlocked { get; set; }
+    public bool ReportBlocked { get; set; } = EngineOptions.Default.ReportBlocked;
 
 
     // Phase 1.4: the planner may set a step semantic criteria (needs TypedCriteria), and a step that has them is judged
     // against those alone, each verdict citing evidence of the kinds the criterion allows. Off until runs show it.
-    public bool SemanticCriteria { get; set; }
+    public bool SemanticCriteria { get; set; } = EngineOptions.Default.SemanticCriteria;
 
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is
     // left alone and named in the log — reverting over somebody's edit would be the very thing this
     // is meant to prevent. Turn it off to inspect what a rejected step actually produced.
-    public bool RevertRejectedSteps { get; set; } = true;
+    public bool RevertRejectedSteps { get; set; } = EngineOptions.Default.RevertRejectedSteps;
 
     // Ask workers to read a file back after writing it, to catch a weak local model fabricating content.
     // Costs an extra LLM round-trip per write — worth turning off when running strong models. On by default.
@@ -497,12 +481,12 @@ public sealed partial class AppSettings
     // one shared conversation. Above 1 each concurrent step gets its own forked conversation, seeded with
     // a digest of what earlier steps concluded. Only pays off when steps route to different providers —
     // two steps on one Ollama still queue on the GPU.
-    public int MaxParallelSteps { get; set; } = 1;
+    public int MaxParallelSteps { get; set; } = EngineOptions.Default.MaxParallelSteps;
 
     // How many characters of tool evidence the reviewer is shown, shared between every call the step
     // made. Raise it for work that reads many files: the budget is divided, so thirteen reads under
     // the default leave about 320 characters of each - too little to check anything quoted from one.
-    public int EvidenceBudget { get; set; } = ExecutionJournal.DefaultBudget;
+    public int EvidenceBudget { get; set; } = EngineOptions.Default.EvidenceBudget;
 
     // How many days of log files to keep. 0 keeps everything, which is what shipped: a file per day,
     // appended forever, deleted by nobody.
@@ -605,28 +589,8 @@ public sealed partial class AppSettings
                 var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(file), JsonOptions);
                 if (loaded is not null)
                 {
-                    // Decrypt per-provider keys back into memory (plaintext field is not serialized).
-                    foreach (var p in loaded.Providers)
-                        if (!string.IsNullOrEmpty(p.ApiKeyProtected))
-                            p.ApiKey = Secret.Unprotect(p.ApiKeyProtected);
-
-                    // Legacy key: encrypted form wins; a legacy plaintext value is kept for migration.
-                    if (!string.IsNullOrEmpty(loaded.AnthropicApiKeyProtected))
-                        loaded.AnthropicApiKey = Secret.Unprotect(loaded.AnthropicApiKeyProtected);
-
-                    if (!string.IsNullOrEmpty(loaded.RemoteAccess.TokenProtected))
-                        loaded.RemoteAccess.Token = Secret.Unprotect(loaded.RemoteAccess.TokenProtected);
-
-                    if (!string.IsNullOrEmpty(loaded.Smtp.PasswordProtected))
-                        loaded.Smtp.Password = Secret.Unprotect(loaded.Smtp.PasswordProtected);
-
-                    loaded.LoadMcpSecrets();
-                    foreach (var (stored, plaintext) in loaded.Providers.Select(p => (p.ApiKeyProtected, p.ApiKey))
-                        .Concat(new[] { (loaded.AnthropicApiKeyProtected, loaded.AnthropicApiKey),
-                            (loaded.RemoteAccess.TokenProtected, loaded.RemoteAccess.Token),
-                            (loaded.Smtp.PasswordProtected, loaded.Smtp.Password) }))
-                        if (Secret.IsProtected(stored) && string.IsNullOrEmpty(plaintext))
-                            loaded._unreadableSecrets.Add(stored);
+                    // Every secret back into memory, and a note of each that cannot be (see Secrets()).
+                    loaded.UnprotectSecrets();
                     loaded.MigrateIfNeeded();
 
                     // A file written by an older version can hold duplicate ids, which used to reach
@@ -731,7 +695,8 @@ public sealed partial class AppSettings
                 try { File.Copy(file, backup, overwrite: false); }
                 catch (FileNotFoundException) { /* First launch or original removed: nothing to back up. */ }
             }
-            SaveMcpSecrets();
+            // Every secret encrypted for disk; the plaintext forms are [JsonIgnore] (see Secrets()).
+            ProtectSecrets();
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
 
             // What is written is in THIS build's schema, and says so. The number is otherwise whatever
@@ -744,18 +709,9 @@ public sealed partial class AppSettings
             // that states no version, and no file at all, are told from one this build wrote.
             SchemaVersion = CurrentSchemaVersion;
 
-            // Encrypt every provider key; plaintext is [JsonIgnore] so it never reaches disk.
-            foreach (var p in Providers)
-                p.ApiKeyProtected = ProtectOrPreserve(p.ApiKey, p.ApiKeyProtected);
-
-            // The device token, same rule: the encrypted form is the only one that reaches disk.
-            RemoteAccess.TokenProtected = ProtectOrPreserve(RemoteAccess.Token, RemoteAccess.TokenProtected);
-
-            // And the mail password. [JsonIgnore] on the plaintext is what keeps it off disk.
-            Smtp.PasswordProtected = ProtectOrPreserve(Smtp.Password, Smtp.PasswordProtected);
-
-            // Legacy key: persist only the encrypted form, blanking the plaintext during serialization.
-            AnthropicApiKeyProtected = ProtectOrPreserve(AnthropicApiKey, AnthropicApiKeyProtected);
+            // The legacy key is the one secret whose plaintext field IS serialized - an older file is read
+            // through it for migration - so it is blanked while the file is written; its encrypted form was
+            // set above with the others.
             var legacyPlain = AnthropicApiKey;
             AnthropicApiKey = string.Empty;
             try
@@ -960,61 +916,29 @@ public sealed partial class AppSettings
     /// because <c>Smtp</c> was never copied; <c>KeepRuns</c> and <c>ProposeChecks</c> were being
     /// silently reset the same way, with nobody looking at them to notice.</para>
     /// </summary>
-    public AppSettings Clone() => new()
+    public AppSettings Clone()
     {
-        SaveBlocked = SaveBlocked,
-        _unreadableSecrets = new HashSet<string>(_unreadableSecrets, StringComparer.Ordinal),
-        LoadProblems = LoadProblems.ToArray(),
-        // Must be copied: a clone that fell back to 1 would be saved as a v1 file, and the next load
-        // would re-run the migration and hand "*" back to a worker the user had just emptied.
-        SchemaVersion = SchemaVersion,
-        GlobalInstructions = GlobalInstructions,
-        NumCtx = NumCtx,
-        GenerationBudgets = GenerationBudgets with { },
-        RepairConsultation = RepairConsultation with { },
-        DisableThinking = DisableThinking,
-        AllowImplicitToolCalls = AllowImplicitToolCalls,
-        ReviewRetries = ReviewRetries,
-        MaxLoadedToolsPerStep = MaxLoadedToolsPerStep,
-        SuccessRetries = SuccessRetries,
-        RevertRejectedSteps = RevertRejectedSteps,
-        VerifyWrites = VerifyWrites,
-        MaxParallelSteps = MaxParallelSteps,
-        EvidenceBudget = EvidenceBudget,
-        LogRetentionDays = LogRetentionDays,
-        LogPromptBodies = LogPromptBodies,
-        ShellCommands = ShellCommands,
-        CloseToTray = CloseToTray,
-        BaseUrl = BaseUrl,
-        Model = Model,
-        MultiAgent = MultiAgent,
-        AnthropicApiKey = AnthropicApiKey,
-        AnthropicApiKeyProtected = AnthropicApiKeyProtected,
-        ReasonerModel = ReasonerModel,
-        AnthropicWorkspaceId = AnthropicWorkspaceId,
-        WindowX = WindowX,
-        WindowY = WindowY,
-        WindowWidth = WindowWidth,
-        WindowHeight = WindowHeight,
-        KeepRuns = KeepRuns,
-        ProposeChecks = ProposeChecks,
-        StepOutputs = StepOutputs,
-        TypedCriteria = TypedCriteria,
-        DynamicSteps = DynamicSteps,
-        MaxStepsPerExpansion = MaxStepsPerExpansion,
-        MaxTotalSteps = MaxTotalSteps,
-        MaxFanOutDepth = MaxFanOutDepth,
-        ValidateWaves = ValidateWaves,
-        ReportBlocked = ReportBlocked,
-        SemanticCriteria = SemanticCriteria,
-        Bindings = Bindings.Clone(),
-        RemoteAccess = RemoteAccess.Clone(),
-        Smtp = Smtp.Clone(),
-        Web = Web.Clone(),
-        McpServers = McpServers.Select(x => x.Clone()).ToList(),
-        Providers = Providers.Select(x => x.Clone()).ToList(),
-        Workers = Workers.Select(x => x.Clone()).ToList()
-    };
+        // Every value - a number, a switch, a string, an immutable record - is copied by itself. Listing each
+        // one by hand was a fifth edit for every new setting, and the place a new one was forgotten: KeepRuns,
+        // ProposeChecks and the SMTP account were each reset to their defaults on a clone that way.
+        var copy = (AppSettings)MemberwiseClone();
+
+        // Only what can be changed in place is copied explicitly, so the editor's copy is its own.
+        // ClonedSettingsAreIndependentTests holds every such member to that.
+        copy._unreadableSecrets = new HashSet<string>(_unreadableSecrets, StringComparer.Ordinal);
+        copy.LoadProblems = LoadProblems.ToArray();
+        copy.Bindings = Bindings.Clone();
+        copy.RemoteAccess = RemoteAccess.Clone();
+        copy.Smtp = Smtp.Clone();
+        copy.Web = Web.Clone();
+        copy.McpServers = McpServers.Select(x => x.Clone()).ToList();
+        copy.Providers = Providers.Select(x => x.Clone()).ToList();
+        copy.Workers = Workers.Select(x => x.Clone()).ToList();
+
+        // About one file, not about the settings: the copy has not been saved anywhere.
+        copy.LastSaveError = null;
+        return copy;
+    }
 
     /// <summary>
     /// What was wrong with the file this configuration was loaded from, and what was done about it.
@@ -1043,62 +967,10 @@ public sealed partial class AppSettings
         repairs.AddRange(DropUnnamed(Workers, w => w.Id, "worker"));
         repairs.AddRange(RenameDuplicates(Providers, p => p.Id, (p, id) => p.Id = id, "provider"));
         repairs.AddRange(RenameDuplicates(Workers, w => w.Id, (w, id) => w.Id = id, "worker"));
-        repairs.AddRange(UnencryptedSecrets());
-        repairs.AddRange(UnreadableRemoteToken());
-        foreach (var provider in Providers)
-            if (Secret.IsProtected(provider.ApiKeyProtected) && string.IsNullOrEmpty(provider.ApiKey))
-                repairs.Add($"The API key for provider '{provider.Id}' cannot be decrypted. "
-                    + "Its encrypted value will be preserved on save; enter a replacement key to use it here.");
-        if (Secret.IsProtected(Smtp.PasswordProtected) && string.IsNullOrEmpty(Smtp.Password))
-            repairs.Add("The SMTP password cannot be decrypted. Its encrypted value will be preserved on save; enter a replacement password to use it here.");
-        if (Secret.IsProtected(AnthropicApiKeyProtected) && string.IsNullOrEmpty(AnthropicApiKey))
-            repairs.Add("The legacy Anthropic key cannot be decrypted. Its encrypted value will be preserved on save.");
+        repairs.AddRange(SecretProblems());
 
         LoadProblems = repairs;
         return repairs;
-    }
-
-    /// <summary>
-    /// Keys sitting in settings.json in the clear. Left working - locking someone out of their own
-    /// settings would be worse - but never left unsaid. This is the residue of a build whose
-    /// encryption failed quietly and stored the plaintext in the field named "protected"; the next
-    /// successful save encrypts them.
-    /// </summary>
-    private IEnumerable<string> UnencryptedSecrets()
-    {
-        foreach (var provider in Providers)
-            if (!string.IsNullOrEmpty(provider.ApiKeyProtected) && !Secret.IsProtected(provider.ApiKeyProtected))
-                yield return $"The API key for provider '{provider.Id}' is stored UNENCRYPTED in settings.json. "
-                           + "It will be encrypted the next time settings are saved.";
-
-        if (!string.IsNullOrEmpty(AnthropicApiKeyProtected) && !Secret.IsProtected(AnthropicApiKeyProtected))
-            yield return "The stored Anthropic API key is UNENCRYPTED in settings.json. "
-                       + "It will be encrypted the next time settings are saved.";
-
-        if (!string.IsNullOrEmpty(RemoteAccess.TokenProtected) && !Secret.IsProtected(RemoteAccess.TokenProtected))
-            yield return "The remote access device token is stored UNENCRYPTED in settings.json. "
-                       + "It will be encrypted the next time settings are saved. Anyone who can read "
-                       + "that file can connect as this computer, so consider revoking it and "
-                       + "connecting again with a new connection code.";
-    }
-
-    /// <summary>
-    /// A device token that is encrypted but cannot be decrypted here: the settings file was copied
-    /// from another computer, or the Windows account was rebuilt. DPAPI ciphertext bound to a user
-    /// and machine that no longer exist will never open again, so it is not something to keep and
-    /// retry - it is a token that has to be reissued.
-    ///
-    /// <para>Said out loud because the alternative is the worst version of this: remote access
-    /// simply stops working, the pane still shows a token stored, and the next Save quietly
-    /// replaces the unreadable bytes with nothing.</para>
-    /// </summary>
-    private IEnumerable<string> UnreadableRemoteToken()
-    {
-        if (Secret.IsProtected(RemoteAccess.TokenProtected) && string.IsNullOrEmpty(RemoteAccess.Token))
-            yield return "The remote access device token cannot be decrypted by this Windows account "
-                       + "- these settings were most likely copied from another computer. Make a new "
-                       + "connection code in the browser and connect with it under Remote access; this "
-                       + "computer cannot connect until you do.";
     }
 
     private static IEnumerable<string> DropUnnamed<T>(List<T> items, Func<T, string> id, string what)

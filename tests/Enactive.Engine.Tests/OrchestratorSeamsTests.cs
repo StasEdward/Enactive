@@ -33,7 +33,7 @@ public sealed class OrchestratorSeamsTests
             PermissionPolicy.PermissiveDefault, new Services(), new ModelRouter(models),
             new OrchestratorServices(success));
         var criteria = new[] { new SuccessCriterionDefinition("check", "must never execute") };
-        var options = RunEngineOptions.Capture(new AppSettings { ProposeChecks = false, SuccessRetries = 0, ReviewRetries = 0 });
+        var options = EngineComposition.Options(new AppSettings { ProposeChecks = false, SuccessRetries = 0, ReviewRetries = 0 });
         var events = await fx.RunAsync(RunComposer.Engine(resources, options, successCriteria: criteria), "answer");
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
         Assert.True(success.Calls > 0);
@@ -65,7 +65,7 @@ public sealed class OrchestratorSeamsTests
             fx.Artifacts, fx.Workspace, new Planner(checksAuditEnabled: false), new PermissionEngine(), fx.Decisions,
             PermissionPolicy.PermissiveDefault, new Services(), new ModelRouter(models),
             new OrchestratorServices(Handover: handover));
-        var options = RunEngineOptions.Capture(new AppSettings { ProposeChecks = false });
+        var options = EngineComposition.Options(new AppSettings { ProposeChecks = false });
         var events = await fx.RunAsync(RunComposer.Engine(resources, options), "Inspect the files");
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
         Assert.Equal(1, handover.Calls);

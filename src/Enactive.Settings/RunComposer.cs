@@ -55,7 +55,7 @@ public sealed record RunEnvironment(
     SessionApprovals? Session = null,
     ApprovalStore? Approvals = null)
 {
-    public RunEngineOptions EngineOptions { get; } = RunEngineOptions.Capture(Settings);
+    public EngineOptions EngineOptions { get; } = EngineComposition.Options(Settings);
 }
 
 /// <summary>What one host asks to be run.</summary>
@@ -227,26 +227,17 @@ public static class RunComposer
     /// The single mapping from run resources and engine switches to an orchestrator - reached directly
     /// only by tests that need to put their own parts into it.
     /// </summary>
-    internal static Orchestrator Engine(RunEngineResources resources, RunEngineOptions options,
+    internal static Orchestrator Engine(RunEngineResources resources, EngineOptions options,
         IRunCheckpointStore? checkpoints = null, RunSettings? settings = null,
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null, ExecutionLimits? limits = null)
         => new(new WorkspaceChangesFactory(), resources.Providers, resources.Models, resources.Workers,
             resources.Tools, resources.Artifacts, resources.Workspace, resources.Planner,
             resources.Permissions, resources.Decisions, resources.Policy, resources.Services,
-            router: resources.Router, reviewRetries: options.ReviewRetries, successRetries: options.SuccessRetries,
-            maxLoadedToolsPerStep: options.MaxLoadedToolsPerStep,
-            proposeChecks: options.ProposeChecks, numCtx: options.NumCtx,
-            generationBudgets: options.GenerationBudgets, repairConsultation: options.RepairConsultation,
-            disableThinking: options.DisableThinking, maxParallelSteps: options.MaxParallelSteps,
-            evidenceBudget: options.EvidenceBudget, allowImplicitToolCalls: options.AllowImplicitToolCalls,
-            revertRejectedSteps: options.RevertRejectedSteps, checkpoints: checkpoints, settings: settings,
+            router: resources.Router, options: options, checkpoints: checkpoints, settings: settings,
             successCriteria: successCriteria, limits: limits, agents: resources.Agents,
             // The kinds of project the engine can build for its own "no new build errors" check.
             // A new kind is a new IEcosystem here; nothing in the orchestrator changes.
-            ecosystems: [new DotnetEcosystem()],
-            stepOutputs: options.StepOutputs, typedCriteria: options.TypedCriteria,
-            dynamicSteps: options.DynamicSteps, fanOut: options.FanOut, validateWaves: options.ValidateWaves,
-            reportBlocked: options.ReportBlocked, semanticCriteria: options.SemanticCriteria);
+            ecosystems: [new DotnetEcosystem()]);
 
     /// <summary>Only the window's own command bar has somebody at the screen to apply staged changes.</summary>
     private static bool Attended(RunRequest request) => request.Source == IntentSource.CommandBar;

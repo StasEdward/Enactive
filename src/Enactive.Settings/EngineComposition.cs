@@ -139,26 +139,59 @@ public static class EngineComposition
         => new(settings.Web.Enabled, settings.Web.SearchUrl.Trim())
             { UseWithoutAsking = settings.Web.UseWithoutAsking };
 
+    /// <summary>
+    /// The engine's switches as the settings have them. Every property of <see cref="EngineOptions"/> is named here,
+    /// and its constructor has no defaults, so a switch added there does not compile until it is read from here.
+    /// </summary>
+    public static EngineOptions Options(AppSettings settings) => new(
+        ReviewRetries: settings.ReviewRetries,
+        SuccessRetries: settings.SuccessRetries,
+        MaxLoadedToolsPerStep: settings.MaxLoadedToolsPerStep,
+        ProposeChecks: settings.ProposeChecks,
+        NumCtx: settings.NumCtx,
+        DisableThinking: settings.DisableThinking,
+        MaxParallelSteps: settings.MaxParallelSteps,
+        EvidenceBudget: settings.EvidenceBudget,
+        AllowImplicitToolCalls: settings.AllowImplicitToolCalls,
+        RevertRejectedSteps: settings.RevertRejectedSteps,
+        // Records, copied: a run reads its switches minutes later, after the settings dialog may have edited these.
+        GenerationBudgets: settings.GenerationBudgets with { },
+        RepairConsultation: settings.RepairConsultation with { },
+        StepOutputs: settings.StepOutputs,
+        TypedCriteria: settings.TypedCriteria,
+        DynamicSteps: settings.DynamicSteps,
+        FanOut: new FanOutLimits(settings.MaxStepsPerExpansion, settings.MaxTotalSteps, settings.MaxFanOutDepth),
+        ValidateWaves: settings.ValidateWaves,
+        ReportBlocked: settings.ReportBlocked,
+        SemanticCriteria: settings.SemanticCriteria);
+
     /// <summary>Every configured endpoint, as the provider factory wants them.</summary>
     public static IReadOnlyList<ProviderDescriptor> Descriptors(AppSettings settings)
+        // By name, every one: six int? follow one another here, and positionally two of them could change
+        // places without the compiler or anybody reading the line noticing.
         => settings.Providers.Select(p => new ProviderDescriptor(
-            p.Id,
-            string.IsNullOrWhiteSpace(p.DisplayName) ? p.Id : p.DisplayName,
-            p.Kind,
-            p.BaseUrl,
-            string.IsNullOrEmpty(p.ApiKey) ? null : p.ApiKey,
-            p.Models,
-            p.Headers.Count > 0 ? p.Headers : null,
-            p.MaxTokens,
-            p.ContextWindowTokens,
-            p.AnswerReserveTokens,
-            p.HandoverAtPercent, p.StreamIdleTimeoutSeconds, p.OpenAiReasoningProfile, p.OllamaKeepAliveSeconds, p.CompletionTimeoutSeconds, p.ReasoningTokenAllowance,
-            p.WorkingContextTokens,
-            string.IsNullOrWhiteSpace(p.Effort) ? null : p.Effort.Trim().ToLowerInvariant(),
-            double.TryParse(p.Temperature?.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var t)
-                && t is >= 0 and <= 2 ? t : null,
-            string.Equals(p.Temperature?.Trim(), "server", StringComparison.OrdinalIgnoreCase),
-            p.SendReasoningBack)).ToList();
+            Id: p.Id,
+            DisplayName: string.IsNullOrWhiteSpace(p.DisplayName) ? p.Id : p.DisplayName,
+            Kind: p.Kind,
+            BaseUrl: p.BaseUrl,
+            ApiKey: string.IsNullOrEmpty(p.ApiKey) ? null : p.ApiKey,
+            Models: p.Models,
+            Headers: p.Headers.Count > 0 ? p.Headers : null,
+            MaxTokens: p.MaxTokens,
+            ContextWindowTokens: p.ContextWindowTokens,
+            AnswerReserveTokens: p.AnswerReserveTokens,
+            HandoverAtPercent: p.HandoverAtPercent,
+            StreamIdleTimeoutSeconds: p.StreamIdleTimeoutSeconds,
+            OpenAiReasoningProfile: p.OpenAiReasoningProfile,
+            OllamaKeepAliveSeconds: p.OllamaKeepAliveSeconds,
+            CompletionTimeoutSeconds: p.CompletionTimeoutSeconds,
+            ReasoningTokenAllowance: p.ReasoningTokenAllowance,
+            WorkingContextTokens: p.WorkingContextTokens,
+            Effort: string.IsNullOrWhiteSpace(p.Effort) ? null : p.Effort.Trim().ToLowerInvariant(),
+            Temperature: double.TryParse(p.Temperature?.Trim(), System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var t) && t is >= 0 and <= 2 ? t : null,
+            ServerTemperature: string.Equals(p.Temperature?.Trim(), "server", StringComparison.OrdinalIgnoreCase),
+            SendReasoningBack: p.SendReasoningBack)).ToList();
 
     /// <summary>
     /// The configured team, or the built-in one when a person has never edited it. Global

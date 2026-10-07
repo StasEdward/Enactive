@@ -26,7 +26,7 @@ public sealed class RunCompositionRefactorTests
             Turn.Calls1("write_file", """{"path":"result.txt","content":"kept"}"""), Turn.Says("done"));
         var settings = new AppSettings { ProposeChecks = false,
             GenerationBudgets = new(Action: 1234) };
-        var options = RunEngineOptions.Capture(settings);
+        var options = EngineComposition.Options(settings);
         settings.GenerationBudgets = new(Action: 9999);
         var artifacts = staged ? (Enactive.Core.Artifacts.IArtifactStore)new StagingArtifactStore(fx.Root) : fx.Artifacts;
         var models = new ModelResolver();

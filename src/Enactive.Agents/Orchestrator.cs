@@ -220,60 +220,30 @@ public sealed partial class Orchestrator : IOrchestrator
         PermissionPolicy policy,
         IServiceProvider services,
         IModelRouter? router = null,
-        int reviewRetries = 1,
-        int successRetries = 1,
-        int maxLoadedToolsPerStep = ToolBudget.DefaultMaxLoaded,
-        bool proposeChecks = true,
-        int? numCtx = null,
-        bool disableThinking = false,
-        int maxParallelSteps = 1,
-        int evidenceBudget = ExecutionJournal.DefaultBudget,
-        bool allowImplicitToolCalls = false,
-        bool revertRejectedSteps = true,
+        // The engine's switches, as the settings have them - EngineOptions.Default when not given.
+        EngineOptions? options = null,
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
         ExecutionLimits? limits = null,
         IRunCheckpointStore? checkpoints = null,
         RunSettings? settings = null,
         WritableRoots? writableRoots = null,
-        GenerationBudgets? generationBudgets = null,
-        RepairConsultation? repairConsultation = null,
         OrchestratorServices? agents = null,
         // The kinds of project the engine can build and read, each behind IEcosystem. None by
         // default: a workspace no ecosystem recognises gets no build check, and so does a test that
         // says nothing about builds.
         IReadOnlyList<IEcosystem>? ecosystems = null,
-        // Phase 2: whether the planner may declare what a step hands on as values, and steps must
-        // then hand it on with submit_step_output. Off by default - it changes the planner's prompt
-        // and what every such step must do to finish, and is to be switched on by evidence.
-        bool stepOutputs = false,
-        // Phase 3: whether the planner may state acceptance criteria as types the engine checks
-        // itself. Off by default: it changes the planner's prompt, and is to be switched on by evidence.
-        bool typedCriteria = false,
-        // Phase 5.3: whether a step may be declared "for each" item another step hands on, and the plan
-        // grow by one step per item. Off by default, like the phases before it; it needs step outputs.
-        bool dynamicSteps = false,
-        // Phase 5.4: how far a plan may grow without asking.
-        FanOutLimits? fanOut = null,
-        // Phase 6: whether a plan's waves are validated where nothing is running, and a regression
-        // attributed to the step that made it. Off by default: it runs builds the run did not run before.
-        bool validateWaves = false,
         // Where a wave's files are kept for a resume - outside every workspace. A test points it somewhere temporary.
-        string? waveStore = null,
-        // Phase 7.2: the step may say it cannot go on (report_blocked). Advisory; the engine's own detection of
-        // blocks does not depend on it. Off by default, like the phases before it: it is one more tool offered.
-        bool reportBlocked = false,
-        // Phase 1.4: the planner may set a step semantic criteria, and a step that has them is judged against those only.
-        // Off by default: it changes what a step's review is.
-        bool semanticCriteria = false)
+        string? waveStore = null)
     {
-        _semanticCriteria = semanticCriteria;
-        _validateWaves = validateWaves;
-        _reportBlocked = reportBlocked;
+        options ??= EngineOptions.Default;
+        _semanticCriteria = options.SemanticCriteria;
+        _validateWaves = options.ValidateWaves;
+        _reportBlocked = options.ReportBlocked;
         _waveStore = waveStore ?? WaveCapture.DefaultStore();
-        _stepOutputs = stepOutputs;
-        _typedCriteria = typedCriteria;
-        _dynamicSteps = dynamicSteps;
-        _fanOut = fanOut ?? FanOutLimits.Default;
+        _stepOutputs = options.StepOutputs;
+        _typedCriteria = options.TypedCriteria;
+        _dynamicSteps = options.DynamicSteps;
+        _fanOut = options.FanOut;
         _ecosystems = ecosystems ?? Array.Empty<IEcosystem>();
         // The machine's own store unless a test points it somewhere temporary. Defaulted rather
         // than required because a run that never writes outside the workspace never touches it, and
@@ -303,30 +273,30 @@ public sealed partial class Orchestrator : IOrchestrator
         // How many times a rejected step may be redone. Clamped rather than trusted: this multiplies
         // the cost of a run by the reviewer's price, and a stray large number would be paid for in
         // full before anyone noticed.
-        _reviewRetries = Math.Clamp(reviewRetries, 0, 5);
+        _reviewRetries = Math.Clamp(options.ReviewRetries, 0, 5);
         // How many tools of its catalog one step may load (ToolBudget). Each one is a definition sent with every
         // later turn of the step, so a stray large number brings back the cost the catalog exists to remove.
-        _maxLoadedToolsPerStep = Math.Clamp(maxLoadedToolsPerStep, 1, 32);
+        _maxLoadedToolsPerStep = Math.Clamp(options.MaxLoadedToolsPerStep, 1, 32);
         // How many times a run whose CHECKS failed may try to make them pass. Same clamp and the
         // same reason: each attempt is a whole tool loop, paid for before anybody notices a stray
         // number. 0 restores the behaviour this had until 2026-09-08 - check once, and stop.
-        _successRetries = Math.Clamp(successRetries, 0, 5);
-        _proposeChecks = proposeChecks;
+        _successRetries = Math.Clamp(options.SuccessRetries, 0, 5);
+        _proposeChecks = options.ProposeChecks;
         // 1 = the original behaviour: one step at a time on one shared conversation.
-        _maxParallelSteps = Math.Max(1, maxParallelSteps);
-        _evidenceBudget = Math.Max(ExecutionJournal.MinimumBudget, evidenceBudget);
+        _maxParallelSteps = Math.Max(1, options.MaxParallelSteps);
+        _evidenceBudget = Math.Max(ExecutionJournal.MinimumBudget, options.EvidenceBudget);
         _successEvaluator = agents?.SuccessEvaluator ?? new SuccessEvaluator();
         _handover = agents?.Handover ?? new Handover();
-        _generationBudgets = generationBudgets ?? new();
-        _repairConsultation = repairConsultation ?? new();
-        _numCtx = numCtx;
+        _generationBudgets = options.GenerationBudgets;
+        _repairConsultation = options.RepairConsultation;
+        _numCtx = options.NumCtx;
         // Disable the local model's <think> phase by sending think:false; null leaves it to the model.
-        _think = disableThinking ? false : null;
+        _think = options.DisableThinking ? false : null;
         // Off by default: executing JSON found in a reply is a way to talk the agent into acting.
-        _allowImplicitToolCalls = allowImplicitToolCalls;
+        _allowImplicitToolCalls = options.AllowImplicitToolCalls;
         // On by default: a gate that stops the report but leaves the rejected work on disk is the
         // state a person is most likely to pick up and use.
-        _revertRejectedSteps = revertRejectedSteps;
+        _revertRejectedSteps = options.RevertRejectedSteps;
     }
 
     public IAsyncEnumerable<WorkEvent> SubmitIntentAsync(Intent intent, CancellationToken ct)

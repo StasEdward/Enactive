@@ -589,23 +589,28 @@ public sealed class EngineFixture : IDisposable
             decisions ?? Decisions,
             policy ?? PermissionPolicy.PermissiveDefault,
             new EmptyServices(),
-            proposeChecks: ProposeChecks,
-            generationBudgets: GenerationBudgetsOverride,
-            repairConsultation: RepairConsultationOverride,
             router: router,
-            reviewRetries: reviewRetries,
-            allowImplicitToolCalls: allowImplicitToolCalls,
-            revertRejectedSteps: revertRejectedSteps,
+            options: EngineOptions.Default with
+            {
+                ProposeChecks = ProposeChecks,
+                GenerationBudgets = GenerationBudgetsOverride ?? EngineOptions.Default.GenerationBudgets,
+                RepairConsultation = RepairConsultationOverride ?? EngineOptions.Default.RepairConsultation,
+                ReviewRetries = reviewRetries,
+                AllowImplicitToolCalls = allowImplicitToolCalls,
+                RevertRejectedSteps = revertRejectedSteps,
+                MaxParallelSteps = maxParallelSteps,
+                EvidenceBudget = evidenceBudget,
+                SuccessRetries = successRetries,
+                StepOutputs = StepOutputs, TypedCriteria = TypedCriteria, DynamicSteps = DynamicSteps,
+                FanOut = FanOut ?? FanOutLimits.Default, ValidateWaves = ValidateWaves,
+                ReportBlocked = ReportBlocked, SemanticCriteria = SemanticCriteria
+            },
             successCriteria: successCriteria,
             limits: limits,
-            maxParallelSteps: maxParallelSteps,
-            evidenceBudget: evidenceBudget,
-            successRetries: successRetries,
             checkpoints: checkpoints,
             settings: settings,
             ecosystems: EcosystemsOverride,
-            stepOutputs: StepOutputs, typedCriteria: TypedCriteria, dynamicSteps: DynamicSteps, fanOut: FanOut, validateWaves: ValidateWaves,
-            waveStore: WaveStore, reportBlocked: ReportBlocked, semanticCriteria: SemanticCriteria);
+            waveStore: WaveStore);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>
