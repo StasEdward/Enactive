@@ -168,4 +168,15 @@ internal static class ToolCallParsing
         public string? Name { get; set; }
         public StringBuilder Arguments { get; } = new();
     }
+
+    /// <summary>Whether a call's arguments are a whole JSON object - a call cut off mid-arguments is not one.</summary>
+    internal static bool CompleteArguments(string arguments)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(arguments);
+            return doc.RootElement.ValueKind == JsonValueKind.Object;
+        }
+        catch (JsonException) { return false; }
+    }
 }
