@@ -3,6 +3,7 @@ namespace Enactive.Agents;
 using Enactive.Core.Context;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
+using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 
 /// <summary>
@@ -163,9 +164,10 @@ public static class DefaultWorkers
     public static string Augment(string baseInstructions, string? globalInstructions = null,
         bool verifyWrites = true, IReadOnlyList<string>? tools = null)
     {
-        var available = tools is null ? null : WorkerTools.WithImplied(tools);
-        bool Has(string name) => available is null || available.Contains("*")
-            || available.Contains(name, StringComparer.OrdinalIgnoreCase);
+        // The role's tools as the gate reads them (ToolAllowlist), and nothing more. This used to add the
+        // tools a list implies (WorkerTools.WithImplied), which saved lists are given once, by migration -
+        // so a role somebody later took copy_file from was still advised to copy_file, and refused it.
+        bool Has(string name) => tools is null || ToolAllowlist.Allows(tools, name);
         var reads = Has("read_file") || Has("read_files");
         var writes = Has("write_file") || Has("edit_file");
         var commands = Has("run_command") || Has("run_powershell") || Has("git") || Has("docker");

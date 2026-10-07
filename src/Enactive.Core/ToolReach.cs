@@ -50,25 +50,17 @@ public static class ToolReach
     public static string? Unnamed(
         IEnumerable<string> registered, IEnumerable<IEnumerable<string>> namedBy)
     {
-        var named = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var wildcard = false;
+        var roles = namedBy.Select(role => role.ToArray()).ToArray();
 
-        foreach (var role in namedBy)
-            foreach (var tool in role)
-            {
-                // A role granted "*" carries every tool there is, so nothing is unreachable.
-                if (tool == "*")
-                    wildcard = true;
-
-                named.Add(tool);
-            }
-
-        if (wildcard)
+        // A role granted "*" carries every tool there is, so nothing is unreachable.
+        if (roles.Any(ToolAllowlist.GrantsEverything))
             return null;
 
         var orphans = registered
             .Where(name => !name.StartsWith(McpReach.Prefix, StringComparison.Ordinal))
-            .Where(name => !named.Contains(name))
+            // Named as the role gate reads a role (ToolAllowlist), so this says no role names a tool
+            // exactly when no role can call it.
+            .Where(name => !roles.Any(role => ToolAllowlist.Allows(role, name)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToArray();

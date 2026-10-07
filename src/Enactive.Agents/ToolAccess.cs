@@ -60,10 +60,6 @@ internal sealed class ToolAccess(IToolRegistry tools, IPermissionEngine permissi
             .FirstOrDefault(name => string.Equals(Bare(name), bare, StringComparison.OrdinalIgnoreCase));
     }
 
-    public static bool Allows(Worker worker, string tool)
-        => worker.ToolAllowlist.Contains("*")
-        || worker.ToolAllowlist.Contains(tool, StringComparer.OrdinalIgnoreCase)
-        || (tool.StartsWith("mcp__", StringComparison.Ordinal)
-            && worker.ToolAllowlist.Any(pattern => pattern.StartsWith("mcp__", StringComparison.Ordinal)
-                && pattern.EndsWith('*') && tool.StartsWith(pattern[..^1], StringComparison.Ordinal)));
+    /// <summary>Whether this worker's role names the tool - see <see cref="ToolAllowlist"/>, which every reader of a role asks.</summary>
+    public static bool Allows(Worker worker, string tool) => ToolAllowlist.Allows(worker.ToolAllowlist, tool);
 }

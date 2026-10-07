@@ -1,6 +1,7 @@
 namespace Enactive.Settings;
 
 using Enactive.Core.Permissions;
+using Enactive.Core.Tools;
 
 /// <summary>
 /// Which of the saved roles may call <c>send_email</c> - read by the SMTP pane, never written by it. The tool is
@@ -25,15 +26,12 @@ public static class MailRoles
 {
     public const string Tool = "send_email";
 
-    /// <summary>The wildcard that means "every tool", which therefore includes this one.</summary>
-    private const string Everything = "*";
-
     /// <summary>A role whose level allows the tool at all — see the note on the class.</summary>
     public static bool CanCarry(WorkerConfig worker) => worker.Level >= PermissionLevel.Execute;
 
     /// <summary>Whether this role's saved list already reaches the tool.</summary>
     public static bool Carries(WorkerConfig worker)
-        => Wildcarded(worker) || worker.Tools.Contains(Tool, StringComparer.OrdinalIgnoreCase);
+        => ToolAllowlist.Allows(worker.Tools, Tool);
 
     /// <summary>
     /// A role granted <c>*</c> carries the tool and cannot be refused it here: taking it away would
@@ -41,7 +39,7 @@ public static class MailRoles
     /// and leaves it alone.
     /// </summary>
     public static bool Wildcarded(WorkerConfig worker)
-        => worker.Tools.Contains(Everything, StringComparer.Ordinal);
+        => ToolAllowlist.GrantsEverything(worker.Tools);
 
     /// <summary>Whether ANY role can reach the tool — what the pane says when the answer is no.</summary>
     public static bool AnyoneCanSend(IEnumerable<WorkerConfig> workers)

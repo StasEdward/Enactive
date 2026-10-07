@@ -89,7 +89,7 @@ For example, `ollama/qwen3-coder:30b` identifies a model under the configured pr
 | Ops | Read/search/list, shell, Git, Docker | Execute |
 | Writer | Read/search/list, write/edit, directories/moves | Execute |
 
-The worker's tool allowlist is authoritative: an empty list permits no tools; `*` permits all registered tools. MCP additionally supports `mcp__*`, a server prefix such as `mcp__example__*`, or an exact discovered tool name.
+The worker's tool allowlist is authoritative: an empty list permits no tools; `*` permits all registered tools. MCP additionally supports `mcp__*`, a server prefix such as `mcp__example__*`, or an exact discovered tool name. Names and patterns are compared ignoring case. A trailing `*` is a pattern only after `mcp__`: built-in tools are granted by name, so `write_*` is just a name and grants nothing. The run, the MCP and SMTP screens, and the advice a worker is given all read a role by this one rule.
 
 Worker instructions are augmented at runtime with shared honesty rules, optional read-back guidance, and Global instructions. Put role-specific behavior in the worker and project/task-specific requirements in a template or request.
 

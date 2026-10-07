@@ -61,10 +61,14 @@ public sealed class RolePromptTests
         }
     }
 
+    // Advice follows the tools the role can call, as the gate reads it (ToolAllowlist): a list gets the
+    // copy_file advice when it names copy_file, not because write_file and read_file imply it. Implied tools
+    // reach saved lists once, by migration; a role somebody later took copy_file from is not advised to use it
+    // (ToolAllowlistTests.A_worker_is_not_advised_to_use_a_tool_its_role_does_not_carry).
     [Fact]
-    public void Wildcard_and_implied_tools_keep_write_verification_and_full_log_advice()
+    public void Wildcard_and_named_tools_keep_write_verification_and_full_log_advice()
     {
-        foreach (string[] tools in new[] { new[] { "*" }, new[] { "read_file", "write_file", "run_command" } })
+        foreach (string[] tools in new[] { new[] { "*" }, new[] { "read_file", "write_file", "run_command", "copy_file" } })
         {
             var text = DefaultWorkers.Augment("custom", tools: tools);
             Assert.Contains("To save requested command output", text);
