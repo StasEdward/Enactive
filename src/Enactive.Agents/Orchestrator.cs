@@ -916,7 +916,7 @@ public sealed partial class Orchestrator : IOrchestrator
     {
         var scope = session.Scope;
         var messages = session.Messages;
-        yield return scope.Ev(EventKind.Routed, $"Quick action: {plan.Title}");
+        yield return scope.Event(EventKind.Routed, $"Quick action: {plan.Title}", WorkEventPayload.QuickActionPayload(plan.Title));
 
         // Drained through a channel for the same reason as the DAG path below: the work runs in a
         // task that owns the log scope, while this method only yields what the channel hands it.

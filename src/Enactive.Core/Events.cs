@@ -431,6 +431,25 @@ public static class WorkEventPayload
     /// <summary>The step titles this event carries, or null when it carries none.</summary>
     public static IReadOnlyList<string>? PlanSteps(this WorkEvent ev) => Plan(ev)?.Steps;
 
+    /// <summary>
+    /// Builds the payload of the event that announces a quick action: its title, as a value. The step card and
+    /// the window header read it from the sentence "Quick action: &lt;title&gt;" - live and in the history - so
+    /// rewording that sentence would have renamed a run's only card. Not a route: a quick action is not a model choice.
+    /// </summary>
+    public static string QuickActionPayload(string title)
+        => System.Text.Json.JsonSerializer.Serialize(new QuickActionShape(title), PayloadJson);
+
+    /// <summary>The quick action's title this event carries, or null for one that is not that announcement.</summary>
+    public static string? QuickActionTitle(this WorkEvent ev)
+    {
+        if (string.IsNullOrEmpty(ev.PayloadJson) || !ev.PayloadJson.Contains("quickAction", StringComparison.Ordinal))
+            return null;
+        try { return System.Text.Json.JsonSerializer.Deserialize<QuickActionShape>(ev.PayloadJson, PayloadJson)?.QuickAction; }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
+    private sealed record QuickActionShape(string QuickAction);
+
     private static PlanPayloadShape? Plan(WorkEvent ev)
     {
         if (string.IsNullOrEmpty(ev.PayloadJson))

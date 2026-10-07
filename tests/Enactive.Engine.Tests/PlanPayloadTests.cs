@@ -79,10 +79,10 @@ public sealed class PlanPayloadTests
             Stored(nameof(EventKind.StepStarted), "[1/2]", 1),
             Stored(nameof(EventKind.StepStarted), "[2/2]", 2));
 
-        var segments = RunReplayPlan.Segments(record);
+        var cards = RunFeed.Replay(record).Cards;
 
-        Assert.Equal(2, segments.Count);
-        Assert.Equal(steps, segments.Select(s => s.Title).ToArray());
+        Assert.Equal(2, cards.Count);
+        Assert.Equal(steps, cards.Select(s => s.Title).ToArray());
     }
 
     // A run from before the payload has only the sentence, and still rebuilds.
@@ -94,7 +94,7 @@ public sealed class PlanPayloadTests
             Stored(nameof(EventKind.StepStarted), "[1/2]", 1),
             Stored(nameof(EventKind.StepStarted), "[2/2]", 2));
 
-        Assert.Equal(new[] { "first", "second" }, RunReplayPlan.Segments(record).Select(s => s.Title).ToArray());
+        Assert.Equal(new[] { "first", "second" }, RunFeed.Replay(record).Cards.Select(s => s.Title).ToArray());
     }
 
     // ── the artifact ──────────────────────────────────────────────────────────────────

@@ -80,13 +80,16 @@ internal sealed class RunListItemViewModel
     public string Tooltip { get; }
     public IBrush StatusBrush { get; }
 
-    internal static IBrush BrushFor(string status) => status.ToLowerInvariant() switch
+    // Which kind of ending a stored status is, is decided once, in Core (RunStanding), where it is tested against
+    // every outcome the engine records - this used to be a second copy of that classification. Only the colours
+    // are here.
+    internal static IBrush BrushFor(string status) => RunStanding.Of(status) switch
     {
-        "completed" or "succeeded" or "ok" => Brand.Success,
-        "failed" or "error" => Brand.Danger,
-        "cancelled" or "canceled" => Brand.TextMuted,
-        // Anything else never wrote a final status - blocked, or the app died mid-run. That is a
-        // person's problem to look at, which is what amber means everywhere else here.
+        RunStandingKind.Done => Brand.Success,
+        RunStandingKind.Failed => Brand.Danger,
+        RunStandingKind.Idle => Brand.TextMuted,
+        // Open - blocked, waiting for an answer, incomplete - and, in the history, any word that is not an end:
+        // a run that never wrote a final status. A person's problem to look at, which is what amber means here.
         _ => Brand.Amber
     };
 
@@ -318,8 +321,9 @@ internal sealed class PastRunViewModel : ObservableObject
         var model = string.IsNullOrWhiteSpace(record.Model) ? "unknown model" : record.Model;
         Meta = $"{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {model} · run {record.RunId:N}";
 
-        foreach (var card in RunReplay.Steps(record))
-            Steps.Add(card);
+        // Folded from the record exactly as the live window folds the events as they arrive (RunFeed).
+        foreach (var card in RunFeed.Replay(record).Cards)
+            Steps.Add(new StepCardViewModel(card));
         foreach (var row in RunTimeline.Fold(record))
             Events.Add(row);
         foreach (var a in record.Artifacts)

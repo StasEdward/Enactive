@@ -89,17 +89,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private DecisionCompletion? _pendingDecision;
     private readonly SessionApprovals _sessionApprovals = new();
     private readonly DecisionQueue _decisionQueue = new();
-    private readonly List<StepCardViewModel> _cards = new();
-    private readonly List<StepCardViewModel> _running = new();
-    private StepCardViewModel? _currentCard;
-    private int _stepIndex;
-
-    // How many cards came before the plan's first one: a card made for events that arrived before the
-    // plan did (a planner criterion dropped, the planner checking its criteria). Step numbers count from
-    // the plan's first card, not from the top of the list - otherwise every step shows one card early.
-    private int _planOffset;
-    private int _doneSteps;
-    private int _totalSteps;
+    // The live run's step cards, title, phase and step count - the same fold a run reopened from the history
+    // is drawn from (RunFeed) - and the card views drawn from it.
+    private RunFeed _feed = new();
+    private readonly List<StepCardViewModel> _cardViews = new();
+    private string? _shownPhase;
+    private (int Done, int Total) _shownProgress;
     private readonly Stopwatch _runStopwatch = new();
     private DispatcherTimer? _elapsedTimer;
 
@@ -847,6 +842,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _vm.InputText = string.Empty;
             Live(() => _vm.TaskIntent = text);
             SetLiveTitle(Summarise(text));
+            _feed = new RunFeed(_liveTitle);
             Live(() => _vm.HasTask = true);
             Live(() => _vm.StatusPhase = "Running");
 
@@ -907,14 +903,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             }
             catch (OperationCanceledException)
             {
-                await Dispatcher.UIThread.InvokeAsync(() => { Live(() => _vm.StatusPhase = "Cancelled"); _currentCard?.SetFailed(); });
+                await Dispatcher.UIThread.InvokeAsync(() => { Live(() => _vm.StatusPhase = "Cancelled"); _feed.Stopped(); SyncFeed(); });
             }
             catch (Exception ex)
             {
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     Live(() => { _vm.StatusPhase = "Error"; _vm.CurrentAction = ex.Message; });
-                    _currentCard?.SetFailed();
+                    // Every card still short of an end never reached one - not only the one that happened to be current.
+                    _feed.Stopped();
+                    SyncFeed();
                 });
             }
             finally
@@ -963,121 +961,29 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     UpdateLive(_liveRow, r => r.RunId == ev.RunId ? r : r with { RunId = ev.RunId });
                 }
 
+                // The cards, the title, the phase and the step count: folded by RunFeed, exactly as a run reopened
+                // from the history is, so the two cannot disagree. New cards are shown where the feed put them.
+                foreach (var (card, at) in _feed.Apply(ev))
+                {
+                    var view = new StepCardViewModel(card);
+                    _cardViews.Add(view);
+                    Live(() => _vm.Steps.Insert(Math.Min(at, _vm.Steps.Count), view));
+                }
+                SyncFeed();
+
+                // What only the window shows: the routing panel, the agent pill, the line saying what is
+                // happening now, the counters, tokens and artifacts.
                 switch (ev.Kind)
                 {
-                    case EventKind.IntentReceived:
-                        Live(() => _vm.StatusPhase = "Understanding");
-                        break;
                     case EventKind.Routed:
                         Live(() => _vm.Routing.Apply(ev.Summary, ev.PayloadJson));
-                        if (ev.Summary.Contains("-> model"))
-                            Live(() => _vm.StatusPhase = "Planning");
-                        if (ev.Summary.StartsWith("Quick action: ", StringComparison.Ordinal))
-                            SetLiveTitle(ev.Summary["Quick action: ".Length..]);
-                        if (ev.Summary.StartsWith("Reasoner", StringComparison.Ordinal))
-                            SetLiveAgent("Reasoner · planning", Brand.PillReasoner);
-                        break;
-                    case EventKind.PlanCreated:
-                        Live(() => _vm.StatusPhase = "Executing");
-                        // The planner's title is a better header than the raw request, which is often a
-                        // paragraph. From the payload; the sentence is read only for a run produced by a
-                        // build that predates it, where a title containing " — " lost its tail.
-                        if (ev.PlanTitle() is { Length: > 0 } plannedTitle)
-                            SetLiveTitle(plannedTitle);
-                        else
-                        {
-                            var dash = ev.Summary.IndexOf(" — ", StringComparison.Ordinal);
-                            if (dash > 0)
-                                SetLiveTitle(ev.Summary[..dash]);
-                        }
-                        CreateStepCards(ev);
-                        break;
-                    case EventKind.PlanExpanded:
-                        // Steps the plan grew while it ran: numbered after every step it had, SHOWN under the
-                        // step they were made from - a step after the items ran last and read first otherwise.
-                        var grownFrom = CardFor(ev);
-                        var grown = ev.PlanSteps()?.ToArray() ?? [];
-                        AddStepCards(grown, grownFrom);
-                        grownFrom?.SetActivity(grown.Length == 0
-                            ? "No steps for its items"
-                            : $"{grown.Length} item step(s); joins their results when they have all ended");
                         break;
                     case EventKind.StepStarted:
                         SetLiveAgent("Coder", Brand.PillCoder);
-                        BeginStep(ev);
-                        (CardFor(ev) ?? EnsureCurrentCard()).SetActivity("Thinking…");
+                        Live(() => _vm.CurrentAction = ev.Summary);
                         break;
-                    case EventKind.StepCompleted:
-                        var doneCard = CardFor(ev) ?? _currentCard;
-                        // A failed step and a dependency-skipped step arrive as StepCompleted too, so the
-                        // card must not go green for either of them. The step's outcome is now a value in
-                        // the payload; the old string search is the fallback for a run recorded by an
-                        // earlier build, and is exactly the fragility it replaces — rewording a summary
-                        // used to turn a red card green.
-                        var stepOutcome = ev.StepOutcome();
-                        var wasSkipped = stepOutcome == StepOutcomeKind.Skipped
-                            || (stepOutcome is null && ev.Summary.Contains("skipped (dependency", StringComparison.Ordinal));
-                        var wasFailed = wasSkipped
-                            || (stepOutcome is not null && stepOutcome != StepOutcomeKind.Succeeded)
-                            || (stepOutcome is null && ev.Summary.Contains("FAILED:", StringComparison.Ordinal));
-                        // The line under the title is the step's own REASON when it recorded one, and
-                        // the outcome word alone otherwise. It used to be three literals here, which is
-                        // how a run stopped by "nothing is listening at http://localhost:11434/v1"
-                        // showed a card that said "Failed" and nothing else, with the diagnosis sitting
-                        // unread in the payload this very method is holding. The wording is in Core
-                        // (RunOutcomeWords) because this file is in a WinExe no test can reach - which
-                        // is exactly where a literal like that gets written and never questioned.
-                        var stepSays = RunOutcomeWords.StepActivity(
-                            wasSkipped ? StepOutcomeKind.Skipped : stepOutcome,
-                            ev.OutcomeReason());
-
-                        if (wasSkipped)
-                        {
-                            // Skipped is not failed: nothing went wrong in THIS step, and painting it red
-                            // sends you looking for a fault that is in another card.
-                            doneCard?.SetSkipped();
-                            doneCard?.SetActivity(stepSays);
-                        }
-                        else if (stepOutcome == StepOutcomeKind.Blocked)
-                        {
-                            // Before wasFailed too: a blocked step has not failed; it waits for its cause.
-                            doneCard?.SetBlocked();
-                            doneCard?.SetActivity(stepSays);
-                        }
-                        else if (stepOutcome == StepOutcomeKind.DoneUnverified)
-                        {
-                            // Checked before wasFailed, which counts anything short of Succeeded as a
-                            // failure and would paint work that is on disk red.
-                            doneCard?.SetUnverified();
-                            doneCard?.SetActivity(stepSays);
-                        }
-                        else if (wasFailed)
-                        {
-                            doneCard?.SetFailed();
-                            doneCard?.SetActivity(stepSays);
-                        }
-                        else
-                        {
-                            doneCard?.SetDone();
-                            doneCard?.SetActivity("Done");
-                        }
-                        EndStep(doneCard);
-                        _doneSteps++;
-                        UpdateProgress();
-                        break;
-                    // A long generation still arriving - shown on the activity line, replaced in place,
-                    // so minutes of writing a big tool call do not look like a hang.
-                    case EventKind.GenerationProgress:
-                        (CardFor(ev) ?? EnsureCurrentCard()).SetActivity(ev.Summary);
-                        break;
-
                     case EventKind.AssistantDelta:
                         SetLiveAgent("Coder", Brand.PillCoder);
-                        var streamCard = CardFor(ev) ?? EnsureCurrentCard();
-                        // Buffered, not shown live - the raw streamed reply isn't interesting on its own;
-                        // it gets folded into one short note the next time a tool runs or the step ends.
-                        streamCard.AppendAssistantText(ev.Summary);
-                        streamCard.SetActivity("Thinking…");
                         break;
                     case EventKind.ToolInvoked:
                         SetLiveAgent("Coder", Brand.PillCoder);
@@ -1086,56 +992,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                             _vm.ToolCalls++;
                             _vm.CurrentAction = ev.Summary;
                         });
-                        var toolCard = CardFor(ev) ?? EnsureCurrentCard();
-                        StepCardWriter.LogInvocation(toolCard, ev.Summary);
-                        toolCard.SetActivity(StepCardWriter.DescribeActivity(ev.Summary));
-                        break;
-                    case EventKind.ToolResult:
-                        (CardFor(ev) ?? EnsureCurrentCard()).AppendEntryDetail(ev.Summary);
-                        break;
-                    case EventKind.ErrorObserved:
-                        // Surface the warning in the activity line without changing disclosure state.
-                        var warnCard = CardFor(ev) ?? EnsureCurrentCard();
-                        warnCard.AddNote("⚠ " + ev.Summary);
-                        warnCard.SetActivity("⚠ " + ev.Summary);
-
                         break;
                     case EventKind.ReviewRequested:
                     case EventKind.ReviewPassed:
                     case EventKind.ReviewFailed:
                         SetLiveAgent("Reasoner · review", Brand.PillReasoner);
-                        Live(() =>
-                        {
-                            _vm.CurrentAction = ev.Summary;
-                        });
-                        var reviewCard = CardFor(ev) ?? EnsureCurrentCard();
-                        reviewCard.AddNote(ev.Summary);
-                        reviewCard.SetActivity(
-                            ev.Kind == EventKind.ReviewRequested ? "Reviewing…" :
-                            ev.Kind == EventKind.ReviewPassed ? "Review passed" : "Review flagged an issue…");
+                        Live(() => _vm.CurrentAction = ev.Summary);
                         break;
                     case EventKind.DecisionRequested:
                     case EventKind.DecisionResolved:
                         Live(() => _vm.CurrentAction = ev.Summary);
-                        var decisionCard = CardFor(ev) ?? EnsureCurrentCard();
-                        // A refused call gets its own word in the summary rather than being folded in
-                        // with the remarks - by the event's VALUE, exactly as the replay reads it, so
-                        // the live card and the same run reopened later cannot disagree.
-                        if (ev.WasRefused() == true)
-                            decisionCard.AddRefusal(ev.Summary);
-                        else
-                            decisionCard.AddNote(ev.Summary);
-                        if (ev.Kind == EventKind.DecisionRequested)
-                        {
-                            decisionCard.SetActivity("Waiting for your approval…");
-                            decisionCard.SetWaitingForYou();
-                        }
-                        else
-                        {
-                            // Answered: the step is moving again, and the card should stop saying it is
-                            // not. The step's own ending overwrites this either way.
-                            decisionCard.SetRunning();
-                        }
                         break;
                     case EventKind.UsageReported:
                         if (ev.Usage() is { } used)
@@ -1145,42 +1011,22 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                         }
                         break;
                     case EventKind.ArtifactProduced:
-                        (CardFor(ev) ?? EnsureCurrentCard()).AddNote("Artifact: " + ev.Summary);
                         if (_staging is not null)
                             AddStagedArtifact();
                         else
                             AddArtifact(ev);
                         break;
-
-                    // The conversation was pruned to fit the model's window, or is being handed over to a
-                    // fresh one - announced before the note is written, because writing it is one long
-                    // silent turn. Shown on the step card, not buried in the log: from here on the model
-                    // is working with less than it was given, and that explains behaviour a person would
-                    // otherwise blame on the model - or on a hang.
-                    case EventKind.ContextTrimmed:
-                        (CardFor(ev) ?? EnsureCurrentCard()).AddNote(ev.Summary);
-                        break;
-
                     // The step's work was put back after the reviewer rejected it. Its cards must stop
                     // offering to open or undo a file that is no longer the file they describe.
                     case EventKind.ArtifactReverted:
-                        (CardFor(ev) ?? EnsureCurrentCard()).AddNote(ev.Summary);
                         MarkRevertedArtifacts(ev.Summary);
                         break;
-                    // The pill says what the engine DECIDED, read from the event's typed outcome rather
-                    // than from which of the two terminal kinds arrived. "Incomplete" is its own answer:
-                    // nothing failed, but the work is not done, and calling that Completed is what let a
-                    // truncated or half-run task look finished.
                     case EventKind.TaskCompleted:
                     case EventKind.TaskFailed:
                         var outcome = ev.Outcome()
-                            ?? (ev.Kind == EventKind.TaskCompleted
-                                ? RunOutcomeKind.Completed
-                                : RunOutcomeKind.Failed);
-
+                            ?? (ev.Kind == EventKind.TaskCompleted ? RunOutcomeKind.Completed : RunOutcomeKind.Failed);
                         Live(() =>
                         {
-                            _vm.StatusPhase = outcome.ToString();
                             _vm.IsAgentVisible = false;
                             // Why it stopped belongs on screen, not only in the log. A completed run has a
                             // reason only when something must be added to "done" - a check the engine ran
@@ -1189,147 +1035,33 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                                 ? ev.OutcomeReason() ?? string.Empty
                                 : ev.OutcomeReason() ?? ev.Summary;
                         });
-
-                        if (outcome == RunOutcomeKind.Completed)
-                        {
-                            _currentCard?.SetDone();
-                            _currentCard?.SetActivity("Done");
-                        }
-                        else if (outcome == RunOutcomeKind.Blocked)
-                        {
-                            _currentCard?.SetBlocked();
-                            _currentCard?.SetActivity(outcome.ToString());
-                        }
-                        else
-                        {
-                            _currentCard?.SetFailed();
-                            _currentCard?.SetActivity(outcome.ToString());
-                        }
                         break;
                 }
         }
 
-        private void CreateStepCards(WorkEvent ev)
+        /// <summary>
+        /// Draws what the feed has become: every card view brought up to its card, and the phase, the title and
+        /// the step count wherever they changed.
+        /// </summary>
+        private void SyncFeed()
         {
-            // Values first. Splitting the sentence on " | " turned a step whose own title contains one
-            // into two cards, and every event afterwards was attributed to the wrong card. The sentence
-            // is read only for a run produced by a build that predates the payload.
-            var titles = ev.PlanSteps()?.ToArray() ?? FromSummary(ev.Summary);
-            if (titles.Length == 0)
-                return;
+            foreach (var view in _cardViews)
+                view.Sync();
 
-            // A card made before the plan arrived is the planning's, not step 1's: it is closed, and the
-            // plan's cards are numbered after it.
-            foreach (var early in _cards)
+            if (_feed.Phase is { } phase && phase != _shownPhase)
             {
-                early.SetDone();
-                early.SetActivity("Planned");
+                _shownPhase = phase;
+                Live(() => _vm.StatusPhase = phase);
             }
-            _planOffset = _cards.Count;
-            _currentCard = null;
-            _running.Clear();
-            _totalSteps = 0;   // the plan's own count, as before; steps it grows are added to it
-            AddStepCards(titles);
 
-            static string[] FromSummary(string summary)
+            if (_feed.Title.Length > 0 && _feed.Title != _liveTitle)
+                SetLiveTitle(_feed.Title);
+
+            if ((_feed.StepsDone, _feed.StepsTotal) != _shownProgress)
             {
-                const string marker = " steps: ";
-                var index = summary.IndexOf(marker, StringComparison.Ordinal);
-                return index < 0
-                    ? Array.Empty<string>()
-                    : summary[(index + marker.Length)..].Split(" | ", StringSplitOptions.RemoveEmptyEntries);
+                _shownProgress = (_feed.StepsDone, _feed.StepsTotal);
+                UpdateProgress();
             }
-        }
-
-        /// <param name="under">A card the new ones are shown under (the step they were made from), or null for the end.</param>
-        private void AddStepCards(IReadOnlyList<string> titles, StepCardViewModel? under = null)
-        {
-            if (titles.Count == 0)
-                return;
-            _totalSteps += titles.Count;
-            foreach (var title in titles)
-            {
-                var card = new StepCardViewModel(title.Trim());
-                _cards.Add(card);                                   // numbering: after every step the plan had
-                if (under is null)
-                    Live(() => _vm.Steps.Add(card));
-                else
-                {
-                    var parent = under;
-                    var below = _shownUnder.TryGetValue(parent, out var n) ? n : 0;
-                    _shownUnder[parent] = below + 1;
-                    Live(() =>
-                    {
-                        var at = _vm.Steps.IndexOf(parent);
-                        if (at < 0) _vm.Steps.Add(card);
-                        else _vm.Steps.Insert(Math.Min(at + 1 + below, _vm.Steps.Count), card);
-                    });
-                }
-            }
-            UpdateProgress();
-        }
-
-        // How many cards are shown under each step done for each item - where the next one goes.
-        private readonly Dictionary<StepCardViewModel, int> _shownUnder = new();
-
-        private void BeginStep(WorkEvent ev)
-        {
-            // Prefer the step number the orchestrator stamped on the event; steps can start out of order
-            // (and several at once) once MaxParallelSteps > 1, so a running counter is not enough.
-            var index = ev.StepNo() ?? ++_stepIndex;
-            _stepIndex = Math.Max(_stepIndex, index);
-
-            StepCardViewModel card;
-            if (_planOffset + index - 1 < _cards.Count)
-            {
-                card = _cards[_planOffset + index - 1];
-            }
-            else
-            {
-                var fresh = new StepCardViewModel(ev.Summary);
-                card = fresh;
-                _cards.Add(fresh);
-                Live(() => _vm.Steps.Add(fresh));
-                _totalSteps = _cards.Count;
-            }
-            card.SetRunning();
-            _running.Add(card);
-            // With one step in flight this is that step; with several, events without a step number have
-            // no single owner, so nothing claims to be "current".
-            _currentCard = _running.Count == 1 ? card : null;
-            Live(() => _vm.CurrentAction = ev.Summary);
-        }
-
-        private void EndStep(StepCardViewModel? card)
-        {
-            if (card is not null)
-                _running.Remove(card);
-            _currentCard = _running.Count == 1 ? _running[0] : null;
-        }
-
-        /// <summary>The card this event belongs to, or null when it carries no step number.</summary>
-        private StepCardViewModel? CardFor(WorkEvent ev)
-        {
-            var n = ev.StepNo();
-            return n is { } i && i >= 1 && _planOffset + i - 1 < _cards.Count ? _cards[_planOffset + i - 1] : null;
-        }
-
-        private StepCardViewModel EnsureCurrentCard()
-        {
-            if (_currentCard is null)
-            {
-                // The quick action's own title when the planner has given one - the same name replay
-                // puts on this card, so a run reads identically live and from the history.
-                var card = new StepCardViewModel(
-                    string.IsNullOrWhiteSpace(_liveTitle) ? "Working" : _liveTitle);
-                card.SetRunning();
-                _cards.Add(card);
-                Live(() => _vm.Steps.Add(card));
-                _currentCard = card;
-                if (_totalSteps == 0)
-                    _totalSteps = 1;
-            }
-            return _currentCard;
         }
 
         /// <summary>
@@ -1349,7 +1081,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         private void UpdateProgress()
         {
-            var progress = _totalSteps > 0 ? $"{_doneSteps} / {_totalSteps} steps" : "—";
+            var progress = _feed.StepsTotal > 0 ? $"{_feed.StepsDone} / {_feed.StepsTotal} steps" : "—";
             Live(() => _vm.StatusProgress = progress);
 
             // The one place step counts change, so the one place the live row has to be told. The row
@@ -1358,8 +1090,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 UpdateLive(_liveRow, r => r with
                 {
                     Title = _liveTitle,
-                    StepsDone = _doneSteps,
-                    StepsTotal = _totalSteps
+                    StepsDone = _feed.StepsDone,
+                    StepsTotal = _feed.StepsTotal
                 });
         }
 
@@ -1626,14 +1358,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             // panels while the run carries on filling these.
             _shownArtifacts.Clear();
             _liveArtifacts.Clear();
-            _cards.Clear();
-            _shownUnder.Clear();
-            _currentCard = null;
-            _running.Clear();
-            _stepIndex = 0;
-            _planOffset = 0;
-            _doneSteps = 0;
-            _totalSteps = 0;
+            _feed = new RunFeed();
+            _cardViews.Clear();
+            _shownPhase = null;
+            _shownProgress = default;
             _liveTitle = string.Empty;
             _liveJournal.Clear();
             _liveAgent = null;
