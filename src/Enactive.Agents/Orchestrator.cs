@@ -2559,7 +2559,7 @@ public sealed partial class Orchestrator : IOrchestrator
     /// A block the engine can see in what the step left open (Phase 7.1): a permission it was refused and nothing
     /// made good, or - its whole record - lookups that found nothing. Null when what is open is something else.
     /// </summary>
-    private static (OutcomeCause Cause, string Reason)? EngineBlock(OpenFailures open)
+    internal static (OutcomeCause Cause, string Reason)? EngineBlock(OpenFailures open)
         => open.OpenRefusals is { Count: > 0 } refused
             ? (OutcomeCause.BlockedPermission, "needs a permission it was refused: " + string.Join("; ", refused))
             : open.NothingButMisses
@@ -3195,12 +3195,6 @@ public sealed partial class Orchestrator : IOrchestrator
                                                      WorkEventPayload.WorkPurpose.Execute, cached, created));
         }
 
-        // A reply that describes a call instead of making one earns exactly ONE re-ask per step; without
-        // the cap a model that keeps explaining itself would burn every iteration on the same nudge.
-        var repairRequested = false;
-        // Set when the engine asks for a call to be re-sent properly; the calls that arrive on the
-        // NEXT turn are what that question bought, and are recorded as such.
-        var resendAsked = false;
         var repairAttempts = new RepairAttempts();
         var repairGoal = RepairAttempts.Clip(string.Join("\n", messages.Where(m => m.Role == ChatRole.User)
             .Select(m => m.Content)), 3000);
@@ -3336,12 +3330,6 @@ public sealed partial class Orchestrator : IOrchestrator
         // start left, and read on each time - the page it had already checked, a settings file eight
         // thousand characters at a time. One turn, then every tool is back.
         var handOnOnly = false;
-        // Whether this step has been told, once, that a criterion the plan attached to it fails.
-        var criteriaNudged = false;
-        // Amendment A: told once which calls are still open; what is still open after it, if a reviewer is to judge
-        // the step, goes to it marked - the text of it, so a call that fails afterwards is not waved through.
-        var openCallsNudged = false;
-        string? openCallsForReview = null;
         var handoverFailures = 0;
         var turnsHere = 0;
         ChatMessage? commandHistoryMessage = null;
@@ -3415,6 +3403,11 @@ public sealed partial class Orchestrator : IOrchestrator
             journal, openFailures, messages, progress, _progress, _decisions, _decisionGate, granted, _writableRoots,
             _workspace.RootPath, _workspace.Id, taskId, runId, stepNo, toolsOnRequest, mayReportBlocked,
             outputSchema, outputSlot, submitTool, path => OutputPathExists(path, store), boundary, changes, stepStart);
+
+        // Whether each turn ends the step, and how - in one order, with its once-only reminders (see StepEnding).
+        var stepEnding = new StepEnding(journal, openFailures, messages, progress, taskId, runId, stepNo, _workspace.RootPath,
+            async (path, token) => await store.TryReadPendingAsync(path, token) ?? await ReadOrNullAsync(path, token),
+            stepCriteria, outputSchema, outputSlot, reviewed);
 
         // The transcript's size when lastPromptTokens was measured, so what has been added since
         // can be estimated on top of a real count rather than instead of one.
@@ -4120,217 +4113,19 @@ public sealed partial class Orchestrator : IOrchestrator
             messages.Add(new ChatMessage(ChatRole.Assistant, replyText, toolCalls)
                 { Reasoning = reasoningBuilder.Length > 0 ? reasoningBuilder.ToString() : null });
 
-            // A step that has said it is done and repeats a call it has already made, with nothing changed since, is
-            // done - not stuck. Run fba4d6, 2026-09-29: "S3 done - all 133 tests passed", and the same test run
-            // attached, four turns running; its reasoning said "I need to stop repeating", and the step was stopped as
-            // stuck, the report step after it skipped. The repeat is not run - it would say what it said - and the step
-            // ends on its message by the ordinary road: the same end-of-step checks, and the review.
-            if (!forcedThisTurn && !string.IsNullOrWhiteSpace(replyText) && toolCalls is { Count: > 0 } && progress.OnlyRepeats(toolCalls))
+            // Whether this turn ends the step - and what the step is told when it does not (StepEnding).
+            var ending = new StepEnding.Verdict();
+            await foreach (var ev in stepEnding.EndAsync(new StepEnding.Turn(replyText, toolCalls, forcedThisTurn, described,
+                               actionsTaken, reasoningBuilder.Length, lastCompletionTokens, lastPromptTokens,
+                               () => provider.ContextWindow(request)), ending, ct))
+                yield return ev;
+            if (ending.Next == StepEnding.Next.End)
             {
-                foreach (var call in toolCalls)
-                    messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: this exact call already ran in this step, and nothing has "
-                        + "changed since - its result is above. The step ends with your message."));
-                yield return Ev(EventKind.ContextAssembled, "The step said it was done and repeated "
-                    + string.Join("; ", toolCalls.Select(c => $"{c.Name} {Compact(c.ArgumentsJson)}"))
-                    + ", which it had already made with nothing changed since: not run, and the step ends on its message.");
-                toolCalls = null;
+                loopResult.Set(ending.Kind, ending.Reason, ending.Cause);
+                yield break;
             }
-
-            if (toolCalls is null && forcedThisTurn)
-            {
-                messages.Add(ChatMessage.User($"Nothing was handed on. Carry on with the step, and hand its result on with "
-                    + $"{StepOutputContract.ToolName} when you have it."));
-                yield return Ev(EventKind.ContextAssembled, $"The turn for {StepOutputContract.ToolName} was answered with text; the step carries on.");
+            if (ending.Next == StepEnding.Next.Continue || toolCalls is null)
                 continue;
-            }
-
-            if (toolCalls is null)
-            {
-                if (described is not null && !repairRequested)
-                {
-                    repairRequested = true;
-                    resendAsked = true;
-                    messages.Add(ChatMessage.User(
-                        $"Your reply described a '{described.Name}' call in plain text instead of invoking it. "
-                        + "Nothing was executed. If you meant to act, send it again as a real tool call. "
-                        + "If that JSON was only an example or an explanation, reply with your final answer."));
-                    yield return Ev(EventKind.ErrorObserved,
-                        $"The model described a '{described.Name}' call in plain text instead of invoking it — "
-                        + "nothing was executed; asked it to re-send the call properly.");
-                    continue;
-                }
-
-                // NOTHING came back. Not an answer, not a call - and this used to fall through to
-                // "genuine final answer" below and mark the step SUCCEEDED. The reviewer then failed
-                // it for the only thing it could see ("no tools were run and no files were
-                // changed"), the retry produced the same silence, and the run died with a message
-                // about the reviewer while the cause - the model's output never arrived - appeared
-                // nowhere. An absence is not an answer, which is the same rule as everywhere else
-                // here; this was the last place still breaking it.
-                if (replyText is null && actionsTaken == 0)
-                {
-                    var thought = reasoningBuilder.Length;
-                    var spent = lastCompletionTokens is { } t and > 0 ? $" while reporting {t} output token(s)" : "";
-
-                    // Only when the prompt is actually near the window. Suggesting num_ctx to somebody
-                    // whose prompt used 1786 of 131072 tokens sends them to tune a setting that has
-                    // nothing to do with it, which is how a diagnosis becomes a list of everything it
-                    // might be.
-                    var declaredWindow = provider.ContextWindow(request);
-                    var tight = declaredWindow is { } w && lastPromptTokens is { } used && used > w * 4 / 5
-                        ? $" The prompt also used {used} of this model's {w} tokens, so raising num_ctx may help."
-                        : "";
-
-                    var why = thought > 0
-                        ? $"The model spent the whole turn reasoning ({thought:N0} characters of it) and "
-                          + "produced no answer and no tool call. Turn Thinking off in Settings, or use a "
-                          + "model that answers as well as reasons." + tight
-                        // What was OBSERVED first, then the causes - and reasoning is named as ruled
-                        // out rather than led with, because the provider reported none and saying
-                        // "a reasoning model does this" over evidence to the contrary is the habit
-                        // the rest of this engine exists to break.
-                        : $"The model returned nothing{spent} — no text, no tool call, and no reasoning "
-                          + "either — so its output never reached the engine. The usual cause is a model "
-                          + "that cannot emit tool calls in the format the provider expects: a small "
-                          + "local model often answers with something the provider then drops. Tick "
-                          + "\"Capture raw wire (Trace)\" in the log window and run it again to see "
-                          + "exactly what came back, or use a model known to call tools." + tight;
-
-                    yield return Ev(EventKind.ErrorObserved, why);
-                    loopResult.Set(StepOutcomeKind.Failed, why);
-                    yield break;
-                }
-
-                // An edit that did not apply is settled by its file holding what it wanted - read now, as
-                // the run sees the file - and by nothing less: not by another write to the file, not by
-                // the same stale old_string sent again (run 4f1d97, 2026-09-28).
-                if (openFailures.EditPaths is { Count: > 0 } edited)
-                {
-                    var contents = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var path in edited)
-                        contents[path] = await store.TryReadPendingAsync(path, ct) ?? await ReadOrNullAsync(path, ct);
-                    foreach (var path in openFailures.Settle(p => contents.GetValueOrDefault(p)))
-                        yield return Ev(EventKind.ContextAssembled,
-                            $"An edit of {path} that did not apply is settled: the file holds the text it was to put there.");
-                }
-
-                // A criterion the plan attached to THIS step, decided by the engine as the step ends - not after the
-                // run, when nothing can be done about it. Run 68f92f: the last step was to write the coverage report
-                // the plan named, found the previous run's report under another name, said nothing needed doing, and
-                // the run failed on the missing file five seconds later. Once, as an ordinary turn; nothing is taken
-                // from prose, and what still fails after it is shown to the reviewer as the engine's own finding.
-                if (!criteriaNudged && stepCriteria is { Count: > 0 } && stepNo is { } planNo
-                    && TypedCriteria.OfStep(stepCriteria, planNo - 1, _workspace.RootPath)
-                        .Where(r => r.Outcome == CriterionOutcome.Failed).ToArray() is { Length: > 0 } failing)
-                {
-                    criteriaNudged = true;
-                    messages.Add(ChatMessage.User("Before this step ends: the plan checks this step's work, and the engine finds "
-                        + (failing.Length == 1 ? "this fails" : "these fail") + ":\n"
-                        + string.Join("\n", failing.Select(r => $"- {r.Name}: {r.Detail}"))
-                        + "\nMake the work meet " + (failing.Length == 1 ? "it" : "them") + " - the path and the text are the plan's, "
-                        + "not a suggestion - or say plainly why that cannot be done."));
-                    yield return Ev(EventKind.ContextAssembled, $"The plan's criteria for this step fail as it ends: "
-                        + string.Join("; ", failing.Select(r => $"{r.Name} ({r.Detail})")) + ". The step is told, once.");
-                    continue;
-                }
-
-                // A step that was to hand its result on and has not is reminded ONCE, before any verdict -
-                // including the one on calls still open, which used to end the step first: in run 4f1d97
-                // three steps that had written their findings never heard the reminder. It is an ordinary
-                // turn: limits, budget and cancellation apply to it as to any other, and it makes nothing
-                // that did not finish into something that did.
-                if (outputSchema is not null && outputSlot is { Values: null, Nudged: false })
-                {
-                    outputSlot.Nudged = true;
-                    messages.Add(ChatMessage.User(
-                        $"This step is not finished until it hands its result on with {StepOutputContract.ToolName}. "
-                        + "Call it now with the step's result: "
-                        + string.Join(", ", outputSchema.Fields.Where(f => f.Required).Select(f => f.Name)) + "."
-                        + (openFailures.Count > 0
-                            ? " These calls are still open and keep the step unfinished: " + openFailures.Describe()
-                            : "")));
-                    continue;
-                }
-
-                // A final answer only settles the step if the actions behind it actually worked. The
-                // model saying "Done" over a failed read is the exact shape the follow-up review
-                // caught reporting green.
-                if (openFailures.Count > 0 && openFailures.Describe() != openCallsForReview)
-                {
-                    var unresolved = openFailures.Describe();
-
-                    // Blocked, not unfinished (Phase 7.1), where the engine can see why: a permission it was refused
-                    // and nothing made good, or nothing it looked for there at all. Both are for a person to put
-                    // right, and the run carries on from here once they have.
-                    if (EngineBlock(openFailures) is { } block)
-                    {
-                        yield return Ev(EventKind.ErrorObserved, "Blocked: " + block.Reason);
-                        loopResult.Set(StepOutcomeKind.Blocked, block.Reason, block.Cause);
-                        yield break;
-                    }
-
-                    // Told once, before any verdict (amendment A). Run 0cf51c, 2026-09-29: a command written for bash
-                    // failed under cmd.exe, the step ran it again rightly spelled two seconds later and it passed, and
-                    // the step - never told the first was still open - ended INCOMPLETE on it, two steps skipped.
-                    if (!openCallsNudged)
-                    {
-                        openCallsNudged = true;
-                        messages.Add(ChatMessage.User("Before this step ends: "
-                            + (openFailures.Count == 1 ? "this call" : $"these {openFailures.Count} calls")
-                            + " did not go through, and nothing since has made "
-                            + (openFailures.Count == 1 ? "it" : "them") + " good:\n" + unresolved
-                            + "\nMake each good - run it again, corrected - or, if this step's result does not depend on it, "
-                            + "say so and why in your closing message."));
-                        yield return Ev(EventKind.ContextAssembled, $"The step is told, once, of {openFailures.Count} call(s) still open: {unresolved}");
-                        continue;
-                    }
-
-                    // Still open, and a reviewer is to judge the step: it goes to the review with them named, as the
-                    // engine's own finding - the reviewer decides whether the result stands without them. Without a
-                    // reviewer, nothing can, and the step is unfinished as before.
-                    if (reviewed)
-                    {
-                        openCallsForReview = unresolved;
-                        journal.Record(stepNo, "engine_open_calls", "{}", ActionOutcome.Succeeded,
-                            "Checked by the engine as this step ended: calls that did not go through and that nothing made good, "
-                            + "after the step was told of them once:\n" + unresolved
-                            + "\nJudge whether the step's result stands without them. A result that depends on one of them is not "
-                            + "shown to be done; one that does not - a mistyped command made good by a different one - may stand.",
-                            WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
-                        yield return Ev(EventKind.ErrorObserved, $"Finished with {openFailures.Count} call(s) not made good, after being "
-                            + "told once: " + unresolved + " - the review decides whether the result stands without them.");
-                    }
-                    else
-                    {
-                        // Two different things end a step here, and saying which one is the difference
-                        // between a person fixing a broken command and a person checking a path.
-                        yield return Ev(EventKind.ErrorObserved, openFailures.NothingButMisses
-                            ? $"Finished with nothing done: all {openFailures.Count} lookup(s) this step "
-                              + "made found nothing, and nothing else was tried: " + unresolved
-                            : $"Finished without resolving {openFailures.Count} tool call(s) that did not "
-                              + "go through: " + unresolved);
-
-                        loopResult.Set(StepOutcomeKind.Incomplete, openFailures.NothingButMisses
-                            ? "nothing found and nothing done: " + unresolved
-                            : "unresolved tool call: " + unresolved);
-                        yield break;
-                    }
-                }
-
-                // A step that was to hand its result on as values and has not: told once, with the
-                // fields, and then not called finished - the steps after it would have nothing.
-                if (outputSchema is not null && outputSlot is { Values: null })
-                {
-                    loopResult.Set(StepOutcomeKind.Incomplete,
-                        $"the step finished without handing on its declared output ({StepOutputContract.ToolName}), "
-                        + "so the steps after it would have nothing to work from");
-                    yield return Ev(EventKind.ErrorObserved, "The step finished without submitting its declared output.");
-                    yield break;
-                }
-
-                loopResult.Set(StepOutcomeKind.Succeeded, null);
-                yield break; // genuine final answer - no tool calls
-            }
 
             // Freeze prior successes, not repeat decisions: a write in this batch can change the
             // generation before a later command reaches its gate.
@@ -4362,10 +4157,11 @@ public sealed partial class Orchestrator : IOrchestrator
 
             // Healing beats being asked, being asked beats the attempt default: each names the
             // cheapest thing that explains how this turn produced a call at all.
+            // Taken every turn that makes calls, whichever origin wins: a request to re-send is answered by THIS turn.
+            var resent = stepEnding.TakeResendAsked();
             var turnOrigin = recovered ? ToolCallOrigin.Healed
-                : resendAsked ? ToolCallOrigin.Nudged
+                : resent ? ToolCallOrigin.Nudged
                 : attemptOrigin;
-            resendAsked = false;
             var accounting = new ToolResultAccounting(_tools, progress, openFailures, reads, journal,
                 repairAttempts, _repairConsultation.Enabled, stepNo, turnOrigin);
             var readResults = new Dictionary<int, ToolInvocation.Result>();
