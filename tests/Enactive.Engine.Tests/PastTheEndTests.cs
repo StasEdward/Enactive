@@ -29,7 +29,7 @@ public sealed class PastTheEndTests
     private static ToolContext Context(EngineFixture fx)
         => new(TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: fx.Workspace.Id,
                Context: null!, PermissionPolicy: PermissionPolicy.PermissiveDefault,
-               WorkspaceRoot: fx.Root, Artifacts: fx.Artifacts, Services: null!);
+               WorkspaceRoot: fx.Root, Artifacts: fx.Artifacts);
 
     private static Task<ToolResult> Read(EngineFixture fx, string argumentsJson)
         => new ReadFileTool().InvokeAsync(argumentsJson, Context(fx), CancellationToken.None);

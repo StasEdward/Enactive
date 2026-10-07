@@ -45,7 +45,7 @@ public sealed class MissingPathTests
     private static ToolContext Context(EngineFixture fx)
         => new(TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: fx.Workspace.Id,
                Context: null!, PermissionPolicy: PermissionPolicy.PermissiveDefault,
-               WorkspaceRoot: fx.Root, Artifacts: fx.Artifacts, Services: null!);
+               WorkspaceRoot: fx.Root, Artifacts: fx.Artifacts);
 
     private static Task<ToolResult> Call(ITool tool, EngineFixture fx, string argumentsJson)
         => tool.InvokeAsync(argumentsJson, Context(fx), CancellationToken.None);

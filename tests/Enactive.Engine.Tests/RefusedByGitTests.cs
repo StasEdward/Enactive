@@ -49,7 +49,7 @@ public sealed class RefusedByGitTests
     private static ToolContext Context(EngineFixture fx)
         => new(TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: fx.Workspace.Id,
                Context: null!, PermissionPolicy: PermissionPolicy.PermissiveDefault,
-               WorkspaceRoot: fx.Root, Artifacts: fx.Artifacts, Services: null!);
+               WorkspaceRoot: fx.Root, Artifacts: fx.Artifacts);
 
     /// <summary>
     /// The first of the three, verbatim. A subcommand git does not have is a word, not a failure,

@@ -30,7 +30,7 @@ public sealed class SilentTruncationTests
     private static ToolContext Context(EngineFixture fx, IArtifactStore? store = null)
         => new(TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: fx.Workspace.Id,
                Context: null!, PermissionPolicy: PermissionPolicy.PermissiveDefault,
-               WorkspaceRoot: fx.Root, Artifacts: store ?? fx.Artifacts, Services: null!);
+               WorkspaceRoot: fx.Root, Artifacts: store ?? fx.Artifacts);
 
     private static IReadOnlyList<Worker> Roles()
         => DefaultWorkers.Seed(new ModelRef("fake", "fake-model"));

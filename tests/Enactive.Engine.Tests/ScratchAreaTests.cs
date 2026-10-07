@@ -429,7 +429,7 @@ public sealed class SearchRootTests
             var context = new Enactive.Core.Tools.ToolContext(
                 TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: workspace.Id,
                 Context: null!, PermissionPolicy: Enactive.Core.Permissions.PermissionPolicy.PermissiveDefault,
-                WorkspaceRoot: root, Artifacts: new DiskArtifactStore(workspace), Services: null!);
+                WorkspaceRoot: root, Artifacts: new DiskArtifactStore(workspace));
 
             var found = await new SearchFilesTool().InvokeAsync(
                 """{"pattern": "Needle"}""", context, CancellationToken.None);

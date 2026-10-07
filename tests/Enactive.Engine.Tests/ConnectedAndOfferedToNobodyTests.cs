@@ -22,11 +22,6 @@ using Xunit;
 /// </summary>
 public sealed class ConnectedAndOfferedToNobodyTests
 {
-    private sealed class NoServices : IServiceProvider
-    {
-        public object? GetService(Type serviceType) => null;
-    }
-
     private static string Tool(string server, string name) => $"{McpReach.Prefix}{server}__{name}_abc123";
 
     // ── the engine's half ──────────────────────────────────────────────────────────
@@ -145,11 +140,8 @@ public sealed class ConnectedAndOfferedToNobodyTests
         // indistinguishable from naming none of them until somebody is told.
         var worker = EngineFixture.WorkerWith("read_file", "mcp__other__*");
 
-        var engine = new Orchestrator(new Enactive.Workspace.WorkspaceChangesFactory(),
-            new SingleProviderFactory(provider), new ModelResolver(),
-            new StaticWorkerProvider(worker), tools, fx.Artifacts, fx.Workspace,
-            new Planner(checksAuditEnabled: false), new PermissionEngine(), fx.Decisions,
-            PermissionPolicy.PermissiveDefault, new NoServices());
+        var engine = new Orchestrator(fx.Resources(new SingleProviderFactory(provider), worker, [worker]) with { Tools = tools },
+            EngineOptions.Default);
 
         var events = await fx.RunAsync(engine, "do something without MCP");
 

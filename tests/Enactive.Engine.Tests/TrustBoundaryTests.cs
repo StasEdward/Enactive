@@ -264,11 +264,5 @@ internal static class ToolContexts
                    Array.Empty<string>(), Array.Empty<string>()),
                PermissionPolicy.PermissiveDefault,
                fx.Root,
-               fx.Artifacts,
-               new NoServices());
-
-    private sealed class NoServices : IServiceProvider
-    {
-        public object? GetService(Type serviceType) => null;
-    }
+               fx.Artifacts);
 }

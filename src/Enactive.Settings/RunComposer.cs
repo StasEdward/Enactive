@@ -191,13 +191,28 @@ public static class RunComposer
             if (request.Source == IntentSource.Remote)
                 policy = RemotePolicy.ForRemoteRun(policy);
 
-            var orchestrator = Engine(
-                new RunEngineResources(engine.Providers, engine.Models, engine.Workers,
-                    new LoggingToolRegistry(tools, engine.Log), artifacts, workspace, engine.Planner,
-                    engine.Permissions, Answering(engine, request, decisions), policy,
-                    new NoServices(), engine.Router),
-                engine.EngineOptions, new JsonCheckpointStore(workspace), runSettings,
-                spec?.SuccessCriteria, spec?.Limits);
+            var orchestrator = new Orchestrator(new RunEngineResources
+            {
+                Providers = engine.Providers,
+                Models = engine.Models,
+                Workers = engine.Workers,
+                Router = engine.Router,
+                Tools = new LoggingToolRegistry(tools, engine.Log),
+                Artifacts = artifacts,
+                Workspace = workspace,
+                WorkspaceChanges = new WorkspaceChangesFactory(),
+                Planner = engine.Planner,
+                Permissions = engine.Permissions,
+                Decisions = Answering(engine, request, decisions),
+                Policy = policy,
+                // The kinds of project the engine can build for its own "no new build errors" check.
+                // A new kind is a new IEcosystem here; nothing in the orchestrator changes.
+                Ecosystems = [new DotnetEcosystem()],
+                SuccessCriteria = spec?.SuccessCriteria ?? [],
+                Limits = spec?.Limits ?? ExecutionLimits.None,
+                Checkpoints = new JsonCheckpointStore(workspace),
+                Settings = runSettings
+            }, engine.EngineOptions);
 
             var context = await new ContextProvider(workspace, new EnvironmentProbe(), memory)
                 .BuildAsync(new IntentFocus(workspace.Id), ct);
@@ -223,22 +238,6 @@ public static class RunComposer
             throw;
         }
     }
-
-    /// <summary>
-    /// The single mapping from run resources and engine switches to an orchestrator - reached directly
-    /// only by tests that need to put their own parts into it.
-    /// </summary>
-    internal static Orchestrator Engine(RunEngineResources resources, EngineOptions options,
-        IRunCheckpointStore? checkpoints = null, RunSettings? settings = null,
-        IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null, ExecutionLimits? limits = null)
-        => new(new WorkspaceChangesFactory(), resources.Providers, resources.Models, resources.Workers,
-            resources.Tools, resources.Artifacts, resources.Workspace, resources.Planner,
-            resources.Permissions, resources.Decisions, resources.Policy, resources.Services,
-            router: resources.Router, options: options, checkpoints: checkpoints, settings: settings,
-            successCriteria: successCriteria, limits: limits, agents: resources.Agents,
-            // The kinds of project the engine can build for its own "no new build errors" check.
-            // A new kind is a new IEcosystem here; nothing in the orchestrator changes.
-            ecosystems: [new DotnetEcosystem()]);
 
     /// <summary>Only the window's own command bar has somebody at the screen to apply staged changes.</summary>
     private static bool Attended(RunRequest request) => request.Source == IntentSource.CommandBar;
@@ -268,11 +267,5 @@ public static class RunComposer
         public IAsyncEnumerable<WorkEvent> ResumeRunAsync(
             RunCheckpoint checkpoint, WorkContext context, CancellationToken ct)
             => recorder.RecordAsync(inner.ResumeRunAsync(checkpoint, context, ct).TeeToLog(log, ct), ct);
-    }
-
-    /// <summary>The engine asks for a service provider and this application has none to give.</summary>
-    private sealed class NoServices : IServiceProvider
-    {
-        public object? GetService(Type serviceType) => null;
     }
 }

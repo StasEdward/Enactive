@@ -293,7 +293,13 @@ public static class ToolResults
         => new(false, output, error, Array.Empty<ArtifactRef>(), metadata ?? EmptyMeta, DidNotRun: true);
 }
 
-/// <summary>The only surface a tool sees. No UI / Orchestrator back-channel.</summary>
+/// <summary>
+/// The only surface a tool sees. No UI / Orchestrator back-channel.
+///
+/// <para>It carried an IServiceProvider until 2026-10-08 that no tool ever read: every host and test handed in
+/// a provider that answered null to everything, four copies of it, so that there was something to pass. A tool
+/// that needs something takes it when it is built (BuiltInTools.Create), as the mail and web tools do.</para>
+/// </summary>
 public sealed record ToolContext(
     Guid TaskId,
     Guid RunId,
@@ -301,8 +307,7 @@ public sealed record ToolContext(
     WorkContext Context,
     PermissionPolicy PermissionPolicy,
     string WorkspaceRoot,
-    IArtifactStore Artifacts,
-    IServiceProvider Services);
+    IArtifactStore Artifacts);
 
 /// <summary>A capability the agent can invoke.</summary>
 public interface ITool

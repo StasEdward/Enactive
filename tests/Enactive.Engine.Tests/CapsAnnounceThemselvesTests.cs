@@ -31,7 +31,7 @@ public sealed class CapsAnnounceThemselvesTests
     private static ToolContext Context(EngineFixture fx, IArtifactStore? store = null)
         => new(TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: fx.Workspace.Id,
                Context: null!, PermissionPolicy: PermissionPolicy.PermissiveDefault,
-               WorkspaceRoot: fx.Root, Artifacts: store ?? fx.Artifacts, Services: null!);
+               WorkspaceRoot: fx.Root, Artifacts: store ?? fx.Artifacts);
 
     // ── the census ──────────────────────────────────────────────────────────
 

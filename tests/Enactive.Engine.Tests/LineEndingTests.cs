@@ -23,7 +23,7 @@ public sealed class LineEndingTests
     private static ToolContext Context(EngineFixture fx, IArtifactStore? store = null)
         => new(TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: fx.Workspace.Id,
                Context: null!, PermissionPolicy: PermissionPolicy.PermissiveDefault,
-               WorkspaceRoot: fx.Root, Artifacts: store ?? fx.Artifacts, Services: null!);
+               WorkspaceRoot: fx.Root, Artifacts: store ?? fx.Artifacts);
 
     private static Task<ToolResult> Call(ITool tool, EngineFixture fx, string argumentsJson)
         => tool.InvokeAsync(argumentsJson, Context(fx), CancellationToken.None);

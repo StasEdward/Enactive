@@ -36,7 +36,7 @@ public sealed class ExpectedExitCodeTests
     private static ToolContext Context(EngineFixture fx)
         => new(TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: fx.Workspace.Id,
                Context: null!, PermissionPolicy: PermissionPolicy.PermissiveDefault,
-               WorkspaceRoot: fx.Root, Artifacts: fx.Artifacts, Services: null!);
+               WorkspaceRoot: fx.Root, Artifacts: fx.Artifacts);
 
     /// <summary>A command that exits with the code we ask it for, on either platform.</summary>
     private static string ExitsWith(int code)

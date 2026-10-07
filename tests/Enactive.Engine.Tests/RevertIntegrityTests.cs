@@ -286,7 +286,7 @@ public sealed class RevertIntegrityTests
         var staging = new StagingArtifactStore(fixture.Root);
         var context = new ToolContext(
             Guid.NewGuid(), Guid.NewGuid(), fixture.Workspace.Id, null!,
-            PermissionPolicy.PermissiveDefault, fixture.Root, staging.BeginStep(), null!);
+            PermissionPolicy.PermissiveDefault, fixture.Root, staging.BeginStep());
 
         var result = await new MoveFileTool().InvokeAsync(
             """{"from":"input.bin","to":"output.bin"}""", context, default);
@@ -308,7 +308,7 @@ public sealed class RevertIntegrityTests
         var staging = new StagingArtifactStore(fixture.Root);
         var context = new ToolContext(
             Guid.NewGuid(), Guid.NewGuid(), fixture.Workspace.Id, null!,
-            PermissionPolicy.PermissiveDefault, fixture.Root, staging.BeginStep(), null!);
+            PermissionPolicy.PermissiveDefault, fixture.Root, staging.BeginStep());
 
         var result = await new MoveFileTool().InvokeAsync(
             """{"from":"input.txt","to":"output.txt"}""", context, default);

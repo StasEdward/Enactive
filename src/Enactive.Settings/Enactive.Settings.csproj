@@ -9,7 +9,7 @@
     <PackageReference Include="MailKit" Version="4.18.0" />
   </ItemGroup>
   <ItemGroup>
-    <!-- RunComposer.Engine: the one mapping to an orchestrator, for tests that put their own parts into it. -->
+    <!-- AppSettings.Secrets(): the list of settings secrets, which a test checks every protected field against. -->
     <InternalsVisibleTo Include="Enactive.Engine.Tests" />
   </ItemGroup>
 

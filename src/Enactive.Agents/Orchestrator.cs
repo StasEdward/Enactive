@@ -123,7 +123,6 @@ public sealed partial class Orchestrator : IOrchestrator
     // Where a task's steps stopped at questions, and the once-only actions it has taken - see TaskProgress.
     private readonly TaskProgress _progress;
     private readonly PermissionPolicy _policy;
-    private readonly IServiceProvider _services;
     private readonly IModelRouter _router;
 
     /// <summary>Folders this workspace may write to outside itself, from earlier runs.</summary>
@@ -206,70 +205,43 @@ public sealed partial class Orchestrator : IOrchestrator
     /// </summary>
     private readonly RunSettings? _settings;
 
-    public Orchestrator(
-        IWorkspaceChangesFactory workspaceChanges,
-        IChatProviderFactory providers,
-        IModelResolver modelResolver,
-        IWorkerProvider workers,
-        IToolRegistry tools,
-        IArtifactStore artifacts,
-        WorkspaceInfo workspace,
-        Planner planner,
-        IPermissionEngine permissions,
-        IDecisionHandler decisions,
-        PermissionPolicy policy,
-        IServiceProvider services,
-        IModelRouter? router = null,
-        // The engine's switches, as the settings have them - EngineOptions.Default when not given.
-        EngineOptions? options = null,
-        IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
-        ExecutionLimits? limits = null,
-        IRunCheckpointStore? checkpoints = null,
-        RunSettings? settings = null,
-        WritableRoots? writableRoots = null,
-        OrchestratorServices? agents = null,
-        // The kinds of project the engine can build and read, each behind IEcosystem. None by
-        // default: a workspace no ecosystem recognises gets no build check, and so does a test that
-        // says nothing about builds.
-        IReadOnlyList<IEcosystem>? ecosystems = null,
-        // Where a wave's files are kept for a resume - outside every workspace. A test points it somewhere temporary.
-        string? waveStore = null)
+    /// <summary>
+    /// An orchestrator for one run: what the run is given, and the engine's switches - two values, both said.
+    /// The switches used to default to EngineOptions.Default when left out, so a host could forget the
+    /// person's settings and nothing would notice.
+    /// </summary>
+    public Orchestrator(RunEngineResources resources, EngineOptions options)
     {
-        options ??= EngineOptions.Default;
         _semanticCriteria = options.SemanticCriteria;
         _validateWaves = options.ValidateWaves;
         _reportBlocked = options.ReportBlocked;
-        _waveStore = waveStore ?? WaveCapture.DefaultStore();
+        _waveStore = resources.WaveStore;
         _stepOutputs = options.StepOutputs;
         _typedCriteria = options.TypedCriteria;
         _dynamicSteps = options.DynamicSteps;
         _fanOut = options.FanOut;
-        _ecosystems = ecosystems ?? Array.Empty<IEcosystem>();
-        // The machine's own store unless a test points it somewhere temporary. Defaulted rather
-        // than required because a run that never writes outside the workspace never touches it, and
-        // making every caller name it would put a policy decision in the signature of every test.
-        _writableRoots = writableRoots ?? WritableRoots.Default;
-        _checkpoints = checkpoints;
-        _settings = settings;
-        _successCriteria = successCriteria ?? Array.Empty<SuccessCriterionDefinition>();
-        _limits = limits ?? ExecutionLimits.None;
-        _workspaceChanges = workspaceChanges;
-        _providers = providers;
-        _workers = workers;
-        _tools = tools;
-        _artifacts = artifacts;
-        _workspace = workspace;
-        _planner = planner;
-        _permissions = permissions;
-        _ledger = new DecisionLedger(workspace.RootPath);
-        _baselines = new BaselineStore(workspace.RootPath);
-        _progress = new TaskProgress(workspace.RootPath);
-        _ledgered = new LedgeredDecisions(decisions, _ledger);
+        _ecosystems = resources.Ecosystems;
+        _writableRoots = resources.WritableRoots;
+        _checkpoints = resources.Checkpoints;
+        _settings = resources.Settings;
+        _successCriteria = resources.SuccessCriteria;
+        _limits = resources.Limits;
+        _workspaceChanges = resources.WorkspaceChanges;
+        _providers = resources.Providers;
+        _workers = resources.Workers;
+        _tools = resources.Tools;
+        _artifacts = resources.Artifacts;
+        _workspace = resources.Workspace;
+        _planner = resources.Planner;
+        _permissions = resources.Permissions;
+        _ledger = new DecisionLedger(_workspace.RootPath);
+        _baselines = new BaselineStore(_workspace.RootPath);
+        _progress = new TaskProgress(_workspace.RootPath);
+        _ledgered = new LedgeredDecisions(resources.Decisions, _ledger);
         _decisions = _ledgered;
-        _policy = policy;
-        _services = services;
-        _router = router ?? new ModelRouter(modelResolver);
-        _modelResolver = modelResolver;
+        _policy = resources.Policy;
+        _router = resources.Router ?? new ModelRouter(resources.Models);
+        _modelResolver = resources.Models;
         // How many times a rejected step may be redone. Clamped rather than trusted: this multiplies
         // the cost of a run by the reviewer's price, and a stray large number would be paid for in
         // full before anyone noticed.
@@ -285,8 +257,8 @@ public sealed partial class Orchestrator : IOrchestrator
         // 1 = the original behaviour: one step at a time on one shared conversation.
         _maxParallelSteps = Math.Max(1, options.MaxParallelSteps);
         _evidenceBudget = Math.Max(ExecutionJournal.MinimumBudget, options.EvidenceBudget);
-        _successEvaluator = agents?.SuccessEvaluator ?? new SuccessEvaluator();
-        _handover = agents?.Handover ?? new Handover();
+        _successEvaluator = resources.Agents?.SuccessEvaluator ?? new SuccessEvaluator();
+        _handover = resources.Agents?.Handover ?? new Handover();
         _generationBudgets = options.GenerationBudgets;
         _repairConsultation = options.RepairConsultation;
         _numCtx = options.NumCtx;
@@ -2953,8 +2925,7 @@ public sealed partial class Orchestrator : IOrchestrator
             Context: context,
             PermissionPolicy: _policy,
             WorkspaceRoot: _workspace.RootPath,
-            Artifacts: _artifacts,
-            Services: _services);
+            Artifacts: _artifacts);
 
         // A coverage criterion is about what THIS run's steps hand on; before any step there is nothing
         // it could already be true of, so there is nothing to learn by trying it now.
@@ -3069,8 +3040,7 @@ public sealed partial class Orchestrator : IOrchestrator
             Context: context,
             PermissionPolicy: _policy,
             WorkspaceRoot: _workspace.RootPath,
-            Artifacts: _artifacts,
-            Services: _services);
+            Artifacts: _artifacts);
 
         return await _successEvaluator.EvaluateAsync(
             criteria, _tools, _permissions, _policy, _decisions, toolContext, taskId, ct);
@@ -4167,7 +4137,7 @@ public sealed partial class Orchestrator : IOrchestrator
             var readResults = new Dictionary<int, ToolInvocation.Result>();
             admission.BeginTurn(onlyHandOn: forcedThisTurn);
             ToolContext CallContext() => new(taskId, runId, _workspace.Id, context,
-                EffectivePolicyFor(worker), _workspace.RootPath, store, _services);
+                EffectivePolicyFor(worker), _workspace.RootPath, store);
             WorkEvent Invoked(ToolCall item) => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
                 EventKind.ToolInvoked, $"{item.Name} {Compact(item.ArgumentsJson)}",
                 WorkEventPayload.ToolPayload(item, stepNo));
