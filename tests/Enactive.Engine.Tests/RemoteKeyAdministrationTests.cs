@@ -555,7 +555,7 @@ public sealed class RemoteKeyAdministrationTests
         var connects = 0;
 
         await using var service = new RemoteAccessService(settings, keys: null,
-            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            () => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
             connect: _ =>
             {
                 connects++;
@@ -584,7 +584,7 @@ public sealed class RemoteKeyAdministrationTests
         };
 
         await using (var service = new RemoteAccessService(settings, keys: null,
-            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            () => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
             connect: _ =>
             {
                 connects++;
@@ -607,7 +607,7 @@ public sealed class RemoteKeyAdministrationTests
     {
         using var fx = new EngineFixture();
         await using var service = new RemoteAccessService(new RemoteAccessSettings(), keys: null,
-            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions,
+            () => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions,
             fx.PathOf("remote.db"),
             connect: _ => throw new Xunit.Sdk.XunitException("Nothing should have been dialled."));
 
@@ -632,7 +632,7 @@ public sealed class RemoteKeyAdministrationTests
         var gateway = new FakeGateway();
 
         await using (var service = new RemoteAccessService(settings, keys: null,
-            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            () => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
             connect: _ => Task.FromResult<IGatewayConnection>(gateway)))
         {
             service.Start();
@@ -664,7 +664,7 @@ public sealed class RemoteKeyAdministrationTests
         };
 
         await using var service = new RemoteAccessService(settings, keys: null,
-            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            () => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
             connect: _ => Task.FromResult<IGatewayConnection>(gateway));
         service.Start();
 
@@ -688,7 +688,7 @@ public sealed class RemoteKeyAdministrationTests
         var gateways = new Queue<FakeGateway>([first, second]);
         await using var service = new RemoteAccessService(
             new RemoteAccessSettings { Enabled = true, GatewayUrl = Gateway.ToString(), HostId = "host-1", Token = "token" },
-            new FixedHostKeys(), _ => throw new InvalidOperationException("No composition expected"), () => [],
+            new FixedHostKeys(), () => throw new InvalidOperationException("No composition expected"), () => [],
             fx.Decisions, fx.PathOf("remote.db"),
             connect: _ => Task.FromResult<IGatewayConnection>(gateways.Dequeue()),
             firstRetry: TimeSpan.FromMilliseconds(10));
@@ -733,7 +733,7 @@ public sealed class RemoteKeyAdministrationTests
         var admitted = new ConcurrentQueue<AdmittedDevice>();
 
         await using (service = new RemoteAccessService(settings, keys: null,
-            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            () => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
             connect: _ => Task.FromResult<IGatewayConnection>(gateways.Dequeue()),
             firstRetry: TimeSpan.FromMilliseconds(10)))
         {
@@ -775,7 +775,7 @@ public sealed class RemoteKeyAdministrationTests
         var gateway = new FakeGateway { Pending = [removal] };
 
         await using (var service = new RemoteAccessService(settings, keys: null,
-            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            () => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
             connect: _ => Task.FromResult<IGatewayConnection>(gateway)))
         {
             service.Start();
@@ -828,7 +828,7 @@ public sealed class RemoteKeyAdministrationTests
 
         var said = new ConcurrentQueue<string>();
         await using (var service = new RemoteAccessService(settings, keys: null,
-            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            () => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
             connect, firstRetry: TimeSpan.FromMilliseconds(20)))
         {
             service.Changed += () => said.Enqueue(service.Status);
@@ -873,7 +873,7 @@ public sealed class RemoteKeyAdministrationTests
         var connections = 0;
         await using (var service = new RemoteAccessService(
             new RemoteAccessSettings { Enabled = true, GatewayUrl = Gateway.ToString(), HostId = keys.HostId, Token = "token" },
-            keys, _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            keys, () => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
             _ => Task.FromResult<IGatewayConnection>(Interlocked.Increment(ref connections) == 1 ? first : new FakeGateway()),
             firstRetry: TimeSpan.FromMilliseconds(20)))
         {
@@ -931,7 +931,7 @@ public sealed class RemoteKeyAdministrationTests
         var gateway = new FakeGateway { Pending = [.. batch] };
 
         await using (var service = new RemoteAccessService(settings, keys: null,
-            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            () => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
             connect: _ => Task.FromResult<IGatewayConnection>(gateway)))
         {
             service.Start();
@@ -975,7 +975,7 @@ public sealed class RemoteKeyAdministrationTests
 
         string said;
         await using (var service = new RemoteAccessService(settings, keys: null,
-            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            () => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
             connect: _ => Task.FromException<IGatewayConnection>(new IOException("The gateway is down.")),
             firstRetry: TimeSpan.FromHours(1)))
         {
@@ -1020,7 +1020,7 @@ public sealed class RemoteKeyAdministrationTests
         var gateways = new Queue<FakeGateway>([first, second]);
 
         await using (var service = new RemoteAccessService(settings, keys: null,
-            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            () => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
             connect: _ => Task.FromResult<IGatewayConnection>(gateways.Dequeue()),
             firstRetry: TimeSpan.FromMilliseconds(10)))
         {
@@ -2312,7 +2312,7 @@ public sealed class RemoteKeyAdministrationTests
             {
                 Enabled = true, GatewayUrl = Gateway.ToString(), HostId = keys.HostId, Token = "token"
             },
-            keys, _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions,
+            keys, () => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions,
             fx.PathOf("remote.db"), connect);
 
     /// <summary>The service's loop has ended, on its own: it stopped rather than went round again.</summary>

@@ -526,4 +526,69 @@ public sealed class EngineCompositionTests : IDisposable
             new ModelRef("Antropic", "claude-sonnet-4-6"),
             engine.Router.Resolve(ModelPurpose.Plan, engine.Workers.Default));
     }
+
+    // ── what each host used to put together itself ──────────────────────────
+
+    /// <summary>
+    /// The session's approvals are the host's, and outlive the engine: the window builds a new one on every
+    /// save, and "Allow (session)" given before it must still answer. The console, with no session, gets an
+    /// empty set of its own - it used to pass none.
+    /// </summary>
+    [Fact]
+    public void The_engine_answers_with_the_session_it_was_given()
+    {
+        using var http = new HttpClient();
+        using var log = new LogHub();
+        var session = new SessionApprovals();
+
+        Assert.Same(session, EngineComposition.Build(Configured(), http, log, session).Session);
+        Assert.NotNull(EngineComposition.Build(Configured(), http, log).Session);
+    }
+
+    /// <summary>
+    /// A run reads its MCP configurations minutes after it was started, so the engine holds copies. The window
+    /// cloned them and the console did not; it is one rule now.
+    /// </summary>
+    [Fact]
+    public void The_engine_holds_copies_of_the_mcp_configurations()
+    {
+        var settings = Configured();
+        settings.McpServers.Add(new Enactive.Tools.Mcp.McpServerConfig { Id = "mail", Command = "mail-server" });
+        using var http = new HttpClient();
+        using var log = new LogHub();
+
+        var engine = EngineComposition.Build(settings, http, log);
+        settings.McpServers[^1].Command = "edited later";
+
+        Assert.Equal("mail-server", engine.McpServers.Single(c => c.Id == "mail").Command);
+    }
+
+    /// <summary>
+    /// One rule for what a worker's name means, wherever it was typed or saved: its id, or its role, ignoring
+    /// case. The window saved roles and looked them up as ids; the log analysis then read every log with the
+    /// default worker's model.
+    /// </summary>
+    [Theory]
+    [InlineData("writer", "writer")]
+    [InlineData("WRITER", "writer")]
+    [InlineData(" Technical writer ", "writer")]
+    [InlineData("developer", "developer")]
+    [InlineData("nobody", null)]
+    [InlineData("", null)]
+    [InlineData(null, null)]
+    public void A_worker_is_found_by_its_id_or_its_role(string? name, string? id)
+    {
+        var developer = new Worker("developer", "Developer", "", [], PermissionLevel.Execute, new ModelPolicy(new ModelRef("p", "m")));
+        var engine = new ComposedEngine(new NoProviders(),
+            new Enactive.Agents.StaticWorkerProvider([developer, developer with { Id = "writer", Role = "Technical writer" }], "developer"),
+            new ModelRouter(new ModelResolver()), new ModelResolver(), new Enactive.Tools.ToolRegistry([]), [],
+            new AppSettings(), new LogHub(), new SessionApprovals());
+
+        Assert.Equal(id, engine.WorkerIdFor(name));
+    }
+
+    private sealed class NoProviders : IChatProviderFactory
+    {
+        public IChatProvider Create(string providerId) => throw new InvalidOperationException("No model is called here.");
+    }
 }

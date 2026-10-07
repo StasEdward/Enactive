@@ -40,14 +40,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 {
     // ── Reusable singletons ──────────────────────────────────────────────────
     private readonly HttpClient _http = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
-    private string _model = "qwen2.5-coder";
     private string _globalInstructions = string.Empty;
-    private ChatProviderFactory _providerFactory = null!;
-    /// <summary>
-    /// Rebuilt on Save, not only at startup — see <see cref="BuildToolRegistry"/>. Every use reads
-    /// the field at call time, so replacing it is all that is needed.
-    /// </summary>
-    private IToolRegistry _toolRegistry;
     // Global, app-wide log hub. Default Debug (readable); the log window can drop it to Trace for raw wire.
     // Held separately from the hub so settings can reach it: this is built before any settings are
     // read, and retention is a setting.
@@ -56,11 +49,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private LogWindow? _logWindow;
     private InboxWindow? _inboxWindow;
     private readonly EnvironmentProbe _envProbe = new();
-    private readonly Planner _planner = new();
-    private readonly ModelResolver _modelResolver = new();
-    // The interface, not the concrete provider: what composes the team is EngineComposition now, and
-    // this window only reads it.
-    private IWorkerProvider _workerProvider = null!;
+
+    /// <summary>
+    /// The engine every run started here is composed on - built by EngineComposition from the current
+    /// settings and rebuilt when they are saved; null while <see cref="_engineProblem"/> says why there is
+    /// none. This window assembles none of it: it used to, and its copy had drifted from the console's.
+    /// </summary>
+    private ComposedEngine? _engine;
 
     /// <summary>
     /// Why there is no engine, or null when there is one.
@@ -71,7 +66,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// one say this instead of running.</para>
     /// </summary>
     private string? _engineProblem;
-    private readonly PermissionEngine _permissionEngine = new();
     private AppSettings _settings = new();
 
     // What the close button says when it hides the window to the tray, and the note saying it, while it is up.
@@ -159,7 +153,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         _log = new LogHub(minLevel: LogLevel.Debug, downstream: new ILogSink[] { _logFile });
         _settings = AppSettings.Load();
-        _toolRegistry = BuildToolRegistry();
 
         // A settings file the app cannot build from must not make the app unlaunchable. Saving is
         // validated now, but a file edited by hand — or written by an older build — can still be
@@ -337,14 +330,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             // the settings. With no id it has none, and says so rather than connecting with nothing
             // to seal or open with.
             keys: null,
-            // On the UI thread, because it reads the worker list and the app settings. Governed by
-            // the workspace THE TASK NAMED, not by the slider: the slider is about the folder open
-            // on this screen, and a phone naming a different project must get the level saved for
-            // that project. Read when the task arrives rather than now, so editing a workspace's
-            // autonomy takes effect without restarting.
-            entry => Dispatcher.UIThread.InvokeAsync(
-                () => SnapshotEnvironment(
-                    Math.Clamp(entry.Autonomy, 0, 3), entry.WorkerId, entry.StageChanges)).GetTask(),
+            // The engine as it is when the task arrives, read on the UI thread where it is replaced. What
+            // governs the task - the level and worker saved for the folder it names - the service reads
+            // from the workspace list itself (RunRequest.FromPhone).
+            () => Dispatcher.UIThread.InvokeAsync(CurrentEngine).GetTask(),
             () => _registry.Entries,
             // The desktop's own handler. RemoteRunner wraps it rather than replacing it, so a
             // permission question from a remote run shows here as well as on the phone.
@@ -661,7 +650,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 var window = new SettingsWindow(_settings, workspaceRoot: WorkspaceRootOrNull(),
                     // With the web tools always among them: a role can be given them before reading the web is
                     // turned on, and the Team list would otherwise only show them after a save and a reopen.
-                    toolNames: _toolRegistry.Definitions.Select(d => d.Name)
+                    toolNames: EngineComposition.Tools(_settings).Definitions.Select(d => d.Name)
                         .Union([Enactive.Tools.Web.FetchUrlTool.Name, Enactive.Tools.Web.WebSearchTool.Name]).ToArray(),
                     remoteCheck: CheckRemoteAsync,
                     remoteConnect: ConnectRemoteAsync,
@@ -883,8 +872,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 // template brings, whether the changes are staged - this window decides none of it. What it
                 // keeps is its own: the approval card (this), the timeline it renders, its cancellation.
                 await using var composed = await RunComposer.ComposeAsync(
-                    SnapshotEnvironment(_vm.AutonomyTier, CurrentWorkerRole(), _vm.StageChanges),
-                    new RunRequest(workspace, text, IntentSource.CommandBar, taskId, resume, spec, Stage: _vm.StageChanges),
+                    CurrentEngine(),
+                    new RunRequest(workspace, text, IntentSource.CommandBar, taskId, resume, spec, Stage: _vm.StageChanges)
+                        { Autonomy = _vm.AutonomyTier, WorkspaceWorkerId = CurrentWorkerId() },
                     this, runCancellation.Token);
 
                 _staging = composed.Artifacts as StagingArtifactStore;
@@ -1582,7 +1572,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             if (path.Length == 0)
                 return;
 
-            _registry.SaveSettings(path, _vm.AutonomyTier, CurrentWorkerRole(), _vm.StageChanges);
+            _registry.SaveSettings(path, _vm.AutonomyTier, CurrentWorkerId(), _vm.StageChanges);
         }
 
         /// <summary>
@@ -1611,9 +1601,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 _vm.AutonomyLevel = Math.Clamp(entry.Autonomy, 0, 3);
                 _vm.StageChanges = entry.StageChanges;
 
-                // By role name, not by position: the list changes when the roles are edited, and an
-                // index would then quietly select a different worker.
-                var index = entry.WorkerId is null ? -1 : _vm.WorkerRoles.IndexOf(entry.WorkerId);
+                // By id - or by role name, as this window saved it until 2026-10-08 - and not by position:
+                // the list changes when the roles are edited, and an index would then quietly select a
+                // different worker. The role box lists the workers in order, so a worker's position is its row.
+                var index = _engine?.WorkerIdFor(entry.WorkerId) is { } id
+                    ? _engine.Workers.All.ToList().FindIndex(w => w.Id == id)
+                    : -1;
                 if (index >= 0)
                     _vm.SelectedWorkerIndex = index;
             }
@@ -1662,11 +1655,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             // No engine, no analysis - and the button already says so when this returns null, which is
             // the behaviour a build with no Review binding has always had.
-            if (_engineProblem is not null)
+            if (_engine is not { } engine)
                 return null;
 
-            var worker = _workerProvider.Get(CurrentWorkerRole());
-            var reference = BuildRouter().Resolve(ModelPurpose.Review, worker) ?? worker?.ModelPolicy.Preferred;
+            // By id: this looked the worker box's ROLE NAME up as an id, and so read every log with the
+            // default worker's model unless a role happened to be named as its id.
+            var worker = engine.Workers.Get(CurrentWorkerId());
+            var reference = engine.Router.Resolve(ModelPurpose.Review, worker) ?? worker?.ModelPolicy.Preferred;
             if (reference is null)
                 return null;
 
@@ -1686,7 +1681,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             // it straight back into it. One analysis of a 10,429-line run added 4,785 lines; the second
             // then read a log that was half its own previous prompt. See LoggingChatProvider.
             return async (text, ct) => await new LogAnalyst().AnalyseAsync(
-                text, _providerFactory.Create(reference.ProviderId, promptBodies: false),
+                text, engine.Providers.Create(reference.ProviderId, promptBodies: false),
                 reference.Model, declared ?? _settings.Engine.NumCtx, ct);
         }
 
@@ -1732,76 +1727,23 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             }
         }
 
-        // The phase->model router, from the shared composition. A scheduled run built its own and was
-        // never given any bindings at all, so planning bound here to Anthropic ran on the local model
-        // and nothing said so.
-        private IModelRouter BuildRouter() => EngineComposition.Router(_settings, _modelResolver);
-
         /// <summary>
-        /// The run's setup as it is RIGHT NOW, for the record. Read once at the start, because by the
-        /// time anyone opens the run to ask what it was allowed to do, the slider will have moved.
-        /// </summary>
-        private RunSettings CurrentRunSettings()
-            => new(_vm.AutonomyTier, MainWindowViewModel.LevelName(_vm.AutonomyTier), CurrentWorkerRole(), _vm.StageChanges);
-
-        /// <summary>
-        /// Everything an unattended run needs from this window, read while we are still on the UI
-        /// thread and then handed over as a frozen thing.
+        /// The engine a run is composed on, or the reason there is none, as a refusal.
         ///
-        /// <para>Read here rather than inside the run for the same reason
-        /// <see cref="CurrentRunSettings"/> is: a run started now and finishing in ten minutes must be
-        /// governed by the autonomy level it was started under, not by wherever the slider has since
-        /// been dragged. The MCP configurations are cloned for the same reason - the settings dialog
-        /// edits the live ones.</para>
+        /// <para>Thrown rather than returned as null: the callers that reach this without an earlier gate - a
+        /// task from a phone - would otherwise reach a null provider. A named refusal is what the panel can
+        /// report; a NullReferenceException is not.</para>
         /// </summary>
-        /// <param name="autonomy">
-        /// WHOSE autonomy, which is the whole reason this is a parameter. The slider on screen is about
-        /// the folder on screen; a task from a phone names a folder of its own and must be governed by
-        /// the level saved against THAT one. Reading the slider for both meant a remote task running at
-        /// whatever permission an unrelated project happened to be sitting at.
-        /// </param>
-        /// <exception cref="InvalidOperationException">
-        /// When no model is configured, so there is no engine to snapshot. The two callers are the
-        /// background run — stopped earlier, by RunAsync — and a task started from a phone, which has
-        /// no earlier gate and would otherwise reach a null provider. A named refusal is what the panel
-        /// can report; a NullReferenceException is not.
-        /// </exception>
-        private RunEnvironment SnapshotEnvironment(int autonomy, string? workerRole, bool stageChanges)
-            => _engineProblem is { Length: > 0 } problem
-                ? throw new InvalidOperationException(problem)
-                : new(
-                _providerFactory, _modelResolver, _workerProvider, _toolRegistry,
-                _settings.McpServers.Select(c => c.Clone()).ToArray(),
-                _planner, _permissionEngine, BuildRouter(), _log, _settings,
-                PolicyFor(autonomy),
-                new RunSettings(
-                    autonomy, MainWindowViewModel.LevelName(autonomy), workerRole, stageChanges),
-                WorkerIdForRole(workerRole),
-                // "Allow (session)" answers for every run this process starts, watched or not.
-                _sessionApprovals);
+        private ComposedEngine CurrentEngine()
+            => _engine ?? throw new InvalidOperationException(_engineProblem ?? "There is no engine to run on.");
 
         /// <summary>
-        /// The worker a saved ROLE NAME refers to, or null for the default.
-        ///
-        /// <para>The registry stores the role, not the id - by name on purpose, because the worker list
-        /// is editable and an index would quietly select somebody else the first time a role was
-        /// added. The two lists are built together, so the position of a role is the position of its
-        /// worker.</para>
+        /// The worker the worker box is on, by id - null when there are none to pick from. The box lists the
+        /// engine's workers in order, so the selected row is the worker at that position.
         /// </summary>
-        private string? WorkerIdForRole(string? role)
-        {
-            if (role is null)
-                return null;
-
-            var index = _vm.WorkerRoles.IndexOf(role);
-
-            return index >= 0 && index < _workerProvider.All.Count ? _workerProvider.All[index].Id : null;
-        }
-
-        /// <summary>The role the worker box is on, by name - null when there are no roles to pick from.</summary>
-        private string? CurrentWorkerRole()
-            => _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _vm.WorkerRoles.Count
-                ? _vm.WorkerRoles[_vm.SelectedWorkerIndex]
+        private string? CurrentWorkerId()
+            => _engine is { } engine && _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < engine.Workers.All.Count
+                ? engine.Workers.All[_vm.SelectedWorkerIndex].Id
                 : null;
 
         /// <summary>
@@ -1823,8 +1765,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             // Adopt: a background run is a run, and the folder is being taken up as a workspace here
             // exactly as it is in the foreground.
             var workspace = WorkspaceInfo.Adopt(fullPath);
+            // The slider and the worker box on screen, and rightly: this run is against the folder on screen.
             var request = new RunRequest(workspace, text, IntentSource.Inbox, resume?.TaskId ?? taskId, resume, spec,
-                Stage: _vm.StageChanges);
+                Stage: _vm.StageChanges) { Autonomy = _vm.AutonomyTier, WorkspaceWorkerId = CurrentWorkerId() };
             // Refused here, where the request was made, and in the composer's own words - see RunComposer.Refusal.
             if (RunComposer.Refusal(request) is { } refused)
             {
@@ -1832,8 +1775,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 _vm.CurrentAction = refused;
                 return;
             }
-            // The slider on screen, and rightly: this run is against the folder on screen.
-            var environment = SnapshotEnvironment(_vm.AutonomyTier, CurrentWorkerRole(), _vm.StageChanges);
+            var engine = CurrentEngine();
             var inbox = InboxStoreFactory.Create(workspace);
             _registry.Touch(fullPath);
             RefreshWorkspaces();
@@ -1867,7 +1809,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     // (ContinueParkedAsync). It used to be answered "no" on the spot, and the only
                     // way to get "yes" in was to start the whole task again, in the foreground.
                     await using var composed = await RunComposer.ComposeAsync(
-                        environment, request, new ParkingDecisionHandler(), ct);
+                        engine, request, new ParkingDecisionHandler(), ct);
                     await BackgroundRunner.RunAsync(composed.Events(ct), inbox, workspace, text, ct);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -2618,29 +2560,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             }
         }
 
-        /// <summary>
-        /// The tools this host offers, built from the CURRENT settings.
-        ///
-        /// <para>It used to be a list inline in the constructor, which made every setting a tool reads
-        /// a restart-only setting. Reported 2026-09-22: an SMTP account filled in and saved, and
-        /// <c>send_email</c> still telling the agent it was unavailable, because the account it holds
-        /// was read once when the window opened. Nothing about that is particular to mail - any tool
-        /// taking configuration would have behaved the same way - so the registry is rebuilt wherever
-        /// the settings are applied, and the pane no longer has to tell anybody to restart.</para>
-        ///
-        /// <para>Safe to swap while the application is running: <c>_toolRegistry</c> is read at the
-        /// point of use, and a run already in flight holds the registry it started with.</para>
-        /// </summary>
-        private IToolRegistry BuildToolRegistry()
-            => new ToolRegistry(BuiltInTools.Create(EngineComposition.Mail(_settings), EngineComposition.Web(_settings)));
-
         private void ApplySettings()
         {
             _globalInstructions = _settings.GlobalInstructions;
-
-            // Before the early return below: a tool's configuration is not the engine's, and an SMTP
-            // account saved on a machine with no model chosen should still reach the tool.
-            _toolRegistry = BuildToolRegistry();
 
             // Nothing to build an engine out of is a STATE, not an error. A machine where nobody has
             // chosen a model now says so — where it used to be silently configured for a model name
@@ -2652,18 +2574,18 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
             if (_engineProblem is not null)
             {
-
+                _engine = null;
                 _vm.WorkerRoles.Clear();
                 return;
             }
 
-            // The engine itself — providers, team, router — from the composition every host shares.
+            // The engine itself — providers, team, router, tools — from the composition every host shares.
             // It was built inline here, which is why nothing could check it and why the console's own
             // version had drifted onto a different provider kind and a model nobody had installed.
-            var engine = EngineComposition.Build(_settings, _http, _log);
-            _providerFactory = engine.Providers;
-            _providerFactory.MetricsReported = metrics => Dispatcher.UIThread.Post(() => _vm.Performance.Add(metrics));
-            _workerProvider = engine.Workers;
+            // "Allow (session)" answers for every run this process starts, watched or not, and outlives
+            // this engine: the next save builds another.
+            _engine = EngineComposition.Build(_settings, _http, _log, _sessionApprovals,
+                metrics => Dispatcher.UIThread.Post(() => _vm.Performance.Add(metrics)));
 
             // Applied here rather than at construction because the sink predates the settings. The
             // setter prunes, so lowering it takes effect on Save instead of at the next midnight.
@@ -2677,7 +2599,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             {
                 var keep = _vm.SelectedWorkerIndex;
                 _vm.WorkerRoles.Clear();
-                foreach (var worker in _workerProvider.All)
+                foreach (var worker in _engine.Workers.All)
                     _vm.WorkerRoles.Add(worker.Role);
                 _vm.SelectedWorkerIndex = keep >= 0 && keep < _vm.WorkerRoles.Count ? keep : 0;
         }
@@ -2685,9 +2607,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             _vm.IsLoadingWorkspaceDefaults = false;
         }
-
-        _model = _workerProvider.Default.ModelPolicy.Preferred.Model;
-
     }
 
     /// <summary>

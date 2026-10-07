@@ -61,7 +61,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     private IHostKeys? _keys;
     private HostKeyStore? _ownedKeys;
     private Sealer? _sealer;
-    private readonly Func<WorkspaceEntry, Task<RunEnvironment>> _environment;
+    private readonly Func<Task<ComposedEngine>> _engine;
     private readonly Func<IReadOnlyList<WorkspaceEntry>> _workspaces;
     private readonly IDecisionHandler _desktop;
     private readonly string _databasePath;
@@ -95,12 +95,11 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// hold - which is what the application does. With no id there are none: the computer has not been
     /// connected with a code, and the service says so and does not connect.
     /// </param>
-    /// <param name="environment">
-    /// The run setup for one workspace. A function of the WORKSPACE rather than a value, because
-    /// the autonomy level, worker and staging flag are facts about a folder: a task naming one
-    /// project must not be governed by the slider belonging to whichever project is open on the
-    /// desktop. A function rather than a table read once, because those settings are editable and
-    /// a task arriving in an hour should run under what they say then.
+    /// <param name="engine">
+    /// The desktop's engine as it is when a task arrives - a function rather than a value, because saving
+    /// the settings builds a new one and a task arriving in an hour should run on that. What governs the
+    /// task is not in it: the level, worker and staging saved against the workspace the task names are
+    /// read from <paramref name="workspaces"/> then (<see cref="RunRequest.FromPhone"/>).
     /// </param>
     /// <param name="desktop">
     /// Who answers a permission question at this machine. It is wrapped, not replaced: a question
@@ -119,7 +118,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     public RemoteAccessService(
         RemoteAccessSettings settings,
         IHostKeys? keys,
-        Func<WorkspaceEntry, Task<RunEnvironment>> environment,
+        Func<Task<ComposedEngine>> engine,
         Func<IReadOnlyList<WorkspaceEntry>> workspaces,
         IDecisionHandler desktop,
         string databasePath,
@@ -131,7 +130,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         _keys = keys;
         _sealer = keys is null ? null : new Sealer(keys, TimeProvider.System);
         _connect = connect ?? ConnectSignalRAsync;
-        _environment = environment;
+        _engine = engine;
         _workspaces = workspaces;
         _desktop = desktop;
         _databasePath = databasePath;
@@ -861,10 +860,8 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         // Staging, the policy a phone may have, recording: all RunComposer's, the same as every other run.
         // A refusal (staging nobody is here to apply) is an exception the panel reports.
         var composed = await RunComposer.ComposeAsync(
-            // The autonomy, worker and staging saved against THE WORKSPACE THIS TASK NAMES - not
-            // the slider on the desktop, which is about whatever folder happens to be open there.
-            await _environment(entry),
-            new RunRequest(workspace, task.Prompt, IntentSource.Remote, Stage: entry.StageChanges),
+            await _engine(),
+            RunRequest.FromPhone(workspace, entry, task.Prompt),
             wrap(_desktop),
             ct);
 

@@ -19,46 +19,6 @@ using Enactive.Workspace;
 
 namespace Enactive.Settings;
 
-/// <summary>
-/// What a run needs from the application that is not about any one run: the providers, the tools,
-/// the models, and the settings as they stood when the run was started.
-///
-/// <para>Taken as a snapshot on the UI thread and then treated as frozen. A run reads it minutes
-/// later, on a thread pool thread, by which time the slider has moved and the settings dialog has
-/// been through two round trips - so reading these live would mean a run whose permissions changed
-/// underneath it and a history that could not say what it had been allowed to do.</para>
-///
-/// <para><see cref="Policy"/>, <see cref="RunSettings"/> and <see cref="WorkerId"/> are the three
-/// that belong to a WORKSPACE rather than to the application, and the caller is what decides which
-/// workspace's. For a run started here that is the slider on screen, because the slider on screen
-/// is about the folder on screen. For a run started from a phone it is emphatically not: that task
-/// names a workspace of its own, and the level saved against THAT folder is the one its owner
-/// chose for it.</para>
-/// </summary>
-/// <param name="WorkerId">The worker this host would pick when neither the run nor its template names one.</param>
-/// <param name="Session">The approvals given "for this session" in this process; null for a host without a session.</param>
-/// <param name="Approvals">The approvals given "for this workspace"; null for the store every host shares.</param>
-public sealed record RunEnvironment(
-    IChatProviderFactory Providers,
-    ModelResolver Models,
-    IWorkerProvider Workers,
-    IToolRegistry BuiltInTools,
-    IReadOnlyList<McpServerConfig> McpServers,
-    Planner Planner,
-    IPermissionEngine Permissions,
-    IModelRouter Router,
-    LogHub Log,
-    AppSettings Settings,
-    PermissionPolicy Policy,
-    RunSettings RunSettings,
-    string? WorkerId,
-    SessionApprovals? Session = null,
-    ApprovalStore? Approvals = null)
-{
-    // The settings' own section, as it stood when the snapshot was taken: a record, so the editor's later changes are a new one.
-    public EngineOptions EngineOptions { get; } = Settings.Engine;
-}
-
 /// <summary>What one host asks to be run.</summary>
 /// <param name="Source">Where the run was started - which decides who can be asked, and so what the run may do.</param>
 /// <param name="TaskId">
@@ -68,7 +28,7 @@ public sealed record RunEnvironment(
 /// </param>
 /// <param name="Resume">An interrupted run to carry on from its last step boundary.</param>
 /// <param name="Spec">The saved task this run is, with its permissions, checks, limits and role.</param>
-/// <param name="WorkerId">A worker named for this invocation; it wins over the template's and the host's.</param>
+/// <param name="WorkerId">A worker named for this invocation; it wins over the template's and the workspace's.</param>
 /// <param name="Stage">Hold the run's changes for somebody to apply, instead of writing them.</param>
 /// <param name="Remembered">
 /// False when the host's decision handler is an explicit answer for this invocation (the console's
@@ -83,7 +43,36 @@ public sealed record RunRequest(
     ResolvedTaskSpec? Spec = null,
     string? WorkerId = null,
     bool Stage = false,
-    bool Remembered = true);
+    bool Remembered = true)
+{
+    /// <summary>
+    /// The autonomy level of the workspace this run is in - one of the workspace defaults, with
+    /// <see cref="WorkspaceWorkerId"/>. Required, so no host can forget to say it: a level is what decides
+    /// what the run may do without asking. Which workspace's level it is, is the host's to know: the slider
+    /// on screen is about the folder on screen, and a task from a phone names a folder of its own (see
+    /// <see cref="FromPhone"/>). Ignored when resuming - a resumed run keeps the level it was started under.
+    /// </summary>
+    public required int Autonomy { get; init; }
+
+    /// <summary>
+    /// The worker chosen for this workspace, by id or - as the window saved it until 2026-10-08 - by role
+    /// name. Used when neither this invocation nor the template names one.
+    /// </summary>
+    public string? WorkspaceWorkerId { get; init; }
+
+    /// <summary>
+    /// A task from a phone, governed by what is saved against THE WORKSPACE IT NAMES - its level, its worker,
+    /// its staging - and not by the desktop's slider, which is about whatever folder happens to be open
+    /// there. Reading the slider for both once ran a remote task at whatever permission an unrelated project
+    /// was sitting at.
+    /// </summary>
+    public static RunRequest FromPhone(WorkspaceInfo workspace, WorkspaceEntry saved, string prompt)
+        => new(workspace, prompt, IntentSource.Remote, Stage: saved.StageChanges)
+        {
+            Autonomy = saved.Autonomy,
+            WorkspaceWorkerId = saved.WorkerId
+        };
+}
 
 /// <summary>
 /// One composed run, ready to start: the engine, the intent, where its changes go, and the things
@@ -146,10 +135,11 @@ public static class RunComposer
             : null;
 
     /// <summary>Connects the tools and builds the engine and the intent for one run.</summary>
+    /// <param name="engine">The host's current engine, built by <see cref="EngineComposition.Build"/> - nothing a host assembles.</param>
     /// <param name="decisions">Who answers this host's permission requests - the one part each host supplies.</param>
     /// <exception cref="InvalidOperationException">The request is refused - see <see cref="Refusal"/>.</exception>
     public static async Task<ComposedRun> ComposeAsync(
-        RunEnvironment environment, RunRequest request, IDecisionHandler decisions, CancellationToken ct)
+        ComposedEngine engine, RunRequest request, IDecisionHandler decisions, CancellationToken ct)
     {
         if (Refusal(request) is { } refused)
             throw new InvalidOperationException(refused);
@@ -158,11 +148,11 @@ public static class RunComposer
         var spec = request.Spec;
         var memory = MemoryStoreFactory.Create(workspace);
         var tools = await McpRunTools.ConnectAsync(
-            environment.BuiltInTools, environment.McpServers, workspace.RootPath, ct);
+            engine.BuiltInTools, engine.McpServers, workspace.RootPath, ct);
 
         // Said once per run, whether or not anything calls them: starting a server is a cost the run has
         // already paid, and a scheduled run is where it costs most and shows least.
-        environment.Log.Info(LogSource.Tool, tools.Summary());
+        engine.Log.Info(LogSource.Tool, tools.Summary());
 
         try
         {
@@ -176,39 +166,49 @@ public static class RunComposer
             // what it was started with: the slider will have moved by now - it is a control, not a record
             // - and a run that finishes its remaining steps under permissions nobody granted it is not the
             // run somebody asked to resume.
-            var runSettings = request.Resume?.Settings ?? environment.RunSettings with { Staged = staged };
+            //
+            // A level outside the tiers is clamped to the nearest one: AutonomyTiers reads anything it has
+            // no case for as Autonomous, and a -1 from a damaged registry entry is not a request to run
+            // everything without asking.
+            var autonomy = Math.Clamp(request.Autonomy, 0, AutonomyTiers.Names.Count - 1);
+            // A worker named for this invocation, then the one the template needs, then the workspace's.
+            // Each read as a name that may be an id or a role (ComposedEngine.WorkerIdFor); one that names
+            // nobody leaves the engine's default, as an unknown id always did.
+            var workerId = engine.WorkerIdFor(request.WorkerId ?? spec?.WorkerId ?? request.WorkspaceWorkerId);
+            // The history says which worker the run was ON - the template's, when it named one - and by its
+            // role, which is what a person reads. It said the host's pick, which a template overrides, and in
+            // the console's runs an id where the window's said a role.
+            var runSettings = request.Resume?.Settings
+                ?? new RunSettings(autonomy, AutonomyTiers.Describe(autonomy), engine.Workers.Get(workerId).Role, staged);
             var policy = request.Resume?.Settings is { } was
-                ? EngineComposition.PolicyFor(environment.Settings, was.Autonomy)
+                ? EngineComposition.PolicyFor(engine.Settings, was.Autonomy)
                 // A template's permissions are already the INTERSECTION of its own ceiling and the
                 // workspace's tier (TemplateResolution.Narrow), so this is never more than the slider allows.
-                : spec?.Permissions ?? environment.Policy;
+                : spec?.Permissions ?? EngineComposition.PolicyFor(engine.Settings, autonomy);
             // A run started from the web never runs a shell, and this is where that is true. The decision
             // handler refuses one too, but a handler only sees what the policy decided to ASK about - and at
             // the Autonomous tier the policy asks about nothing.
             if (request.Source == IntentSource.Remote)
                 policy = RemotePolicy.ForRemoteRun(policy);
 
-            var engine = Engine(
-                new RunEngineResources(environment.Providers, environment.Models, environment.Workers,
-                    new LoggingToolRegistry(tools, environment.Log), artifacts, workspace, environment.Planner,
-                    environment.Permissions, Answering(environment, request, decisions), policy,
-                    new NoServices(), environment.Router),
-                environment.EngineOptions, new JsonCheckpointStore(workspace), runSettings,
+            var orchestrator = Engine(
+                new RunEngineResources(engine.Providers, engine.Models, engine.Workers,
+                    new LoggingToolRegistry(tools, engine.Log), artifacts, workspace, engine.Planner,
+                    engine.Permissions, Answering(engine, request, decisions), policy,
+                    new NoServices(), engine.Router),
+                engine.EngineOptions, new JsonCheckpointStore(workspace), runSettings,
                 spec?.SuccessCriteria, spec?.Limits);
 
             var context = await new ContextProvider(workspace, new EnvironmentProbe(), memory)
                 .BuildAsync(new IntentFocus(workspace.Id), ct);
 
-            // A worker named for this invocation, then the one the template needs, then the host's own pick.
-            var workerId = request.WorkerId ?? spec?.WorkerId ?? environment.WorkerId;
-
             return new ComposedRun(
                 new Recorded(
-                    engine,
+                    orchestrator,
                     // The specification is recorded WITH the run, so reading it back later shows the
                     // template as it was rather than as it has since been edited.
                     new RunRecorder(RunStoreFactory.Create(workspace), memory, workspace.Id, runSettings, spec?.Snapshot()),
-                    environment.Log),
+                    engine.Log),
                 new Intent(request.Resume?.TaskId ?? request.TaskId ?? Guid.NewGuid(), request.Prompt, request.Source,
                     context, DateTimeOffset.UtcNow, workerId),
                 artifacts,
@@ -247,11 +247,11 @@ public static class RunComposer
     /// The host's decisions, behind the answers a person already gave for good - except for a phone,
     /// which must be asked afresh every time, and an explicit answer given for this invocation.
     /// </summary>
-    private static IDecisionHandler Answering(RunEnvironment environment, RunRequest request, IDecisionHandler decisions)
+    private static IDecisionHandler Answering(ComposedEngine engine, RunRequest request, IDecisionHandler decisions)
         => request.Source == IntentSource.Remote || !request.Remembered
             ? decisions
             : new RememberedApprovals(decisions, request.Workspace.RootPath,
-                environment.Approvals ?? ApprovalStore.Default, environment.Session);
+                engine.Approvals ?? ApprovalStore.Default, engine.Session);
 
     /// <summary>
     /// The orchestrator with the run's record and the log tap already around it.

@@ -112,4 +112,11 @@ public interface IChatProvider
 public interface IChatProviderFactory
 {
     IChatProvider Create(string providerId);
+
+    /// <summary>
+    /// The provider, with its prompts logged with or without their bodies. False is for a caller whose
+    /// prompts carry the log itself (the log window's analysis), which would otherwise write the log back
+    /// into the log. A factory that logs nothing has nothing to leave out.
+    /// </summary>
+    IChatProvider Create(string providerId, bool promptBodies) => Create(providerId);
 }

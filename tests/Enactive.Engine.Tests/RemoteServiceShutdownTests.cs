@@ -19,7 +19,7 @@ public sealed class RemoteServiceShutdownTests
             CommandStatus.PendingDelivery, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1)));
         Assert.True(store.BeginRun("command", "run"));
         await using var service = new RemoteAccessService(new RemoteAccessSettings(), new FixedHostKeys(),
-            _ => throw new InvalidOperationException("No network or composition expected"), () => [], fx.Decisions, database);
+            () => throw new InvalidOperationException("No network or composition expected"), () => [], fx.Decisions, database);
         typeof(RemoteAccessService).GetField("_store", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(service, store);
         var runs = (BackgroundRunGroup)typeof(RemoteAccessService)
             .GetField("_runs", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(service)!;

@@ -19,3 +19,8 @@ between hosts: the decision handler, the event sink, and cancellation.
   hosts show before starting anything.
 - Remembered approvals answer for every host except a phone (which must be asked afresh each time) and
   an explicit answer given for one invocation (the console's `--approve`).
+- A host does not assemble the engine either: it holds the one `EngineComposition.Build` made from the
+  settings (`ComposedEngine`) and hands it over with each request. What governs the run - the workspace
+  defaults, a level and a worker - travels in the request, and the composer turns them into the policy
+  and the record. Assembled by hand, the window's and the console's copies had drifted again (MCP
+  configurations, session approvals, a worker named by role in one and by id in the other).

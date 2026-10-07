@@ -92,7 +92,7 @@ from a command line instead of by driving the desktop by hand.
 | Argument | Values | Default |
 | --- | --- | --- |
 | `--autonomy` | `observe`, `suggest`, `execute`, `autonomous` (or `0`-`3`) | `execute` |
-| `--role` | `developer`, `reviewer`, `ops`, `writer` | `developer` |
+| `--role` | a worker's id (`developer`, `reviewer`, `ops`, `writer`) or its role name, case ignored | `developer` |
 | `--approve` | `allow`, `deny` | unset |
 
 `--autonomy` uses the desktop application's own mapping, shared by both hosts. A check run here is

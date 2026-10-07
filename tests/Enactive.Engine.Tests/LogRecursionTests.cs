@@ -188,4 +188,19 @@ public sealed class LogRecursionTests
         Assert.DoesNotContain("----- LOG -----", log.Everything(), StringComparison.Ordinal);
         Assert.Single(log.Entries, e => e.Source == LogSource.Prompt);
     }
+
+    /// <summary>
+    /// The window asks for the analyst's provider through the interface now, since the engine it holds is no
+    /// longer built from the concrete factory. The interface's own answer ignores the flag - right for a factory
+    /// that logs nothing - so the real factory must answer it with its own method, or every analysis would
+    /// write the log back into the log again.
+    /// </summary>
+    [Fact]
+    public void The_real_factory_answers_the_interface_s_request_without_bodies_itself()
+    {
+        var map = typeof(ChatProviderFactory).GetInterfaceMap(typeof(IChatProviderFactory));
+        var withFlag = Array.FindIndex(map.InterfaceMethods, m => m.GetParameters().Length == 2);
+
+        Assert.Equal(typeof(ChatProviderFactory), map.TargetMethods[withFlag].DeclaringType);
+    }
 }

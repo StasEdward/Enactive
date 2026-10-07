@@ -247,24 +247,12 @@ if (EngineComposition.Missing(settings) is { Count: > 0 } notConfigured)
 }
 
 var engine = EngineComposition.Build(settings, http, logHub);
-var providerFactory = engine.Providers;
-var workerProvider = engine.Workers;
-var modelResolver = engine.Models;
 var model = engine.DefaultModel;
 
 logHub.Info(LogSource.System,
     $"Enactive console starting — providers={string.Join(", ", settings.Providers.Select(p => $"{p.Id}:{p.Kind}"))}, "
     + $"model={model}, log dir={FileLogSink.DefaultDirectory()}");
-// Whether there is an account to send from. The tool is registered either way - the roles name
-// it, and the set they name and the set the host registers have to be the same - and it tells
-// the model in its own description when there is nowhere to send.
-var mailAccount = EngineComposition.Mail(settings);
-
-// Built in tools only: the composer connects the configured MCP servers on top of them, as it does for
-// every run - the console used to connect none, so a role that reached an MCP server in the window
-// reached nothing here.
-IToolRegistry builtInTools = new ToolRegistry(BuiltInTools.Create(mailAccount, EngineComposition.Web(settings)));
-var workers = workerProvider.All;
+var workers = engine.Workers.All;
 
 // ── The role this run is given ────────────────────────────────────────────────
 //   --role developer | reviewer | ops | writer
@@ -272,19 +260,18 @@ var workers = workerProvider.All;
 // Which role runs a task decides which tools it may call at all, and that is half of what there is
 // to check about permissions: a task that reaches for a shell because the tool it needed was never
 // granted looks exactly like a task the policy refused, and they are different facts.
-var roleId = Option("--role");
+// By id or by role name, the one rule every host reads a worker's name by (ComposedEngine.WorkerIdFor).
+var roleText = Option("--role");
+var roleId = engine.WorkerIdFor(roleText);
 
-if (roleId is { Length: > 0 }
-    && !workers.Any(w => string.Equals(w.Id, roleId, StringComparison.OrdinalIgnoreCase)))
+if (roleText is { Length: > 0 } && roleId is null)
 {
     // Named and refused, with the list. An unknown role silently falling back to the default would
     // produce a run under a role nobody asked for, reported as though it had been honoured.
-    Console.Error.WriteLine($"There is no role '{roleId}'.");
+    Console.Error.WriteLine($"There is no role '{roleText}'.");
     Console.Error.WriteLine($"  Roles: {string.Join(", ", workers.Select(w => w.Id))}");
     return 64;
 }
-var planner = new Planner();
-var permissionEngine = new PermissionEngine();
 
 // ── The tier this run acts under ──────────────────────────────────────────────
 //   --autonomy observe | suggest | execute | autonomous   (or 0-3)
@@ -495,7 +482,7 @@ if (args.Contains("--resume", StringComparer.OrdinalIgnoreCase))
     // A resumed run continues under the tier and role it was started with (RunComposer). Asking for
     // others here is refused rather than ignored: quietly running under something else than what was
     // typed is the one answer that is wrong either way.
-    if (autonomyText is not null || roleId is not null)
+    if (autonomyText is not null || roleText is not null)
     {
         Console.Error.WriteLine("A resumed run keeps the autonomy and role it was started with; "
                                 + "drop --autonomy and --role, or start the task again instead of resuming it.");
@@ -507,12 +494,6 @@ if (args.Contains("--resume", StringComparer.OrdinalIgnoreCase))
         $"Resuming a run stopped on {resumeFrom.At.ToLocalTime():yyyy-MM-dd HH:mm}: "
         + $"{resumeFrom.Finished} of {resumeFrom.Steps.Count} step(s) were done.");
 }
-
-var environment = new RunEnvironment(
-    providerFactory, modelResolver, workerProvider, builtInTools, settings.McpServers, planner, permissionEngine,
-    engine.Router, logHub, settings, permissionPolicy,
-    new RunSettings(autonomyTier.Value, AutonomyTiers.Describe(autonomyTier.Value), roleId, Staged: false),
-    WorkerId: null);
 
 // ── Run ──────────────────────────────────────────────────────────────────────
 using var cts = new CancellationTokenSource();
@@ -585,7 +566,7 @@ try
     // The same composition every host uses (RunComposer). What this host keeps: who answers (above), where the
     // events go (stdout, below), and Ctrl+C.
     composed = await RunComposer.ComposeAsync(
-        environment,
+        engine,
         new RunRequest(workspace, command,
             // A scheduled run says so about itself. IntentSource.Schedule existed from the first version
             // and had never been used by anything.
@@ -595,7 +576,12 @@ try
             // this invocation.
             WorkerId: roleId,
             // --approve is the answer for this invocation, given on purpose; a standing approval must not overrule it.
-            Remembered: approve is null),
+            Remembered: approve is null)
+        {
+            // --autonomy is the level of the workspace this console is pointed at; a template's own
+            // permissions are already narrowed to it (TemplateResolution, above).
+            Autonomy = autonomyTier.Value
+        },
         decisionHandler, cts.Token);
 
     await foreach (var ev in composed.Events(cts.Token))

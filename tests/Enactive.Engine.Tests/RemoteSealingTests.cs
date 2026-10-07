@@ -346,7 +346,7 @@ public sealed class RemoteSealingTests : IDisposable
     {
         var settings = new RemoteAccessSettings { Enabled = true, GatewayUrl = "https://remote.example.test", Token = "token" };
         await using var service = new RemoteAccessService(settings, keys: null,
-            _ => throw new InvalidOperationException("No composition expected"), () => [], new ScriptedDecisionHandler("allow"),
+            () => throw new InvalidOperationException("No composition expected"), () => [], new ScriptedDecisionHandler("allow"),
             Path.Combine(_folder, "remote.db"));
 
         service.Start();

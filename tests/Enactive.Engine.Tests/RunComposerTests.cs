@@ -38,23 +38,32 @@ public sealed class RunComposerTests
     private static ApprovalStore TempApprovals()
         => new(Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-permissions.json"));
 
-    private static RunEnvironment Environment(EngineFixture fx, FakeChatProvider provider, Worker worker, int autonomy,
-        ApprovalStore approvals, IReadOnlyList<McpServerConfig>? mcp = null)
+    /// <summary>An engine as EngineComposition.Build makes one, with a scripted model and the given team in it.</summary>
+    private static ComposedEngine Engine(FakeChatProvider provider, ApprovalStore approvals, params Worker[] team)
+        => Engine(provider, approvals, mcp: [], team);
+
+    private static ComposedEngine Engine(FakeChatProvider provider, ApprovalStore approvals,
+        IReadOnlyList<McpServerConfig> mcp, params Worker[] team)
     {
         var models = new ModelResolver();
         var settings = new AppSettings { Engine = new() { ProposeChecks = false, ReviewRetries = 0, SuccessRetries = 0 } };
-        return new RunEnvironment(new SingleProviderFactory(provider), models, new StaticWorkerProvider([worker], worker.Id),
-            new ToolRegistry(EngineFixture.ShippedTools()), mcp ?? [], new Planner(checksAuditEnabled: false),
-            new PermissionEngine(), new ModelRouter(models), new LogHub(), settings,
-            EngineComposition.PolicyFor(settings, autonomy),
-            new RunSettings(autonomy, AutonomyTiers.Describe(autonomy), worker.Id, Staged: false), worker.Id,
-            Approvals: approvals);
+        return new ComposedEngine(new SingleProviderFactory(provider), new StaticWorkerProvider(team, team[0].Id),
+            new ModelRouter(models), models, new ToolRegistry(EngineFixture.ShippedTools()), mcp, settings, new LogHub(),
+            new SessionApprovals())
+        {
+            Planner = new Planner(checksAuditEnabled: false),
+            Approvals = approvals
+        };
     }
 
-    private static async Task<List<WorkEvent>> RunAsync(RunEnvironment environment, RunRequest request, IDecisionHandler decisions)
+    /// <summary>A request as a host makes one, with the level of the workspace it is in.</summary>
+    private static RunRequest Request(EngineFixture fx, string prompt, IntentSource source, int autonomy = 2)
+        => new(fx.Workspace, prompt, source) { Autonomy = autonomy };
+
+    private static async Task<List<WorkEvent>> RunAsync(ComposedEngine engine, RunRequest request, IDecisionHandler decisions)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        await using var composed = await RunComposer.ComposeAsync(environment, request, decisions, cts.Token);
+        await using var composed = await RunComposer.ComposeAsync(engine, request, decisions, cts.Token);
         var events = new List<WorkEvent>();
         await foreach (var ev in composed.Events(cts.Token))
             events.Add(ev);
@@ -81,12 +90,12 @@ public sealed class RunComposerTests
     public async Task Every_run_is_recorded_with_the_settings_it_ran_under(IntentSource source)
     {
         using var fx = new EngineFixture();
-        var environment = Environment(fx, new FakeChatProvider(Turn.Says(QuickAnswer), Turn.Says("done")),
-            EngineFixture.WorkerWith(), autonomy: 2, TempApprovals());
+        var worker = EngineFixture.WorkerWith();
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer), Turn.Says("done")), TempApprovals(), worker);
 
-        await RunAsync(environment, new RunRequest(fx.Workspace, "answer", source), new ScriptedDecisionHandler("allow"));
+        await RunAsync(engine, Request(fx, "answer", source, autonomy: 2), new ScriptedDecisionHandler("allow"));
 
-        Assert.Equal(environment.RunSettings, (await OnlyRecordAsync(fx)).Settings);
+        Assert.Equal(new RunSettings(2, AutonomyTiers.Describe(2), worker.Role, Staged: false), (await OnlyRecordAsync(fx)).Settings);
     }
 
     /// <summary>
@@ -97,13 +106,13 @@ public sealed class RunComposerTests
     public async Task A_template_run_keeps_its_limits_and_is_recorded_as_that_template()
     {
         using var fx = new EngineFixture();
-        var environment = Environment(fx, new FakeChatProvider(Turn.Says(TwoStepPlan)) { WhenExhausted = Turn.Says("step done") },
-            EngineFixture.WorkerWith(), autonomy: 2, TempApprovals());
+        var engine = Engine(new FakeChatProvider(Turn.Says(TwoStepPlan)) { WhenExhausted = Turn.Says("step done") },
+            TempApprovals(), EngineFixture.WorkerWith());
         var spec = new ResolvedTaskSpec("nightly-mail", 3, "Nightly mail digest", fx.Workspace.Id, fx.Workspace.Name, fx.Root,
-            "Write the mail digest", new Dictionary<string, string>(), environment.Policy, [],
+            "Write the mail digest", new Dictionary<string, string>(), EngineComposition.PolicyFor(engine.Settings, 2), [],
             new ExecutionLimits(MaxSteps: 1), WorkerId: null, ReviewRequired: false);
 
-        var events = await RunAsync(environment, new RunRequest(fx.Workspace, spec.Goal, IntentSource.Inbox, Spec: spec),
+        var events = await RunAsync(engine, new RunRequest(fx.Workspace, spec.Goal, IntentSource.Inbox, Spec: spec) { Autonomy = 2 },
             new ParkingDecisionHandler());
 
         Assert.Contains("limit of 1 step(s)", events.Last().OutcomeReason());
@@ -125,16 +134,113 @@ public sealed class RunComposerTests
         var afterFirst = checkpoints.Saved.First(c => c.Finished == 1);
 
         var worker = EngineFixture.WorkerWith("write_file");
-        var environment = Environment(fx, new FakeChatProvider(
+        var engine = Engine(new FakeChatProvider(
                 Turn.Calls1("write_file", """{"path":"report.md","content":"done"}"""), Turn.Says("done"))
-            { WhenExhausted = Turn.Says("done") }, worker, autonomy: 3, TempApprovals());
+            { WhenExhausted = Turn.Says("done") }, TempApprovals(), worker);
         var decisions = new ScriptedDecisionHandler("deny");
 
-        await RunAsync(environment, new RunRequest(fx.Workspace, afterFirst.Request, IntentSource.Inbox, Resume: afterFirst), decisions);
+        await RunAsync(engine, new RunRequest(fx.Workspace, afterFirst.Request, IntentSource.Inbox, Resume: afterFirst) { Autonomy = 3 },
+            decisions);
 
         // Autonomous would have written without asking; the Observe the run was started under asks.
         Assert.Contains(decisions.Requests, r => r.Subject == "write_file");
         Assert.False(fx.Exists("report.md"));
+    }
+
+    // ── what governs a run: its workspace's level and worker ────────────────
+    //
+    // Hosts used to work these out themselves - the policy, the level's name, which worker - and their
+    // copies differed: the window named the worker by its role, the console by its id, and the history
+    // said the host's pick even where a template had named another.
+
+    private static readonly Worker Writer = EngineFixture.WorkerWith("write_file") with { Id = "writer", Role = "Technical writer" };
+
+    /// <summary>The level the request carries is the one the run acts under - here, whether a write is asked about.</summary>
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(3, false)]
+    public async Task A_run_acts_under_the_level_of_its_workspace(int autonomy, bool asked)
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
+            Turn.Calls1("write_file", """{"path":"digest.md","content":"mail"}"""), Turn.Says("done")),
+            TempApprovals(), EngineFixture.WorkerWith("write_file"));
+        var deny = new ScriptedDecisionHandler("deny");
+
+        await RunAsync(engine, Request(fx, "write the digest", IntentSource.CommandBar, autonomy), deny);
+
+        Assert.Equal(asked, deny.Requests.Any(r => r.Subject == "write_file"));
+        Assert.Equal(!asked, fx.Exists("digest.md"));
+    }
+
+    /// <summary>
+    /// A level outside the tiers is the nearest tier, not Autonomous: AutonomyTiers reads anything it has no case
+    /// for as the last one, and a -1 from a damaged registry entry is not a request to run everything unasked.
+    /// </summary>
+    [Fact]
+    public async Task A_level_below_the_tiers_is_the_most_careful_one()
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
+            Turn.Calls1("write_file", """{"path":"digest.md","content":"mail"}"""), Turn.Says("done")),
+            TempApprovals(), EngineFixture.WorkerWith("write_file"));
+        var deny = new ScriptedDecisionHandler("deny");
+
+        await RunAsync(engine, Request(fx, "write the digest", IntentSource.CommandBar, autonomy: -1), deny);
+
+        Assert.False(fx.Exists("digest.md"));
+        Assert.Equal(AutonomyTiers.Describe(0), (await OnlyRecordAsync(fx)).Settings!.AutonomyName);
+    }
+
+    /// <summary>The history names the worker the run was on - the template's, over the workspace's - by its role.</summary>
+    [Fact]
+    public async Task The_history_names_the_worker_the_template_chose()
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer), Turn.Says("done")), TempApprovals(),
+            EngineFixture.WorkerWith(), Writer);
+        var spec = new ResolvedTaskSpec("notes", 1, "Release notes", fx.Workspace.Id, fx.Workspace.Name, fx.Root,
+            "Write the notes", new Dictionary<string, string>(), EngineComposition.PolicyFor(engine.Settings, 2), [],
+            new ExecutionLimits(), WorkerId: "writer", ReviewRequired: false);
+
+        await RunAsync(engine, new RunRequest(fx.Workspace, spec.Goal, IntentSource.Inbox, Spec: spec)
+            { Autonomy = 2, WorkspaceWorkerId = "developer" }, new ParkingDecisionHandler());
+
+        Assert.Equal("Technical writer", (await OnlyRecordAsync(fx)).Settings!.Worker);
+    }
+
+    /// <summary>
+    /// A workspace the window saved before 2026-10-08 names its worker by role. Looked up as an id that found
+    /// nobody, and the run went to the default worker while the workspace said otherwise.
+    /// </summary>
+    [Fact]
+    public async Task A_worker_saved_by_its_role_name_is_still_the_one_that_runs()
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer), Turn.Says("done")), TempApprovals(),
+            EngineFixture.WorkerWith(), Writer);
+
+        await using var composed = await RunComposer.ComposeAsync(engine,
+            Request(fx, "write the notes", IntentSource.CommandBar) with { WorkspaceWorkerId = "technical WRITER" },
+            fx.Decisions, default);
+
+        Assert.Equal("writer", composed.Intent.WorkerId);
+    }
+
+    /// <summary>
+    /// A task from a phone is governed by what is saved against the folder IT names - not by the desktop's
+    /// slider, which once ran a remote task at whatever level an unrelated project was sitting at.
+    /// </summary>
+    [Fact]
+    public void A_task_from_a_phone_carries_the_settings_saved_for_its_own_workspace()
+    {
+        using var fx = new EngineFixture();
+        var saved = new WorkspaceEntry("notes", fx.Root, DateTimeOffset.UtcNow, Autonomy: 0, WorkerId: "writer", StageChanges: true);
+
+        var request = RunRequest.FromPhone(fx.Workspace, saved, "write the notes");
+
+        Assert.Equal((IntentSource.Remote, 0, "writer", true),
+            (request.Source, request.Autonomy, request.WorkspaceWorkerId, request.Stage));
     }
 
     // ── staging ─────────────────────────────────────────────────────────────
@@ -146,12 +252,12 @@ public sealed class RunComposerTests
     public async Task A_run_nobody_is_watching_cannot_stage_and_says_so_before_anything_starts(IntentSource source)
     {
         using var fx = new EngineFixture();
-        var request = new RunRequest(fx.Workspace, "answer", source, Stage: true);
-        var environment = Environment(fx, new FakeChatProvider(Turn.Says(QuickAnswer)), EngineFixture.WorkerWith(), 2, TempApprovals());
+        var request = new RunRequest(fx.Workspace, "answer", source, Stage: true) { Autonomy = 2 };
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
 
         Assert.Contains("cannot stage", RunComposer.Refusal(request));
         var refused = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => RunComposer.ComposeAsync(environment, request, new ParkingDecisionHandler(), CancellationToken.None));
+            () => RunComposer.ComposeAsync(engine, request, new ParkingDecisionHandler(), CancellationToken.None));
         Assert.Equal(RunComposer.Refusal(request), refused.Message);
     }
 
@@ -159,16 +265,17 @@ public sealed class RunComposerTests
     public async Task A_watched_run_stages_and_a_resumed_one_never_does()
     {
         using var fx = new EngineFixture();
-        var environment = Environment(fx, new FakeChatProvider(Turn.Says(QuickAnswer)), EngineFixture.WorkerWith(), 2, TempApprovals());
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
 
-        await using (var staged = await RunComposer.ComposeAsync(environment,
-                         new RunRequest(fx.Workspace, "answer", IntentSource.CommandBar, Stage: true), fx.Decisions, default))
+        await using (var staged = await RunComposer.ComposeAsync(engine,
+                         new RunRequest(fx.Workspace, "answer", IntentSource.CommandBar, Stage: true) { Autonomy = 2 }, fx.Decisions, default))
             Assert.IsType<StagingArtifactStore>(staged.Artifacts);
 
         var checkpoint = new RunCheckpoint(Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
             "answer", "answer", null, null, [], [], [], [], 0, 0, null);
-        await using var resumed = await RunComposer.ComposeAsync(environment,
-            new RunRequest(fx.Workspace, "answer", IntentSource.CommandBar, Resume: checkpoint, Stage: true), fx.Decisions, default);
+        await using var resumed = await RunComposer.ComposeAsync(engine,
+            new RunRequest(fx.Workspace, "answer", IntentSource.CommandBar, Resume: checkpoint, Stage: true) { Autonomy = 2 },
+            fx.Decisions, default);
         Assert.IsType<DiskArtifactStore>(resumed.Artifacts);
     }
 
@@ -187,11 +294,11 @@ public sealed class RunComposerTests
         using var fx = new EngineFixture();
         var approvals = TempApprovals();
         approvals.Approve(fx.Root, "write_file");
-        var environment = Environment(fx, new FakeChatProvider(Turn.Says(QuickAnswer),
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
             Turn.Calls1("write_file", """{"path":"digest.md","content":"mail"}"""), Turn.Says("done")),
-            EngineFixture.WorkerWith("write_file"), autonomy: 0, approvals);
+            approvals, EngineFixture.WorkerWith("write_file"));
 
-        await RunAsync(environment, new RunRequest(fx.Workspace, "write the digest", source), new UnattendedDecisionHandler());
+        await RunAsync(engine, Request(fx, "write the digest", source, autonomy: 0), new UnattendedDecisionHandler());
 
         Assert.True(fx.Exists("digest.md"));
     }
@@ -206,12 +313,13 @@ public sealed class RunComposerTests
         using var fx = new EngineFixture();
         var approvals = TempApprovals();
         approvals.Approve(fx.Root, "write_file");
-        var environment = Environment(fx, new FakeChatProvider(Turn.Says(QuickAnswer),
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
             Turn.Calls1("write_file", """{"path":"digest.md","content":"mail"}"""), Turn.Says("done")),
-            EngineFixture.WorkerWith("write_file"), autonomy: 0, approvals);
+            approvals, EngineFixture.WorkerWith("write_file"));
         var deny = new ScriptedDecisionHandler("deny");
 
-        await RunAsync(environment, new RunRequest(fx.Workspace, "write the digest", IntentSource.CommandBar, Remembered: false), deny);
+        await RunAsync(engine, new RunRequest(fx.Workspace, "write the digest", IntentSource.CommandBar, Remembered: false) { Autonomy = 0 },
+            deny);
 
         Assert.Contains(deny.Requests, r => r.Subject == "write_file");
         Assert.False(fx.Exists("digest.md"));
@@ -224,12 +332,12 @@ public sealed class RunComposerTests
         using var fx = new EngineFixture();
         var approvals = TempApprovals();
         approvals.Approve(fx.Root, "write_file");
-        var environment = Environment(fx, new FakeChatProvider(Turn.Says(QuickAnswer),
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
             Turn.Calls1("write_file", """{"path":"digest.md","content":"mail"}"""), Turn.Says("done")),
-            EngineFixture.WorkerWith("write_file"), autonomy: 0, approvals);
+            approvals, EngineFixture.WorkerWith("write_file"));
         var phone = new ScriptedDecisionHandler("deny");
 
-        await RunAsync(environment, new RunRequest(fx.Workspace, "write the digest", IntentSource.Remote), phone);
+        await RunAsync(engine, Request(fx, "write the digest", IntentSource.Remote, autonomy: 0), phone);
 
         Assert.Contains(phone.Requests, r => r.Subject == "write_file");
         Assert.False(fx.Exists("digest.md"));
@@ -246,14 +354,14 @@ public sealed class RunComposerTests
         using var fx = new EngineFixture();
         var echo = McpConnection.ToolName("test", "echo");
         var worker = EngineFixture.WorkerWith("mcp__test__*") with { DefaultLevel = PermissionLevel.Autonomous };
-        var environment = Environment(fx, new FakeChatProvider(Turn.Says(QuickAnswer),
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
                 Turn.Calls1(ToolBudget.LoadToolName, "{\"names\":[\"" + echo + "\"]}", "load_1"),
                 Turn.Calls1(echo, "{\"value\":\"mail\"}"), Turn.Says("done")),
-            worker, autonomy: 3, TempApprovals(),
+            TempApprovals(),
             [new McpServerConfig { Id = "test", Enabled = true, Command = "dotnet",
-                Arguments = new() { typeof(Responses).Assembly.Location }, TimeoutSeconds = 10 }]);
+                Arguments = new() { typeof(Responses).Assembly.Location }, TimeoutSeconds = 10 }], worker);
 
-        var events = await RunAsync(environment, new RunRequest(fx.Workspace, "use the server", source),
+        var events = await RunAsync(engine, Request(fx, "use the server", source, autonomy: 3),
             new ScriptedDecisionHandler("allow"));
 
         Assert.Contains(events, e => e.Kind == EventKind.ToolResult && e.Summary.Contains(echo, StringComparison.Ordinal));
