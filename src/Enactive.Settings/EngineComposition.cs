@@ -139,32 +139,6 @@ public static class EngineComposition
         => new(settings.Web.Enabled, settings.Web.SearchUrl.Trim())
             { UseWithoutAsking = settings.Web.UseWithoutAsking };
 
-    /// <summary>
-    /// The engine's switches as the settings have them. Every property of <see cref="EngineOptions"/> is named here,
-    /// and its constructor has no defaults, so a switch added there does not compile until it is read from here.
-    /// </summary>
-    public static EngineOptions Options(AppSettings settings) => new(
-        ReviewRetries: settings.ReviewRetries,
-        SuccessRetries: settings.SuccessRetries,
-        MaxLoadedToolsPerStep: settings.MaxLoadedToolsPerStep,
-        ProposeChecks: settings.ProposeChecks,
-        NumCtx: settings.NumCtx,
-        DisableThinking: settings.DisableThinking,
-        MaxParallelSteps: settings.MaxParallelSteps,
-        EvidenceBudget: settings.EvidenceBudget,
-        AllowImplicitToolCalls: settings.AllowImplicitToolCalls,
-        RevertRejectedSteps: settings.RevertRejectedSteps,
-        // Records, copied: a run reads its switches minutes later, after the settings dialog may have edited these.
-        GenerationBudgets: settings.GenerationBudgets with { },
-        RepairConsultation: settings.RepairConsultation with { },
-        StepOutputs: settings.StepOutputs,
-        TypedCriteria: settings.TypedCriteria,
-        DynamicSteps: settings.DynamicSteps,
-        FanOut: new FanOutLimits(settings.MaxStepsPerExpansion, settings.MaxTotalSteps, settings.MaxFanOutDepth),
-        ValidateWaves: settings.ValidateWaves,
-        ReportBlocked: settings.ReportBlocked,
-        SemanticCriteria: settings.SemanticCriteria);
-
     /// <summary>Every configured endpoint, as the provider factory wants them.</summary>
     public static IReadOnlyList<ProviderDescriptor> Descriptors(AppSettings settings)
         // By name, every one: six int? follow one another here, and positionally two of them could change

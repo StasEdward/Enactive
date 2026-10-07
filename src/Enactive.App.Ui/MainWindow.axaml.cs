@@ -1687,7 +1687,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             // then read a log that was half its own previous prompt. See LoggingChatProvider.
             return async (text, ct) => await new LogAnalyst().AnalyseAsync(
                 text, _providerFactory.Create(reference.ProviderId, promptBodies: false),
-                reference.Model, declared ?? _settings.NumCtx, ct);
+                reference.Model, declared ?? _settings.Engine.NumCtx, ct);
         }
 
         private void ShowLogWindow()

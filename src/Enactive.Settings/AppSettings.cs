@@ -382,111 +382,24 @@ public sealed partial class AppSettings
 
     public string GlobalInstructions { get; set; } = string.Empty;
 
-    // Ollama context window (options.num_ctx). Null = inherit whatever the model was loaded with.
-    public int? NumCtx { get; set; } = EngineOptions.Default.NumCtx;
+    /// <summary>
+    /// The engine's switches - one property each, declared once, in <see cref="EngineOptions"/>, with its default.
+    /// Kept in settings.json as one "Engine" object; a file written before it held them at the top level, and they are
+    /// moved in on load (see <see cref="MoveTopLevelEngineFields"/>).
+    /// </summary>
+    public EngineOptions Engine { get; set; } = new();
 
-    public Enactive.Core.Chat.GenerationBudgets GenerationBudgets { get; set; } = EngineOptions.Default.GenerationBudgets;
-    public Enactive.Core.Chat.RepairConsultation RepairConsultation { get; set; } = EngineOptions.Default.RepairConsultation;
-
-    // Send think:false to the local model so a reasoning model (qwen3, ...) answers directly instead of
-    // burning a whole turn in <think> with empty content. On by default; only OllamaNative honors it.
-    public bool DisableThinking { get; set; } = EngineOptions.Default.DisableThinking;
-
-    // Execute a tool call the model only DESCRIBED in its reply (a ```json block) instead of invoking it.
-    // Off by default and deliberately so: a parser cannot tell an intended call from a quoted example,
-    // which means anything that can put text in front of the model can put an action in front of the
-    // engine. Turn it on only for a weak local model that cannot emit structured tool calls at all.
-    public bool AllowImplicitToolCalls { get; set; } = EngineOptions.Default.AllowImplicitToolCalls;
-
-    // How many times a rejected step may be redone before the run gives up. 1 means two tries in
-    // total, which is what the engine did when this number was hard-coded. It was worth exposing
-    // because it is the dial between "the reviewer's feedback gets used" and "a weak model burns the
-    // budget arguing with a strong one": in a real run one step needed exactly two attempts and
-    // passed, while another used both and was still wrong. Clamped to 0..5 by the orchestrator.
-    public int ReviewRetries { get; set; } = EngineOptions.Default.ReviewRetries;
-
-    // How many tools of its catalog one step may load. The tools of connected MCP servers are not sent with
-    // every request: they are named in a catalog and loaded by name when the work needs them, and each one
-    // loaded is a definition sent with every later turn of that step. Clamped to 1..32 by the orchestrator.
-    public int MaxLoadedToolsPerStep { get; set; } = EngineOptions.Default.MaxLoadedToolsPerStep;
-
-    // How many times a run whose success CRITERIA failed may try to make them pass. A criterion is
-    // the one thing in a run that is not somebody's opinion, and until 2026-09-08 a failed one just
-    // ended the run: a build left broken was reported as broken and nothing tried to fix it, which
-    // is not what "done" means to anyone. 1 gives the agent one attempt with the check's own output
-    // in front of it; the criteria are then re-run and they alone decide. 0 restores the old
-    // behaviour - check once, and stop. Clamped to 0..5 by the orchestrator.
-    public int SuccessRetries { get; set; } = EngineOptions.Default.SuccessRetries;
-
-    // Ask the planner, before any of the work, for commands that would PROVE the request was
-    // carried out - and judge the run by them when it was given no criteria of its own.
-    //
-    // Until 2026-09-21 the one guard that looks at the WORKSPACE instead of the transcript was
-    // reachable only through a template: `successCriteria: spec?.SuccessCriteria` in both hosts,
-    // and spec is a template. Every ad-hoc run was therefore judged on text a model wrote about
-    // its own work. A template's criteria still win outright and the planner is not even asked,
-    // so nothing about a template run changes.
-    //
-    // Safe to leave on: a proposed check can only make a verdict stricter (SuccessReport.Apply
-    // never promotes), and it can only do so by RUNNING and failing - one that the shell would not
-    // start, or that the policy forbids, reports Unknown and holds nothing back, because nobody
-    // asked for it. Turn it off to judge ad-hoc runs the way they were judged before.
-    public bool ProposeChecks { get; set; } = EngineOptions.Default.ProposeChecks;
-
-    // Phase 2: a planned step may declare what it hands on as values, and must then hand it on with
-    // submit_step_output; the steps after it receive the values instead of a retelling. Off until
-    // runs show it helps - it changes the planner's prompt and what a declared step needs to finish.
-    public bool StepOutputs { get; set; } = EngineOptions.Default.StepOutputs;
-
-    // Phase 3: the planner may state acceptance criteria as types the engine checks itself -
-    // file_exists, file_contains, tests_pass - added to, never instead of, the run's own criteria.
-    // Off until runs show it helps.
-    public bool TypedCriteria { get; set; } = EngineOptions.Default.TypedCriteria;
-
-    // Phase 5.3: a step may be declared "for each" item an earlier step hands on, and the plan grows
-    // by one step per item once the list exists. Needs StepOutputs. Off until runs show it helps.
-    public bool DynamicSteps { get; set; } = EngineOptions.Default.DynamicSteps;
-
-    // Phase 5.4: how far a plan may grow without asking - per "for each", in total, and in depth.
-    public int MaxStepsPerExpansion { get; set; } = EngineOptions.Default.FanOut.MaxStepsPerExpansion;
-    public int MaxTotalSteps { get; set; } = EngineOptions.Default.FanOut.MaxTotalSteps;
-    public int MaxFanOutDepth { get; set; } = EngineOptions.Default.FanOut.MaxDepth;
-
-    // Phase 6: a plan's steps are built and tested once per wave - where nothing is running - instead of
-    // only at the end, and a regression is put on the step that made it, or said to be ambiguous. Off
-    // until runs show it helps: it runs builds, and trial builds when something broke.
-    public bool ValidateWaves { get; set; } = EngineOptions.Default.ValidateWaves;
-
-    // Phase 7.2: a step may say it cannot go on (report_blocked) - advisory; the engine finds the blocks it can
-    // see without it. Off until runs show a local model uses it for real blocks and not for hard work.
-    public bool ReportBlocked { get; set; } = EngineOptions.Default.ReportBlocked;
-
-
-    // Phase 1.4: the planner may set a step semantic criteria (needs TypedCriteria), and a step that has them is judged
-    // against those alone, each verdict citing evidence of the kinds the criterion allows. Off until runs show it.
-    public bool SemanticCriteria { get; set; } = EngineOptions.Default.SemanticCriteria;
-
-    // Put a rejected step's files back to how they were before it ran. Without this the gate stops
-    // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
-    // is the version someone is most likely to open next. A file changed since the step wrote it is
-    // left alone and named in the log — reverting over somebody's edit would be the very thing this
-    // is meant to prevent. Turn it off to inspect what a rejected step actually produced.
-    public bool RevertRejectedSteps { get; set; } = EngineOptions.Default.RevertRejectedSteps;
+    /// <summary>
+    /// What settings.json holds that this build has no property for - read only so the engine's switches of a file
+    /// written before they had their own section can be found and moved into <see cref="Engine"/>. Emptied once that is
+    /// done: anything else unknown is dropped on the next save, as it always was.
+    /// </summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? UnreadFields { get; set; }
 
     // Ask workers to read a file back after writing it, to catch a weak local model fabricating content.
     // Costs an extra LLM round-trip per write — worth turning off when running strong models. On by default.
     public bool VerifyWrites { get; set; } = true;
-
-    // How many independent plan steps may run at once. 1 = the original behaviour: one step at a time on
-    // one shared conversation. Above 1 each concurrent step gets its own forked conversation, seeded with
-    // a digest of what earlier steps concluded. Only pays off when steps route to different providers —
-    // two steps on one Ollama still queue on the GPU.
-    public int MaxParallelSteps { get; set; } = EngineOptions.Default.MaxParallelSteps;
-
-    // How many characters of tool evidence the reviewer is shown, shared between every call the step
-    // made. Raise it for work that reads many files: the budget is divided, so thirteen reads under
-    // the default leave about 320 characters of each - too little to check anything quoted from one.
-    public int EvidenceBudget { get; set; } = EngineOptions.Default.EvidenceBudget;
 
     // How many days of log files to keep. 0 keeps everything, which is what shipped: a file per day,
     // appended forever, deleted by nobody.
@@ -586,9 +499,12 @@ public sealed partial class AppSettings
         try
         {
             {
-                var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(file), JsonOptions);
+                var text = File.ReadAllText(file);
+                var loaded = JsonSerializer.Deserialize<AppSettings>(text, JsonOptions);
                 if (loaded is not null)
                 {
+                    loaded.MoveTopLevelEngineFields(System.Text.Json.Nodes.JsonNode.Parse(text) is System.Text.Json.Nodes.JsonObject root
+                                                    && root.ContainsKey(nameof(Engine)));
                     // Every secret back into memory, and a note of each that cannot be (see Secrets()).
                     loaded.UnprotectSecrets();
                     loaded.MigrateIfNeeded();
@@ -736,6 +652,47 @@ public sealed partial class AppSettings
     }
 
     private HashSet<string> _unreadableSecrets = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The engine's switches of a file written before they had a section of their own, moved into it: every top-level
+    /// field named as a property of <see cref="EngineOptions"/> - found by that name, so a switch added later needs no
+    /// line here - and the three plan-growth limits, which were spelled differently at the top level. Moved, so the
+    /// next save writes them once, in "Engine". Run on every load; a file without them is left as it is.
+    /// </summary>
+    /// <param name="fileHasEngine">The file already has an "Engine" section: what is in it wins over a stray top-level field.</param>
+    private void MoveTopLevelEngineFields(bool fileHasEngine)
+    {
+        if (UnreadFields is not { Count: > 0 } unread)
+        {
+            UnreadFields = null;
+            return;
+        }
+
+        var engine = JsonSerializer.SerializeToNode(Engine, JsonOptions)!.AsObject();
+        var moved = false;
+
+        foreach (var option in typeof(EngineOptions).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            moved |= Move(option.Name, value => engine[option.Name] = value);
+
+        // Phase 5.4's limits were three top-level numbers; in the engine's options they are one FanOut.
+        var fanOut = engine[nameof(EngineOptions.FanOut)]!.AsObject();
+        moved |= Move("MaxStepsPerExpansion", value => fanOut[nameof(FanOutLimits.MaxStepsPerExpansion)] = value);
+        moved |= Move("MaxTotalSteps", value => fanOut[nameof(FanOutLimits.MaxTotalSteps)] = value);
+        moved |= Move("MaxFanOutDepth", value => fanOut[nameof(FanOutLimits.MaxDepth)] = value);
+
+        if (moved && !fileHasEngine)
+            Engine = engine.Deserialize<EngineOptions>(JsonOptions) ?? new();
+        // Not written back: a field no build reads any more (the old review switches) stays gone, as before.
+        UnreadFields = null;
+
+        bool Move(string name, Action<System.Text.Json.Nodes.JsonNode?> set)
+        {
+            if (!unread.Remove(name, out var value))
+                return false;
+            set(System.Text.Json.Nodes.JsonNode.Parse(value.GetRawText()));
+            return true;
+        }
+    }
 
     private string ProtectOrPreserve(string plaintext, string stored)
         => string.IsNullOrEmpty(plaintext) && Secret.IsProtected(stored)
@@ -934,6 +891,7 @@ public sealed partial class AppSettings
         copy.McpServers = McpServers.Select(x => x.Clone()).ToList();
         copy.Providers = Providers.Select(x => x.Clone()).ToList();
         copy.Workers = Workers.Select(x => x.Clone()).ToList();
+        copy.UnreadFields = UnreadFields is null ? null : new Dictionary<string, JsonElement>(UnreadFields);
 
         // About one file, not about the settings: the copy has not been saved anywhere.
         copy.LastSaveError = null;
@@ -1046,7 +1004,7 @@ public sealed partial class AppSettings
                      ("Review", Bindings.Review),
                      ("Execute · light", Bindings.ExecuteLight),
                      ("Execute · heavy", Bindings.ExecuteHeavy),
-                     ("Repair consultant", RepairConsultation.Enabled && RepairConsultation.Model is { } consultant
+                     ("Repair consultant", Engine.RepairConsultation.Enabled && Engine.RepairConsultation.Model is { } consultant
                          ? consultant.ProviderId + "/" + consultant.Model : null)
                  })
         {

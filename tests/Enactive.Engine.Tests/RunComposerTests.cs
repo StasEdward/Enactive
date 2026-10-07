@@ -42,7 +42,7 @@ public sealed class RunComposerTests
         ApprovalStore approvals, IReadOnlyList<McpServerConfig>? mcp = null)
     {
         var models = new ModelResolver();
-        var settings = new AppSettings { ProposeChecks = false, ReviewRetries = 0, SuccessRetries = 0 };
+        var settings = new AppSettings { Engine = new() { ProposeChecks = false, ReviewRetries = 0, SuccessRetries = 0 } };
         return new RunEnvironment(new SingleProviderFactory(provider), models, new StaticWorkerProvider([worker], worker.Id),
             new ToolRegistry(EngineFixture.ShippedTools()), mcp ?? [], new Planner(checksAuditEnabled: false),
             new PermissionEngine(), new ModelRouter(models), new LogHub(), settings,

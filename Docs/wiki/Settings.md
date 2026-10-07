@@ -13,6 +13,8 @@
 | Resolved run specification | One template resolved with concrete answers and permissions | Stored with a run |
 | Environment | Storage backend, logging, console model/endpoint, initial desktop defaults | Process environment |
 
+The engine's switches - review retries, parallel steps, evidence budget, thinking, the phase switches and the rest - are one `"Engine"` object in `settings.json`. A file written before that section existed held them at the top level; they are moved into it the first time the file is loaded, with their values, and the next save writes them there only. A switch the file does not mention keeps its default. A build from before this change, opening a file written after it, does not see the section and runs on its own defaults.
+
 There is no independent Workspace Providers/Phases file in the current desktop implementation. Global instructions and phase bindings are application-wide. “Workspace versus Global” in the template editor selects a template's storage scope, not a separate full application-settings profile.
 
 ## Saving and cancelling

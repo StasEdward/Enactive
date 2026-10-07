@@ -24,10 +24,10 @@ public sealed class RunCompositionRefactorTests
         var provider = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"write","steps":[]}"""),
             Turn.Calls1("write_file", """{"path":"result.txt","content":"kept"}"""), Turn.Says("done"));
-        var settings = new AppSettings { ProposeChecks = false,
-            GenerationBudgets = new(Action: 1234) };
-        var options = EngineComposition.Options(settings);
-        settings.GenerationBudgets = new(Action: 9999);
+        var settings = new AppSettings { Engine = new() { ProposeChecks = false, GenerationBudgets = new(Action: 1234) } };
+        var options = settings.Engine;
+        // The editor changes the settings after the run took its switches: a new value, not the one the run holds.
+        settings.Engine = settings.Engine with { GenerationBudgets = new(Action: 9999) };
         var artifacts = staged ? (Enactive.Core.Artifacts.IArtifactStore)new StagingArtifactStore(fx.Root) : fx.Artifacts;
         var models = new ModelResolver();
         var worker = EngineFixture.WorkerWith("write_file");

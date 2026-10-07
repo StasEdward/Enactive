@@ -1,5 +1,7 @@
 namespace Enactive.App.Ui.ViewModels;
 
+using Enactive.Agents;
+
 using System.Collections.ObjectModel;
 using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
@@ -299,23 +301,23 @@ internal sealed partial class SettingsViewModel : ObservableObject
         InitializeWeb();
         InitializeWritableRoots();
 
-        _numCtxText = _working.NumCtx?.ToString() ?? string.Empty;
-        _generationAction = _working.GenerationBudgets.Action.ToString();
-        _generationFileWrite = _working.GenerationBudgets.FileWrite.ToString();
-        _generationFinalAnswer = _working.GenerationBudgets.FinalAnswer.ToString();
-        _generationHandover = _working.GenerationBudgets.Handover.ToString();
-        _generationPlanner = _working.GenerationBudgets.Planner.ToString();
-        _repairModel = _working.RepairConsultation.Model is { } repairModel ? repairModel.ProviderId + "/" + repairModel.Model : "";
-        _repairThreshold = _working.RepairConsultation.FailedRepairs.ToString();
+        _numCtxText = _working.Engine.NumCtx?.ToString() ?? string.Empty;
+        _generationAction = _working.Engine.GenerationBudgets.Action.ToString();
+        _generationFileWrite = _working.Engine.GenerationBudgets.FileWrite.ToString();
+        _generationFinalAnswer = _working.Engine.GenerationBudgets.FinalAnswer.ToString();
+        _generationHandover = _working.Engine.GenerationBudgets.Handover.ToString();
+        _generationPlanner = _working.Engine.GenerationBudgets.Planner.ToString();
+        _repairModel = _working.Engine.RepairConsultation.Model is { } repairModel ? repairModel.ProviderId + "/" + repairModel.Model : "";
+        _repairThreshold = _working.Engine.RepairConsultation.FailedRepairs.ToString();
 
         _globalInstructions = _working.GlobalInstructions;
-        _disableThinking = _working.DisableThinking;
+        _disableThinking = _working.Engine.DisableThinking;
         _verifyWrites = _working.VerifyWrites;
-        _allowImplicitToolCalls = _working.AllowImplicitToolCalls;
-        _reviewRetriesText = _working.ReviewRetries.ToString();
-        _revertRejectedSteps = _working.RevertRejectedSteps;
-        _maxParallelStepsText = _working.MaxParallelSteps.ToString();
-        _evidenceBudgetText = _working.EvidenceBudget.ToString();
+        _allowImplicitToolCalls = _working.Engine.AllowImplicitToolCalls;
+        _reviewRetriesText = _working.Engine.ReviewRetries.ToString();
+        _revertRejectedSteps = _working.Engine.RevertRejectedSteps;
+        _maxParallelStepsText = _working.Engine.MaxParallelSteps.ToString();
+        _evidenceBudgetText = _working.Engine.EvidenceBudget.ToString();
         _logRetentionDaysText = _working.LogRetentionDays.ToString();
         _logPromptBodies = _working.LogPromptBodies;
         _shellCommandsIndex = (int)_working.ShellCommands;
@@ -563,35 +565,42 @@ internal sealed partial class SettingsViewModel : ObservableObject
             return;
 
         await _startupLoad;
-        _working.NumCtx = int.TryParse(NumCtxText.Trim(), out var n) ? n : null;
-        var repairParts = RepairModelText.Trim().Split('/', 2);
-        _working.RepairConsultation = _working.RepairConsultation with {
-            Model = repairParts.Length == 2 && repairParts.All(p => !string.IsNullOrWhiteSpace(p))
-                ? new Enactive.Core.Providers.ModelRef(repairParts[0], repairParts[1]) : null,
-            FailedRepairs = int.TryParse(RepairThresholdText.Trim(), out var repairThreshold) && repairThreshold >= 2 ? repairThreshold : 0
-        };
-        _working.GenerationBudgets = new(
-            Action: int.TryParse(GenerationActionText.Trim(), out var genAction) && genAction > 0 ? genAction : new Enactive.Core.Chat.GenerationBudgets().Action,
-            FileWrite: int.TryParse(GenerationFileWriteText.Trim(), out var genFileWrite) && genFileWrite > 0 ? genFileWrite : new Enactive.Core.Chat.GenerationBudgets().FileWrite,
-            FinalAnswer: int.TryParse(GenerationFinalAnswerText.Trim(), out var genFinalAnswer) && genFinalAnswer > 0 ? genFinalAnswer : new Enactive.Core.Chat.GenerationBudgets().FinalAnswer,
-            Handover: int.TryParse(GenerationHandoverText.Trim(), out var genHandover) && genHandover > 0 ? genHandover : new Enactive.Core.Chat.GenerationBudgets().Handover,
-            Planner: int.TryParse(GenerationPlannerText.Trim(), out var genPlanner) && genPlanner > 0 ? genPlanner : new Enactive.Core.Chat.GenerationBudgets().Planner);
         _working.GlobalInstructions = GlobalInstructions;
-        _working.DisableThinking = DisableThinking;
         _working.VerifyWrites = VerifyWrites;
-        _working.AllowImplicitToolCalls = AllowImplicitToolCalls;
-        // Clamped here as well as in the orchestrator: what is saved should be what will be used, or
-        // the settings window shows one number while the engine quietly runs another.
-        _working.ReviewRetries = int.TryParse(ReviewRetriesText.Trim(), out var r) ? Math.Clamp(r, 0, 5) : 1;
-        _working.RevertRejectedSteps = RevertRejectedSteps;
-        _working.MaxParallelSteps = int.TryParse(MaxParallelStepsText.Trim(), out var p) && p > 0 ? p : 1;
-        // Anything unparseable or below the floor falls back to the default rather than to the
-        // number typed: an evidence block too small to hold its header is not a smaller setting,
-        // it is a reviewer shown nothing.
-        _working.EvidenceBudget = int.TryParse(EvidenceBudgetText.Trim(), out var e)
-                                  && e >= ExecutionJournal.MinimumBudget
-            ? e
-            : ExecutionJournal.DefaultBudget;
+        // The engine's switches, as one new value of the settings' own section. What does not parse falls back to the
+        // engine's own default (EngineOptions.Default) - a number typed wrong is not a choice, and the defaults are
+        // written in one place.
+        var engineDefault = EngineOptions.Default;
+        var repairParts = RepairModelText.Trim().Split('/', 2);
+        _working.Engine = _working.Engine with
+        {
+            NumCtx = int.TryParse(NumCtxText.Trim(), out var n) ? n : null,
+            RepairConsultation = _working.Engine.RepairConsultation with
+            {
+                Model = repairParts.Length == 2 && repairParts.All(p => !string.IsNullOrWhiteSpace(p))
+                    ? new Enactive.Core.Providers.ModelRef(repairParts[0], repairParts[1]) : null,
+                FailedRepairs = int.TryParse(RepairThresholdText.Trim(), out var repairThreshold) && repairThreshold >= 2 ? repairThreshold : 0
+            },
+            GenerationBudgets = new(
+                Action: int.TryParse(GenerationActionText.Trim(), out var genAction) && genAction > 0 ? genAction : engineDefault.GenerationBudgets.Action,
+                FileWrite: int.TryParse(GenerationFileWriteText.Trim(), out var genFileWrite) && genFileWrite > 0 ? genFileWrite : engineDefault.GenerationBudgets.FileWrite,
+                FinalAnswer: int.TryParse(GenerationFinalAnswerText.Trim(), out var genFinalAnswer) && genFinalAnswer > 0 ? genFinalAnswer : engineDefault.GenerationBudgets.FinalAnswer,
+                Handover: int.TryParse(GenerationHandoverText.Trim(), out var genHandover) && genHandover > 0 ? genHandover : engineDefault.GenerationBudgets.Handover,
+                Planner: int.TryParse(GenerationPlannerText.Trim(), out var genPlanner) && genPlanner > 0 ? genPlanner : engineDefault.GenerationBudgets.Planner),
+            DisableThinking = DisableThinking,
+            AllowImplicitToolCalls = AllowImplicitToolCalls,
+            // Clamped here as well as in the orchestrator: what is saved should be what will be used, or
+            // the settings window shows one number while the engine quietly runs another.
+            ReviewRetries = int.TryParse(ReviewRetriesText.Trim(), out var r) ? Math.Clamp(r, 0, 5) : engineDefault.ReviewRetries,
+            RevertRejectedSteps = RevertRejectedSteps,
+            MaxParallelSteps = int.TryParse(MaxParallelStepsText.Trim(), out var p) && p > 0 ? p : engineDefault.MaxParallelSteps,
+            // Anything unparseable or below the floor falls back to the default rather than to the
+            // number typed: an evidence block too small to hold its header is not a smaller setting,
+            // it is a reviewer shown nothing.
+            EvidenceBudget = int.TryParse(EvidenceBudgetText.Trim(), out var e) && e >= ExecutionJournal.MinimumBudget
+                ? e
+                : engineDefault.EvidenceBudget
+        };
         // A number that does not parse means the default, not zero: zero here is "keep everything",
         // a deliberate choice, and reaching it by typing nonsense would be the opposite of one.
         _working.LogRetentionDays = int.TryParse(LogRetentionDaysText.Trim(), out var d) && d >= 0

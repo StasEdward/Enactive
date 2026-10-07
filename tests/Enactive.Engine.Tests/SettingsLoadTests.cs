@@ -145,13 +145,14 @@ public sealed class SettingsLoadTests : IDisposable
     {
         var settings = AppSettings.Load(Write(AsShipped));
 
-        Assert.Equal(131072, settings.NumCtx);
-        Assert.True(settings.DisableThinking);
-        Assert.False(settings.AllowImplicitToolCalls);
+        // A file from before the switches had their own section: moved into it on load.
+        Assert.Equal(131072, settings.Engine.NumCtx);
+        Assert.True(settings.Engine.DisableThinking);
+        Assert.False(settings.Engine.AllowImplicitToolCalls);
         // ReviewContent, CheckSoundness, TaskReview and ShortReview switched the earlier step review, gone since
         // 2026-09-30, and CheckDerivedFigures a rule of the short one, always on since 2026-10-01: a file that still has
         // them loads, with no problem said (the test above), and they do nothing.
-        Assert.Equal(1, settings.ReviewRetries);
+        Assert.Equal(1, settings.Engine.ReviewRetries);
     }
 
     /// <summary>

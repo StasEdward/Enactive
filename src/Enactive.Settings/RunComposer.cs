@@ -55,7 +55,8 @@ public sealed record RunEnvironment(
     SessionApprovals? Session = null,
     ApprovalStore? Approvals = null)
 {
-    public EngineOptions EngineOptions { get; } = EngineComposition.Options(Settings);
+    // The settings' own section, as it stood when the snapshot was taken: a record, so the editor's later changes are a new one.
+    public EngineOptions EngineOptions { get; } = Settings.Engine;
 }
 
 /// <summary>What one host asks to be run.</summary>

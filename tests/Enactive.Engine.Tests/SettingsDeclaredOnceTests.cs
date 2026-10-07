@@ -22,40 +22,91 @@ using Xunit;
 public sealed class SettingsDeclaredOnceTests
 {
     // ── engine switches ─────────────────────────────────────────────────────
+    //
+    // A switch is one property of EngineOptions, and the settings hold that very object ("Engine" in settings.json).
+    // Nothing maps one to the other, so these ask what is left to go wrong: the file, old and new.
 
-    /// <summary>
-    /// Every switch the engine has is read from the setting of the same name - set each to something other than
-    /// its default, and each must arrive. A switch read from the wrong setting, or left at its default, fails here.
-    /// </summary>
+    /// <summary>Every switch, set to something other than its default, comes back from the file as it was set.</summary>
     [Fact]
-    public void Every_engine_switch_is_read_from_its_own_setting()
+    public void Every_engine_switch_survives_saving_and_loading()
     {
-        var settings = new AppSettings();
-        var expected = new Dictionary<string, object?>();
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("settings.json");
+        var engine = new EngineOptions { FanOut = new FanOutLimits(91, 92, 93) };
         var n = 0;
-        foreach (var option in typeof(EngineOptions).GetProperties(BindingFlags.Public | BindingFlags.Instance).Where(p => p.Name != nameof(EngineOptions.FanOut)))
-        {
-            var setting = typeof(AppSettings).GetProperty(option.Name)
-                          ?? throw new Xunit.Sdk.XunitException($"No setting is named {option.Name}.");
-            var value = Different(option.PropertyType, option.GetValue(EngineOptions.Default), ++n);
-            setting.SetValue(settings, value);
-            expected[option.Name] = value;
-        }
-        settings.MaxStepsPerExpansion = 91;
-        settings.MaxTotalSteps = 92;
-        settings.MaxFanOutDepth = 93;
+        foreach (var option in typeof(EngineOptions).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                     .Where(p => p.Name != nameof(EngineOptions.FanOut)))
+            option.SetValue(engine, Different(option.PropertyType, option.GetValue(EngineOptions.Default), ++n));
+        Assert.True(new AppSettings { Engine = engine }.Save(path));
 
-        var options = EngineComposition.Options(settings);
-
-        foreach (var (name, value) in expected)
-            Assert.Equal(value, typeof(EngineOptions).GetProperty(name)!.GetValue(options));
-        Assert.Equal(new FanOutLimits(91, 92, 93), options.FanOut);
+        Assert.Equal(engine, AppSettings.Load(path).Engine);
     }
 
-    /// <summary>The product's defaults are the settings' defaults: one set, not two.</summary>
+    /// <summary>A new installation runs on the engine's own defaults: there is no other set.</summary>
     [Fact]
     public void A_new_installation_runs_on_the_engine_s_own_defaults()
-        => Assert.Equal(EngineOptions.Default, EngineComposition.Options(new AppSettings()));
+        => Assert.Equal(EngineOptions.Default, new AppSettings().Engine);
+
+    /// <summary>
+    /// A file written before a switch existed is read without it, and the switch keeps the default written on its
+    /// property - no migration, no second default.
+    /// </summary>
+    [Fact]
+    public void A_switch_the_file_does_not_have_keeps_its_default()
+    {
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("settings.json");
+        Assert.True(new AppSettings().Save(path));
+        Edit(path, root => root["Engine"] = new JsonObject { ["ReviewRetries"] = 3 });
+
+        Assert.Equal(EngineOptions.Default with { ReviewRetries = 3 }, AppSettings.Load(path).Engine);
+    }
+
+    /// <summary>
+    /// A file from before the switches had their own section held them at the top level - and the plan-growth limits
+    /// under names of their own. They are moved into "Engine" on load, and the next save writes them there only.
+    /// </summary>
+    [Fact]
+    public void A_file_from_before_the_engine_section_moves_its_switches_in()
+    {
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("settings.json");
+        Assert.True(new AppSettings().Save(path));
+        Edit(path, root =>
+        {
+            root.AsObject().Remove("Engine");
+            root["ReviewRetries"] = 3;
+            root["DisableThinking"] = false;
+            root["NumCtx"] = 4096;
+            root["MaxStepsPerExpansion"] = 7;
+            root["MaxFanOutDepth"] = 1;
+        });
+
+        var loaded = AppSettings.Load(path);
+
+        Assert.Equal(EngineOptions.Default with
+        {
+            ReviewRetries = 3, DisableThinking = false, NumCtx = 4096,
+            FanOut = FanOutLimits.Default with { MaxStepsPerExpansion = 7, MaxDepth = 1 }
+        }, loaded.Engine);
+        Assert.True(loaded.Save(path));
+        var saved = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        Assert.False(saved.ContainsKey("ReviewRetries"));
+        Assert.False(saved.ContainsKey("MaxStepsPerExpansion"));
+        Assert.Equal(3, (int)saved["Engine"]!["ReviewRetries"]!);
+    }
+
+    /// <summary>Where a file has both, the section is what was saved last - a stray top-level field does not override it.</summary>
+    [Fact]
+    public void The_engine_section_wins_over_a_stray_top_level_switch()
+    {
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("settings.json");
+        Assert.True(new AppSettings { Engine = new() { ReviewRetries = 4 } }.Save(path));
+        Edit(path, root => root["ReviewRetries"] = 0);
+
+        Assert.Equal(4, AppSettings.Load(path).Engine.ReviewRetries);
+    }
 
     private static object? Different(Type type, object? value, int n)
         => type == typeof(bool) ? !(bool)value!
