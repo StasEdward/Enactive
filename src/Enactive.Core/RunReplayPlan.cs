@@ -175,8 +175,11 @@ public static class RunReplayPlan
         };
 
         var reason = stand.OutcomeReason();
+        // A completed run has a reason only when there is something to add to "done" - the checks that
+        // overruled the steps, or one of the engine's own checks that failed (RunOutcomeDecision.Settle) -
+        // and that is shown, or the run reopened says less than the run did live.
         var note = kind == RunOutcomeKind.Completed
-            ? null
+            ? string.IsNullOrWhiteSpace(reason) ? null : reason
             : string.IsNullOrWhiteSpace(reason) ? kind.ToString() : $"{kind} — {reason}";
 
         return (outcome, note);

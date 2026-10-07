@@ -1238,9 +1238,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                         {
                             _vm.StatusPhase = outcome.ToString();
                             _vm.IsAgentVisible = false;
-                            // Why it stopped belongs on screen, not only in the log.
+                            // Why it stopped belongs on screen, not only in the log. A completed run has a
+                            // reason only when something must be added to "done" - a check the engine ran
+                            // on the workspace and saw fail (RunOutcomeDecision.Settle) - and that is shown too.
                             _vm.CurrentAction = outcome == RunOutcomeKind.Completed
-                                ? string.Empty
+                                ? ev.OutcomeReason() ?? string.Empty
                                 : ev.OutcomeReason() ?? ev.Summary;
                         });
 

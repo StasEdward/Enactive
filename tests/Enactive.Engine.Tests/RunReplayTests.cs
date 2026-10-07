@@ -56,6 +56,23 @@ public sealed class RunReplayTests
         Assert.DoesNotContain(segment.Events, e => e.Kind == nameof(EventKind.TaskCompleted));
     }
 
+    // Done, but the engine saw one of its own checks fail: reopened, the run must still say so.
+    [Fact]
+    public void A_completed_quick_action_with_something_to_add_replays_with_it()
+    {
+        const string reason = "Completed, but check 'No new build errors' failed: CS0103 in Mail.cs";
+        var record = Record(
+            Ev(nameof(EventKind.Routed), "Quick action: add the mail module"),
+            Ev(nameof(EventKind.ToolInvoked), """write_file {"path":"Mail.cs"}"""),
+            Ev(nameof(EventKind.TaskCompleted), "Mail.cs written",
+               payload: WorkEventPayload.OutcomePayload(RunOutcomeKind.Completed, reason)));
+
+        var segment = Assert.Single(RunReplayPlan.Segments(record));
+
+        Assert.Equal(StepOutcomeKind.Succeeded, segment.Outcome);
+        Assert.Equal(reason, segment.Note);
+    }
+
     // A run that went wrong has to survive the rebuild as one, or the history quietly launders it.
     [Fact]
     public void A_quick_action_that_failed_replays_as_failed_and_says_why()

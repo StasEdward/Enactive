@@ -1038,12 +1038,16 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
-        var quickOutcome = RunOutcomeOf(new[] { quickResult.Kind });
-        var quickReason = quickResult.Reason;
-        if (quickOutcome == RunOutcomeKind.Blocked)
-            quickReason = $"Blocked - {quickResult.Reason}. Put that right and run it again.";
+        // A run of one unnumbered step, with no checkpoint to carry on from - decided by the same rule
+        // as a plan's (RunOutcomeDecision).
+        var quickWork = new RunWork(
+            [new SettledStep(null, plan.Title, quickResult.Kind, quickResult.Reason,
+                BlockedBecause: quickResult.Kind == StepOutcomeKind.Blocked ? quickResult.Reason : null)],
+            Resumable: false);
+        var quickDecision = RunOutcomeDecision.BeforeChecks(quickWork);
 
-        if (quickOutcome is RunOutcomeKind.Completed or RunOutcomeKind.Incomplete)
+        RunVerification? quickVerification = null;
+        if (quickDecision.Verify)
         {
             var verified = new VerifyResult();
             await foreach (var checkEvent in VerifyAsync(
@@ -1052,25 +1056,15 @@ public sealed partial class Orchestrator : IOrchestrator
                 scope.Artifacts, scope.Budget, verified, scope.Criterion,
                 (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct, session, models.PlanProvider, models.Plan))
                 yield return checkEvent;
-
-            var adjusted = verified.Apply(quickOutcome);
-            // The same rule as a planned run's: checks may not promote past a missing verdict.
-            if (adjusted == RunOutcomeKind.Completed && quickResult.Kind == StepOutcomeKind.DoneUnverified)
-                adjusted = quickOutcome;
-            if (adjusted != quickOutcome)
-            {
-                quickReason = adjusted == RunOutcomeKind.Completed
-                    ? verified.Report.Overruling(quickReason)
-                    : verified.IncompleteReason ?? verified.Report.Explain();
-                quickOutcome = adjusted;
-            }
+            quickVerification = new RunVerification(verified.Report, verified.IncompleteReason);
         }
 
-        foreach (var check in ProducedFilesNow(scope, session))
+        IReadOnlyList<CriterionResult> quickChecks = [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session,
+                intent.Context, ct, session.Builds.Count > 0 ? await NetChangedAsync(quickChanges, quickBefore, ct) : null)];
+        foreach (var check in quickChecks)
             yield return scope.Criterion(check);
-        foreach (var check in await BuildRegressionNowAsync(scope, session, intent.Context, ct,
-                     session.Builds.Count > 0 ? await NetChangedAsync(quickChanges, quickBefore, ct) : null))
-            yield return scope.Criterion(check);
+
+        var (quickOutcome, quickReason) = RunOutcomeDecision.Settle(quickWork, quickDecision, quickVerification, quickChecks);
 
         var quickNet = quickOutcome == RunOutcomeKind.Completed
             ? await NetChangedAsync(quickChanges, quickBefore, ct)
@@ -1261,16 +1255,6 @@ public sealed partial class Orchestrator : IOrchestrator
         // How each step ended. The run's own outcome is the aggregate of these, computed once at the
         // end — not assumed to be success because the loop finished.
         var stepOutcomes = session.Outcomes;
-
-        // And WHY, for the ones that did not succeed, in the order they settled.
-        //
-        // Kept beside the outcomes rather than derived from them, because it cannot be: the reason
-        // is a sentence the step produced and the outcome is an enum. Without this the run's own
-        // explanation was assembled from the enums alone, so a run whose single failure carried a
-        // perfect diagnosis — "nothing is listening at http://localhost:11434/v1" — reported
-        // "1 step(s) failed" and threw the diagnosis away. A resumed step contributes nothing here:
-        // its reason belongs to the run that produced it.
-        var stepReasons = session.Reasons;
 
         // Every time a step was blocked, oldest first, across resumes (Phase 7.3): a resume loses no attempt, and
         // the step done again is told what stopped it before.
@@ -1734,10 +1718,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 // failed without a reason contributes nothing rather than a blank the run would
                 // then have to decide how to render.
                 if (outcome != StepOutcomeKind.Succeeded && !string.IsNullOrWhiteSpace(outcomeReason))
-                {
-                    stepReasons.Add(outcomeReason!);
                     session.ReasonOf[step.Id] = outcomeReason!;
-                }
             }
 
             await RevertRejectedAsync(stepResult, store, scope,
@@ -1769,7 +1750,7 @@ public sealed partial class Orchestrator : IOrchestrator
             // visible to whoever the unblocking releases.
             // DoneUnverified releases its dependents too: the work they build on exists, and each of
             // them is reviewed on its own. What it does NOT do is count as accepted - see
-            // RunOutcomeOf - and it says so on its card, with the reason the verdict was missing.
+            // RunOutcomeDecision - and it says so on its card, with the reason the verdict was missing.
             if (outcome is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified)
             {
                 // What it handed on, kept and recorded BEFORE its dependents are released, for the
@@ -2044,7 +2025,6 @@ public sealed partial class Orchestrator : IOrchestrator
             lock (stepOutcomes)
             {
                 stepOutcomes[join.Id] = outcome;
-                if (reason is not null && outcome != StepOutcomeKind.Succeeded) stepReasons.Add(reason);
             }
 
             if (outcome is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified)
@@ -2114,7 +2094,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 var no = stepNumbers.TryGetValue(step.Id, out var rn) ? rn : 0;
                 yield return scope.Event(
                     EventKind.StepCompleted,
-                    $"[{(no > 0 ? no : 0)}/{total}] {step.Title} — {Word(kind)} before this run",
+                    $"[{(no > 0 ? no : 0)}/{total}] {step.Title} — {RunOutcomeDecision.Word(kind)} before this run",
                     WorkEventPayload.StepPayload(no > 0 ? no : null, kind));
             }
         }
@@ -2346,14 +2326,6 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
-        StepOutcomeKind[] outcomes;
-        string[] reasons;
-        lock (stepOutcomes)
-        {
-            outcomes = stepOutcomes.Values.ToArray();
-            reasons = stepReasons.ToArray();
-        }
-
         // A run whose work was done item by item leads with what the items came to, from the engine's
         // records - not with the first reason one item happened to give (run 4f1d97 led with a reviewer's
         // remark about one page of twelve).
@@ -2364,87 +2336,39 @@ public sealed partial class Orchestrator : IOrchestrator
             var byStatus = itemSteps.GroupBy(s => ItemReport.Status(session.Records.GetValueOrDefault(s.Id)))
                 .Select(g => $"{g.Count()} {g.Key.ToLowerInvariant()}");
             itemsCameTo = $"{itemSteps.Length} item step(s): {string.Join(", ", byStatus)}";
-            reasons = [itemsCameTo, .. reasons];
         }
 
-        var runOutcome = RunOutcomeOf(outcomes);
-        if (cycle && runOutcome == RunOutcomeKind.Completed)
-            runOutcome = RunOutcomeKind.Incomplete;
+        Dictionary<Guid, StepOutcomeKind> settledOutcomes;
+        lock (stepOutcomes) settledOutcomes = new(stepOutcomes);
+        var work = new RunWork(
+            scheduler.Steps.Select(s => new SettledStep(
+                stepNumbers.TryGetValue(s.Id, out var n) ? n : null,
+                s.Title,
+                settledOutcomes.TryGetValue(s.Id, out var o) ? o : null,
+                // A step's own reason, or the engine's record of it - a step joining items has only the record.
+                session.ReasonOf.GetValueOrDefault(s.Id) ?? session.Records.GetValueOrDefault(s.Id)?.Reason,
+                s.ObligationIds,
+                BlocksOf(s.Id) is { Count: > 0 } b && b[^1].Cause != OutcomeCause.BlockedDependency ? b[^1].Reason : null)).ToArray(),
+            // A blocked run waits on its checkpoint (Phase 7) - where the engine was given a store to keep one in.
+            Resumable: _checkpoints is not null,
+            Cycle: cycle,
+            Limit: limitReason,
+            ItemsCameTo: itemsCameTo);
+        var decision = RunOutcomeDecision.BeforeChecks(work);
 
-        var runReason = ExplainOutcome(outcomes, reasons, cycle, limitReason);
-        // A blocked run leads with what blocks it - each step blocked for a cause of its own, not the ones only
-        // waiting behind them - and with what to do about it.
-        if (runOutcome == RunOutcomeKind.Blocked)
-        {
-            var causes = scheduler.Steps
-                .Where(s => BlocksOf(s.Id) is { Count: > 0 } b && b[^1].Cause != OutcomeCause.BlockedDependency
-                            && stepOutcomes.GetValueOrDefault(s.Id) == StepOutcomeKind.Blocked)
-                .Select(s => $"[{(stepNumbers.TryGetValue(s.Id, out var n) ? n : 0)}] {s.Title}: {BlocksOf(s.Id)![^1].Reason}")
-                .ToArray();
-            runReason = "Blocked - " + string.Join("; ", causes) + ". Put that right and resume this run: it carries on from the "
-                + "blocked step(s)" + (ExplainOutcome(outcomes, [], cycle, limitReason) is { } tally ? $" ({tally})." : ".");
-        }
-
-        // The last word, and the only one in the run that is not somebody's opinion.
-        //
-        // Also asked of an INCOMPLETE run, as of 2026-09-21. It used to be asked only of a run
-        // everything else had already called done, which sounded careful and was the opposite: the
-        // one guard that looks at the WORKSPACE ran last and could only tighten, so it was silent
-        // in exactly the cases where the guards that read the TRANSCRIPT are wrong. Measured that
-        // day - a run added the method, wrote the tests, and its own proposed check passed against
-        // the workspace it left behind, while the report said Incomplete over two shell calls that
-        // were never formally closed.
-        //
-        // Failed and Cancelled are still not asked. Those had their outcome decided by something
-        // that actually went wrong, or by the person, and a green build on top would bury it.
-        // Incomplete is the one that means "we could not establish that it finished", and that is
-        // a question, not a verdict. See SuccessReport.Apply.
-        // A step that never RAN is a different kind of Incomplete, and checks may not answer it.
-        //
-        // "Incomplete" was treated as one thing when the promotion shipped earlier today: an
-        // absence of evidence, which a command with an exit code is exactly the cure for. A
-        // SKIPPED step is not that. It is a known absence of work - the plan said three things
-        // were needed, one of them did not finish and two never started - and no check can make
-        // the missing two have happened.
-        //
-        // Measured 2026-09-21 20:57, a regression from that same promotion. Step 1 ended
-        // Incomplete, steps 2 and 3 were skipped behind it, and the run was reported Completed
-        // because "Docs/DRIFT_ollama.md exists and is not empty" passed - against the scaffold
-        // step 1 had written before it stopped. A third of the work, called done, on a check
-        // satisfied by a file's existence. The baseline could not catch it: the file was absent
-        // beforehand, so the check DID fail then and did count as proof. Proof of a write, which
-        // is all it ever claimed.
-        var nothingWasSkipped = !outcomes.Contains(StepOutcomeKind.Skipped);
-
-        VerifyResult? verification = null;
-        if (runOutcome == RunOutcomeKind.Completed
-            || (runOutcome == RunOutcomeKind.Incomplete && nothingWasSkipped))
+        // The last word, and the only one in the run that is not somebody's opinion - asked of a run
+        // done, or one that could not establish it was done (see RunOutcomeDecision.BeforeChecks).
+        RunVerification? verification = null;
+        if (decision.Verify)
         {
             var verified = new VerifyResult();
-            verification = verified;
             await foreach (var checkEvent in VerifyAsync(
                 CriteriaFor(plan),
                 intent, scope.TaskId, scope.RunId, models.Worker, models.Provider, models.Model.Model, models.Model.ProviderId,
                 scope.Artifacts, scope.Budget, verified, scope.Criterion,
                 (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct, session, models.PlanProvider, models.Plan))
                 yield return checkEvent;
-
-            var adjusted = verified.Apply(runOutcome);
-            // Checks may not promote a run past a MISSING verdict. They still ran, are still in the
-            // report, and can still fail the run - but a step whose work was never confirmed keeps it
-            // short of Completed. nothingWasSkipped above used to guarantee this, because such a step
-            // skipped everything after it; a DoneUnverified step releases its dependents, so nothing
-            // is skipped and that guard no longer fires. Without this, the promotion measured on
-            // 2026-09-21 - a run called done on "the file exists" - would come back by another road.
-            if (adjusted == RunOutcomeKind.Completed && outcomes.Contains(StepOutcomeKind.DoneUnverified))
-                adjusted = runOutcome;
-            if (adjusted != runOutcome)
-            {
-                runReason = adjusted == RunOutcomeKind.Completed
-                    ? verified.Report.Overruling(runReason)
-                    : verified.IncompleteReason ?? verified.Report.Explain();
-                runOutcome = adjusted;
-            }
+            verification = new RunVerification(verified.Report, verified.IncompleteReason);
         }
 
         // Last, so it describes the workspace as the run leaves it: after every step and every check
@@ -2453,6 +2377,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 session.Builds.Count > 0 ? await NetChangedAsync(workspaceChanges, beforeRun, ct) : null)];
         foreach (var check in finalChecks)
             yield return scope.Criterion(check);
+
+        var (runOutcome, runReason) = RunOutcomeDecision.Settle(work, decision, verification, finalChecks);
 
         // This run reached an end, whatever kind of end. Nothing here is resumable any more, and a
         // checkpoint left behind would offer to redo work that is finished. Except a BLOCKED run (Phase 7): it
@@ -2463,14 +2389,6 @@ public sealed partial class Orchestrator : IOrchestrator
         var runNet = runOutcome == RunOutcomeKind.Completed
             ? await NetChangedAsync(workspaceChanges, beforeRun, ct)
             : null;
-        // What is not complete, named - every step not confirmed, with the parts of the request it answers for, and
-        // every check that failed - instead of the first reason any step happened to give (the user's model: "no -
-        // list concretely what is not finished").
-        if (runOutcome is RunOutcomeKind.Failed or RunOutcomeKind.Incomplete
-            && NotComplete(scheduler, stepNumbers, stepOutcomes, session, verification, finalChecks) is { Length: > 0 } open)
-            // Led, as the other reasons are, by what the items came to (run 4f1d97).
-            runReason = "Not complete - " + string.Join("; ", itemsCameTo is null ? open : [itemsCameTo, .. open])
-                + (limitReason is null ? "" : $" ({limitReason})");
 
         RecordWhatThisRunWrote(scope, intent);
         yield return scope.Terminal(runOutcome, runReason,
@@ -2686,32 +2604,6 @@ public sealed partial class Orchestrator : IOrchestrator
         catch (Exception) { return []; }   // an instrument; the run it observes matters more
     }
 
-    /// <summary>Each thing that keeps a run from Completed, as a line: a step not confirmed, a check that failed.</summary>
-    private static string[] NotComplete(DagScheduler scheduler, System.Collections.Concurrent.ConcurrentDictionary<Guid, int> stepNumbers,
-        Dictionary<Guid, StepOutcomeKind> stepOutcomes, RunSession session, VerifyResult? verification, IReadOnlyList<CriterionResult>? finalChecks)
-    {
-        static string Clip(string text, int max) => text.Length <= max ? text : text[..max] + "…";
-        Dictionary<Guid, StepOutcomeKind> outcomes;
-        lock (stepOutcomes) outcomes = new(stepOutcomes);
-        var lines = new List<string>();
-        foreach (var step in scheduler.Steps.OrderBy(s => stepNumbers.TryGetValue(s.Id, out var n) ? n : int.MaxValue))
-        {
-            if (outcomes.TryGetValue(step.Id, out var outcome) && outcome == StepOutcomeKind.Succeeded) continue;
-            var no = stepNumbers.TryGetValue(step.Id, out var number) ? number : 0;
-            var parts = step.ObligationIds is { Count: > 0 } ids ? $" ({string.Join(", ", ids)})" : "";
-            var said = outcomes.ContainsKey(step.Id) ? Word(outcome) : "not run";
-            // A step's own reason, or the engine's record of it - a step joining items has only the record.
-            var reason = session.ReasonOf.GetValueOrDefault(step.Id) ?? session.Records.GetValueOrDefault(step.Id)?.Reason;
-            var why = !string.IsNullOrWhiteSpace(reason) ? ": " + Clip(reason, 300) : "";
-            lines.Add($"[{no}] {step.Title}{parts} - {said}{why}");
-        }
-        if (verification?.IncompleteReason is { } unverified) lines.Add(Clip(unverified, 300));
-        foreach (var check in (verification?.Report.Blocking ?? []).Concat((finalChecks ?? []).Where(c => c.Outcome == CriterionOutcome.Failed)))
-            lines.Add($"check '{check.Name}' {check.Outcome.ToString().ToLowerInvariant()}"
-                      + (string.IsNullOrWhiteSpace(check.Detail) ? "" : ": " + Clip(check.Detail, 200)));
-        return lines.Distinct().ToArray();
-    }
-
     /// <summary>What this run wrote, recorded as it leaves it, for the runs after it - see EarlierRuns.</summary>
     private void RecordWhatThisRunWrote(RunScope scope, Intent intent)
     {
@@ -2751,61 +2643,6 @@ public sealed partial class Orchestrator : IOrchestrator
             System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)).ToArray();
         return named.Length == 0 ? null : new ToolOffer([], named).Because;
     }
-
-    private static string Word(StepOutcomeKind kind) => kind switch
-    {
-        StepOutcomeKind.Succeeded => "done",
-        StepOutcomeKind.ReviewRejected => "review rejected",
-        StepOutcomeKind.Incomplete => "incomplete",
-        StepOutcomeKind.Skipped => "skipped",
-        StepOutcomeKind.DoneUnverified => "done, not verified",
-        StepOutcomeKind.Blocked => "blocked",
-        _ => "failed"
-    };
-
-    /// <summary>
-    /// The run's outcome from its steps'. Anything that went wrong outranks anything that went
-    /// right: a plan is not finished because most of it finished. Completed requires that every step
-    /// succeeded — which is exactly the guarantee the engine did not have.
-    /// </summary>
-    private static RunOutcomeKind RunOutcomeOf(IReadOnlyCollection<StepOutcomeKind> steps)
-    {
-        if (steps.Count == 0)
-            return RunOutcomeKind.Incomplete;
-
-        if (steps.Any(s => s is StepOutcomeKind.Failed or StepOutcomeKind.ReviewRejected))
-            return RunOutcomeKind.Failed;
-
-        // After a failure, before everything short of it: nothing is known to be wrong, and the run is not over -
-        // it waits for its cause to be put right, and then carries on (Phase 7).
-        if (steps.Contains(StepOutcomeKind.Blocked))
-            return RunOutcomeKind.Blocked;
-
-        // DoneUnverified with them: its work was done, but a run is Completed only on verdicts that
-        // were actually given. Left out of this line it would fall through to Completed - a run
-        // declaring itself finished on a step nobody confirmed.
-        if (steps.Any(s => s is StepOutcomeKind.Incomplete or StepOutcomeKind.Skipped or StepOutcomeKind.DoneUnverified))
-            return RunOutcomeKind.Incomplete;
-
-        return RunOutcomeKind.Completed;
-    }
-
-    /// <summary>
-    /// A short, honest summary of why a run did not simply complete.
-    ///
-    /// <para>The wording is <see cref="RunOutcomeWords.Explain"/>, in Core, so the sentence somebody
-    /// actually reads can be tested for what it says rather than only for the run reaching it. What
-    /// stays here is the gathering: which steps settled how, and what each of them gave as a reason.
-    /// That was the half that was missing — the counts were assembled from the OUTCOMES alone, so a
-    /// run whose only failure had a perfect diagnosis reported "1 step(s) failed" and dropped it.
-    /// </para>
-    /// </summary>
-    private static string? ExplainOutcome(
-        IReadOnlyCollection<StepOutcomeKind> steps,
-        IEnumerable<string?> reasons,
-        bool cycle,
-        string? limit = null)
-        => RunOutcomeWords.Explain(steps, reasons, cycle, limit);
 
     /// <summary>
     /// How a tool loop ended, filled in by <see cref="RunToolLoopAsync"/>. A class, not a return
@@ -2854,9 +2691,6 @@ public sealed partial class Orchestrator : IOrchestrator
         public string? IncompleteReason { get; set; }
         /// <summary>How many changes to the definition of done this verification has numbered (Phase 4.1).</summary>
         public int Revisions { get; set; }
-        public RunOutcomeKind Apply(RunOutcomeKind current) =>
-            IncompleteReason is not null && current is not (RunOutcomeKind.Failed or RunOutcomeKind.Cancelled)
-                ? RunOutcomeKind.Incomplete : Report.Apply(current);
     }
 
     /// <summary>
