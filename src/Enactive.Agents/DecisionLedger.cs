@@ -194,6 +194,8 @@ internal sealed class LedgeredDecisions(IDecisionHandler inner, DecisionLedger l
 
     public bool CanApprove => inner.CanApprove;
 
+    public bool CanApproveTool(string tool) => inner.CanApproveTool(tool);
+
     public async Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
     {
         if (ledger.Answered(request) is { } answered) return answered;

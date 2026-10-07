@@ -36,7 +36,7 @@ public sealed class RunCompositionRefactorTests
             new ToolRegistry(EngineFixture.ShippedTools()), artifacts, fx.Workspace, new Planner(checksAuditEnabled: false),
             new PermissionEngine(), fx.Decisions, PermissionPolicy.PermissiveDefault,
             new Services(), new ModelRouter(models));
-        var events = await fx.RunAsync(RunEngineComposition.Build(resources, options), "Write result.txt");
+        var events = await fx.RunAsync(RunComposer.Engine(resources, options), "Write result.txt");
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
         Assert.Equal(!staged, fx.Exists("result.txt"));
         Assert.Equal(staged ? "kept" : null, await artifacts.TryReadPendingAsync("result.txt", default));

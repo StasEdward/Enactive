@@ -43,6 +43,18 @@ public static class AutonomyTiers
     };
 
     /// <summary>
+    /// The tier in words, as a run's record keeps it - a number alone means nothing to whoever reads that run
+    /// in six months. Here rather than in the window, so a run started from the console records the same words.
+    /// </summary>
+    public static string Describe(int level) => level switch
+    {
+        0 => "Observe — read only, asks before changes",
+        1 => "Suggest — prepares changes, asks to apply",
+        2 => "Execute — edits freely, asks before run_command",
+        _ => "Autonomous — runs everything without asking"
+    };
+
+    /// <summary>
     /// A tier named on a command line, by name or by its number.
     ///
     /// <para>Null for anything else, so a caller can refuse the invocation. A typo must not become

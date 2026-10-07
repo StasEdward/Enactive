@@ -5272,7 +5272,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     ? PermissionDecision.Ask
                     : decision;
             },
-            _decisions.CanApprove);
+            // Per tool: a run nobody watches is still offered a tool somebody allowed for good (RememberedApprovals).
+            _decisions.CanApproveTool);
     }
 
     /// <summary>

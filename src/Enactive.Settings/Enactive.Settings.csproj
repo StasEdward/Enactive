@@ -8,6 +8,10 @@
   <ItemGroup>
     <PackageReference Include="MailKit" Version="4.18.0" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- RunComposer.Engine: the one mapping to an orchestrator, for tests that put their own parts into it. -->
+    <InternalsVisibleTo Include="Enactive.Engine.Tests" />
+  </ItemGroup>
 
   <!--
     What a person configured, and what builds an engine from it.

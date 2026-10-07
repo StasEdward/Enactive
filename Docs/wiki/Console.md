@@ -4,21 +4,20 @@
 
 ## Scope of the console host
 
-The current console host is a separate composition of the shared engine. It supports a free-text task, template execution, a timeline view, and an Inbox view. It is not a command-line front end to every desktop setting.
+The console composes its runs exactly as the desktop does (`RunComposer`, see [ADR 0001](../adr/0001-one-run-composer.md)), from the same saved settings. It supports a free-text task, template execution, resuming an interrupted run, a timeline view, and an Inbox view. What it keeps of its own is who answers permission questions, where the events go (the terminal), and Ctrl+C. It is not a command-line front end to every desktop setting.
 
 | Capability | Desktop | Current console |
 | --- | --- | --- |
-| Provider selection | Saved Providers list | One OpenAI-compatible endpoint from environment |
-| Model selection | Worker policy and phase bindings | `ENACTIVE_MODEL` |
-| Team | Editable workers | Built-in workers |
-| Plan | Bound model or worker model | Worker model |
-| Review phase | Enabled by Review binding | No Review binding composed |
-| Execute light/heavy | Optional routing | Not configured |
-| MCP | Configured per-run connections | Not connected |
-| Staging | Optional | Direct disk artifact store |
+| Provider selection | Saved Providers list | Same saved Providers list |
+| Model selection | Worker policy and phase bindings | Same |
+| Team | Editable workers | Same saved team; `--role` picks one |
+| Plan / Review / Execute routing | Phase bindings | Same phase bindings |
+| MCP | Configured per-run connections | Same connections |
+| Staging | Optional, in the foreground | Direct disk artifact store |
 | Template library | Built-in + Global + Workspace | Same library resolution |
 | Template criteria and limits | Yes | Yes |
-| Remembered desktop approvals | Foreground UI handler | Not loaded |
+| "Allow (workspace)" approvals | Honoured | Honoured, unless `--approve` is given |
+| "Allow (session)" approvals | Honoured while the app runs | None - each invocation is its own process |
 
 ## Supported commands
 
@@ -119,6 +118,11 @@ neither is a default.
 A value none of these recognizes is refused with exit code `64` and the list of what was meant.
 A typo is not rounded to the nearest tier in either direction.
 
+`--resume` continues an interrupted run under the autonomy and role it was started with. Giving
+`--autonomy` or `--role` with it is refused with exit code `64`: running the rest of the steps under
+something other than what was typed, or other than what the run was started with, would be wrong
+either way.
+
 ## Unattended permission behavior
 
 Without `--approve`, a free-text run asks at the terminal and a `--template` run uses the unattended
@@ -130,7 +134,11 @@ Unattended + Ask = Deny
 
 Templates can add restrictions but cannot grant more autonomy.
 
-The console does not read the desktop workspace registry or remembered approvals.
+A tool somebody allowed with **Allow (workspace)** for this folder is answered "allow" without asking,
+by the console as by every host - so a scheduled run is offered that tool and uses it, while every
+other tool that asks is still kept back. `--approve` is the exception: it is the answer for that
+invocation, given on purpose, and a remembered approval does not overrule it. The console does not
+read the desktop workspace registry.
 
 Consequences:
 

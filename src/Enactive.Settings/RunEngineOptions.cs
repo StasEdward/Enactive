@@ -37,28 +37,3 @@ public sealed record RunEngineResources(
     IToolRegistry Tools, IArtifactStore Artifacts, WorkspaceInfo Workspace, Planner Planner,
     IPermissionEngine Permissions, IDecisionHandler Decisions, PermissionPolicy Policy,
     IServiceProvider Services, IModelRouter Router, OrchestratorServices? Agents = null);
-
-/// <summary>The single application mapping from settings and run resources to an orchestrator.</summary>
-public static class RunEngineComposition
-{
-    public static Orchestrator Build(RunEngineResources resources, RunEngineOptions options,
-        IRunCheckpointStore? checkpoints = null, RunSettings? settings = null,
-        IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null, ExecutionLimits? limits = null)
-        => new(new WorkspaceChangesFactory(), resources.Providers, resources.Models, resources.Workers,
-            resources.Tools, resources.Artifacts, resources.Workspace, resources.Planner,
-            resources.Permissions, resources.Decisions, resources.Policy, resources.Services,
-            router: resources.Router, reviewRetries: options.ReviewRetries, successRetries: options.SuccessRetries,
-            maxLoadedToolsPerStep: options.MaxLoadedToolsPerStep,
-            proposeChecks: options.ProposeChecks, numCtx: options.NumCtx,
-            generationBudgets: options.GenerationBudgets, repairConsultation: options.RepairConsultation,
-            disableThinking: options.DisableThinking, maxParallelSteps: options.MaxParallelSteps,
-            evidenceBudget: options.EvidenceBudget, allowImplicitToolCalls: options.AllowImplicitToolCalls,
-            revertRejectedSteps: options.RevertRejectedSteps, checkpoints: checkpoints, settings: settings,
-            successCriteria: successCriteria, limits: limits, agents: resources.Agents,
-            // The kinds of project the engine can build for its own "no new build errors" check.
-            // A new kind is a new IEcosystem here; nothing in the orchestrator changes.
-            ecosystems: [new DotnetEcosystem()],
-            stepOutputs: options.StepOutputs, typedCriteria: options.TypedCriteria,
-            dynamicSteps: options.DynamicSteps, fanOut: options.FanOut, validateWaves: options.ValidateWaves,
-            reportBlocked: options.ReportBlocked, semanticCriteria: options.SemanticCriteria);
-}

@@ -121,6 +121,17 @@ public interface IDecisionHandler
     /// somebody was going to answer, which is the worse mistake of the two.</para>
     /// </summary>
     bool CanApprove => true;
+
+    /// <summary>
+    /// Whether this handler could ever answer "allow" for this one tool.
+    ///
+    /// <para><see cref="CanApprove"/> asked per tool. They differ only where something answers for a
+    /// person who is not there: a workspace approval granted earlier answers for that tool in that
+    /// folder, so a run nobody is watching may be offered it while every other tool that asks stays
+    /// withheld (<c>RememberedApprovals</c>). Asked of the handler as a whole, such a run either never
+    /// saw the tool somebody had already allowed, or saw every asking tool and had each refused.</para>
+    /// </summary>
+    bool CanApproveTool(string tool) => CanApprove;
 }
 
 /// <summary>Decides whether a tool call is allowed, needs approval, or is blocked.</summary>

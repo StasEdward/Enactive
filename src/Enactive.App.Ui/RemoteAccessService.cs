@@ -841,9 +841,10 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// <summary>
     /// Builds the engine for one task started from a phone.
     ///
-    /// <para>The same composition the background runs use, with two differences that are the whole
-    /// of what "started from a phone" means: the intent says so, and the decision handler is the
-    /// desktop's wrapped so that either end can answer.</para>
+    /// <para>The same composition every run uses (RunComposer), with two differences that are the whole
+    /// of what "started from a phone" means: the intent says so - which narrows its policy and asks
+    /// every question afresh - and the decision handler is the desktop's wrapped so that either end
+    /// can answer.</para>
     /// </summary>
     private async Task<RemotePreparation> PrepareAsync(
         OpenedStart task,
@@ -857,25 +858,13 @@ internal sealed class RemoteAccessService : IAsyncDisposable
 
         var (workspace, entry) = found;
 
-        // Refused for the same reason a background run is: staging that survives an unattended run
-        // needs a store that persists its proposals, and there is not one. Running anyway would
-        // write to the files directly while the history said the changes were staged - and here
-        // nobody is at the machine to notice the difference.
-        if (entry.StageChanges)
-        {
-            throw new InvalidOperationException(
-                $"'{entry.Name}' is set to stage changes, and a task started from the web cannot "
-                + "stage: it would write to the files directly while the history claimed otherwise. "
-                + "Turn Stage changes off for that workspace to run it from here.");
-        }
-
-        var composed = await UnattendedRun.ComposeAsync(
+        // Staging, the policy a phone may have, recording: all RunComposer's, the same as every other run.
+        // A refusal (staging nobody is here to apply) is an exception the panel reports.
+        var composed = await RunComposer.ComposeAsync(
             // The autonomy, worker and staging saved against THE WORKSPACE THIS TASK NAMES - not
             // the slider on the desktop, which is about whatever folder happens to be open there.
             await _environment(entry),
-            workspace,
-            task.Prompt,
-            IntentSource.Remote,
+            new RunRequest(workspace, task.Prompt, IntentSource.Remote, Stage: entry.StageChanges),
             wrap(_desktop),
             ct);
 

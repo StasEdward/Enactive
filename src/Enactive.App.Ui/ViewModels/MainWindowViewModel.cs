@@ -3,6 +3,7 @@ namespace Enactive.App.Ui.ViewModels;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using Avalonia.Media;
+using Enactive.Agents;
 using Enactive.Core.History;
 using Enactive.Workspace;
 using Enactive.App.Ui.Mvvm;
@@ -743,11 +744,5 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     /// <summary>The tier in words. Internal because the run record stores it too - a number alone
     /// means nothing to whoever reads that run in six months.</summary>
-    internal static string LevelName(int level) => level switch
-    {
-        0 => "Observe — read only, asks before changes",
-        1 => "Suggest — prepares changes, asks to apply",
-        2 => "Execute — edits freely, asks before run_command",
-        _ => "Autonomous — runs everything without asking"
-    };
+    internal static string LevelName(int level) => AutonomyTiers.Describe(level);
 }

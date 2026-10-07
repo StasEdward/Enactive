@@ -821,7 +821,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // Background: fire the run headless (results land in the Inbox) and keep the UI free.
         if (background)
         {
-            StartBackground(text, Path.GetFullPath(workspacePath));
+            // The template goes with it: a saved task run in the background is still that task, with its
+            // permissions, checks, limits and role - not its goal typed as a request.
+            StartBackground(text, Path.GetFullPath(workspacePath), spec: spec);
             return;
         }
 
@@ -870,11 +872,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
 
 
-                // What this run is allowed to do. A resumed run keeps what the interrupted one recorded, so
-                // the history of the second half says what actually governed it.
-                var runSettings = resume?.Settings ?? CurrentRunSettings();
-                var engineOptions = RunEngineOptions.Capture(_settings);
-
                 var fullPath = Path.GetFullPath(workspacePath);
                 _currentWorkspaceRoot = fullPath;
                 NoteLegacyApprovalsIfAny(fullPath);
@@ -886,76 +883,23 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 // workspace with history keeps it and can be renamed from here on without losing it.
                 var workspace = WorkspaceInfo.Adopt(fullPath);
 
-                // A template's permissions are already the INTERSECTION of its own ceiling and the
-                // workspace's tier - TemplateResolution.Narrow did that when the specification was resolved,
-                // and a ceiling has no way to widen anything. So this is never more than the slider allows.
-                // A resumed run continues under the autonomy it was started with. The slider will have moved
-                // by now - it is a control, not a record - and a run that finishes its remaining steps under
-                // permissions nobody granted it is not the run somebody asked to resume.
-                var policy = spec?.Permissions
-                    ?? (resume?.Settings is { } was ? PolicyFor(was.Autonomy) : PolicyFor(_vm.AutonomyTier));
+                // The same composition every host uses (RunComposer): what governs a resumed run, what a
+                // template brings, whether the changes are staged - this window decides none of it. What it
+                // keeps is its own: the approval card (this), the timeline it renders, its cancellation.
+                await using var composed = await RunComposer.ComposeAsync(
+                    SnapshotEnvironment(_vm.AutonomyTier, CurrentWorkerRole(), _vm.StageChanges),
+                    new RunRequest(workspace, text, IntentSource.CommandBar, taskId, resume, spec, Stage: _vm.StageChanges),
+                    this, runCancellation.Token);
 
-                IArtifactStore artifactStore;
-                // A resumed run never stages, whatever the toggle says. Its earlier steps wrote straight to
-                // disk - that is the only kind of run that is ever checkpointed - so staging the rest would
-                // put half of one piece of work behind a review gate and leave the other half applied.
-                if (_vm.StageChanges && resume is null)
-                {
-                    var staging = new StagingArtifactStore(fullPath);
-                    _staging = staging;
-                    _disk = null;
-                    artifactStore = staging;
-                }
-                else
-                {
-                    _staging = null;
-                    var disk = new DiskArtifactStore(workspace);
-                    _disk = disk;
-                    artifactStore = disk;
-                }
+                _staging = composed.Artifacts as StagingArtifactStore;
+                _disk = composed.Artifacts as DiskArtifactStore;
                 _stagedShown = 0;
 
-                await using var mcp = await McpRunTools.ConnectAsync(_toolRegistry, _settings.McpServers, fullPath, runCancellation.Token);
-
-                // Said once per run, whether or not anything calls them: starting a server is a cost
-                // the run has already paid, and the log had no record of it at all.
-                _log.Info(LogSource.Tool, mcp.Summary());
-                IToolRegistry runTools = new LoggingToolRegistry(mcp, _log);
-                var runStore = RunStoreFactory.Create(workspace);
-                // The same store the recorder folds into, so a run reads back what earlier ones
-                // concluded.
-                var memoryStore = MemoryStoreFactory.Create(workspace);
-                var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), memoryStore);
-                var orchestrator = RunEngineComposition.Build(
-                    new RunEngineResources(_providerFactory, _modelResolver, _workerProvider, runTools,
-                        artifactStore, workspace, _planner, _permissionEngine, this, policy,
-                        new EmptyProvider(), BuildRouter()), engineOptions,
-                    checkpoints: new JsonCheckpointStore(workspace), settings: runSettings,
-                    successCriteria: spec?.SuccessCriteria, limits: spec?.Limits);
-                // The specification is recorded WITH the run, so reading it back later shows the template
-                // as it was rather than as it has since been edited.
-                var recorder = new RunRecorder(
-                    runStore, memoryStore, workspace.Id, runSettings, spec?.Snapshot());
-
-                var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), runCancellation.Token);
-                // The template names the role it needs; the picker decides only when it does not.
-                var workerId = spec?.WorkerId
-                    ?? (_workerProvider.All.Count > 0
-                        && _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _workerProvider.All.Count
-                        ? _workerProvider.All[_vm.SelectedWorkerIndex].Id : null);
-                // The intent's id IS the task id - the orchestrator takes it as one - so continuing a
-                // task is a matter of handing back the id it had.
-                var intent = new Intent(
-                    taskId ?? Guid.NewGuid(), text, IntentSource.CommandBar, context, DateTimeOffset.UtcNow, workerId);
-                var envLine = context.Environment?.OneLine();
+                var envLine = composed.Intent.Context.Environment?.OneLine();
                 await Dispatcher.UIThread.InvokeAsync(() => _vm.EnvironmentSummary = envLine ?? "(no environment data)");
 
-                var stream = resume is null
-                    ? orchestrator.SubmitIntentAsync(intent, runCancellation.Token)
-                    : orchestrator.ResumeRunAsync(resume, context, runCancellation.Token);
-
                 await RunEventPump.RunAsync(
-                    recorder.RecordAsync(stream.TeeToLog(_log, runCancellation.Token), runCancellation.Token),
+                    composed.Events(runCancellation.Token),
                     async batch => await Dispatcher.UIThread.InvokeAsync(() =>
                     {
                         foreach (var ev in batch) RenderEvent(ev);
@@ -2104,7 +2048,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 PolicyFor(autonomy),
                 new RunSettings(
                     autonomy, MainWindowViewModel.LevelName(autonomy), workerRole, stageChanges),
-                WorkerIdForRole(workerRole));
+                WorkerIdForRole(workerRole),
+                // "Allow (session)" answers for every run this process starts, watched or not.
+                _sessionApprovals);
 
         /// <summary>
         /// The worker a saved ROLE NAME refers to, or null for the default.
@@ -2139,26 +2085,25 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         /// <param name="taskId">The task this carries on, when it is one that stopped at a question - see <see cref="ContinueParkedAsync"/>.</param>
         /// <param name="resume">Its step boundary, when it has one; null starts the request again under <paramref name="taskId"/>.</param>
-        private void StartBackground(string text, string fullPath, Guid? taskId = null, RunCheckpoint? resume = null)
+        /// <param name="spec">The saved task this is, when it is one.</param>
+        private void StartBackground(string text, string fullPath, Guid? taskId = null, RunCheckpoint? resume = null,
+            ResolvedTaskSpec? spec = null)
         {
             var continuing = taskId is not null || resume is not null;
             if (_shuttingDown) return;
-            // Background runs always wrote straight to disk while the run settings — and the history —
-            // said "staged". Rather than lie about it, refuse the combination: staging that survives a
-            // background run needs a store that persists its proposals, which does not exist yet.
-            if (_vm.StageChanges)
-            {
-                _vm.StatusPhase = "Not started";
-                _vm.CurrentAction =
-                    "Stage changes is on, and a background run cannot stage: it would write to your files "
-                    + "directly while the history claimed the changes were staged. Turn Stage changes off "
-                    + "to run in the background, or run this in the foreground.";
-                return;
-            }
 
             // Adopt: a background run is a run, and the folder is being taken up as a workspace here
             // exactly as it is in the foreground.
             var workspace = WorkspaceInfo.Adopt(fullPath);
+            var request = new RunRequest(workspace, text, IntentSource.Inbox, resume?.TaskId ?? taskId, resume, spec,
+                Stage: _vm.StageChanges);
+            // Refused here, where the request was made, and in the composer's own words - see RunComposer.Refusal.
+            if (RunComposer.Refusal(request) is { } refused)
+            {
+                _vm.StatusPhase = "Not started";
+                _vm.CurrentAction = refused;
+                return;
+            }
             // The slider on screen, and rightly: this run is against the folder on screen.
             var environment = SnapshotEnvironment(_vm.AutonomyTier, CurrentWorkerRole(), _vm.StageChanges);
             var inbox = InboxStoreFactory.Create(workspace);
@@ -2193,18 +2138,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     // inbox shows it where it can be answered, and answering carries the run on
                     // (ContinueParkedAsync). It used to be answered "no" on the spot, and the only
                     // way to get "yes" in was to start the whole task again, in the foreground.
-                    var composed = await UnattendedRun.ComposeAsync(
-                        environment, workspace, text, IntentSource.Inbox,
-                        new ParkingDecisionHandler(), ct, resume?.TaskId ?? taskId);
-
-                    await using (composed.Resources)
-                    {
-                        await BackgroundRunner.RunAsync(
-                            resume is null
-                                ? composed.Engine.SubmitIntentAsync(composed.Intent, ct)
-                                : composed.Engine.ResumeRunAsync(resume, composed.Intent.Context, ct),
-                            inbox, workspace, text, ct);
-                    }
+                    await using var composed = await RunComposer.ComposeAsync(
+                        environment, request, new ParkingDecisionHandler(), ct);
+                    await BackgroundRunner.RunAsync(composed.Events(ct), inbox, workspace, text, ct);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -2758,17 +2694,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private async Task<DecisionOutcome> ShowDecisionAsync(DecisionRequest request, CancellationToken ct)
     {
         var root = request.Action?.WorkingDirectory;
-        // Already approved for this session or this workspace? Allow silently — no click needed.
-        if (!request.RequiresExplicitAnswer && !string.IsNullOrEmpty(request.Subject))
-        {
-            // Which one answered is carried back, so the timeline can say so. The two used to be
-            // one line and one millisecond apart.
-            if (_sessionApprovals.Approves(request))
-                return new DecisionOutcome(AllowOptionId(request), "remembered for this session and workspace");
-
-            if (request.MayBeRemembered && root is not null && ApprovalStore.Default.Approves(root, request.Subject))
-                return new DecisionOutcome(AllowOptionId(request), "remembered for this workspace");
-        }
+        // What was already approved for this session or this workspace never reaches this card: every run
+        // is composed behind RememberedApprovals, which answers it for watched and unwatched runs alike.
 
         var tcs = new DecisionCompletion();
 
@@ -2796,10 +2723,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 }
 
                 // Remember-this-approval shortcuts, so the user is not clicking Allow for every command.
-                if (!request.RequiresExplicitAnswer && !string.IsNullOrEmpty(request.Subject) && root is not null)
+                // Only for a request an approval can answer: one that names its tool and has an "allow" to give.
+                if (!request.RequiresExplicitAnswer && !string.IsNullOrEmpty(request.Subject) && root is not null
+                    && request.Options.Any(o => o.Id == RememberedApprovals.AllowOptionId))
                 {
                     var subject = request.Subject;
-                    var allowId = AllowOptionId(request);
+                    const string allowId = RememberedApprovals.AllowOptionId;
                     options.Add(new DecisionOptionViewModel(
                         "Allow (session)", () => ResolveDecision(tcs, allowId, () => _sessionApprovals.Remember(request))));
 
@@ -2854,12 +2783,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 _vm.DecisionDetail = string.Empty;
             }
         }
-
-        private static string AllowOptionId(DecisionRequest request)
-            => request.RecommendedOptionId
-            ?? request.Options.FirstOrDefault(o => o.Id.Contains("allow", StringComparison.OrdinalIgnoreCase))?.Id
-            ?? request.Options.FirstOrDefault()?.Id
-            ?? "allow";
 
         // Workspace-scoped approvals live OUTSIDE the workspace — see ApprovalStore in Core, which is
         // where the rules are and where they are tested. This window passes the FOLDER and decides
@@ -3049,9 +2972,4 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// <see cref="EngineComposition"/>, where a test can reach them.</para>
     /// </summary>
     private PermissionPolicy PolicyFor(int level) => EngineComposition.PolicyFor(_settings, level);
-
-    private sealed class EmptyProvider : IServiceProvider
-    {
-        public object? GetService(Type serviceType) => null;
-    }
 }
