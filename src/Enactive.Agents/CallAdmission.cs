@@ -640,5 +640,5 @@ internal sealed class CallAdmission(
     private WorkEvent Invoked(ToolCall call)
         => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
                EventKind.ToolInvoked, $"{call.Name} {Compact(call.ArgumentsJson)}",
-               WorkEventPayload.ToolPayload(call.Name, stepNo));
+               WorkEventPayload.ToolPayload(call, stepNo));
 }

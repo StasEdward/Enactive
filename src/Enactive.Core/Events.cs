@@ -1,5 +1,7 @@
 ﻿namespace Enactive.Core.Events;
 
+using Enactive.Core.Tools;
+
 /// <summary>Kinds of events emitted during a run. The Timeline is a projection over these.</summary>
 public enum EventKind
 {
@@ -311,7 +313,51 @@ public static class WorkEventPayload
     /// this file already carries the scar of.</para>
     /// </summary>
     public static string ToolPayload(string name, int? stepNo = null)
-        => "{" + (stepNo is { } n ? $"\"step\":{n}," : "") + "\"tool\":" + Quote(name) + "}";
+        => ToolPayload(name, stepNo, path: null, command: null);
+
+    /// <summary>
+    /// The payload of a call's <see cref="EventKind.ToolInvoked"/> event: the tool, and what a step card shows of the
+    /// call - the path it names and the command it runs - as values, read from its WHOLE arguments.
+    ///
+    /// <para>The card read them back out of the summary, "<c>name {arguments}</c>": rewording that sentence would have
+    /// turned "Wrote disks.md" into "Ran write_file", and the arguments there are cut at 120 characters, so a
+    /// write_file whose content ran past it was no JSON at all and its card said "Wrote a file".</para>
+    /// </summary>
+    public static string ToolPayload(ToolCall call, int? stepNo = null)
+        => ToolPayload(call.Name, stepNo, ArgumentOf(call.ArgumentsJson, "path"), ArgumentOf(call.ArgumentsJson, "command"));
+
+    private static string ToolPayload(string name, int? stepNo, string? path, string? command)
+        => "{" + (stepNo is { } n ? $"\"step\":{n}," : "") + "\"tool\":" + Quote(name)
+           + (path is null ? "" : ",\"toolPath\":" + Quote(path))
+           // A command line is shown in a line, not stored: the card shows 90 characters of it, the log has it whole.
+           + (command is null ? "" : ",\"toolCommand\":" + Quote(command.Length <= 300 ? command : command[..300] + "…"))
+           + "}";
+
+    /// <summary>A string argument of a call, or null when it has none or its arguments do not parse.</summary>
+    private static string? ArgumentOf(string argumentsJson, string name)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty(name, out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
+    /// <summary>The path a tool call names, as a value - null when it names none, or for a record from before.</summary>
+    public static string? ToolPath(this WorkEvent ev) => Field(ev.PayloadJson, ToolPathRegex);
+
+    /// <summary>The command a tool call runs, as a value - null when it runs none, or for a record from before.</summary>
+    public static string? ToolCommand(this WorkEvent ev) => Field(ev.PayloadJson, ToolCommandRegex);
+
+    private static readonly System.Text.RegularExpressions.Regex ToolPathRegex =
+        new("\"toolPath\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex ToolCommandRegex =
+        new("\"toolCommand\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>
     /// The tool an event names, or null for a record written before this was carried as a value.

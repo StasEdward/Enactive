@@ -144,6 +144,58 @@ public sealed class RunFeedTests
         Assert.Equal(FeedCardStatus.Running, card.Status);
     }
 
+    // ── a tool call, from its values ────────────────────────────────────────
+
+    private static WorkEvent Invoked(string name, string arguments, string summary)
+        => Ev(EventKind.ToolInvoked, summary, WorkEventPayload.ToolPayload(new Enactive.Core.Tools.ToolCall("c1", name, arguments), stepNo: 1));
+
+    private static FeedCard OneStep(params WorkEvent[] events)
+        => Fold([Ev(EventKind.PlanCreated, "Disks — 1 steps: report", WorkEventPayload.PlanPayload("Disks", ["report"])),
+                 Step(EventKind.StepStarted, 1, "[1/1] report"), .. events]).Cards[0];
+
+    /// <summary>The card reads the call's values: a reworded sentence changes nothing on it.</summary>
+    [Fact]
+    public void Rewording_the_sentence_changes_nothing_on_a_tool_card()
+    {
+        var card = OneStep(Invoked("write_file", """{"path":"disks.md","content":"C: 91%"}""", "The worker is writing a file now"));
+
+        var line = Assert.Single(card.Entries);
+        Assert.Equal((FeedEntryKind.File, "Wrote disks.md"), (line.Kind, line.Label));
+        Assert.Equal("Writing disks.md…", card.Activity);
+    }
+
+    /// <summary>
+    /// The sentence carries the arguments cut at 120 characters: a write whose content ran past them was no JSON, and its
+    /// card said "Wrote a file". The path is a value, read from the whole arguments.
+    /// </summary>
+    [Fact]
+    public void A_long_write_still_names_its_file()
+    {
+        // A Windows path, escaped as JSON escapes it: the value comes back as the path, backslash and all.
+        var arguments = $$"""{"path":"Docs\\disks.md","content":"{{new string('x', 500)}}"}""";
+
+        var card = OneStep(Invoked("write_file", arguments, "write_file " + arguments[..120] + "…"));
+
+        Assert.Equal(@"Wrote Docs\disks.md", card.Entries[0].Label);
+    }
+
+    [Fact]
+    public void A_command_card_shows_the_command_it_ran()
+    {
+        var card = OneStep(Invoked("run_command", """{"command":"wmic logicaldisk get \"name,size\""}""", "a command ran"));
+
+        Assert.Equal("Ran: wmic logicaldisk get \"name,size\"", card.Entries[0].Label);
+    }
+
+    /// <summary>A record from before the tool was a value still says what the call was - from its sentence.</summary>
+    [Fact]
+    public void A_record_from_before_the_values_is_read_from_its_sentence()
+    {
+        var card = OneStep(Step(EventKind.ToolInvoked, 1, """write_file {"path":"a.txt","content":"x"}"""));
+
+        Assert.Equal("Wrote a.txt", card.Entries[0].Label);
+    }
+
     /// <summary>A view inserts each new card where the feed put it - the grown steps under their step, in order.</summary>
     [Fact]
     public void New_cards_come_with_where_they_are_shown()

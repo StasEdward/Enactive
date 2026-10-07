@@ -297,8 +297,9 @@ public sealed class RunFeed
 
             case EventKind.ToolInvoked:
                 var tool = CardFor(step) ?? EnsureCurrent(added);
-                LogInvocation(tool, ev.Summary);
-                tool.SetActivity(DescribeActivity(ev.Summary));
+                var call = CallOf(ev);
+                LogInvocation(tool, call);
+                tool.SetActivity(DescribeActivity(call));
                 break;
 
             case EventKind.ToolResult:
@@ -598,34 +599,47 @@ public sealed class RunFeed
 
     // ── what a tool call looks like on a card ────────────────────────────────────
 
-    private static void LogInvocation(FeedCard card, string toolInvokedSummary)
+/// <summary>What a card shows of a tool call: which tool, the path it names, the command it runs.</summary>
+    private sealed record Call(string Name, string? Path, string? Command);
+
+    /// <summary>
+    /// The call an event is about, from its VALUES - the tool, its path and its command, read from its whole arguments
+    /// (WorkEventPayload.ToolPayload). The sentence "<c>name {arguments}</c>" is read only for a record from before the
+    /// tool was a value: rewording it would have turned "Wrote disks.md" into "Ran write_file", and the arguments in it
+    /// are cut short, so a long write was no JSON and said "Wrote a file".
+    /// </summary>
+    private static Call CallOf(WorkEvent ev)
     {
-        var (name, args) = Split(toolInvokedSummary);
-        switch (name)
+        if (ev.ToolName() is { Length: > 0 } name)
+            return new Call(name, ev.ToolPath(), ev.ToolCommand());
+
+        var (said, args) = Split(ev.Summary);
+        return new Call(said, Hint(args, "path"), Hint(args, "command") ?? args);
+    }
+
+    private static void LogInvocation(FeedCard card, Call call)
+    {
+        switch (call.Name)
         {
-            case "write_file": card.AddFileOp("Wrote", Hint(args, "path") ?? "a file"); break;
-            case "read_file": card.AddFileOp("Read", Hint(args, "path") ?? "a file"); break;
-            case "list_dir": card.AddFileOp("Listed", Hint(args, "path") ?? "a directory"); break;
-            case "run_command": card.AddCommand(Hint(args, "command") ?? args); break;
-            default: card.AddGenericTool($"Ran {name}"); break;
+            case "write_file": card.AddFileOp("Wrote", call.Path ?? "a file"); break;
+            case "read_file": card.AddFileOp("Read", call.Path ?? "a file"); break;
+            case "list_dir": card.AddFileOp("Listed", call.Path ?? "a directory"); break;
+            case "run_command": card.AddCommand(call.Command ?? "a command"); break;
+            default: card.AddGenericTool($"Ran {call.Name}"); break;
         }
     }
 
     /// <summary>The one-line "what it is doing right now" for the card's header.</summary>
-    private static string DescribeActivity(string toolInvokedSummary)
+    private static string DescribeActivity(Call call) => call.Name switch
     {
-        var (name, args) = Split(toolInvokedSummary);
-        return name switch
-        {
-            "write_file" => Hint(args, "path") is { } p ? $"Writing {p}…" : "Writing a file…",
-            "read_file" => Hint(args, "path") is { } p ? $"Reading {p}…" : "Reading a file…",
-            "list_dir" => Hint(args, "path") is { } p ? $"Listing {p}…" : "Listing files…",
-            "run_command" => Hint(args, "command") is { } c
-                ? $"Running: {(c.Length <= 60 ? c : c[..60] + "…")}"
-                : "Running a command…",
-            _ => $"Running {name}…"
-        };
-    }
+        "write_file" => call.Path is { } p ? $"Writing {p}…" : "Writing a file…",
+        "read_file" => call.Path is { } p ? $"Reading {p}…" : "Reading a file…",
+        "list_dir" => call.Path is { } p ? $"Listing {p}…" : "Listing files…",
+        "run_command" => call.Command is { } c
+            ? $"Running: {(c.Length <= 60 ? c : c[..60] + "…")}"
+            : "Running a command…",
+        _ => $"Running {call.Name}…"
+    };
 
     private static (string Name, string Args) Split(string summary)
     {

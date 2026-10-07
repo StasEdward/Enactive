@@ -4170,7 +4170,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 EffectivePolicyFor(worker), _workspace.RootPath, store, _services);
             WorkEvent Invoked(ToolCall item) => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
                 EventKind.ToolInvoked, $"{item.Name} {Compact(item.ArgumentsJson)}",
-                WorkEventPayload.ToolPayload(item.Name, stepNo));
+                WorkEventPayload.ToolPayload(item, stepNo));
             bool CanRunRead(ToolCall item) => toolAccess.CanRunRead(item, worker, EffectivePolicyFor(worker), offer);
 
             for (var callIndex = 0; callIndex < toolCalls.Count; callIndex++)
