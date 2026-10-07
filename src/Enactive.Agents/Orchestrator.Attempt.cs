@@ -79,32 +79,23 @@ public sealed partial class Orchestrator
             }
 
             if (assessed is null) return;
-            if ((assessed.BudgetExhausted ?? assessed.Review.IncompleteReason) is { } unavailable)
+            var verdict = assessed.Review.Verdict;
+            // No verdict to act on - the reviewer could not tell, no answer could be used, the budget was spent: the work
+            // is done and only unconfirmed (ReviewVerdict.Missing says what that makes of the step, and why).
+            if (verdict.Missing is { } missing)
             {
-                // A review ran at all only because the worker finished (ExecuteAttemptAsync returns
-                // null otherwise), so when the verdict is what is missing, the work is DONE and only
-                // unconfirmed. That is DoneUnverified, and its dependents run. When instead the
-                // reviewer reached a verdict that ends the step - a prohibition the work violated,
-                // which also carries an IncompleteReason - it stays Incomplete, as it always was:
-                // that work must not be built on.
-                var verdictMissing = assessed.BudgetExhausted is not null || assessed.Review.VerdictUnavailable;
-                // Why, as a code: a reviewer that said it could not tell is not a review that failed to
-                // be processed, and neither is a verdict against the work (a prohibition it broke).
-                result.Set(verdictMissing ? StepOutcomeKind.DoneUnverified : StepOutcomeKind.Incomplete, unavailable,
-                    !verdictMissing ? OutcomeCause.ReviewRejected
-                    : assessed.BudgetExhausted is null && assessed.Review.Undecided ? OutcomeCause.ReviewUndecided
-                    : OutcomeCause.ReviewUnprocessable);
-                await publish(scope.Ev(EventKind.ErrorObserved, prefix + unavailable, stepNumber));
+                result.Set(missing.Kind, verdict.Notes, missing.Cause);
+                await publish(scope.Ev(EventKind.ErrorObserved, prefix + verdict.Notes, stepNumber));
                 return;
             }
-            if (assessed.Review.Pass) return;
+            if (verdict is not ReviewVerdict.Fail fail) return;   // a pass: the step stands
             if (attempt < attempts)
             {
-                RetryAfterReview(step.Messages, assessed.Review.RepairAdvice ?? assessed.Review.Notes, stepNumber is null ? "the work" : "this step");
+                RetryAfterReview(step.Messages, fail.RepairAdvice, stepNumber is null ? "the work" : "this step");
                 continue;
             }
-            result.Set(StepOutcomeKind.ReviewRejected, "review not passed: " + assessed.Review.Notes);
-            result.Keep = assessed.Review.Keep;
+            result.Set(StepOutcomeKind.ReviewRejected, "review not passed: " + fail.Notes);
+            result.Keep = fail.Keep;
         }
     }
 

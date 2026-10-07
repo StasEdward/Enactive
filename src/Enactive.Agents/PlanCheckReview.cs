@@ -101,66 +101,65 @@ internal static class PlanCheckReview
                 + "Assess compliance with the original request's restrictions independently of host approval settings. "
                 + "If any criterion conflicts, or compliance is uncertain, return unresolved with the specific conflict. "
                 + "An approved tool or template does not waive the user's task restrictions.");
-        var prompt = 0; var output = 0; int? cached = null; int? created = null;
-        string? problem = null;
-        for (var attempt = 0; attempt < 2; attempt++)
-        {
-            if (budget.TurnExhaustedAfter(prompt, output) is { } spent) { problem = spent; break; }
-            ChatCompletion completion;
-            try
+        // Asked, and corrected once when the contract is refused - the round every review shares (StructuredAnswer).
+        // The contract's own validation judges an answer that did not finish, so it is read either way.
+        var round = await StructuredAnswer.AskAsync<CheckedContract>(provider, messages,
+            m => new ChatRequest(model, m, Temperature: 0, Purpose: GenerationPurpose.Planning, OutputTokenLimit: Math.Max(1, outputBudget)),
+            (answer, complete) =>
             {
-                completion = await provider.CompleteAsync(GenerationAllowance.Fit(new(model, messages, Temperature: 0,
-                    Purpose: GenerationPurpose.Planning, OutputTokenLimit: Math.Max(1, outputBudget)), provider), ct);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex) { problem = "Verification contract review failed: " + ex.Message; break; }
-            prompt += completion.PromptTokens ?? 0;
-            output += completion.CompletionTokens ?? 0;
-            cached = TokenCounts.Add(cached, completion.CachedPromptTokens);
-            created = TokenCounts.Add(created, completion.CacheCreationPromptTokens);
-            var answer = completion.Message.Content ?? "";
-            var complete = completion.FinishReason is not ("length" or "max_tokens")
-                           && completion.Message.ToolCalls is not { Count: > 0 };
-            try
-            {
-                var contract = PlanCheckContract.Validate(answer, complete, inputs);
-                if (contract.Unresolved is { } unresolved)
+                try { return (new CheckedContract(PlanCheckContract.Validate(answer, complete, inputs), answer), []); }
+                catch (Exception ex) when (PlanCheckContract.IsRefusal(ex))
                 {
-                    // Not settled. Where there is a restriction it can be about - a ban on deleting files, an allowlist
-                    // of tools or commands, one established before - that is a stop. Without one, it is for a person
-                    // to decide (Phase 1.8: an ambiguity nothing can resolve is NeedsUser), not for the review alone:
-                    // twice on 2026-09-29 a run was stopped before its first step because "sending an email cannot be
-                    // verified by a command" and a test command's two exit codes did not fit one field.
-                    if (!askWhenUnsettled || contract.Restrictions.Count > 0 || contract.ActionPolicy is not null
-                        || inputs.Restrictions.Count > 0 || inputs.ActionPolicy is not null)
-                    {
-                        problem = "Unresolved verification contract: " + unresolved;
-                        break;
-                    }
-                    return Result(budget.TurnExhaustedAfter(prompt, output)) with { Unsettled = unresolved };
+                    // Written down with what it was checked against: a refused contract ends the run
+                    // before any work starts, and the log alone cannot replay it.
+                    PlanCheckCorpus.Record(workspaceRoot,
+                        new(DateTimeOffset.UtcNow, model, answer, complete, inputs, ex.Message));
+                    return (null, [ex.Message]);
                 }
-                var (engineCriteria, notes) = reviewsEngineCriteria
-                    ? EngineCriteriaReview.Apply(decidedByTheEngine, answer, request, workspaceRoot, plan.Plan)
-                    : (decidedByTheEngine, []);
-                return Result(budget.TurnExhaustedAfter(prompt, output)) with {
-                    Checks = [.. contract.Checks, .. engineCriteria], Restrictions = contract.Restrictions, ActionPolicy = contract.ActionPolicy,
-                    // With what the plan itself had to say (a check it kept as a proposal), which this result replaces.
-                    ContractNotes = [.. plan.ContractNotes, .. contract.Notes, .. notes] };
-            }
-            catch (Exception ex) when (PlanCheckContract.IsRefusal(ex))
-            {
-                // Written down with what it was checked against: a refused contract ends the run
-                // before any work starts, and the log alone cannot replay it.
-                PlanCheckCorpus.Record(workspaceRoot,
-                    new(DateTimeOffset.UtcNow, model, answer, complete, inputs, ex.Message));
-                problem = "Invalid verification contract: " + ex.Message;
-                messages.Add(ChatMessage.Assistant(answer));
-                messages.Add(ChatMessage.User(problem + " Return the complete corrected contract; preserve all original requirements and restrictions."));
-            }
+            },
+            errors => "Invalid verification contract: " + errors[0]
+                + " Return the complete corrected contract; preserve all original requirements and restrictions.",
+            budget.TurnExhaustedAfter, requireComplete: false, ct);
+        var (prompt, output, cached, created) =
+            (round.PromptTokens, round.CompletionTokens, round.CachedPromptTokens, round.CacheCreationPromptTokens);
+
+        switch (round.Kind)
+        {
+            case AnswerKind.OutOfBudget:
+                return Result(round.Problem);
+            case AnswerKind.Failed:
+                return Result("Verification contract review failed: " + round.Problem);
+            case AnswerKind.Unusable:
+                return Result(round.Errors.FirstOrDefault() is { } refused
+                    ? "Invalid verification contract: " + refused
+                    : "Verification contract review incomplete.");
         }
-        return Result(problem ?? "Verification contract review incomplete.");
+
+        var (contract, said) = round.Value!;
+        if (contract.Unresolved is { } unresolved)
+        {
+            // Not settled. Where there is a restriction it can be about - a ban on deleting files, an allowlist
+            // of tools or commands, one established before - that is a stop. Without one, it is for a person
+            // to decide (Phase 1.8: an ambiguity nothing can resolve is NeedsUser), not for the review alone:
+            // twice on 2026-09-29 a run was stopped before its first step because "sending an email cannot be
+            // verified by a command" and a test command's two exit codes did not fit one field.
+            if (!askWhenUnsettled || contract.Restrictions.Count > 0 || contract.ActionPolicy is not null
+                || inputs.Restrictions.Count > 0 || inputs.ActionPolicy is not null)
+                return Result("Unresolved verification contract: " + unresolved);
+            return Result(budget.TurnExhaustedAfter(prompt, output)) with { Unsettled = unresolved };
+        }
+        var (engineCriteria, notes) = reviewsEngineCriteria
+            ? EngineCriteriaReview.Apply(decidedByTheEngine, said, request, workspaceRoot, plan.Plan)
+            : (decidedByTheEngine, []);
+        return Result(budget.TurnExhaustedAfter(prompt, output)) with {
+            Checks = [.. contract.Checks, .. engineCriteria], Restrictions = contract.Restrictions, ActionPolicy = contract.ActionPolicy,
+            // With what the plan itself had to say (a check it kept as a proposal), which this result replaces.
+            ContractNotes = [.. plan.ContractNotes, .. contract.Notes, .. notes] };
 
         PlanResult Result(string? error) => plan with { Checks = [.. plan.Checks, .. decidedByTheEngine], PromptTokens = prompt, CompletionTokens = output,
             CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = error };
     }
+
+    /// <summary>A contract that passed validation, with the answer it was read from.</summary>
+    private sealed record CheckedContract(PlanContract Contract, string Answer);
 }

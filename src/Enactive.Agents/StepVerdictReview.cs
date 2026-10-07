@@ -117,50 +117,24 @@ internal static class StepVerdictReview
         put in order by a call for the selection to be checked.
         """;
 
+    /// <param name="budget">Why the reviewer may not be asked (again), given what this review has spent - or null when it may.</param>
     public static async Task<ReviewResult> RunAsync(StepVerdictInput input, IChatProvider provider, string model,
-        Func<int, int, string?>? beforeRetry, CancellationToken ct)
+        Func<int, int, string?>? budget, CancellationToken ct)
     {
-        var messages = new List<ChatMessage> { ChatMessage.System(Instruction + DerivedFigures), ChatMessage.User(Prompt(input)) };
-        int prompt = 0, output = 0;
-        int? cached = null, created = null;
-        for (var attempt = 0; attempt < 2; attempt++)
+        var round = await StructuredAnswer.AskAsync(provider,
+            [ChatMessage.System(Instruction + DerivedFigures), ChatMessage.User(Prompt(input))],
+            messages => new ChatRequest(model, messages, Temperature: 0, Purpose: GenerationPurpose.Review, OutputTokenLimit: 2048),
+            (answer, _) => Read(answer, input),
+            errors => StructuredAnswer.Listed(errors, "Return the corrected JSON object."),
+            budget, requireComplete: true, ct);
+
+        return ReviewResult.Of(round.Kind switch
         {
-            if (attempt > 0 && beforeRetry?.Invoke(prompt, output) is { } spent)
-                return new ReviewResult(false, spent, prompt, output) { BudgetExhausted = spent };
-            ChatCompletion completion;
-            try
-            {
-                completion = await provider.CompleteAsync(GenerationAllowance.Fit(new ChatRequest(model, messages, Temperature: 0,
-                    Purpose: GenerationPurpose.Review, OutputTokenLimit: 2048), provider), ct);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                return new ReviewResult(false, "review error: " + ex.Message, prompt, output)
-                    { IncompleteReason = "review error: " + ex.Message, VerdictUnavailable = true };
-            }
-            prompt += completion.PromptTokens ?? 0;
-            output += completion.CompletionTokens ?? 0;
-            cached = TokenCounts.Add(cached, completion.CachedPromptTokens);
-            created = TokenCounts.Add(created, completion.CacheCreationPromptTokens);
-            var answer = completion.Message.Content ?? "";
-            // An answer cut off at its length, or one that called for a tool, is not a finished verdict, however whole the
-            // JSON in it looks - the earlier review took neither as final (code review of engeen_v4, P2).
-            var unfinished = completion.FinishReason is "length" or "max_tokens"
-                ? "your answer was cut off at its length limit; return the JSON object alone, with a short reason"
-                : completion.Message.ToolCalls is { Count: > 0 }
-                    ? "no tools are offered here; return the JSON object alone"
-                    : null;
-            var (result, errors) = unfinished is null ? Read(answer, input) : (null, [unfinished]);
-            if (errors.Count == 0 && result is not null)
-                return result with { PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached, CacheCreationPromptTokens = created };
-            messages.Add(ChatMessage.Assistant(answer));
-            messages.Add(ChatMessage.User("Your answer could not be used:\n" + string.Join("\n", errors.Select(e => "- " + e))
-                + "\nReturn the corrected JSON object."));
-        }
-        const string why = "the step's review could not be used after correction";
-        return new ReviewResult(false, why, prompt, output)
-            { IncompleteReason = why, VerdictUnavailable = true, CachedPromptTokens = cached, CacheCreationPromptTokens = created };
+            AnswerKind.Answered => round.Value!,
+            AnswerKind.OutOfBudget => new ReviewVerdict.OutOfBudget(round.Problem!),
+            AnswerKind.Failed => new ReviewVerdict.Unavailable("review error: " + round.Problem),
+            _ => new ReviewVerdict.Unavailable("the step's review could not be used after correction")
+        }, round);
     }
 
     private static string Prompt(StepVerdictInput input)
@@ -197,7 +171,7 @@ internal static class StepVerdictReview
     }
 
     /// <summary>The answer checked and read. A pass must cite what shows it; a fail must say what is wrong.</summary>
-    internal static (ReviewResult? Result, IReadOnlyList<string> Errors) Read(string answer, StepVerdictInput input)
+    internal static (ReviewVerdict? Verdict, IReadOnlyList<string> Errors) Read(string answer, StepVerdictInput input)
     {
         if (ModelText.ExtractJsonObject(ModelText.StripThink(answer)) is not { } json) return (null, ["no JSON object"]);
         JsonDocument doc;
@@ -250,8 +224,8 @@ internal static class StepVerdictReview
                 .Where(p => p.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
             : [];
         return verdict == "pass"
-            ? (new ReviewResult(true, reason), [])
-            : (new ReviewResult(false, reason) { RepairAdvice = reason, Keep = keep }, []);
+            ? (new ReviewVerdict.Pass(reason), [])
+            : (new ReviewVerdict.Fail(reason, reason, keep), []);
     }
 
     /// <summary>

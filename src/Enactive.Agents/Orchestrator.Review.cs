@@ -34,7 +34,7 @@ public sealed partial class Orchestrator
     /// <summary>The engine's record, for the review, of the tools this run kept back from the step.</summary>
     internal const string KeptBackTool = "engine_kept_back_tools";
 
-    private sealed record AttemptReview(ReviewResult Review, string? BudgetExhausted = null);
+    private sealed record AttemptReview(ReviewResult Review);
 
     /// <summary>
     /// Shared review/proof phase of an attempt. Callers own retries, rollback, checkpoints and
@@ -60,7 +60,7 @@ public sealed partial class Orchestrator
         }
 
         if (scope.Budget.TurnExhausted is { } beforeReview)
-            return new(new ReviewResult(false, beforeReview), BudgetExhausted: beforeReview);
+            return new(new ReviewResult(new ReviewVerdict.OutOfBudget(beforeReview)));
         await Emit(EventKind.ReviewRequested, stepNumber is null ? "reviewing…" : "reviewing with reasoner…");
 
         // The places the report and the handed-on result cite, opened by the engine now and recorded as its
@@ -149,17 +149,17 @@ public sealed partial class Orchestrator
                         models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct),
                     ReviewMode.Step);
         await Usage(review.PromptTokens, review.CompletionTokens, review.CachedPromptTokens, review.CacheCreationPromptTokens);
-        if (review.BudgetExhausted is { } reviewSpent)
-            return new(review, BudgetExhausted: reviewSpent);
-        if (review.IncompleteReason is not null) return new(review);
-        if (!review.Pass)
+        // A verdict, said; a missing one is said by the attempt, with what it makes of the step.
+        switch (review.Verdict)
         {
-            await Emit(EventKind.ReviewFailed, $"FAIL ({mode} review): {review.Notes}");
-            return new(review);
+            case ReviewVerdict.Fail fail:
+                await Emit(EventKind.ReviewFailed, $"FAIL ({mode} review): {fail.Notes}");
+                break;
+            case ReviewVerdict.Pass pass:
+                await Emit(EventKind.ReviewPassed,
+                    $"PASS ({mode} review){(string.IsNullOrEmpty(pass.Notes) ? "" : ": " + pass.Notes)}");
+                break;
         }
-
-        await Emit(EventKind.ReviewPassed,
-            $"PASS ({mode} review){(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}");
         return new(review);
     }
 

@@ -82,9 +82,10 @@ public sealed class RejectedButRightWorkIsKeptTests
     {
         var input = new StepVerdictInput("write", "Write", 1, [], "Done.", null, [new ShownFile("record.txt", "one", true)],
             new Enactive.Core.Execution.ExecutionJournal().Describe());
-        Assert.Empty(StepVerdictReview.Read("""{"verdict":"pass","reason":"ok","calls":[],"files":["record.txt"],"keep":["record.txt"]}""", input).Result!.Keep);
-        Assert.Equal(["record.txt"], StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":["record.txt"]}""", input).Result!.Keep);
-        Assert.Empty(StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":"record.txt"}""", input).Result!.Keep);
+        // A pass keeps everything anyway: it names nothing to keep.
+        Assert.IsType<ReviewVerdict.Pass>(StepVerdictReview.Read("""{"verdict":"pass","reason":"ok","calls":[],"files":["record.txt"],"keep":["record.txt"]}""", input).Verdict);
+        Assert.Equal(["record.txt"], ((ReviewVerdict.Fail)StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":["record.txt"]}""", input).Verdict).Keep);
+        Assert.Empty(((ReviewVerdict.Fail)StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":"record.txt"}""", input).Verdict).Keep);
     }
 
     /// <summary>The review is told to name what it keeps, and that a change the request did not ask for is not kept.</summary>
