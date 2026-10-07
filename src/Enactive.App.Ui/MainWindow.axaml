@@ -159,7 +159,7 @@
                     <TextBlock Classes="panelHeader" Text="WORKSPACE" Margin="0" />
 
                     <Panel>
-                        <Border BorderBrush="{Binding WorkspaceEdgeBrush}"
+                        <Border BorderBrush="{Binding WorkspaceMissing, Converter={x:Static local:Palette.MissingEdge}}"
                                 BorderThickness="2,0,0,0" CornerRadius="0,5,5,0">
                         <!-- Live during a run. The run keeps going in the workspace it belongs to,
                              its row stays in that workspace's RUNNING block, and coming back
@@ -170,7 +170,7 @@
                                 <StackPanel Grid.Column="0" Spacing="1" Margin="0,0,8,0">
                                     <TextBlock Text="{Binding WorkspaceName}"
                                                FontSize="13" FontWeight="SemiBold"
-                                               Foreground="{Binding WorkspaceNameBrush}"
+                                               Foreground="{Binding WorkspaceMissing, Converter={x:Static local:Palette.MissingName}}"
                                                TextWrapping="NoWrap"
                                                TextTrimming="CharacterEllipsis" />
                                     <TextBlock Classes="path" Text="{Binding WorkspacePath}" />
@@ -207,8 +207,8 @@
                                                              the marker nor "you are here" may
                                                              blink when the pointer crosses. -->
                                                         <Border Grid.Column="0"
-                                                                Background="{Binding FillBrush}"
-                                                                BorderBrush="{Binding EdgeBrush}"
+                                                                Background="{Binding IsCurrent, Converter={x:Static local:Palette.WorkspaceFill}}"
+                                                                BorderBrush="{Binding Place, Converter={x:Static local:Palette.WorkspaceEdge}}"
                                                                 BorderThickness="2,0,0,0"
                                                                 CornerRadius="0,4,4,0"
                                                                 Margin="0,0,0,4">
@@ -217,12 +217,12 @@
                                                             <StackPanel Spacing="1">
                                                                 <TextBlock Text="{Binding Name}"
                                                                            FontSize="12.5" FontWeight="SemiBold"
-                                                                           Foreground="{Binding NameBrush}"
+                                                                           Foreground="{Binding Exists, Converter={x:Static local:Palette.WorkspaceName}}"
                                                                            TextWrapping="NoWrap"
                                                                            TextTrimming="CharacterEllipsis" />
                                                                 <TextBlock Text="{Binding Detail}"
                                                                            FontSize="11"
-                                                                           Foreground="{Binding DetailBrush}"
+                                                                           Foreground="{Binding Exists, Converter={x:Static local:Palette.WorkspaceDetail}}"
                                                                            FontFamily="Consolas, Menlo, monospace"
                                                                            TextWrapping="NoWrap"
                                                                            TextTrimming="PrefixCharacterEllipsis" />
@@ -303,7 +303,7 @@
                                      for the one thing you can do with it. Open is absent on a
                                      background run rather than disabled - there is no live view to
                                      go to, and an offer that cannot be taken is not an offer. -->
-                                <Border Classes="card" BorderBrush="{Binding StatusBrush}"
+                                <Border Classes="card" BorderBrush="{DynamicResource Brand.Accent}"
                                         ToolTip.Tip="{Binding Tooltip}">
                                     <Grid ColumnDefinitions="*,Auto">
                                         <StackPanel>
@@ -353,7 +353,7 @@
                     <ItemsControl ItemsSource="{Binding Runs.Resumable}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:ResumableRunViewModel">
-                                <Border Classes="card" BorderBrush="{Binding StatusBrush}"
+                                <Border Classes="card" BorderBrush="{DynamicResource Brand.Amber}"
                                         ToolTip.Tip="{Binding Tooltip}">
                                     <Grid ColumnDefinitions="*,Auto">
                                         <StackPanel>
@@ -385,8 +385,8 @@
                          SelectedItem="{Binding Runs.Selected}">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="vm:RunListItemViewModel">
-                            <Border Classes="card" BorderBrush="{Binding StatusBrush}"
-                                    ToolTip.Tip="{Binding Tooltip}" Margin="{Binding CardMargin}">
+                            <Border Classes="card" BorderBrush="{Binding Record.Status, Converter={x:Static local:Palette.RunEdge}}"
+                                    ToolTip.Tip="{Binding Tooltip}" Margin="{Binding IsLead, Converter={x:Static local:Palette.AttemptMargin}}">
                                 <Grid ColumnDefinitions="Auto,*,Auto">
                                     <!-- The attempt count, on a task that took more than one go.
                                          Twelve tries at one task used to be twelve rows and read as
@@ -480,7 +480,7 @@
                         <!-- The label names what the slider is set to, so it belongs ON the
                              slider, not floating above it. A Slider carries its own vertical
                              padding around the track; the negative margin takes it back. -->
-                        <TextBlock Text="{Binding AutonomyLabel}" Foreground="{Binding AutonomyBrush}"
+                        <TextBlock Text="{Binding AutonomyLabel}" Foreground="{Binding AutonomyTier, Converter={x:Static local:Palette.Autonomy}}"
                                    FontSize="11" TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis" Margin="0,2,0,0"
                                    ToolTip.Tip="{Binding AutonomyLabel}" />
@@ -550,9 +550,9 @@
                              the run underneath does not move when the request is long. -->
                         <TextBox Classes="taskIntent" Text="{Binding TaskIntent}" />
                     </StackPanel>
-                    <Border Grid.Column="1" Classes="pill" HorizontalAlignment="Right" Background="{Binding StatusPillBrush}">
+                    <Border Grid.Column="1" Classes="pill" HorizontalAlignment="Right" Background="{Binding StatusPhase, Converter={x:Static local:Palette.PhaseFill}}">
                         <TextBlock Text="{Binding StatusPhase}"
-                                   Foreground="{Binding StatusPillTextBrush}" />
+                                   Foreground="{Binding StatusPhase, Converter={x:Static local:Palette.PhaseText}}" />
                     </Border>
                 </Grid>
             </Border>
@@ -640,7 +640,7 @@
                                                                FontFamily="Consolas, Menlo, monospace" FontSize="12" />
                                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                                         <TextBlock Classes="hint" Text="{Binding Tag}" FontSize="11" />
-                                                        <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}"
+                                                        <TextBlock Text="{Binding Status}" Foreground="{Binding State, Converter={x:Static local:Palette.Change}}"
                                                                    FontSize="11" />
                                                     </StackPanel>
                                                 </StackPanel>
@@ -663,7 +663,7 @@
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate x:DataType="vm:DiffLineViewModel">
                                                                 <TextBlock Text="{Binding Text}"
-                                                                           Foreground="{Binding Brush}"
+                                                                           Foreground="{Binding Kind, Converter={x:Static local:Palette.DiffLine}}"
                                                                            FontFamily="Consolas, Menlo, monospace"
                                                                            FontSize="11" />
                                                             </DataTemplate>
@@ -690,7 +690,7 @@
                             <ListBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:LogRow">
                                     <TextBlock Text="{Binding Line}"
-                                               Foreground="{Binding Brush}"
+                                               Foreground="{Binding Entry.Level, Converter={x:Static local:Palette.LogLevel}}"
                                                FontFamily="Consolas, Menlo, monospace"
                                                FontSize="12"
                                                TextWrapping="NoWrap" />
@@ -776,7 +776,7 @@
                                         <Grid ColumnDefinitions="52,*" Margin="0,1">
                                             <TextBlock Grid.Column="0" Classes="routingPhase"
                                                        Text="{Binding Label}"
-                                                       Foreground="{Binding Edge}" />
+                                                       Foreground="{Binding Reach, Converter={x:Static local:Palette.Reach}}" />
                                             <TextBlock Grid.Column="1" Classes="routing"
                                                        Text="{Binding Detail}"
                                                        ToolTip.Tip="{Binding Detail}" />
@@ -788,7 +788,7 @@
 
                         <TextBlock Classes="hint" Text="{Binding StatusProgress}" FontSize="12" />
 
-                        <Border Background="{Binding AgentBrush}" IsVisible="{Binding IsAgentVisible}"
+                        <Border Background="{Binding Agent, Converter={x:Static local:Palette.Agent}}" IsVisible="{Binding IsAgentVisible}"
                                 Classes="pill" HorizontalAlignment="Left">
                             <TextBlock Text="{Binding AgentBadge}"
                                        Foreground="{DynamicResource Brand.Text}" />
@@ -929,9 +929,9 @@
                                         IsVisible="{Binding PastRun.CanRunAgain}"
                                         ToolTip.Tip="{Binding PastRun.RunAgainTooltip}" />
 
-                                <Border Grid.Column="4" Classes="pill" Width="124" Height="30" HorizontalAlignment="Right" Background="{Binding PastRun.StatusBrush}">
+                                <Border Grid.Column="4" Classes="pill" Width="124" Height="30" HorizontalAlignment="Right" Background="{Binding PastRun.Status, Converter={x:Static local:Palette.PhaseFill}}">
                                     <TextBlock Text="{Binding PastRun.Status}" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                               Foreground="{Binding PastRun.StatusTextBrush}" />
+                                               Foreground="{Binding PastRun.Status, Converter={x:Static local:Palette.PhaseText}}" />
                                 </Border>
                             </Grid>
 
@@ -1031,7 +1031,7 @@
                                                        Foreground="{DynamicResource Brand.TextMuted}"
                                                        TextTrimming="CharacterEllipsis" Margin="0,0,10,0" />
                                             <TextBlock Grid.Column="2" Text="{Binding Summary}"
-                                                       Foreground="{Binding Brush}"
+                                                       Foreground="{Binding Kind, Converter={x:Static local:Palette.TimelineKind}}"
                                                        FontSize="12" TextWrapping="Wrap" />
                                         </Grid>
                                     </DataTemplate>
@@ -1155,7 +1155,7 @@
                                             <Grid ColumnDefinitions="52,*" Margin="0,1">
                                                 <TextBlock Grid.Column="0" Classes="routingPhase"
                                                            Text="{Binding Label}"
-                                                           Foreground="{Binding Edge}" />
+                                                           Foreground="{Binding Reach, Converter={x:Static local:Palette.Reach}}" />
                                                 <TextBlock Grid.Column="1" Classes="routing"
                                                            Text="{Binding Detail}"
                                                            ToolTip.Tip="{Binding Detail}" />
@@ -1171,7 +1171,7 @@
                                         Margin="0,6,0,0">
                                 <TextBlock Classes="panelHeader" Text="RAN AS" Margin="0" />
                                 <TextBlock Text="{Binding PastRun.AutonomyText}"
-                                           Foreground="{Binding PastRun.AutonomyBrush}"
+                                           Foreground="{Binding PastRun.Autonomy, Converter={x:Static local:Palette.Autonomy}}"
                                            FontSize="11" TextWrapping="Wrap" />
                                 <TextBlock Classes="hint" Text="{Binding PastRun.WorkerText}" FontSize="11" />
                                 <TextBlock Classes="hint" Text="{Binding PastRun.StagingText}" FontSize="11" />

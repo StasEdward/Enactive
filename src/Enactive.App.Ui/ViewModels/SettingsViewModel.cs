@@ -3,7 +3,6 @@ namespace Enactive.App.Ui.ViewModels;
 using Enactive.Agents;
 
 using System.Collections.ObjectModel;
-using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Providers;
 using Enactive.Core.Execution;
@@ -32,15 +31,10 @@ internal sealed class ProviderRow : ObservableObject
     public string Name => Config.Id;
     public string Meta => $"{Config.Kind}  ·  {Config.BaseUrl}";
 
-    /// <summary>
-    /// Green when the provider is on this machine, blue when it is not. That is the one thing about
-    /// a provider worth seeing without reading: whether your code leaves the box to reach it.
-    /// </summary>
-    public IBrush EdgeBrush => IsLocal ? Brand.Success : Brand.Info;
-
     public string Reach => IsLocal ? "local" : "remote";
 
-    private bool IsLocal =>
+    /// <summary>On this machine - drawn green, and blue when not (Palette.Local).</summary>
+    public bool IsLocal =>
         Config.BaseUrl.Contains("localhost", StringComparison.OrdinalIgnoreCase)
         || Config.BaseUrl.Contains("127.0.0.1", StringComparison.Ordinal)
         || Config.BaseUrl.Contains("[::1]", StringComparison.Ordinal);
@@ -49,7 +43,7 @@ internal sealed class ProviderRow : ObservableObject
     {
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(Meta));
-        OnPropertyChanged(nameof(EdgeBrush));
+        OnPropertyChanged(nameof(IsLocal));
         OnPropertyChanged(nameof(Reach));
 
         // A card that was edited has not been re-checked, and the light must not go on claiming
@@ -68,14 +62,12 @@ internal sealed class ProviderRow : ObservableObject
         {
             _health = value;
             OnPropertyChanged();
-            OnPropertyChanged(nameof(HealthBrush));
             OnPropertyChanged(nameof(HealthTip));
         }
     }
 
     private ProviderStatus _health = ProviderStatus.Unknown;
 
-    public IBrush HealthBrush => ProviderEditViewModel.BrushFor(Health.Health);
 
     /// <summary>
     /// The summary AND the time it was learned.
@@ -108,16 +100,16 @@ internal sealed class WorkerRow : ObservableObject
     public string Meta => Config.Summary();
 
     /// <summary>
-    /// The worker's permission level on the same green-blue-yellow-red scale the autonomy slider
-    /// uses, because it is the same question: how much this one may do without asking.
+    /// The worker's permission level, drawn on the same green-blue-yellow-red scale the autonomy slider
+    /// uses (Palette.Autonomy), because it is the same question: how much this one may do without asking.
     /// </summary>
-    public IBrush EdgeBrush => Brand.Autonomy((int)Config.Level);
+    public int Autonomy => (int)Config.Level;
 
     public void Refresh()
     {
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(Meta));
-        OnPropertyChanged(nameof(EdgeBrush));
+        OnPropertyChanged(nameof(Autonomy));
     }
 }
 

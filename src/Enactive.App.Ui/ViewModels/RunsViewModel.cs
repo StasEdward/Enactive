@@ -1,8 +1,6 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
-using Avalonia;
-using Avalonia.Media;
 using Enactive.Core.Artifacts;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Events;
@@ -39,21 +37,13 @@ internal sealed class RunListItemViewModel
         Chevron = expanded ? "\u25be" : "\u25b8";
         ToggleCommand = new RelayCommand(() => toggle?.Invoke(this), () => HasAttempts);
 
-        // Indented, so an older attempt reads as belonging to the row above rather than as its own
-        // piece of work - which is the whole thing being fixed.
-        //
-        // The WHOLE margin, not the indent alone. Binding Margin on the card replaces the value
-        // Border.card sets in the style, gap included - so an indent expressed as a left inset and
-        // nothing else silently took the 6px between every run row away with it, and the list of
-        // cards became one block with lines drawn on it. Anything bound here has to carry the gap.
-        CardMargin = isLead ? new Thickness(0, 0, 0, 6) : new Thickness(14, 0, 0, 6);
+        // An older attempt is indented so it reads as belonging to the row above (Palette.AttemptMargin, on IsLead).
 
         // Repaired on the way OUT, not only on the way in: history recorded before titles were
         // one line still has to read properly, and rewriting somebody's stored runs in place to fix
         // a display problem is the wrong trade.
         Title = RunTitle.For(record);
         Meta = $"{Ago(record.StartedAt)} · {Outcome(record)}";
-        StatusBrush = BrushFor(record.Status);
 
         var elapsed = record.FinishedAt - record.StartedAt;
         Tooltip = $"{Title}\n{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {record.Status} · {Duration(elapsed)}";
@@ -70,28 +60,12 @@ internal sealed class RunListItemViewModel
     public bool HasAttempts { get; }
     public string AttemptsLabel { get; }
     public string Chevron { get; }
-    /// <summary>The card's margin: the indent of an older attempt, and the gap under every row.</summary>
-    public Thickness CardMargin { get; }
     public RelayCommand ToggleCommand { get; }
 
     /// <summary>Forgets this run. The window asks first; the row only reports the click.</summary>
     public RelayCommand RemoveCommand { get; }
     public string Meta { get; }
     public string Tooltip { get; }
-    public IBrush StatusBrush { get; }
-
-    // Which kind of ending a stored status is, is decided once, in Core (RunStanding), where it is tested against
-    // every outcome the engine records - this used to be a second copy of that classification. Only the colours
-    // are here.
-    internal static IBrush BrushFor(string status) => RunStanding.Of(status) switch
-    {
-        RunStandingKind.Done => Brand.Success,
-        RunStandingKind.Failed => Brand.Danger,
-        RunStandingKind.Idle => Brand.TextMuted,
-        // Open - blocked, waiting for an answer, incomplete - and, in the history, any word that is not an end:
-        // a run that never wrote a final status. A person's problem to look at, which is what amber means here.
-        _ => Brand.Amber
-    };
 
     /// <summary>
     /// How long ago, the way a person would say it. Days are counted on the CALENDAR, not in
@@ -176,9 +150,6 @@ internal sealed class LiveRunViewModel
     public string Tooltip { get; }
     public bool CanOpen { get; }
     public RelayCommand OpenCommand { get; }
-
-    /// <summary>Ember: this is the thing that is happening, which is what ember means here.</summary>
-    public IBrush StatusBrush => Brand.Accent;
 }
 
 /// <summary>
@@ -209,9 +180,6 @@ internal sealed class ResumableRunViewModel
     public string Meta { get; }
     public string Tooltip { get; }
     public RelayCommand ResumeCommand { get; }
-
-    /// <summary>Amber, like everywhere else here: nobody knows how this ended.</summary>
-    public IBrush StatusBrush => Brand.Amber;
 }
 
 /// <summary>
@@ -268,7 +236,7 @@ internal sealed class PastRunViewModel : ObservableObject
         Action<ArtifactItemViewModel> remove,
         // Passed in rather than looked up here: only the window knows the provider list, and a past
         // run must be classified by the same rule as a live one.
-        Func<string?, ModelWorkSplit.Reach>? reachOf = null,
+        Func<string?, ModelReach>? reachOf = null,
         // Every attempt at the same task, newest first. Passed in because only the window has the
         // whole history; a run cannot know its siblings from inside itself. Headers, because all
         // this needs of a sibling is that it exists and when it started.
@@ -314,8 +282,6 @@ internal sealed class PastRunViewModel : ObservableObject
         Status = record.Status;
         // The pill is a tint with the colour in the word - see Brand. The 3px edge on a run
         // CARD stays saturated: an edge that thin has nowhere to put a tint.
-        StatusBrush = Brand.PhaseFill(record.Status);
-        StatusTextBrush = Brand.PhaseText(record.Status);
 
         var elapsed = record.FinishedAt - record.StartedAt;
         var model = string.IsNullOrWhiteSpace(record.Model) ? "unknown model" : record.Model;
@@ -333,7 +299,7 @@ internal sealed class PastRunViewModel : ObservableObject
 
         // The same three tiles the live run shows, off what was actually recorded.
         Routing = RunRouting.From(record);
-        ModelWork = ModelWorkSplit.From(record, reachOf ?? (_ => ModelWorkSplit.Reach.Unknown));
+        ModelWork = ModelWorkSplit.From(record, reachOf ?? (_ => ModelReach.Unknown));
 
         // Null usage means the run predates the counting, or the provider never reported - which is
         // not the same as zero and does not get to look like it.
@@ -355,14 +321,13 @@ internal sealed class PastRunViewModel : ObservableObject
         {
             HasSettings = true;
             AutonomyText = set.AutonomyName;
-            AutonomyBrush = Brand.Autonomy(set.Autonomy);
+            Autonomy = set.Autonomy;
             WorkerText = string.IsNullOrWhiteSpace(set.Worker) ? "default worker" : set.Worker;
             StagingText = set.Staged ? "changes were staged for review" : "changes were applied directly";
         }
         else
         {
             AutonomyText = WorkerText = StagingText = string.Empty;
-            AutonomyBrush = Brand.TextMuted;
         }
 
         ShowExecutionCommand = new RelayCommand(() => SelectedTab = 0);
@@ -382,8 +347,6 @@ internal sealed class PastRunViewModel : ObservableObject
     public string Title { get; }
     public string Meta { get; }
     public string Status { get; }
-    public IBrush StatusBrush { get; }
-    public IBrush StatusTextBrush { get; }
 
     /// <summary>The plan's steps, rebuilt from the record. Empty for a run stored before the step
     /// number was, in which case the timeline is the whole story.</summary>
@@ -403,7 +366,8 @@ internal sealed class PastRunViewModel : ObservableObject
     /// <summary>False for a run recorded before its setup was.</summary>
     public bool HasSettings { get; }
     public string AutonomyText { get; } = string.Empty;
-    public IBrush AutonomyBrush { get; } = Brand.TextMuted;
+    /// <summary>The tier the run was started under; null for a run recorded before runs kept their settings.</summary>
+    public int? Autonomy { get; }
     public string WorkerText { get; } = string.Empty;
     public string StagingText { get; } = string.Empty;
 

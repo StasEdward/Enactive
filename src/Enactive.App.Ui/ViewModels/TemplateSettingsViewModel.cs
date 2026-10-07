@@ -1,7 +1,6 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
-using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Templates;
 using Enactive.Workspace;
@@ -41,16 +40,10 @@ internal sealed class TemplateRow : ObservableObject
     public bool HasDescription => !string.IsNullOrWhiteSpace(Template.Description);
 
     /// <summary>
-    /// Grey for a built-in, blue for one of yours, green for one that lives with the project — the
-    /// same one-glance distinction the Providers and MCP lists draw. Where a template comes from
-    /// decides who else sees it, so it is worth a colour rather than only a word.
+    /// Where the template comes from, which decides who else sees it - so it is worth a colour rather than only
+    /// a word (Palette.Template).
     /// </summary>
-    public IBrush EdgeBrush => Entry.Origin switch
-    {
-        TemplateOrigin.Builtin => Brand.Line,
-        TemplateOrigin.Global => Brand.Info,
-        _ => Brand.Success
-    };
+    public TemplateEdge Edge => TemplateEdges.Of(Entry.Origin);
 
     /// <summary>A built-in is customised rather than edited: the original has to stay reachable.</summary>
     public bool IsEditable => !Entry.IsBuiltin;

@@ -103,7 +103,7 @@
                     <Button Content="Test" Command="{Binding TestCommand}"
                             ToolTip.Tip="Ask this provider for its model list, and check that the first model above is among them" />
                     <Ellipse Width="9" Height="9" VerticalAlignment="Center"
-                             Fill="{Binding StatusBrush}" />
+                             Fill="{Binding Health, Converter={x:Static local:Palette.Health}}" />
                     <TextBlock Classes="hint" Text="{Binding Status}"
                                VerticalAlignment="Center" TextWrapping="Wrap" />
                 </StackPanel>

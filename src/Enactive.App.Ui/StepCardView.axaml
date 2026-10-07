@@ -1,13 +1,14 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Enactive.App.Ui.ViewModels"
+             xmlns:local="using:Enactive.App.Ui"
              x:Class="Enactive.App.Ui.StepCardView"
              x:DataType="vm:StepCardViewModel">
 
     <!-- The left edge carries the step's status colour: a running step is the one place in the plan
          feed that earns ember. -->
     <Border Background="{DynamicResource Brand.CardFill}"
-            BorderBrush="{Binding StatusBrush}"
+            BorderBrush="{Binding Tone, Converter={x:Static local:Palette.CardTone}}"
             BorderThickness="4,0,0,0"
             CornerRadius="4"
             Padding="12,8,10,10"
@@ -16,7 +17,7 @@
 
             <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
             <TextBlock Text="{Binding Activity}" FontSize="12"
-                       Foreground="{Binding StatusBrush}"
+                       Foreground="{Binding Tone, Converter={x:Static local:Palette.CardTone}}"
                        TextWrapping="Wrap" Margin="0,3,0,0" />
 
             <!-- Disclosure: hidden until the step has logged something, and the summary is computed
@@ -42,12 +43,12 @@
                             <StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
                                     <TextBlock Text="{Binding Icon}"
-                                               Foreground="{Binding IconBrush}"
+                                               Foreground="{Binding Kind, Converter={x:Static local:Palette.EntryIcon}}"
                                                FontFamily="Consolas, Menlo, monospace"
                                                FontSize="12" Width="16" TextAlignment="Center" />
                                     <TextBlock Text="{Binding Label}"
-                                               Foreground="{Binding LabelBrush}"
-                                               FontWeight="{Binding LabelWeight}"
+                                               Foreground="{DynamicResource Brand.TextBody}"
+                                               FontWeight="{Binding Kind, Converter={x:Static local:Palette.EntryWeight}}"
                                                FontSize="12" TextWrapping="Wrap" />
                                 </StackPanel>
                                 <TextBlock Text="{Binding Detail}"

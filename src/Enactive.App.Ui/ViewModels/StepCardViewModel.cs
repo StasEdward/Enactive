@@ -1,32 +1,27 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
-using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.History;
 
 /// <summary>
 /// One line of a step's action log: an icon, a short label, and an optional muted one-line result
-/// attached afterwards when the tool comes back.
+/// attached afterwards when the tool comes back. Its kind decides how it is drawn (Palette.EntryIcon, EntryWeight).
 /// </summary>
 internal sealed class StepEntry : ObservableObject
 {
     private string _detail = string.Empty;
 
-    public StepEntry(string icon, IBrush iconBrush, string label, IBrush labelBrush, bool bold)
+    public StepEntry(FeedEntryKind kind, string icon, string label)
     {
+        Kind = kind;
         Icon = icon;
-        IconBrush = iconBrush;
         Label = label;
-        LabelBrush = labelBrush;
-        LabelWeight = bold ? FontWeight.SemiBold : FontWeight.Normal;
     }
 
+    public FeedEntryKind Kind { get; }
     public string Icon { get; }
-    public IBrush IconBrush { get; }
     public string Label { get; }
-    public IBrush LabelBrush { get; }
-    public FontWeight LabelWeight { get; }
 
     /// <summary>Set once, when the tool this row describes returns. Empty until then.</summary>
     public string Detail
@@ -50,8 +45,8 @@ internal sealed class StepEntry : ObservableObject
 ///
 /// <para>A view of a <see cref="FeedCard"/>, and nothing more. What a card says and where it stands is
 /// decided by <see cref="RunFeed"/>, in Core, the same fold for a run happening in front of you and for
-/// one reopened from the history; this only turns its status into a word and a colour and its lines into
-/// rows. It used to decide all of it here, in a WinExe no test could reach, and the replay had a copy of
+/// one reopened from the history; this only turns its status into a word and a tone (the view picks the colour,
+/// Palette.CardTone) and its lines into rows. It used to decide all of it here, in a WinExe no test could reach, and the replay had a copy of
 /// its own that had drifted.</para>
 /// </summary>
 internal sealed class StepCardViewModel : ObservableObject
@@ -59,7 +54,7 @@ internal sealed class StepCardViewModel : ObservableObject
     private readonly FeedCard _card;
     private int _syncedVersion = -1;
     private string _statusWord = "pending";
-    private IBrush _statusBrush = Brand.StepPending;
+    private CardTone _tone = CardTone.Pending;
     private string _activity = "Waiting…";
     private string _toggleLabel = string.Empty;
     private bool _isExpanded;
@@ -78,7 +73,7 @@ internal sealed class StepCardViewModel : ObservableObject
 
     public string StatusWord { get => _statusWord; private set => Set(ref _statusWord, value); }
 
-    public IBrush StatusBrush { get => _statusBrush; private set => Set(ref _statusBrush, value); }
+    public CardTone Tone { get => _tone; private set => Set(ref _tone, value); }
 
     public string Activity { get => _activity; private set => Set(ref _activity, value); }
 
@@ -110,8 +105,7 @@ internal sealed class StepCardViewModel : ObservableObject
         _syncedVersion = _card.Version;
 
         StatusWord = Word(_card.Status);
-        // Amber while a question waits for a person - the step has not failed, it is waiting.
-        StatusBrush = _card.WaitingForYou ? Brand.Warning : BrushOf(_card.Status);
+        Tone = ToneOf(_card);
         Activity = _card.Activity;
         ToggleLabel = _card.Tally;
 
@@ -141,28 +135,32 @@ internal sealed class StepCardViewModel : ObservableObject
         _ => "pending"
     };
 
-    private static IBrush BrushOf(FeedCardStatus status) => status switch
+    /// <summary>
+    /// A question waiting for a person outranks the status: the step has not failed, it is waiting - and a
+    /// blocked one is the same to look at, since nothing went wrong in it and it goes on once its cause is put
+    /// right.
+    /// </summary>
+    internal static CardTone ToneOf(FeedCard card) => card.WaitingForYou ? CardTone.NeedsYou : card.Status switch
     {
-        FeedCardStatus.Running => Brand.StepRunning,
-        FeedCardStatus.Done => Brand.StepDone,
-        FeedCardStatus.Failed => Brand.StepFailed,
-        FeedCardStatus.Skipped => Brand.StepSkipped,
-        FeedCardStatus.Unverified => Brand.StepUnverified,
-        // Amber, like waiting for an answer: nothing went wrong in it, and it is done again once the cause is put right.
-        FeedCardStatus.Blocked => Brand.Warning,
-        _ => Brand.StepPending
+        FeedCardStatus.Running => CardTone.Running,
+        FeedCardStatus.Done => CardTone.Done,
+        FeedCardStatus.Failed => CardTone.Failed,
+        FeedCardStatus.Skipped => CardTone.Skipped,
+        FeedCardStatus.Unverified => CardTone.Unverified,
+        FeedCardStatus.Blocked => CardTone.NeedsYou,
+        _ => CardTone.Pending
     };
 
     private static StepEntry Row(FeedEntry entry)
     {
-        var row = entry.Kind switch
+        var row = new StepEntry(entry.Kind, entry.Kind switch
         {
-            FeedEntryKind.Command => new StepEntry("⌘", Brand.Info, entry.Label, Brand.TextBody, bold: false),
-            FeedEntryKind.File => new StepEntry("📄", Brand.Success, entry.Label, Brand.TextBody, bold: false),
-            FeedEntryKind.Note => new StepEntry("🔔", Brand.Warning, entry.Label, Brand.TextBody, bold: true),
-            FeedEntryKind.Refusal => new StepEntry("🛇", Brand.Danger, entry.Label, Brand.TextBody, bold: false),
-            _ => new StepEntry("🛠", Brand.Info, entry.Label, Brand.TextBody, bold: false)
-        };
+            FeedEntryKind.Command => "⌘",
+            FeedEntryKind.File => "📄",
+            FeedEntryKind.Note => "🔔",
+            FeedEntryKind.Refusal => "🛇",
+            _ => "🛠"
+        }, entry.Label);
         row.Detail = entry.Detail;
         return row;
     }

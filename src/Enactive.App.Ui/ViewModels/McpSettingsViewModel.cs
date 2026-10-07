@@ -1,7 +1,6 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
-using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Settings;
 using Enactive.Tools.Mcp;
@@ -14,16 +13,13 @@ internal sealed class McpServerRow : ObservableObject
     public string Meta => Config.CredentialsUnavailable ? "Disabled · credentials unavailable — edit to re-enter"
         : $"{(Config.Enabled ? "Enabled" : "Disabled")} · {Config.Transport} · {(Config.RequireApproval ? "asks before calls" : "workspace autonomy")}";
 
-    /// <summary>
-    /// Green when the server is a program on this machine, blue when it is reached over the network
-    /// — the same one-glance distinction the Providers list draws, and here it also says which
-    /// connections leave the machine at all.
-    /// </summary>
-    public IBrush EdgeBrush => IsLocal ? Brand.Success : Brand.Info;
-
     public string Reach => IsLocal ? "local" : "remote";
 
-    private bool IsLocal => Config.Transport == McpTransportKind.Stdio;
+    /// <summary>
+    /// A program on this machine rather than a server reached over the network - drawn as the Providers list
+    /// draws it (Palette.Local), and here it also says which connections leave the machine at all.
+    /// </summary>
+    public bool IsLocal => Config.Transport == McpTransportKind.Stdio;
 
     public RelayCommand EditCommand { get; }
     public RelayCommand RemoveCommand { get; }

@@ -44,18 +44,18 @@
                             <!-- The edge is what the item IS - a result, a decision nobody was there
                                  to answer, an error. The ember dot is the one thing that changes when
                                  you read it. -->
-                            <Border Classes="card" BorderBrush="{Binding KindBrush}">
+                            <Border Classes="card" BorderBrush="{Binding Kind, Converter={x:Static local:Palette.InboxKind}}">
                                 <StackPanel>
                                     <StackPanel Orientation="Horizontal" Spacing="6">
                                         <Ellipse Width="6" Height="6" VerticalAlignment="Center"
                                                  Fill="{DynamicResource Brand.Accent}"
                                                  IsVisible="{Binding IsUnread}" />
-                                        <TextBlock Text="{Binding Kind}" Foreground="{Binding KindBrush}"
+                                        <TextBlock Text="{Binding Kind}" Foreground="{Binding Kind, Converter={x:Static local:Palette.InboxKind}}"
                                                    FontSize="11" VerticalAlignment="Center" />
                                         <TextBlock Classes="cardMeta" Text="{Binding When}"
                                                    Margin="0" VerticalAlignment="Center" />
                                     </StackPanel>
-                                    <TextBlock Text="{Binding Title}" FontWeight="{Binding TitleWeight}"
+                                    <TextBlock Text="{Binding Title}" FontWeight="{Binding IsUnread, Converter={x:Static local:Palette.Bold}}"
                                                Foreground="{DynamicResource Brand.Text}"
                                                FontSize="12.5" TextWrapping="Wrap" Margin="0,3,0,0" />
                                 </StackPanel>
@@ -120,9 +120,9 @@
                                     <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,1">
                                         <TextBlock Text="{Binding When}" Classes="hint"
                                                    FontFamily="Consolas, Menlo, monospace" />
-                                        <TextBlock Text="{Binding Kind}" Foreground="{Binding Brush}"
+                                        <TextBlock Text="{Binding Kind}" Foreground="{Binding Kind, Converter={x:Static local:Palette.TimelineKind}}"
                                                    FontSize="11" Width="120" />
-                                        <TextBlock Text="{Binding Summary}" Foreground="{Binding Brush}"
+                                        <TextBlock Text="{Binding Summary}" Foreground="{Binding Kind, Converter={x:Static local:Palette.TimelineKind}}"
                                                    FontSize="12" TextWrapping="Wrap" />
                                     </StackPanel>
                                 </DataTemplate>

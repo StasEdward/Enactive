@@ -3,7 +3,6 @@ namespace Enactive.App.Ui.ViewModels;
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Text;
-using Avalonia.Media;
 using Avalonia.Threading;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Agents;
@@ -24,15 +23,10 @@ internal sealed class LogRow
         if (msg.Length > 200)
             msg = msg[..200] + "…";
         Line = $"{entry.At.ToLocalTime():HH:mm:ss.fff}  {Short(entry.Level)}  {entry.Source,-12} {run}{cat}  {msg}";
-        Brush = BrushesByLevel[(int)entry.Level];
     }
-
-    private static readonly IBrush[] BrushesByLevel = Enum.GetValues<LogLevel>()
-        .Select(level => (IBrush)new Avalonia.Media.Immutable.ImmutableSolidColorBrush(ColorFor(level))).ToArray();
 
     public LogEntry Entry { get; }
     public string Line { get; }
-    public IBrush Brush { get; }
 
     private static string Short(LogLevel level) => level switch
     {
@@ -42,16 +36,6 @@ internal sealed class LogRow
         LogLevel.Warn => "WRN",
         LogLevel.Error => "ERR",
         _ => "?"
-    };
-
-    private static Color ColorFor(LogLevel level) => level switch
-    {
-        LogLevel.Trace => Brand.Ink400,
-        LogLevel.Debug => Brand.Ink300,
-        LogLevel.Info => Brand.Ink100,
-        LogLevel.Warn => Brand.WarningColor,
-        LogLevel.Error => Brand.DangerColor,
-        _ => Brand.Ink100
     };
 }
 

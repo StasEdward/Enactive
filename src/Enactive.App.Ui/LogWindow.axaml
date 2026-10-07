@@ -68,7 +68,7 @@
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:LogRow">
                         <TextBlock Text="{Binding Line}"
-                                   Foreground="{Binding Brush}"
+                                   Foreground="{Binding Entry.Level, Converter={x:Static local:Palette.LogLevel}}"
                                    FontFamily="Consolas, Menlo, monospace"
                                    FontSize="12"
                                    TextWrapping="NoWrap" />

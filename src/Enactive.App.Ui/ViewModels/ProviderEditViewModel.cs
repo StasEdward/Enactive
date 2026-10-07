@@ -1,7 +1,6 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
-using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Providers;
 using Enactive.Core.Providers;
@@ -141,10 +140,10 @@ internal sealed class ProviderEditViewModel : ObservableObject
     public RelayCommand SaveCommand { get; }
     public RelayCommand CancelCommand { get; }
 
-    /// <summary>The colour of the last check. Grey until one has been made - not green.</summary>
-    public IBrush StatusBrush { get => _statusBrush; set => Set(ref _statusBrush, value); }
+    /// <summary>What the last check learned; Unknown until one has been made, and the light is grey then - not green.</summary>
+    public ProviderHealth Health { get => _health; set => Set(ref _health, value); }
 
-    private IBrush _statusBrush = Brand.TextFaint;
+    private ProviderHealth _health = ProviderHealth.Unknown;
 
     /// <summary>
     /// Asks the provider whether it is there, using the FIRST model this provider lists.
@@ -162,30 +161,15 @@ internal sealed class ProviderEditViewModel : ObservableObject
     private async Task TestAsync()
     {
         Status = "checking…";
-        StatusBrush = Brand.TextFaint;
+        Health = ProviderHealth.Checking;
 
         var status = await ProviderProbe.CheckAsync(
             Http, Kind, Id.Trim(), BaseUrl.Trim(), ApiKey,
             ModelFetch.ParseHeaders(HeadersText), ModelLines().FirstOrDefault());
 
         Status = status.Summary;
-        StatusBrush = BrushFor(status.Health);
+        Health = status.Health;
     }
-
-    /// <summary>
-    /// Three states, three colours, and grey for "nobody has asked".
-    ///
-    /// <para>Amber rather than red for a missing model: the provider answered and the credential
-    /// was accepted, so nothing is broken - something is not installed or is misspelled, and that
-    /// is a different repair.</para>
-    /// </summary>
-    internal static IBrush BrushFor(ProviderHealth health) => health switch
-    {
-        ProviderHealth.Ready => Brand.Success,
-        ProviderHealth.ModelMissing => Brand.Warning,
-        ProviderHealth.Unreachable => Brand.Danger,
-        _ => Brand.TextFaint
-    };
 
     private async Task FetchModelsAsync()
     {

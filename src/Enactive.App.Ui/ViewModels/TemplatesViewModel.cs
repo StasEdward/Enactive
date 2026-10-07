@@ -1,7 +1,6 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
-using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Context;
 using Enactive.Core.Permissions;
@@ -297,7 +296,7 @@ internal sealed class TemplateListItem : ObservableObject
     public bool IsSelected
     {
         get => _isSelected;
-        set { if (Set(ref _isSelected, value)) OnPropertyChanged(nameof(EdgeBrush)); }
+        set { if (Set(ref _isSelected, value)) OnPropertyChanged(nameof(Edge)); }
     }
 
     /// <summary>
@@ -314,12 +313,6 @@ internal sealed class TemplateListItem : ObservableObject
     /// <para>It is a binding rather than a style because a style setter cannot win against one: a
     /// bound BorderBrush is a local value, and <c>ListBoxItem:selected</c> would never take effect.</para>
     /// </summary>
-    public IBrush EdgeBrush => IsSelected
-        ? Brand.Amber
-        : Entry.Origin switch
-        {
-            TemplateOrigin.Builtin => Brand.Line,
-            TemplateOrigin.Global => Brand.Info,
-            _ => Brand.Success
-        };
+    public TemplateEdge Edge => IsSelected ? TemplateEdge.Selected : TemplateEdges.Of(Entry.Origin);
 }
+

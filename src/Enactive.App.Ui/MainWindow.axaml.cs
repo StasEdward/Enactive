@@ -969,14 +969,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                         Live(() => _vm.Routing.Apply(ev.Summary, ev.PayloadJson));
                         break;
                     case EventKind.StepStarted:
-                        SetLiveAgent("Coder", Brand.PillCoder);
+                        SetLiveAgent("Coder", AgentKind.Coder);
                         Live(() => _vm.CurrentAction = ev.Summary);
                         break;
                     case EventKind.AssistantDelta:
-                        SetLiveAgent("Coder", Brand.PillCoder);
+                        SetLiveAgent("Coder", AgentKind.Coder);
                         break;
                     case EventKind.ToolInvoked:
-                        SetLiveAgent("Coder", Brand.PillCoder);
+                        SetLiveAgent("Coder", AgentKind.Coder);
                         Live(() =>
                         {
                             _vm.ToolCalls++;
@@ -986,7 +986,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     case EventKind.ReviewRequested:
                     case EventKind.ReviewPassed:
                     case EventKind.ReviewFailed:
-                        SetLiveAgent("Reasoner · review", Brand.PillReasoner);
+                        SetLiveAgent("Reasoner · review", AgentKind.Reasoner);
                         Live(() => _vm.CurrentAction = ev.Summary);
                         break;
                     case EventKind.DecisionRequested:
@@ -1196,12 +1196,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     if (!result.Applied)
                     {
                         item.Status = result.Conflict ?? "could not apply";
-                        item.StatusBrush = Brand.Amber;
+                        item.State = ChangeState.Refused;
                         return;
                     }
 
                     item.Status = "applied";
-                    item.StatusBrush = Brand.Success;
+                    item.State = ChangeState.Applied;
                     item.CanAct = false;
                 },
                 item =>
@@ -1210,11 +1210,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     if (!result.Rejected)
                     {
                         item.Status = result.Conflict ?? "could not reject";
-                        item.StatusBrush = Brand.Amber;
+                        item.State = ChangeState.Refused;
                         return;
                     }
                     item.Status = "rejected";
-                    item.StatusBrush = Brand.Danger;
+                    item.State = ChangeState.Rejected;
                     item.CanAct = false;
                 });
 
@@ -1382,12 +1382,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _vm.CurrentAction = string.Empty;
         }
 
-        private void SetLiveAgent(string name, IBrush color)
+        private void SetLiveAgent(string name, AgentKind kind)
         {
             // Keep only badge transitions, including while another workspace is visible.
             if (_liveAgent == name) return;
             _liveAgent = name;
-            Live(() => _vm.SetAgent(name, color));
+            Live(() => _vm.SetAgent(name, kind));
         }
 
         /// <summary>
@@ -2469,20 +2469,20 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         /// provider is a gap in what we know, and filing it under "cloud" would put made-up numbers next
         /// to real ones. Same rule as the token tile's em dash.
         /// </summary>
-        private ModelWorkSplit.Reach ReachOf(string? providerId)
+        private ModelReach ReachOf(string? providerId)
         {
             if (string.IsNullOrWhiteSpace(providerId))
-                return ModelWorkSplit.Reach.Unknown;
+                return ModelReach.Unknown;
 
             var provider = _settings.Providers.FirstOrDefault(
                 p => string.Equals(p.Id, providerId, StringComparison.OrdinalIgnoreCase));
 
             if (provider is null)
-                return ModelWorkSplit.Reach.Unknown;
+                return ModelReach.Unknown;
 
             return Enactive.Settings.ProviderReach.Local(provider.BaseUrl)
-                ? ModelWorkSplit.Reach.Local
-                : ModelWorkSplit.Reach.Cloud;
+                ? ModelReach.Local
+                : ModelReach.Cloud;
         }
 
         /// <summary>
