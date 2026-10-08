@@ -3121,13 +3121,6 @@ public sealed partial class Orchestrator : IOrchestrator
             => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
                    stepNo is { } n ? $"{{\"step\":{n}}}" : null);
 
-        // A resolved decision, with WHETHER THE CALL WENT THROUGH as a value beside the sentence.
-        // Every refusal path goes through here so none of them can be the one that forgets.
-        WorkEvent Decided(string tool, bool allowed, string summary)
-            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
-                   EventKind.DecisionResolved, summary,
-                   WorkEventPayload.DecisionPayload(stepNo, tool, allowed));
-
         WorkEvent Usage(int prompt, int completion, int? cached, int? created)
         {
             runBudget.TokensUsed(prompt, completion);
