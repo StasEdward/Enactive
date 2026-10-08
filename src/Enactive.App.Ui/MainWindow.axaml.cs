@@ -204,6 +204,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.Runs.DeleteRequested += summary => _ = DeleteRunAsync(summary);
         _vm.Runs.DeleteShownRequested += shown => _ = DeleteRunsAsync(shown);
         _vm.Runs.ResumeRequested += checkpoint => _ = RunAsync(background: false, resume: checkpoint);
+        _vm.Runs.ForgetUnfinishedRequested += checkpoint => _ = ForgetUnfinishedAsync(checkpoint);
         // Pressing the running row is the way back to the live feed. The "← Back" in the past-run
         // header does the same thing and is where nobody looks.
         _vm.Runs.OpenLiveRequested += () => _vm.ShowLiveRun();
@@ -2245,6 +2246,38 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         if (refused > 0)
             _vm.Runs.Fail($"{refused} of {runs.Count} could not be deleted; the rest are gone.");
+    }
+
+    /// <summary>
+    /// Forgets an interrupted run: its checkpoint goes, and with it the offer to resume. Nothing else - the files it
+    /// changed stay in the workspace, and a record it left in the history stays there with its own delete.
+    /// </summary>
+    private async Task ForgetUnfinishedAsync(RunCheckpoint checkpoint)
+    {
+        if (!await ConfirmWindow.AskAsync(
+                this,
+                $"Delete the unfinished run “{RunTitle.OneLine(checkpoint.Title)}”?",
+                $"It can no longer be resumed: the {checkpoint.Remaining} step(s) left will not be run. "
+                + "The files it changed stay in your workspace, and its history, if it has any, stays in the list.",
+                "Delete", "Keep"))
+            return;
+
+        var path = _vm.WorkspacePath.Trim();
+        if (string.IsNullOrEmpty(path))
+            return;
+
+        try
+        {
+            await new JsonCheckpointStore(WorkspaceFrom(path)).DeleteAsync(checkpoint.RunId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // Said, and the row left: one that vanishes while its checkpoint is still on disk comes back on the next Refresh.
+            _vm.Runs.Fail("Could not delete that unfinished run: " + ex.Message);
+            return;
+        }
+
+        await LoadRunsAsync();
     }
 
     private async Task DeleteRunAsync(RunSummary record)

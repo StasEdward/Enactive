@@ -163,7 +163,7 @@ internal sealed class LiveRunViewModel
 /// </summary>
 internal sealed class ResumableRunViewModel
 {
-    public ResumableRunViewModel(RunCheckpoint checkpoint, Action<RunCheckpoint> resume)
+    public ResumableRunViewModel(RunCheckpoint checkpoint, Action<RunCheckpoint> resume, Action<RunCheckpoint>? remove = null)
     {
         Checkpoint = checkpoint;
         Title = RunTitle.OneLine(checkpoint.Title);
@@ -172,14 +172,24 @@ internal sealed class ResumableRunViewModel
         Tooltip = $"{checkpoint.Request}\n\nResume runs the {checkpoint.Remaining} step(s) that are left, "
                   + "under the permissions this run started with. A step that was in progress when it "
                   + "stopped is done again from its beginning.";
+        // The button is an icon beside the delete one, as on every other row here - so what it does is said on it.
+        ResumeTip = $"Resume: run the {checkpoint.Remaining} step(s) that are left";
         ResumeCommand = new RelayCommand(() => resume(checkpoint));
+        RemoveCommand = new RelayCommand(() => remove?.Invoke(checkpoint), () => remove is not null);
     }
 
     public RunCheckpoint Checkpoint { get; }
     public string Title { get; }
     public string Meta { get; }
     public string Tooltip { get; }
+    public string ResumeTip { get; }
     public RelayCommand ResumeCommand { get; }
+
+    /// <summary>
+    /// Forgets the offer to carry on. An unfinished run that will never be resumed could otherwise only be resumed - it
+    /// stayed in the column for good. The window asks first; the row only reports the click.
+    /// </summary>
+    public RelayCommand RemoveCommand { get; }
 }
 
 /// <summary>
@@ -475,6 +485,9 @@ internal sealed class RunsViewModel : ObservableObject
     /// <summary>Somebody asked to carry an interrupted run on. The window owns the running.</summary>
     public event Action<RunCheckpoint>? ResumeRequested;
 
+    /// <summary>Somebody asked to forget an interrupted run. The window asks first, and owns the checkpoints.</summary>
+    public event Action<RunCheckpoint>? ForgetUnfinishedRequested;
+
     public ObservableCollection<RunListItemViewModel> Items { get; } = new();
 
     /// <summary>Runs nobody knows the end of. Empty is the normal state and shows nothing at all.</summary>
@@ -522,7 +535,7 @@ internal sealed class RunsViewModel : ObservableObject
     {
         Resumable.Clear();
         foreach (var checkpoint in checkpoints.Where(c => c.IsResumable))
-            Resumable.Add(new ResumableRunViewModel(checkpoint, c => ResumeRequested?.Invoke(c)));
+            Resumable.Add(new ResumableRunViewModel(checkpoint, c => ResumeRequested?.Invoke(c), c => ForgetUnfinishedRequested?.Invoke(c)));
         OnPropertyChanged(nameof(HasResumable));
     }
 

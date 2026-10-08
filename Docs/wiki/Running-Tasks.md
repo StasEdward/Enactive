@@ -142,7 +142,7 @@ If Run again encounters a new required parameter or a now-invalid value, it repo
 
 ## Resume an interrupted run
 
-A run whose process went away before it finished — the app was closed, the machine restarted, a build agent was reclaimed — appears under **UNFINISHED** above the run history, with the request, when it stopped, and how many of its steps were done. Pressing **Resume** runs the steps that are left. The console equivalent is `--resume [<run id>]`, which picks up the most recently interrupted run in the workspace when no id is given.
+A run whose process went away before it finished — the app was closed, the machine restarted, a build agent was reclaimed — appears under **UNFINISHED** above the run history, with the request, when it stopped, and how many of its steps were done. The play icon (**Resume**) runs the steps that are left; its hint says how many. The bin icon deletes an unfinished run you will not resume, after a confirmation: it can no longer be resumed, the files it changed stay in the workspace, and a record it left in the history stays in the list. The console equivalent is `--resume [<run id>]`, which picks up the most recently interrupted run in the workspace when no id is given.
 
 What Resume is, precisely:
 
