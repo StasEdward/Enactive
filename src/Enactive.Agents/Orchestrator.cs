@@ -108,8 +108,17 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly IChatProviderFactory _providers;
     private readonly IWorkerProvider _workers;
 
-    /// <summary>The runs already told which registered tools no role names - see ToolReach; once a run is enough.</summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _toldUnnamedTools = new();
+    /// <summary>
+    /// What each run has already said once, by the sentence: a warning about the team or a role is said once a run, not at
+    /// every step and attempt. Said again each time, the one about MCP servers no role may call stood seven times in run
+    /// 9c0ee4 (2026-10-08), and the one about tools no role names eleven times in fba4d6 (2026-09-29) - read, both
+    /// times, as that many problems. Kept for as long as the run is (see <see cref="_earlierRuns"/>).
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, System.Collections.Concurrent.ConcurrentDictionary<string, byte>> _saidThisRun = new();
+
+    /// <summary>Whether this is the first time this run says <paramref name="sentence"/>.</summary>
+    private bool FirstTimeSaid(Guid runId, string sentence)
+        => _saidThisRun.GetOrAdd(runId, _ => new(StringComparer.Ordinal)).TryAdd(sentence, 0);
     private readonly IToolRegistry _tools;
     private readonly IArtifactStore _artifacts;
     private readonly WorkspaceInfo _workspace;
@@ -346,6 +355,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // A run that ended before its end was recorded (planning refused, cancelled) leaves its entry; a day is long enough.
         foreach (var stale in _earlierRuns.Where(e => e.Value.StartedAt < DateTimeOffset.UtcNow.AddDays(-1)).Select(e => e.Key).ToArray())
             _earlierRuns.TryRemove(stale, out _);
+        // What a run said once goes with it: every run still going has an entry above.
+        foreach (var ended in _saidThisRun.Keys.Where(id => !_earlierRuns.ContainsKey(id)).ToArray())
+            _saidThisRun.TryRemove(ended, out _);
 
         // This scope covers only the code up to the first yield: an async iterator resumes on its
         // CONSUMER's execution context, so an AsyncLocal set here is gone from the next segment on.
@@ -2484,6 +2496,7 @@ public sealed partial class Orchestrator : IOrchestrator
         lock (scope.Artifacts) produced = scope.Artifacts.ToArray();
         EarlierRuns.Record(_workspace.RootPath, scope.RunId, DateTimeOffset.UtcNow, intent.RawText, produced.Select(a => a.RelativePath));
         _earlierRuns.TryRemove(scope.RunId, out _);
+        _saidThisRun.TryRemove(scope.RunId, out _);
     }
 
     private IReadOnlyList<CriterionResult> ProducedFilesNow(RunScope scope, RunSession session)
@@ -3195,8 +3208,8 @@ public sealed partial class Orchestrator : IOrchestrator
         // And the servers the ROLE filtered out before any of that. ToolOffers never sees them -
         // its candidate list is already role-filtered - so without this they are not withheld, they
         // are absent, and a run starts a child process per server for tools nobody may call.
-        if (McpReach.Unreached(_tools.Definitions.Select(d => d.Name), name => Allows(worker, name))
-            is { } unreachedSentence)
+        if (McpReach.Unreached(_tools.Definitions.Select(d => d.Name), name => Allows(worker, name), worker.Role)
+            is { } unreachedSentence && FirstTimeSaid(runId, unreachedSentence))
             yield return Ev(EventKind.ErrorObserved, unreachedSentence);
 
         // And the same question of the REGISTRY, asked of the whole team rather than this worker.
@@ -3208,7 +3221,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // eleven identical warnings in one run (fba4d6, 2026-09-29) that read as eleven problems.
         if (ToolReach.Unnamed(_tools.Definitions.Select(d => d.Name),
                               _workers.All.Select(w => w.ToolAllowlist))
-            is { } unnamedSentence && _toldUnnamedTools.TryAdd(runId, 0))
+            is { } unnamedSentence && FirstTimeSaid(runId, unnamedSentence))
             yield return Ev(EventKind.ErrorObserved, unnamedSentence);
 
         // The tool schemas are sent with every request and are not part of the message list, so they

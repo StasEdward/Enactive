@@ -155,4 +155,51 @@ public sealed class ConnectedAndOfferedToNobodyTests
         Assert.Contains("test (4 tool(s))", said!, StringComparison.Ordinal);
         Assert.Contains("mcp__test__*", said!, StringComparison.Ordinal);
     }
+
+    /// <summary>A tool of an MCP server, registered as a connection registers one, which no role in these tests may call.</summary>
+    private sealed class ServerTool : Enactive.Core.Tools.ITool
+    {
+        public Enactive.Core.Tools.ToolDefinition Definition => new("mcp__notes__search", "searches notes", "{}");
+        public Enactive.Core.Permissions.PermissionLevel RequiredLevel => Enactive.Core.Permissions.PermissionLevel.Observe;
+        public Task<Enactive.Core.Tools.ToolResult> InvokeAsync(string argumentsJson, Enactive.Core.Tools.ToolContext ctx, CancellationToken ct)
+            => Task.FromResult(Enactive.Core.Tools.ToolResults.Ok("found"));
+    }
+
+    /// <summary>
+    /// Once a run for a role, not at every step and attempt: run 9c0ee4 (2026-10-08) said it seven times, which reads as
+    /// seven problems. It is about the role, not the step.
+    /// </summary>
+    [Fact]
+    public async Task A_run_of_several_steps_says_it_once()
+    {
+        using var fx = new EngineFixture();
+        fx.ToolsOverride = [.. EngineFixture.ShippedTools(), new ServerTool()];
+        var worker = new ByStepChatProvider("""
+            {"disposition":"task","title":"notes","steps":[{"title":"First note","dependsOn":[]},{"title":"Second note","dependsOn":[0]},{"title":"Third note","dependsOn":[1]}]}
+            """);
+
+        var role = EngineFixture.WorkerWith("write_file", "read_file");
+        var events = await fx.RunAsync(fx.Build(worker, role), "write three notes");
+
+        Assert.Equal(3, events.Count(e => e.Kind == Enactive.Core.Events.EventKind.StepCompleted));
+        var said = Assert.Single(events, e => e.Summary.Contains("offered to nobody", StringComparison.Ordinal));
+        Assert.Contains($"The {role.Role} role names no tool", said.Summary, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Each role is named, so a run says it once for each role that cannot reach the server: the sentence was the same for
+    /// every role, and said once for the first role it was never said for another.
+    /// </summary>
+    [Fact]
+    public void The_role_that_cannot_reach_a_server_is_named()
+    {
+        var registered = new[] { "read_file", "mcp__notes__search" };
+
+        var developer = McpReach.Unreached(registered, _ => false, "Developer");
+        var writer = McpReach.Unreached(registered, _ => false, "Technical writer");
+
+        Assert.Contains("The Developer role names no tool", developer, StringComparison.Ordinal);
+        Assert.Contains("The Technical writer role names no tool", writer, StringComparison.Ordinal);
+        Assert.NotEqual(developer, writer);
+    }
 }
