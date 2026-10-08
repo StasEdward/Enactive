@@ -104,12 +104,15 @@ public sealed class FeedCard
         Add(FeedEntryKind.Command, "Ran: " + Truncate(commandText, 90));
     }
 
-    /// <summary>A file operation - verb is a short past-tense word like "Wrote", "Read", "Listed".</summary>
-    internal void AddFileOp(string verb, string path)
+    /// <summary>
+    /// A file operation - verb is a short past-tense word like "Wrote", "Read", "Listed". Counted as a file when the tool
+    /// writes one: said by the tool's entry, not read off the word, which is for the screen.
+    /// </summary>
+    internal void AddFileOp(string verb, string path, bool writes)
     {
         FlushPendingNote();
         _tools++;
-        if (string.Equals(verb, "Wrote", StringComparison.Ordinal))
+        if (writes)
             _files++;
         Add(FeedEntryKind.File, $"{verb} {path}");
     }
@@ -620,11 +623,11 @@ public sealed class RunFeed
     /// The tools a card names by what they do to a path: the line a call leaves, and the header while it runs. One table
     /// for both, where each had a switch over the same names. Any other tool is "Ran" and "Running" by its name.
     /// </summary>
-    private static readonly Dictionary<string, (string Did, string Doing, string Unnamed, string UnnamedDoing)> PathTools = new()
+    private static readonly Dictionary<string, (string Did, string Doing, string Unnamed, string UnnamedDoing, bool Writes)> PathTools = new()
     {
-        ["write_file"] = ("Wrote", "Writing", "a file", "a file"),
-        ["read_file"] = ("Read", "Reading", "a file", "a file"),
-        ["list_dir"] = ("Listed", "Listing", "a directory", "files"),
+        ["write_file"] = ("Wrote", "Writing", "a file", "a file", true),
+        ["read_file"] = ("Read", "Reading", "a file", "a file", false),
+        ["list_dir"] = ("Listed", "Listing", "a directory", "files", false),
     };
 
     /// <summary>The tool a card names by the command it runs.</summary>
@@ -632,7 +635,7 @@ public sealed class RunFeed
 
     private static void LogInvocation(FeedCard card, Call call)
     {
-        if (PathTools.TryGetValue(call.Name, out var tool)) card.AddFileOp(tool.Did, call.Path ?? tool.Unnamed);
+        if (PathTools.TryGetValue(call.Name, out var tool)) card.AddFileOp(tool.Did, call.Path ?? tool.Unnamed, tool.Writes);
         else if (call.Name == CommandTool) card.AddCommand(call.Command ?? "a command");
         else card.AddGenericTool($"Ran {call.Name}");
     }

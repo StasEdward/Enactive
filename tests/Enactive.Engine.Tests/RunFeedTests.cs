@@ -179,6 +179,22 @@ public sealed class RunFeedTests
         Assert.Equal(@"Wrote Docs\disks.md", card.Entries[0].Label);
     }
 
+    /// <summary>
+    /// A write is counted as a file the step edited, a read and a listing are not - by what the tool does, said in its
+    /// entry. The count was read off the word on the line ("Wrote"), which is for the screen and could be reworded.
+    /// </summary>
+    [Fact]
+    public void A_write_counts_as_a_file_and_a_read_does_not()
+    {
+        var card = OneStep(Invoked("read_file", """{"path":"a.txt"}""", "read"), Invoked("list_dir", """{"path":"."}""", "list"),
+            Invoked("write_file", """{"path":"b.txt","content":"x"}""", "write"));
+
+        Assert.Equal("Used 3 tools, edited 1 file", card.Tally);
+
+        var feed = File.ReadAllText(Path.Combine(TestRepository.Root, "src", "Enactive.Core", "RunFeed.cs"));
+        Assert.DoesNotMatch(@"Equals\(verb|verb\s*==", feed);
+    }
+
     [Fact]
     public void A_command_card_shows_the_command_it_ran()
     {
