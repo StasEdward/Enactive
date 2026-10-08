@@ -21,6 +21,27 @@ public sealed class EveryStructuredAnswerIsOneRoundTests
 {
     private static RunBudget Spent() => new(new ExecutionLimits(MaxTokens: 100), DateTimeOffset.UtcNow, tokensAlreadySpent: 100);
 
+    // ── a correction ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A round that will ask again has to say what was wrong, and is refused before it asks anything when it cannot. One
+    /// of a single attempt never asks again and needs none: the plan's repair handed in an empty correction for it.
+    /// </summary>
+    [Fact]
+    public async Task Only_a_round_that_asks_again_needs_a_correction()
+    {
+        var provider = new FakeChatProvider(Turn.Says("not an answer"));
+        Task<AnswerRound<string>> Ask(int attempts) => StructuredAnswer.AskAsync<string>(provider, [],
+            messages => new ChatRequest("a-model", messages), (_, _) => (null, ["not an answer"]),
+            null, null, requireComplete: true, default, attempts);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => Ask(attempts: 2));
+        Assert.Empty(provider.Requests);
+
+        Assert.Equal(AnswerKind.Unusable, (await Ask(attempts: 1)).Kind);
+        Assert.Single(provider.Requests);
+    }
+
     // ── what a round that gave nothing says ─────────────────────────────────
 
     private static AnswerRound<string> Round(AnswerKind kind, bool cutOff = false, bool readUnfinished = false, params string[] errors)

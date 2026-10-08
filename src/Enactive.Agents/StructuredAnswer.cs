@@ -77,7 +77,10 @@ internal static class StructuredAnswer
     /// <param name="messages">The conversation so far; an unusable answer and its correction are added to it.</param>
     /// <param name="request">The request for the conversation as it stands - the caller's model, purpose and limits.</param>
     /// <param name="read">Reads an answer, given whether it was finished: a value, or what is wrong with it.</param>
-    /// <param name="correction">What the model is told when an answer cannot be used, from what was wrong with it.</param>
+    /// <param name="correction">
+    /// What the model is told when an answer cannot be used, from what was wrong with it. Null for a round of one attempt,
+    /// which never asks again: the plan's repair handed in <c>_ => ""</c>, a correction that could not be said.
+    /// </param>
     /// <param name="budget">Why the model may not be asked again, given what this round has spent - or null when it may.</param>
     /// <param name="requireComplete">
     /// Refuse an answer cut off at its length limit, or one that called a tool, before reading it. Off only for a reader
@@ -88,12 +91,15 @@ internal static class StructuredAnswer
         List<ChatMessage> messages,
         Func<List<ChatMessage>, ChatRequest> request,
         Func<string, bool, (T? Value, IReadOnlyList<string> Errors)> read,
-        Func<IReadOnlyList<string>, string> correction,
+        Func<IReadOnlyList<string>, string>? correction,
         Func<int, int, string?>? budget,
         bool requireComplete,
         CancellationToken ct,
         int attempts = 2)
     {
+        if (correction is null && attempts > 1)
+            throw new ArgumentException("A round that asks again has to say what was wrong.", nameof(correction));
+
         var usage = TokenUsage.None;
         var asked = 0;
         var cutOff = false;
@@ -141,7 +147,8 @@ internal static class StructuredAnswer
                 return Round(AnswerKind.Answered, value);
 
             messages.Add(ChatMessage.Assistant(answer));
-            messages.Add(ChatMessage.User(correction(errors)));
+            if (correction is not null)
+                messages.Add(ChatMessage.User(correction(errors)));
         }
 
         return Round(AnswerKind.Unusable);

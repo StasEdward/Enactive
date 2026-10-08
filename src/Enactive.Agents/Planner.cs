@@ -218,7 +218,7 @@ public sealed class Planner
             (answer, _) => Parse(answer, request) is { Disposition: IntentDisposition.Task, Plan.Steps.Count: > 0 } plan
                 ? (plan, [])
                 : (null, ["no corrected task DAG in the reply"]),
-            _ => "", budget: null, requireComplete: true, ct, attempts: 1);
+            correction: null, budget: null, requireComplete: true, ct, attempts: 1);
 
         var repaired = round.Value ?? invalid with
         {
