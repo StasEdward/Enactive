@@ -76,6 +76,43 @@ public sealed class ToolAllowlistTests
         }
     }
 
+    // ── what a list holds, as entries ───────────────────────────────────────
+
+    /// <summary>
+    /// An entry is held by the same case rule, but as an entry: a pattern does not hold the tools it reaches.
+    /// What the role editor ticks, and what the implied tools are read by.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { "Write_File" }, "write_file", true)]
+    [InlineData(new[] { "write_file" }, "WRITE_FILE", true)]
+    [InlineData(new[] { "mcp__*" }, "mcp__*", true)]
+    [InlineData(new[] { "mcp__*" }, "mcp__dotnet__build", false)]
+    [InlineData(new[] { "*" }, "write_file", false)]
+    [InlineData(new string[0], "write_file", false)]
+    public void A_list_holds_an_entry_whatever_its_case_and_not_what_its_patterns_reach(string[] list, string entry, bool held)
+        => Assert.Equal(held, ToolAllowlist.Holds(list, entry));
+
+    // ── the web pane ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The web pane says which roles can read the web by the gate's rule. It read the lists with case, and said
+    /// nobody could while the engine let a role naming Fetch_Url through.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { "Fetch_Url" }, true)]
+    [InlineData(new[] { "web_search" }, true)]
+    [InlineData(new[] { "*" }, true)]
+    [InlineData(new[] { "mcp__*" }, false)]
+    [InlineData(new[] { "read_file", "write_file" }, false)]
+    public void The_web_pane_names_the_roles_the_gate_lets_read_the_web(string[] tools, bool named)
+    {
+        var role = new WorkerConfig { Id = "researcher", Role = "Researcher", Tools = [.. tools] };
+
+        Assert.Equal(named, WebRoles.Reaching([role]).Contains(role));
+        Assert.Equal(named, ToolAccess.Allows(EngineFixture.WorkerWith(tools), "fetch_url")
+                            || ToolAccess.Allows(EngineFixture.WorkerWith(tools), "web_search"));
+    }
+
     /// <summary>The MCP screen and the engine's role gate read a role the same way - here they did not, on case.</summary>
     [Fact]
     public void The_mcp_screen_and_the_role_gate_agree_on_a_tool_named_in_another_case()

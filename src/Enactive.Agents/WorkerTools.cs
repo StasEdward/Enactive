@@ -1,5 +1,7 @@
 ﻿namespace Enactive.Agents;
 
+using Enactive.Core.Tools;
+
 /// <summary>
 /// Tools a worker already has the capability for, whether or not its saved list names them.
 ///
@@ -130,7 +132,7 @@ public static class WorkerTools
     public static IReadOnlyList<string> WithImplied(IReadOnlyList<string> tools)
     {
         // "*" is every tool there is. Adding names to it would say less, not more.
-        if (tools.Contains("*", StringComparer.OrdinalIgnoreCase))
+        if (ToolAllowlist.GrantsEverything(tools))
         {
             return tools;
         }
@@ -140,8 +142,9 @@ public static class WorkerTools
         foreach (var (requires, implies) in Implications)
         {
             // EVERY requirement, not any of them.
-            if (!requires.All(r => result.Contains(r, StringComparer.OrdinalIgnoreCase))
-                || result.Contains(implies, StringComparer.OrdinalIgnoreCase))
+            // Read as entries, by the allowlist's case rule - the one every reader of a role's list uses.
+            if (!requires.All(r => ToolAllowlist.Holds(result, r))
+                || ToolAllowlist.Holds(result, implies))
             {
                 continue;
             }

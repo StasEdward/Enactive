@@ -31,6 +31,19 @@ public sealed class WorkerToolsTests
         => Assert.Contains(implied, WorkerTools.WithImplied([has]), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// A list read by the allowlist's own case rule: a tool saved as Write_File implies what write_file does, and
+    /// a tool already held in another case is not added a second time.
+    /// </summary>
+    [Fact]
+    public void A_tool_saved_in_another_case_implies_the_same_and_is_not_named_twice()
+    {
+        var granted = WorkerTools.WithImplied(["Write_File", "Edit_File"]);
+
+        Assert.Contains("create_directory", granted);
+        Assert.Single(granted, t => string.Equals(t, "edit_file", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// copy_file needs BOTH halves, and that is the one entry where it matters. A worker that can
     /// read a file and write another can already copy one by hand - badly, because reading stops at
     /// 8000 characters and the copy comes out partial and looks whole. Naming the capability is

@@ -16,6 +16,12 @@ namespace Enactive.Core.Tools;
 /// them by prefix. Built-in tools are granted by name, on purpose - <c>send_email</c> and
 /// <c>delete_file</c> are each given by a person deciding to - and <c>write_*</c> would quietly hand a
 /// role every tool of that name added later, so anything else ending in <c>*</c> is just a name.</para>
+///
+/// <para><b>What it is not for.</b> Lists that are not a role's, read by rules of their own on purpose: a
+/// permission policy (<c>PermissionPolicy</c> - the autonomy tier's and a template's, matched by the permission
+/// engine), and the commands agreed for one task (<c>TaskActionPolicy</c>), which a model writes and which match
+/// a tool's name exactly - there a <c>*</c> must not come to mean every tool. The settings' old migrations read
+/// role lists in their own way too, and stay as they ran.</para>
 /// </summary>
 public static class ToolAllowlist
 {
@@ -24,6 +30,15 @@ public static class ToolAllowlist
 
     /// <summary>Whether the list grants every tool.</summary>
     public static bool GrantsEverything(IEnumerable<string> list) => list.Any(entry => entry == Everything);
+
+    /// <summary>
+    /// Whether the list carries this entry - by the same case rule, but as an entry and not for what it reaches:
+    /// <c>mcp__*</c> does not hold <c>mcp__dotnet__build</c>. What the role editor ticks. It read the list with
+    /// case, while the tools it offers are told apart without it, so a role saved with <c>Write_File</c> showed an
+    /// unticked <c>write_file</c>, and Save took the tool away.
+    /// </summary>
+    public static bool Holds(IEnumerable<string> list, string entry)
+        => list.Any(held => string.Equals(held, entry, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Whether the list lets a role call this tool.</summary>
     public static bool Allows(IEnumerable<string> list, string tool) => list.Any(entry => Matches(entry, tool));

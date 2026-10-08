@@ -21,6 +21,23 @@ public sealed class WorkerEditorModelTests
     private static WorkerEditViewModel Open(WorkerConfig config)
         => new(config, Catalog, toolCatalog: [], onSaved: () => { });
 
+    /// <summary>
+    /// A tool saved in another case is ticked, and survives opening the role and pressing Save. The rows are told
+    /// apart ignoring case and the ticks were read with it, so Write_File showed an unticked write_file - and Save
+    /// took the tool from the role.
+    /// </summary>
+    [Fact]
+    public void A_tool_saved_in_another_case_survives_the_dialog()
+    {
+        var config = new WorkerConfig { Id = "developer", Role = "Developer", Tools = ["Write_File", "read_file"] };
+        var editor = new WorkerEditViewModel(config, Catalog, toolCatalog: ["read_file", "write_file"], onSaved: () => { });
+
+        Assert.True(editor.Tools.Single(t => t.Name == "write_file").IsSelected);
+        editor.SaveCommand.Execute(null);
+
+        Assert.Contains("write_file", config.Tools, StringComparer.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void A_worker_nobody_chose_a_model_for_is_still_unassigned_after_Apply()
     {
