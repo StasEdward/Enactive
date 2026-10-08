@@ -23,12 +23,10 @@ public sealed class StepEndingTests : IDisposable
     private readonly ToolRegistry _tools = new(EngineFixture.ShippedTools());
     private readonly List<ChatMessage> _messages = [];
     private readonly ExecutionJournal _journal = new();
-    private readonly OpenFailures _open;
     private readonly StepProgress _progress;
 
     public StepEndingTests()
     {
-        _open = new OpenFailures(_tools.Definitions);
         _progress = new StepProgress(_tools.Definitions);
     }
 
@@ -36,7 +34,7 @@ public sealed class StepEndingTests : IDisposable
 
     private StepEnding Ending(IReadOnlyList<SuccessCriterionDefinition>? criteria = null, StepOutputSchema? schema = null,
         StepOutputSlot? slot = null, bool reviewed = false)
-        => new(_journal, _open, _messages, _progress, Guid.NewGuid(), Guid.NewGuid(), stepNo: 1, _fx.Root,
+        => new(_journal, _tools.Definitions, _messages, _progress, Guid.NewGuid(), Guid.NewGuid(), stepNo: 1, _fx.Root,
             (_, _) => Task.FromResult<string?>(null), criteria, schema, slot, reviewed);
 
     private static StepEnding.Turn Says(string? reply, IReadOnlyList<ToolCall>? calls = null, bool onlyHandOn = false,
@@ -152,8 +150,8 @@ public sealed class StepEndingTests : IDisposable
     [Fact]
     public async Task A_step_owing_its_result_is_reminded_before_any_verdict_on_its_open_calls()
     {
-        _open.Failed(Call("run_command", """{"command":"wmic diskdrive get status"}"""), "'wmic' is not recognized");
         var ending = Ending(schema: Findings, slot: new StepOutputSlot());
+        ending.Open.Failed(Call("run_command", """{"command":"wmic diskdrive get status"}"""), "'wmic' is not recognized");
 
         var reminded = await End(ending, Says("The disks look fine."));
         var remindedOf = LastTold;
@@ -174,10 +172,11 @@ public sealed class StepEndingTests : IDisposable
     [Fact]
     public async Task A_block_the_engine_can_see_ends_the_step_before_it_is_told_of_its_open_calls()
     {
-        _open.Refused(Call("send_email", """{"to":"ops@example.com"}"""), "the user did not permit this action");
+        var ending = Ending();
+        ending.Open.Refused(Call("send_email", """{"to":"ops@example.com"}"""), "the user did not permit this action");
         var before = _messages.Count;
 
-        var verdict = await End(Ending(), Says("I could not send the report."));
+        var verdict = await End(ending, Says("I could not send the report."));
 
         Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Blocked), (verdict.Next, verdict.Kind));
         Assert.Equal(OutcomeCause.BlockedPermission, verdict.Cause);
@@ -187,8 +186,8 @@ public sealed class StepEndingTests : IDisposable
     [Fact]
     public async Task Calls_still_open_after_the_step_was_told_go_to_its_reviewer_named()
     {
-        _open.Failed(Call("run_command", """{"command":"wmic diskdrive get status"}"""), "'wmic' is not recognized");
         var ending = Ending(reviewed: true);
+        ending.Open.Failed(Call("run_command", """{"command":"wmic diskdrive get status"}"""), "'wmic' is not recognized");
 
         var told = await End(ending, Says("The disks look fine."));
         var ended = await End(ending, Says("The disks look fine."));
@@ -208,5 +207,84 @@ public sealed class StepEndingTests : IDisposable
 
         Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Incomplete), (ended.Next, ended.Kind));
         Assert.Contains("without handing on its declared output", ended.Reason);
+    }
+
+    // ── a step that said it cannot go on ────────────────────────────────────
+
+    private static readonly ToolOffer GitKeptBack = new(["read_file"], [new WithheldTool("git", "this run runs no shell commands")]);
+
+    private static StepEnding.Verdict Reported(StepEnding ending, string reported, ToolOffer offer)
+    {
+        var verdict = new StepEnding.Verdict();
+        _ = ending.ReportedBlocked(reported, offer, verdict).ToList();
+        return verdict;
+    }
+
+    /// <summary>
+    /// A step's own report of a block is advisory. What the engine finds itself is the cause, with the step's word
+    /// beside it; then a tool the run kept back that the report names; only then the step's word alone. This was
+    /// decided inside the tool loop, apart from every other rule about how a step ends.
+    /// </summary>
+    [Fact]
+    public void A_permission_the_step_was_refused_is_the_cause_of_the_block_it_reports()
+    {
+        var ending = Ending();
+        ending.Open.Refused(Call("send_email", """{"to":"ops@example.com"}"""), "the user did not permit this action");
+
+        var verdict = Reported(ending, "I cannot send the report without mail", GitKeptBack);
+
+        Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Blocked, OutcomeCause.BlockedPermission), (verdict.Next, verdict.Kind, verdict.Cause));
+        Assert.StartsWith("needs a permission it was refused", verdict.Reason);
+        Assert.EndsWith("; I cannot send the report without mail", verdict.Reason);
+    }
+
+    [Fact]
+    public void A_tool_the_run_kept_back_and_the_report_names_is_the_cause()
+    {
+        var verdict = Reported(Ending(), "I need GIT to see what changed", GitKeptBack);
+
+        Assert.Equal(OutcomeCause.BlockedPermission, verdict.Cause);
+        Assert.StartsWith("needs a tool this run does not offer:", verdict.Reason);
+    }
+
+    /// <summary>A tool kept back that the report does not name is not why: a step waiting on a person's answer is not blocked by git.</summary>
+    [Fact]
+    public void Where_the_engine_sees_nothing_the_step_s_word_is_the_cause()
+    {
+        var verdict = Reported(Ending(), "waiting for the owner to say which disk to keep", GitKeptBack);
+
+        Assert.Equal((StepOutcomeKind.Blocked, OutcomeCause.BlockedReported), (verdict.Kind, verdict.Cause));
+        Assert.Equal("waiting for the owner to say which disk to keep", verdict.Reason);
+    }
+
+    // ── what the open calls amount to ───────────────────────────────────────
+
+    /// <summary>A block the engine can see in what is open: a permission refused, or a record of nothing but misses.</summary>
+    [Fact]
+    public void Open_calls_are_a_block_only_when_refused_or_nothing_but_misses()
+    {
+        var refused = Ending().Open;
+        refused.Refused(Call("send_email", """{"to":"ops@example.com"}"""), "the user did not permit this action");
+        var misses = Ending().Open;
+        misses.FoundNothing(Call("read_file", """{"path":"disks.md"}"""), "not found");
+        var failed = Ending().Open;
+        failed.Failed(Call("run_command", """{"command":"wmic diskdrive get status"}"""), "'wmic' is not recognized");
+
+        Assert.Equal(OutcomeCause.BlockedPermission, refused.Block?.Cause);
+        Assert.Equal(OutcomeCause.BlockedInput, misses.Block?.Cause);
+        Assert.Null(failed.Block);
+    }
+
+    /// <summary>
+    /// The tool loop does not touch a step's open calls: StepEnding keeps them, the admission and the accounting of
+    /// results write to them. The loop made them, wrote to them in two places and decided a reported block beside
+    /// them, so a rule about what a step left open could be anywhere in it.
+    /// </summary>
+    [Fact]
+    public void The_tool_loop_does_not_touch_the_step_s_open_calls()
+    {
+        var orchestrator = File.ReadAllText(Path.Combine(TestRepository.Root, "src", "Enactive.Agents", "Orchestrator.cs"));
+
+        Assert.DoesNotContain("penFailures", orchestrator, StringComparison.Ordinal);
     }
 }

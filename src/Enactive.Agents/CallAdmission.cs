@@ -184,43 +184,11 @@ internal sealed class CallAdmission(
             yield break;
         }
 
-        // The step's hand-over: checked here, against the one contract, and nowhere else.
-        if (outputSchema is not null && outputSlot is not null && call.Name == StepOutputContract.ToolName)
+        // The step's hand-over: checked here, against the one contract, and nowhere else (see HandOn).
+        if (TakesHandOn && call.Name == StepOutputContract.ToolName)
         {
-            yield return Invoked(call);
-            var sameAgain = outputSlot.LastRefused == TaskProgress.Canonical(call.ArgumentsJson);
-            var checkedOutput = StepOutputContract.Check(outputSchema, call.ArgumentsJson,
-                path => outputPathExists?.Invoke(path) == true, id => id >= 1 && id <= journal.Actions.Count,
-                boundary is { ForItem: true } ? boundary.Items : null, offered: submitTool);
-            string handed;
-            if (checkedOutput.Accepted)
-            {
-                outputSlot.Accept(checkedOutput);
-                outputSlot.LastRefused = null;
-                openFailures.HandedOn();
-                // What the step had shown for each item it hands a result on for, recorded now
-                // and by the engine (Phase 5.1): later, only this counts as coverage.
-                outputSlot.Items = EvidenceCoverage.Gather(outputSchema, checkedOutput.Values!, reads, journal.Actions, tools.Definitions,
-                    boundary is { ForItem: true } ? boundary.Items : null);
-                var unbacked = EvidenceCoverage.Unbacked(outputSlot.Items);
-                handed = $"Accepted as this step's output (revision {outputSlot.Revision}); the steps after it receive "
-                    + "these values." + (checkedOutput.Notes.Count > 0 ? " " + string.Join(" ", checkedOutput.Notes) : "")
-                    + (unbacked is null ? "" : " " + unbacked)
-                    + " Finish the step with a short closing message.";
-                journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, handed, WorkspaceEffect.None);
-                yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {handed}");
-            }
-            else
-            {
-                // A submission sent again unchanged is said to be one (C.5): a refusal that
-                // does not say so changes nothing about what the model does next.
-                handed = (sameAgain ? "This is the same submission as the last one, unchanged - the problems below still stand. " : "")
-                    + string.Join(" ", checkedOutput.Errors) + " Nothing was stored; send the corrected submission.";
-                outputSlot.LastRefused = TaskProgress.Canonical(call.ArgumentsJson);
-                journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, handed, WorkspaceEffect.None);
-                yield return Ev(EventKind.ToolResult, $"{call.Name} -> failed: {handed}");
-            }
-            messages.Add(ChatMessage.Tool(call.Id, handed));
+            foreach (var ev in HandOn(call, answered: true))
+                yield return ev;
             yield break;
         }
 
@@ -622,6 +590,76 @@ internal sealed class CallAdmission(
     /// <summary>A call the checks that need nobody refuse, and how it is to be told and counted.</summary>
     private sealed record PreflightRefusal(string Reason, string Reply, string Summary,
         bool DidNotRun = false, string? AsTool = null, bool Answered = false);
+
+    /// <summary>Whether this step hands a result on as values, so a hand-over is checked rather than turned away.</summary>
+    public bool TakesHandOn => outputSchema is not null && outputSlot is not null;
+
+    /// <summary>
+    /// The step's hand-over (submit_step_output), checked against the one contract and kept or refused - for a call
+    /// made in a turn, and for one sent with a handover note. The second is not answered in the conversation, which
+    /// the note is about to replace: <paramref name="answered"/> false.
+    ///
+    /// <para>It was checked twice. The handover note's copy, in the tool loop, had drifted from this one: it said
+    /// nothing of items handed on with no evidence behind them, left out the contract's notes, and did not say a
+    /// submission sent again unchanged was one - all of which the review reads in the journal.</para>
+    /// </summary>
+    public IEnumerable<WorkEvent> HandOn(ToolCall call, bool answered)
+    {
+        if (outputSchema is null || outputSlot is null)
+            throw new InvalidOperationException("This step hands nothing on as values; see TakesHandOn.");
+
+        yield return Invoked(call);
+        var sameAgain = outputSlot.LastRefused == TaskProgress.Canonical(call.ArgumentsJson);
+        var checkedOutput = StepOutputContract.Check(outputSchema, call.ArgumentsJson,
+            path => outputPathExists?.Invoke(path) == true, id => id >= 1 && id <= journal.Actions.Count,
+            boundary is { ForItem: true } ? boundary.Items : null, offered: submitTool);
+        string handed;
+        if (checkedOutput.Accepted)
+        {
+            outputSlot.Accept(checkedOutput);
+            outputSlot.LastRefused = null;
+            openFailures.HandedOn();
+            // What the step had shown for each item it hands a result on for, recorded now
+            // and by the engine (Phase 5.1): later, only this counts as coverage.
+            outputSlot.Items = EvidenceCoverage.Gather(outputSchema, checkedOutput.Values!, reads, journal.Actions, tools.Definitions,
+                boundary is { ForItem: true } ? boundary.Items : null);
+            var unbacked = EvidenceCoverage.Unbacked(outputSlot.Items);
+            handed = $"Accepted as this step's output (revision {outputSlot.Revision}); the steps after it receive "
+                + "these values." + (checkedOutput.Notes.Count > 0 ? " " + string.Join(" ", checkedOutput.Notes) : "")
+                + (unbacked is null ? "" : " " + unbacked)
+                // Said to the step when it is answered; with a note, the note is what carries on.
+                + (answered ? " Finish the step with a short closing message." : " Handed on with the handover note.");
+            journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, handed, WorkspaceEffect.None);
+            yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {handed}");
+        }
+        else
+        {
+            // A submission sent again unchanged is said to be one (C.5): a refusal that
+            // does not say so changes nothing about what the model does next.
+            handed = (sameAgain ? "This is the same submission as the last one, unchanged - the problems below still stand. " : "")
+                + string.Join(" ", checkedOutput.Errors) + " Nothing was stored; send the corrected submission.";
+            outputSlot.LastRefused = TaskProgress.Canonical(call.ArgumentsJson);
+            journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, handed, WorkspaceEffect.None);
+            yield return Ev(EventKind.ToolResult, $"{call.Name} -> failed: {handed}");
+        }
+        if (answered)
+            messages.Add(ChatMessage.Tool(call.Id, handed));
+    }
+
+    /// <summary>
+    /// The calls of a turn that came back incomplete - cut at the output limit, or with arguments that do not parse:
+    /// none ran, and each is recorded so - in the journal, and as a call the step has not made good, so it cannot
+    /// end as though it had made them.
+    /// </summary>
+    public void NotRun(IEnumerable<ToolCall> calls, string reason)
+    {
+        foreach (var call in calls)
+        {
+            openFailures.Failed(call, reason + "; nothing executed", didNotRun: true);
+            journal.Record(stepNo, call.Name, call.ArgumentsJson, ActionOutcome.Refused,
+                reason + "; nothing executed", WorkspaceEffect.None);
+        }
+    }
 
     private WorkEvent Ev(EventKind kind, string summary)
         => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,

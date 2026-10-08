@@ -7,6 +7,7 @@ using Enactive.Core.Events;
 using Enactive.Core.Execution;
 using Enactive.Core.Permissions;
 using Enactive.Core.Tools;
+using Enactive.Core.Tasks;
 using Enactive.Core.Workers;
 using Enactive.Tools;
 using Xunit;
@@ -28,6 +29,8 @@ public sealed class CallAdmissionTests : IDisposable
     private readonly TaskProgress _tasks;
     private readonly StepProgress _progress;
     private readonly Guid _taskId = Guid.NewGuid();
+    private readonly ExecutionJournal _journal = new();
+    private OpenFailures _open = null!;
 
     public CallAdmissionTests()
     {
@@ -38,8 +41,10 @@ public sealed class CallAdmissionTests : IDisposable
     public void Dispose() => _fx.Dispose();
 
     private CallAdmission Admission(int autonomy, IDecisionHandler decisions, Worker? worker = null,
-        WriteBoundary? boundary = null, ToolBudget? catalog = null, bool mayReportBlocked = false)
+        WriteBoundary? boundary = null, ToolBudget? catalog = null, bool mayReportBlocked = false,
+        StepOutputSchema? schema = null, StepOutputSlot? slot = null)
     {
+        _open = new OpenFailures(_tools.Definitions);
         worker ??= EngineFixture.WorkerWith("read_file", "write_file", "run_command", "send_email");
         var policy = AutonomyTiers.PolicyFor(autonomy);
         var permissions = new PermissionEngine();
@@ -49,10 +54,11 @@ public sealed class CallAdmissionTests : IDisposable
                     && d == PermissionDecision.Allow && _tools.RequiresApprovalOf(tool) ? PermissionDecision.Ask : d,
             decisions.CanApproveTool);
         return new CallAdmission(_tools, new ToolAccess(_tools, permissions), worker, policy, offer, new ReadLedger(),
-            _fx.Artifacts.BeginStep(), new ExecutionJournal(), new OpenFailures(_tools.Definitions), _messages, _progress, _tasks,
+            _fx.Artifacts.BeginStep(), _journal, _open, _messages, _progress, _tasks,
             decisions, new SemaphoreSlim(1, 1), _granted,
             new WritableRoots(Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-roots.json")),
-            _fx.Root, _fx.Workspace.Id, _taskId, Guid.NewGuid(), stepNo: 1, catalog, mayReportBlocked, boundary: boundary);
+            _fx.Root, _fx.Workspace.Id, _taskId, Guid.NewGuid(), stepNo: 1, catalog, mayReportBlocked,
+            outputSchema: schema, outputSlot: slot, boundary: boundary);
     }
 
     private static async Task<(bool Run, CallAdmission.Verdict Verdict)> Admit(CallAdmission admission, ToolCall call)
@@ -254,5 +260,48 @@ public sealed class CallAdmissionTests : IDisposable
             Asked++;
             return Task.FromResult(new DecisionOutcome("deny"));
         }
+    }
+
+    // ── calls that never ran, and the hand-over ─────────────────────────────
+
+    /// <summary>
+    /// A turn that came back cut off or with arguments that do not parse ran none of its calls: each is recorded as
+    /// not run, and stays open so the step cannot end as though it had made them. The loop did this itself.
+    /// </summary>
+    [Fact]
+    public void A_call_from_an_incomplete_turn_is_recorded_as_not_run_and_left_open()
+    {
+        var admission = Admission(2, _fx.Decisions);
+
+        admission.NotRun([Call("write_file", """{"path":"disks.md","content":"C: 9""")], "model output reached its token limit");
+
+        Assert.Equal(1, _open.Count);
+        var recorded = Assert.Single(_journal.Actions);
+        Assert.Equal((ActionOutcome.Refused, "model output reached its token limit; nothing executed"), (recorded.Outcome, recorded.Output));
+    }
+
+    private static readonly StepOutputSchema Findings = new("disk-findings", 1,
+        [new StepOutputField("findings", StepOutputFieldType.Text, "What the disks came to")]);
+
+    /// <summary>
+    /// A hand-over sent with a handover note goes through the one check, unanswered - the note replaces the
+    /// conversation - and is refused in the same words: the note's own copy of the check did not say that a
+    /// submission sent again unchanged was one.
+    /// </summary>
+    [Fact]
+    public void A_hand_over_sent_with_a_note_is_checked_as_any_other_and_not_answered()
+    {
+        var admission = Admission(2, _fx.Decisions, schema: Findings, slot: new StepOutputSlot());
+        var wrong = Call(StepOutputContract.ToolName, """{"verdict":"fine"}""");
+        var before = _messages.Count;
+
+        _ = admission.HandOn(wrong, answered: false).ToList();
+        _ = admission.HandOn(wrong with { Id = "again" }, answered: false).ToList();
+        _ = admission.HandOn(Call(StepOutputContract.ToolName, """{"findings":"C: is at 91%"}"""), answered: false).ToList();
+
+        Assert.Equal(before, _messages.Count);
+        Assert.StartsWith("This is the same submission as the last one", _journal.Actions[1].Output);
+        Assert.EndsWith("Handed on with the handover note.", _journal.Actions[2].Output);
+        Assert.Equal(ActionOutcome.Succeeded, _journal.Actions[2].Outcome);
     }
 }

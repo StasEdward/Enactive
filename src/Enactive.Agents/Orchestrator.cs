@@ -2528,29 +2528,6 @@ public sealed partial class Orchestrator : IOrchestrator
     }
 
     /// <summary>
-    /// A block the engine can see in what the step left open (Phase 7.1): a permission it was refused and nothing
-    /// made good, or - its whole record - lookups that found nothing. Null when what is open is something else.
-    /// </summary>
-    internal static (OutcomeCause Cause, string Reason)? EngineBlock(OpenFailures open)
-        => open.OpenRefusals is { Count: > 0 } refused
-            ? (OutcomeCause.BlockedPermission, "needs a permission it was refused: " + string.Join("; ", refused))
-            : open.NothingButMisses
-                ? (OutcomeCause.BlockedInput, "none of what the step looked for is there: " + open.Describe())
-                : null;
-
-    /// <summary>
-    /// The tools the run kept back that the step's report names, with why each was kept back - or null when it
-    /// names none. By whole word and whatever the case: "write_file" in a sentence, not "file" inside it.
-    /// </summary>
-    private static string? KeptBackAndNamed(ToolOffer offer, string report)
-    {
-        var named = offer.Withheld.Where(held => System.Text.RegularExpressions.Regex.IsMatch(report,
-            $@"(?<![A-Za-z0-9_]){System.Text.RegularExpressions.Regex.Escape(held.Name)}(?![A-Za-z0-9_])",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)).ToArray();
-        return named.Length == 0 ? null : new ToolOffer([], named).Because;
-    }
-
-    /// <summary>
     /// How a tool loop ended, filled in by <see cref="RunToolLoopAsync"/>. A class, not a return
     /// value, because an async iterator has nowhere to put one.
     /// </summary>
@@ -3168,7 +3145,6 @@ public sealed partial class Orchestrator : IOrchestrator
         var repairAttempts = new RepairAttempts();
         var repairGoal = RepairAttempts.Clip(string.Join("\n", messages.Where(m => m.Role == ChatRole.User)
             .Select(m => m.Content)), 3000);
-        var openFailures = new OpenFailures(_tools.Definitions);
 
         // Replies stopped for running away (RunawayReply). The first is explained to the model and the
         // step goes on; a second means the explanation did not take, and the step stops.
@@ -3369,15 +3345,16 @@ public sealed partial class Orchestrator : IOrchestrator
         // What happens to each call before its tool runs, in order - see CallAdmission. It also keeps the step's
         // own report that it cannot go on: the turn's other calls are answered, not run, and the step ends blocked
         // when the turn does.
-        var admission = new CallAdmission(_tools, toolAccess, worker, EffectivePolicyFor(worker), offer, reads, store,
-            journal, openFailures, messages, progress, _progress, _decisions, _decisionGate, granted, _writableRoots,
-            _workspace.RootPath, _workspace.Id, taskId, runId, stepNo, toolsOnRequest, mayReportBlocked,
-            outputSchema, outputSlot, submitTool, path => OutputPathExists(path, store), boundary, changes, stepStart);
-
-        // Whether each turn ends the step, and how - in one order, with its once-only reminders (see StepEnding).
-        var stepEnding = new StepEnding(journal, openFailures, messages, progress, taskId, runId, stepNo, _workspace.RootPath,
+        // Whether each turn ends the step, and how - in one order, with its once-only reminders (see StepEnding). It
+        // keeps the step's open calls, which the admission and the accounting of results write to and this loop does not.
+        var stepEnding = new StepEnding(journal, _tools.Definitions, messages, progress, taskId, runId, stepNo, _workspace.RootPath,
             async (path, token) => await store.TryReadPendingAsync(path, token) ?? await ReadOrNullAsync(path, token),
             stepCriteria, outputSchema, outputSlot, reviewed);
+
+        var admission = new CallAdmission(_tools, toolAccess, worker, EffectivePolicyFor(worker), offer, reads, store,
+            journal, stepEnding.Open, messages, progress, _progress, _decisions, _decisionGate, granted, _writableRoots,
+            _workspace.RootPath, _workspace.Id, taskId, runId, stepNo, toolsOnRequest, mayReportBlocked,
+            outputSchema, outputSlot, submitTool, path => OutputPathExists(path, store), boundary, changes, stepStart);
 
         // The transcript's size when lastPromptTokens was measured, so what has been added since
         // can be estimated on top of a real count rather than instead of one.
@@ -3585,32 +3562,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 }
                 var carried = attempt.Note;
 
-                // A result handed on while the note was written: checked and kept like any other hand-over.
-                if (attempt.HandOn is { } handOnCall && outputSchema is not null && outputSlot is not null)
-                {
-                    yield return Invoked(handOnCall);
-                    var handOnVerdict = StepOutputContract.Check(outputSchema, handOnCall.ArgumentsJson,
-                        path => OutputPathExists(path, store), id => id >= 1 && id <= journal.Actions.Count,
-                        boundary is { ForItem: true } ? boundary.Items : null, offered: submitTool);
-                    if (handOnVerdict.Accepted)
-                    {
-                        outputSlot.Accept(handOnVerdict);
-                        outputSlot.LastRefused = null;
-                        openFailures.HandedOn();
-                        outputSlot.Items = EvidenceCoverage.Gather(outputSchema, handOnVerdict.Values!, reads, journal.Actions, _tools.Definitions,
-                            boundary is { ForItem: true } ? boundary.Items : null);
-                        var acceptedWhy = $"Accepted as this step's output (revision {outputSlot.Revision}), handed on with the handover note.";
-                        journal.Record(stepNo, handOnCall.Name, Compact(handOnCall.ArgumentsJson), ActionOutcome.Succeeded, acceptedWhy, WorkspaceEffect.None);
-                        yield return Ev(EventKind.ToolResult, $"{handOnCall.Name} -> ok: {acceptedWhy}");
-                    }
-                    else
-                    {
-                        var refusedWhy = string.Join(" ", handOnVerdict.Errors) + " Nothing was stored.";
-                        outputSlot.LastRefused = TaskProgress.Canonical(handOnCall.ArgumentsJson);
-                        journal.Record(stepNo, handOnCall.Name, Compact(handOnCall.ArgumentsJson), ActionOutcome.Refused, refusedWhy, WorkspaceEffect.None);
-                        yield return Ev(EventKind.ToolResult, $"{handOnCall.Name} -> failed: {refusedWhy}");
-                    }
-                }
+                // A result handed on while the note was written: checked and kept by the one hand-over check, and not
+                // answered in the conversation the note replaces.
+                if (attempt.HandOn is { } handOnCall && admission.TakesHandOn)
+                    foreach (var ev in admission.HandOn(handOnCall, answered: false))
+                        yield return ev;
 
                 // Why there is no note, said with what was measured. Six different faults used to
                 // come back as one null - a provider error, a note cut at the limit, reasoning that
@@ -4013,12 +3969,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     + JsonSerializer.Serialize(new { Text = contentBuilder.ToString(), ToolCalls = toolCalls })));
                 var reason = lengthLimited ? $"model output reached its token limit (finish={finishReason})"
                     : "model returned an incomplete or invalid tool call";
-                foreach (var call in toolCalls ?? [])
-                {
-                    openFailures.Failed(call, reason + "; nothing executed", didNotRun: true);
-                    journal.Record(stepNo, call.Name, call.ArgumentsJson, ActionOutcome.Refused,
-                        reason + "; nothing executed", WorkspaceEffect.None);
-                }
+                admission.NotRun(toolCalls ?? [], reason);
                 var hardWindow = provider.ContextWindow(request);
                 var squeezed = hardWindow is { } w && lastPromptTokens is { } used && used > w * 4 / 5;
                 if (squeezed || outputRecoveries++ >= 2)
@@ -4132,7 +4083,7 @@ public sealed partial class Orchestrator : IOrchestrator
             var turnOrigin = recovered ? ToolCallOrigin.Healed
                 : resent ? ToolCallOrigin.Nudged
                 : attemptOrigin;
-            var accounting = new ToolResultAccounting(_tools, progress, openFailures, reads, journal,
+            var accounting = new ToolResultAccounting(_tools, progress, stepEnding.Open, reads, journal,
                 repairAttempts, _repairConsultation.Enabled, stepNo, turnOrigin);
             var readResults = new Dictionary<int, ToolInvocation.Result>();
             admission.BeginTurn(onlyHandOn: forcedThisTurn);
@@ -4284,20 +4235,13 @@ public sealed partial class Orchestrator : IOrchestrator
                 messages.Add(ChatMessage.Tool(call.Id, reply));
             }
 
-            // Advisory: what the engine finds itself is recorded as the cause, with the step's word beside it;
-            // only where the engine sees nothing is the step's word the cause - and recorded as its word.
+            // A step that said it cannot go on ends blocked now that its turn's calls are answered (StepEnding).
             if (admission.ReportedBlocked is { } reportedBlocked)
             {
-                // A tool the engine kept back, named by the step, is the engine's finding too: it is the engine
-                // that kept it back, and why is its own fact. Only the tools the report names - a step in a run
-                // without git that waits on a person's answer is not blocked by git.
-                var (blockCause, blockWhy) = EngineBlock(openFailures) is { } found
-                    ? (found.Cause, found.Reason + "; " + reportedBlocked)
-                    : KeptBackAndNamed(offer, reportedBlocked) is { } keptBack
-                        ? (OutcomeCause.BlockedPermission, $"needs a tool this run does not offer: {keptBack}; {reportedBlocked}")
-                        : (OutcomeCause.BlockedReported, reportedBlocked);
-                yield return Ev(EventKind.ErrorObserved, "Blocked: " + blockWhy);
-                loopResult.Set(StepOutcomeKind.Blocked, blockWhy, blockCause);
+                var blocked = new StepEnding.Verdict();
+                foreach (var ev in stepEnding.ReportedBlocked(reportedBlocked, offer, blocked))
+                    yield return ev;
+                loopResult.Set(blocked.Kind, blocked.Reason, blocked.Cause);
                 yield break;
             }
         }
