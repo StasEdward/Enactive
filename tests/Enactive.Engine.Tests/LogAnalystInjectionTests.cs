@@ -70,7 +70,7 @@ public sealed class LogAnalystInjectionTests
     {
         var provider = new Parrot(answer);
         var result = await new LogAnalyst().AnalyseAsync(
-            PoisonedLog, provider, "a-model", 16_000, CancellationToken.None);
+            PoisonedLog, provider, "a-model", numCtx: null, CancellationToken.None);
 
         return (result, provider.Request!.Messages.Last().Content ?? "");
     }

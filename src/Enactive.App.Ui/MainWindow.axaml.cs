@@ -1657,24 +1657,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             if (reference is null)
                 return null;
 
-            // How much of the log can be sent, from the provider that is actually going to read it.
-            // It used to be _settings.NumCtx unconditionally — an OLLAMA setting, applied to whatever
-            // model the Review binding points at. With Review on a cloud model and num_ctx left blank
-            // the analyst assumed 16,000 tokens and sent about a seventh of what a 200,000-token
-            // window would have taken; with num_ctx set for a local model it sent that model's window
-            // to Claude. Neither is a fact about the provider doing the work, and nothing can ask it —
-            // so it is declared per provider, and num_ctx is the fallback only because for Ollama it
-            // IS the window.
-            var declared = _settings.Providers
-                .FirstOrDefault(p => string.Equals(p.Id, reference.ProviderId, StringComparison.Ordinal))
-                ?.ContextWindowTokens;
-
+            // How much of the log can be sent is the provider's answer, as it is for a step (LogAnalyst.AnalyseAsync);
+            // the window hands on only the engine's num_ctx - from the engine that makes the provider, not from the
+            // settings as they stand now. It looked the provider's declared window up in the live settings itself and fell
+            // back to num_ctx for any provider: a second rule, read from another snapshot, that sent Ollama a log
+            // cut to a num_ctx its request did not carry.
             // promptBodies: false — this prompt CARRIES the log, and the provider decorator would write
             // it straight back into it. One analysis of a 10,429-line run added 4,785 lines; the second
             // then read a log that was half its own previous prompt. See LoggingChatProvider.
             return async (text, ct) => await new LogAnalyst().AnalyseAsync(
                 text, engine.Providers.Create(reference.ProviderId, promptBodies: false),
-                reference.Model, declared ?? _settings.Engine.NumCtx, ct);
+                reference.Model, engine.EngineOptions.NumCtx, ct);
         }
 
         private void ShowLogWindow()
