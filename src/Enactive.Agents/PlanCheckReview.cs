@@ -68,6 +68,9 @@ internal static class PlanCheckReview
                 + "Include every source ID exactly once, assessing required verification and restrictions in it, even when checks is empty. "
                 + "checks is the COMPLETE corrected list, at most 16. origin is requested or proposed. "
                 + "requested requires a verbatim request_quote containing the exact command. proposed requires request_quote=null and expectedExitCode=0. "
+                + "Where the request itself says which exit codes count as success for a requested command (a test command whose non-zero exit "
+                + "is the finding, not a failure), give them as expectedExitCodes:[...] in place of expectedExitCode - each code as the request "
+                + "says it - rather than returning unresolved; never for a proposed check. "
                 + "Each reason explains why this check is appropriate as a final check and permitted by the entire request. "
                 + "Do not replace a required command with your preferred command, silently waive a requirement, or truncate required checks to fit the limit. "
                 + "If constraints conflict or a final check cannot safely be specified, set unresolved to an explanation; no execution will start. "
@@ -78,7 +81,7 @@ internal static class PlanCheckReview
                     // Origin by NAME, in the answer's own words. Serialized as it was, a template's check
                     // reached the planner as "Origin":0 while a locked review demanded origin=declared
                     // back; on 2026-09-28 it guessed "proposed", twice, and both runs ended there.
-                    checks = plan.Checks.Select(c => new { c.Name, c.Command, c.ExpectedExitCode, c.Required,
+                    checks = plan.Checks.Select(c => new { c.Name, c.Command, c.ExpectedExitCode, c.ExpectedExitCodes, c.Required,
                         origin = c.Origin.ToString().ToLowerInvariant(), c.AlreadyPassing, c.RequestQuote, c.PlanningReason }),
                     engineCriteria = reviewsEngineCriteria ? EngineCriteriaReview.Show(decidedByTheEngine, request, workspaceRoot, plan.Plan) : null,
                     existingRestrictions = plan.Restrictions, actionPolicy = plan.ActionPolicy,
