@@ -243,6 +243,29 @@ public sealed class RunComposerTests
             (request.Source, request.Autonomy, request.WorkspaceWorkerId, request.Stage));
     }
 
+    // ── asking a resume for something else ──────────────────────────────────
+
+    private static RunCheckpoint Stopped(int? autonomy, string? workerId)
+        => new(Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "check the disks", "disks",
+            workerId, null, [], [], [], [], 1, 0,
+            autonomy is { } level ? new RunSettings(level, AutonomyTiers.Describe(level), "Developer", Staged: false) : null);
+
+    /// <summary>
+    /// A resume is refused a level or a worker other than the one the run was started with - and only those. Any level
+    /// or role given with a resume was refused, which broke the scheduler line that resumes after every reboot and names
+    /// the level it always ran under.
+    /// </summary>
+    [Theory]
+    [InlineData(2, null, 3, null, true)]             // another level
+    [InlineData(2, null, 2, null, false)]            // the same level
+    [InlineData(2, "developer", null, "writer", true)]    // another worker
+    [InlineData(2, "developer", null, "DEVELOPER", false)] // the same worker
+    [InlineData(2, null, null, "developer", false)]  // the default worker, when the run named none
+    [InlineData(null, null, 3, null, false)]         // a run that recorded no level: the one asked for is used
+    public void A_resume_is_refused_only_what_contradicts_how_the_run_was_started(
+        int? startedAt, string? startedWith, int? askedLevel, string? askedWorker, bool refused)
+        => Assert.Equal(refused, RunComposer.ResumeRefusal(Stopped(startedAt, startedWith), askedLevel, askedWorker, "developer") is not null);
+
     // ── staging ─────────────────────────────────────────────────────────────
 
     [Theory]

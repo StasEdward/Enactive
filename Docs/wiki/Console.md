@@ -118,10 +118,11 @@ neither is a default.
 A value none of these recognizes is refused with exit code `64` and the list of what was meant.
 A typo is not rounded to the nearest tier in either direction.
 
-`--resume` continues an interrupted run under the autonomy and role it was started with. Giving
-`--autonomy` or `--role` with it is refused with exit code `64`: running the rest of the steps under
-something other than what was typed, or other than what the run was started with, would be wrong
-either way.
+`--resume` continues an interrupted run under the autonomy and role it was started with. Asking it
+for another with `--autonomy` or `--role` is refused with exit code `64`: running the rest of the
+steps under something other than what was typed, or other than what the run was started with, would
+be wrong either way. Asking for the same is fine, so a scheduler line that names its level resumes as
+before; and a run recorded without its level runs the rest under the one given.
 
 ## Unattended permission behavior
 

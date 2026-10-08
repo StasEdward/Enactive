@@ -178,10 +178,11 @@ that a refusal actually stops an action, <code>allow</code> gets past a gate to 
 neither is a default.</p>
 <p>A value none of these recognizes is refused with exit code <code>64</code> and the list of what was meant.
 A typo is not rounded to the nearest tier in either direction.</p>
-<p><code>--resume</code> continues an interrupted run under the autonomy and role it was started with. Giving
-<code>--autonomy</code> or <code>--role</code> with it is refused with exit code <code>64</code>: running the rest of the steps under
-something other than what was typed, or other than what the run was started with, would be wrong
-either way.</p>
+<p><code>--resume</code> continues an interrupted run under the autonomy and role it was started with. Asking it
+for another with <code>--autonomy</code> or <code>--role</code> is refused with exit code <code>64</code>: running the rest of the
+steps under something other than what was typed, or other than what the run was started with, would
+be wrong either way. Asking for the same is fine, so a scheduler line that names its level resumes as
+before; and a run recorded without its level runs the rest under the one given.</p>
 <h2 id="unattended-permission-behavior">Unattended permission behavior<a class="heading-anchor" href="#unattended-permission-behavior" aria-label="Link to Unattended permission behavior">#</a></h2>
 <p>Without <code>--approve</code>, a free-text run asks at the terminal and a <code>--template</code> run uses the unattended
 handler:</p>

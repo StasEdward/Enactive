@@ -479,13 +479,12 @@ if (args.Contains("--resume", StringComparer.OrdinalIgnoreCase))
         return 0;
     }
 
-    // A resumed run continues under the tier and role it was started with (RunComposer). Asking for
-    // others here is refused rather than ignored: quietly running under something else than what was
-    // typed is the one answer that is wrong either way.
-    if (autonomyText is not null || roleText is not null)
+    // A resumed run continues under the tier and role it was started with (RunComposer.ResumeRefusal):
+    // asking for others is refused, asking for the same is not.
+    if (RunComposer.ResumeRefusal(resumeFrom, autonomyText is null ? null : autonomyTier.Value, roleId,
+            engine.Workers.Default.Id) is { } refusedResume)
     {
-        Console.Error.WriteLine("A resumed run keeps the autonomy and role it was started with; "
-                                + "drop --autonomy and --role, or start the task again instead of resuming it.");
+        Console.Error.WriteLine(refusedResume);
         return 64;
     }
 

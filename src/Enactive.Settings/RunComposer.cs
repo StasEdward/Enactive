@@ -120,6 +120,31 @@ public sealed record ComposedRun(
 public static class RunComposer
 {
     /// <summary>
+    /// Why an interrupted run cannot be resumed as asked, or null when it can: a level or a worker named for the resume
+    /// that is not the one the run was started with. A resumed run continues under what it was started with (see
+    /// <see cref="ComposeAsync"/>), so asking for another is refused rather than ignored - quietly running under
+    /// something else than was asked is wrong either way. Asking for the same is no conflict, and neither is a level
+    /// given for a run that recorded none: that one is used. A refusal of any level or role with a resume broke the
+    /// scheduler line written to resume after every reboot, which names the level it always ran under.
+    /// </summary>
+    /// <param name="autonomy">The level asked for, when one was.</param>
+    /// <param name="workerId">The worker asked for, by id, when one was.</param>
+    /// <param name="defaultWorkerId">Who a run that named no worker was on.</param>
+    public static string? ResumeRefusal(RunCheckpoint resume, int? autonomy, string? workerId, string defaultWorkerId)
+    {
+        var levelDiffers = autonomy is { } asked && resume.Settings is { } started && started.Autonomy != asked;
+        var workerDiffers = workerId is not null
+                            && !string.Equals(workerId, resume.WorkerId ?? defaultWorkerId, StringComparison.OrdinalIgnoreCase);
+        return levelDiffers || workerDiffers
+            ? "A resumed run keeps the "
+              + (levelDiffers && workerDiffers ? "autonomy and role" : levelDiffers ? "autonomy" : "role")
+              + " it was started with"
+              + (levelDiffers ? $" ({AutonomyTiers.Names[Math.Clamp(resume.Settings!.Autonomy, 0, AutonomyTiers.Names.Count - 1)]})" : "")
+              + "; ask for the same, leave it out, or start the task again instead of resuming it."
+            : null;
+    }
+
+    /// <summary>
     /// Why this request cannot be run as asked, or null when it can. Asked by hosts before they start
     /// anything, so the refusal is shown where the request was made; <see cref="ComposeAsync"/> refuses
     /// the same way.
