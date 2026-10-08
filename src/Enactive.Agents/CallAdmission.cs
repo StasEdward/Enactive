@@ -78,6 +78,10 @@ internal sealed class CallAdmission(
     }
 
     private readonly HashSet<string> _readsThisTurn = new(StringComparer.Ordinal);
+
+    // Where the call being admitted is answered: the conversation, or a reply kept for it until the loop reaches it.
+    private List<ChatMessage>? _into;
+    private List<ChatMessage> Replies => _into ?? messages;
     private bool _onlyHandOn;
 
     /// <summary>The step's own word that it cannot go on, once it has given it; the step ends blocked when the turn does.</summary>
@@ -94,7 +98,27 @@ internal sealed class CallAdmission(
     /// Decides one call, in order, and records whatever it does not let through.
     /// </summary>
     /// <param name="park">Writes the step's place down before it stops at a question nobody is here to answer.</param>
+    /// <param name="into">
+    /// Where a call that is not let through is answered, when not in the conversation at once: a read admitted ahead of
+    /// the batch it runs in, whose answer belongs after the results of the reads before it - the conversation keeps
+    /// the calls' order. Null: the conversation.
+    /// </param>
     public async IAsyncEnumerable<WorkEvent> AdmitAsync(ToolCall call, Verdict verdict, Action park,
+        [EnumeratorCancellation] CancellationToken ct, List<ChatMessage>? into = null)
+    {
+        _into = into;
+        try
+        {
+            await foreach (var ev in AdmitInOrderAsync(call, verdict, park, ct))
+                yield return ev;
+        }
+        finally
+        {
+            _into = null;
+        }
+    }
+
+    private async IAsyncEnumerable<WorkEvent> AdmitInOrderAsync(ToolCall call, Verdict verdict, Action park,
         [EnumeratorCancellation] CancellationToken ct)
     {
         verdict.Run = false;
@@ -110,7 +134,7 @@ internal sealed class CallAdmission(
                 + "established first; every tool is back on the next turn.";
             journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, onlyHandOn, WorkspaceEffect.None);
             openFailures.RefusedByRule(call);
-            messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + onlyHandOn));
+            Replies.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + onlyHandOn));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {onlyHandOn}");
             yield break;
         }
@@ -122,7 +146,7 @@ internal sealed class CallAdmission(
             const string afterReport = "the step has reported it is blocked; nothing after that report is carried out.";
             journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, afterReport, WorkspaceEffect.None);
             openFailures.RefusedByRule(call);
-            messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + afterReport));
+            Replies.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + afterReport));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {afterReport}");
             yield break;
         }
@@ -149,7 +173,7 @@ internal sealed class CallAdmission(
                 journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, recorded, WorkspaceEffect.None);
                 yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {ReportedBlocked}");
             }
-            messages.Add(ChatMessage.Tool(call.Id, recorded));
+            Replies.Add(ChatMessage.Tool(call.Id, recorded));
             yield break;
         }
 
@@ -163,7 +187,7 @@ internal sealed class CallAdmission(
                 : catalog.Find(call.ArgumentsJson);
             verdict.Loaded = found;
             journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, said, WorkspaceEffect.None);
-            messages.Add(ChatMessage.Tool(call.Id, said));
+            Replies.Add(ChatMessage.Tool(call.Id, said));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {said}");
             yield break;
         }
@@ -179,7 +203,7 @@ internal sealed class CallAdmission(
                 + "it is callable from the turn after, with its full description.";
             openFailures.Failed(call, notLoaded, true, null);
             journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notLoaded);
-            messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + notLoaded));
+            Replies.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + notLoaded));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {notLoaded}");
             yield break;
         }
@@ -199,7 +223,7 @@ internal sealed class CallAdmission(
             const string nothing = "Nothing was stored: this step hands nothing on as values. Finish it now with a short "
                 + "closing message - no further tool calls.";
             journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, nothing, WorkspaceEffect.None);
-            messages.Add(ChatMessage.Tool(call.Id, nothing));
+            Replies.Add(ChatMessage.Tool(call.Id, nothing));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {nothing}");
             yield break;
         }
@@ -212,7 +236,7 @@ internal sealed class CallAdmission(
             yield return Invoked(call);
             journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, assembled, WorkspaceEffect.None);
             openFailures.RefusedByRule(call);
-            messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + assembled));
+            Replies.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + assembled));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {assembled}");
             yield break;
         }
@@ -236,7 +260,7 @@ internal sealed class CallAdmission(
             yield return Invoked(call);
             journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notItsToChange, WorkspaceEffect.None);
             openFailures.RefusedByRule(call);
-            messages.Add(ChatMessage.Tool(call.Id, "REFUSED: " + notItsToChange));
+            Replies.Add(ChatMessage.Tool(call.Id, "REFUSED: " + notItsToChange));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> refused: {notItsToChange}");
             yield break;
         }
@@ -252,7 +276,7 @@ internal sealed class CallAdmission(
             yield return Invoked(call);
             const string same = "Not run: this is the same call, with the same arguments, as one made earlier in this "
                 + "turn, and its result above stands.";
-            messages.Add(ChatMessage.Tool(call.Id, same));
+            Replies.Add(ChatMessage.Tool(call.Id, same));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> {same}");
             yield break;
         }
@@ -277,7 +301,7 @@ internal sealed class CallAdmission(
             else openFailures.Failed(call, admissionRefusal.Reason, admissionRefusal.DidNotRun, admissionRefusal.AsTool);
             journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, admissionRefusal.Reason);
             yield return Decided(call.Name, allowed: false, admissionRefusal.Summary);
-            messages.Add(ChatMessage.Tool(call.Id, admissionRefusal.Reply));
+            Replies.Add(ChatMessage.Tool(call.Id, admissionRefusal.Reply));
             yield break;
         }
 
@@ -289,7 +313,7 @@ internal sealed class CallAdmission(
             const string notAgain = "already done earlier in this task, with the same arguments; not repeated";
             journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notAgain);
             yield return Decided(call.Name, allowed: false, $"{call.Name}: {notAgain}");
-            messages.Add(ChatMessage.Tool(call.Id,
+            Replies.Add(ChatMessage.Tool(call.Id,
                 $"ALREADY DONE: this exact {call.Name} was carried out earlier in this task, at "
                 + $"{already.At.ToLocalTime():yyyy-MM-dd HH:mm}, and cannot be taken back - it was NOT done again. "
                 + $"What it answered then: {already.Output ?? "(nothing)"}"));
@@ -349,7 +373,7 @@ internal sealed class CallAdmission(
                 // A model told a person refused it stops and apologises, which is right; a
                 // model told a tool is off for this run should stop asking for that tool and
                 // do the job another way, and it could not tell the two apart.
-                messages.Add(ChatMessage.Tool(call.Id, gate == PermissionDecision.Ask
+                Replies.Add(ChatMessage.Tool(call.Id, gate == PermissionDecision.Ask
                     ? "ERROR: the user did not permit this action."
                     : $"ERROR: the tool '{call.Name}' is not permitted for this run and will "
                       + "not become permitted. Do not call it again. If another permitted tool "
@@ -403,7 +427,7 @@ internal sealed class CallAdmission(
                 openFailures.Failed(call, "this run may not write outside the workspace");
                 journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
                                ActionOutcome.Refused, "writes outside the workspace");
-                messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + unattendedWhy));
+                Replies.Add(ChatMessage.Tool(call.Id, "ERROR: " + unattendedWhy));
                 yield break;
             }
 
@@ -455,7 +479,7 @@ internal sealed class CallAdmission(
                 openFailures.Failed(call, "the user kept this command inside the workspace");
                 journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
                                ActionOutcome.Refused, "writes outside the workspace");
-                messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + why));
+                Replies.Add(ChatMessage.Tool(call.Id, "ERROR: " + why));
                 yield break;
             }
 
@@ -643,7 +667,7 @@ internal sealed class CallAdmission(
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> failed: {handed}");
         }
         if (answered)
-            messages.Add(ChatMessage.Tool(call.Id, handed));
+            Replies.Add(ChatMessage.Tool(call.Id, handed));
     }
 
     /// <summary>

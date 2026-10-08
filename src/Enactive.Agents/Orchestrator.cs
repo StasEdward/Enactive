@@ -4070,6 +4070,9 @@ public sealed partial class Orchestrator : IOrchestrator
             var accounting = new ToolResultAccounting(_tools, progress, stepEnding.Open, reads, journal,
                 repairAttempts, _repairConsultation.Enabled, stepNo, turnOrigin);
             var readResults = new Dictionary<int, ToolInvocation.Result>();
+            // Calls admitted ahead of the batch of reads they run in, with the answer kept for one that was not let
+            // through - it joins the conversation when its turn comes, so the conversation keeps the calls' order.
+            var admittedAhead = new Dictionary<int, (CallAdmission.Verdict Verdict, List<ChatMessage> Replies)>();
             admission.BeginTurn(onlyHandOn: forcedThisTurn);
             ToolContext CallContext() => new(taskId, runId, _workspace.Id, context,
                 EffectivePolicyFor(worker), _workspace.RootPath, store);
@@ -4089,8 +4092,14 @@ public sealed partial class Orchestrator : IOrchestrator
 
                 // Answered, refused, asked about or let through - in one order, in one place (CallAdmission).
                 var admitted = new CallAdmission.Verdict();
-                await foreach (var ev in admission.AdmitAsync(call, admitted, ParkHere, ct))
-                    yield return ev;
+                if (admittedAhead.Remove(callIndex, out var ahead))
+                {
+                    admitted = ahead.Verdict;
+                    messages.AddRange(ahead.Replies);
+                }
+                else
+                    await foreach (var ev in admission.AdmitAsync(call, admitted, ParkHere, ct))
+                        yield return ev;
                 // The step's catalog: a tool loaded by name, or found by a search, is listed from the next turn -
                 // at the END of the list, so nothing a provider has cached before it moves.
                 if (admitted.Loaded.Count > 0)
@@ -4101,22 +4110,37 @@ public sealed partial class Orchestrator : IOrchestrator
                     yield return Exposed();
                 }
                 if (!admitted.Run)
-                {
-                    // A read run ahead in a batch that the admission did not let through (the same read again).
-                    readResults.Remove(callIndex, out _);
                     continue;
-                }
 
+                // Reads that need nobody's leave run together, up to ParallelToolReads.Limit at a time - and only reads
+                // the admission has let through: each one after this is admitted now, before any of them runs, and one
+                // it does not let through does not run. Before 2026-10-08 the batch ran first and the admission saw its
+                // reads afterwards, so one it then refused had already been made and its result was thrown away - the
+                // same read twice in a turn, which the admission says is made once, was made twice.
                 if (readResults.Count == 0 && CanRunRead(call))
                 {
-                    var group = toolCalls.Skip(callIndex).Take(ParallelToolReads.Limit)
-                        .TakeWhile(CanRunRead).ToArray();
-                    if (group.Length > 1)
+                    var group = new List<(int Index, ToolCall Call)> { (callIndex, call) };
+                    for (var next = callIndex + 1;
+                         next < toolCalls.Count && group.Count < ParallelToolReads.Limit && CanRunRead(toolCalls[next]);
+                         next++)
                     {
-                        foreach (var item in group) yield return Invoked(item);
-                        var completed = await ParallelToolReads.ExecuteAsync(group, _tools, CallContext(), ct);
-                        actionsTaken += group.Length;
-                        for (var i = 0; i < completed.Length; i++) readResults.Add(callIndex + i, completed[i]);
+                        var at = next;
+                        var aheadVerdict = new CallAdmission.Verdict();
+                        var aheadReplies = new List<ChatMessage>();
+                        await foreach (var ev in admission.AdmitAsync(toolCalls[at], aheadVerdict,
+                                           () => _progress.Park(taskId, new ParkedPosition(stepNo, messages.ToArray(),
+                                               journal.Actions.Skip(loopMark).ToArray(), toolCalls.Skip(at).ToArray())),
+                                           ct, aheadReplies))
+                            yield return ev;
+                        admittedAhead[at] = (aheadVerdict, aheadReplies);
+                        if (aheadVerdict.Run) group.Add((at, toolCalls[at]));
+                    }
+                    if (group.Count > 1)
+                    {
+                        foreach (var item in group) yield return Invoked(item.Call);
+                        var completed = await ParallelToolReads.ExecuteAsync(group.Select(g => g.Call).ToArray(), _tools, CallContext(), ct);
+                        actionsTaken += group.Count;
+                        for (var i = 0; i < completed.Length; i++) readResults.Add(group[i].Index, completed[i]);
                     }
                 }
                 readResults.Remove(callIndex, out var readResult);
