@@ -25,6 +25,7 @@ public sealed class PaletteTests
         { nameof(Palette.WorkspaceEdge), typeof(WorkspacePlace) },
         { nameof(Palette.Reach), typeof(ModelReach) },
         { nameof(Palette.Health), typeof(Enactive.Providers.ProviderHealth) },
+        { nameof(Palette.Ci), typeof(Enactive.Workspace.CiState) },
         { nameof(Palette.Template), typeof(TemplateEdge) },
         { nameof(Palette.Timeline), typeof(TimelineTone) },
         { nameof(Palette.Schedule), typeof(ScheduleState) },

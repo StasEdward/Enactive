@@ -512,6 +512,9 @@ internal sealed class MainWindowViewModel : ObservableObject
     /// </summary>
     public PastRunViewModel? PastRun { get => _pastRun; private set => Set(ref _pastRun, value); }
 
+    /// <summary>The workspace's repository, at the foot of the window (RepoBarViewModel).</summary>
+    public RepoBarViewModel Repo { get; } = new();
+
     public bool IsViewingPast
     {
         get => _isViewingPast;

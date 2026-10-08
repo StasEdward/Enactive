@@ -966,6 +966,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />
                         <RowDefinition Height="{StaticResource CurrentActionPanelHeight}" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <Panel Grid.Column="0">
@@ -1213,6 +1214,44 @@
                                                  Foreground="{DynamicResource Brand.TextBody}" />
                         </ScrollViewer>
                     </Grid>
+                </Border>
+
+                <!-- The workspace's repository: its pull request and checks when GitHub can be asked, then the repository,
+                     the branch, how far from its upstream, and what is not committed. Only where there is a repository.
+                     The number and the checks open their pages; anywhere else on the strip reads it again. -->
+                <Border x:Name="RepoBar" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                        IsVisible="{Binding Repo.IsVisible}"
+                        Background="{DynamicResource Brand.Surface}"
+                        BorderBrush="{DynamicResource Brand.Line}" BorderThickness="0,1,0,0"
+                        Padding="12,4" Cursor="Hand"
+                        ToolTip.Tip="The workspace's repository - click to read it again">
+                    <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                        <Button x:Name="RepoPullRequest" IsVisible="{Binding Repo.HasPullRequest}"
+                                Content="{Binding Repo.PullRequest}" Padding="6,1" FontSize="12" FontWeight="SemiBold"
+                                Background="Transparent" BorderThickness="0"
+                                ToolTip.Tip="Open the pull request" />
+                        <TextBlock Text="{Binding Repo.Name}" FontSize="12" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource Brand.TextBody}" />
+                        <TextBlock Text="{Binding Repo.Branch}" FontSize="12" VerticalAlignment="Center"
+                                   FontFamily="Consolas, Menlo, monospace"
+                                   Foreground="{DynamicResource Brand.TextMuted}" />
+                        <TextBlock Text="{Binding Repo.Sync}" FontSize="12" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource Brand.TextMuted}" />
+                        <TextBlock Text="{Binding Repo.Changes}" FontSize="12" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource Brand.TextMuted}"
+                                   ToolTip.Tip="Changed since the last commit, staged or not, and files git does not track" />
+                        <TextBlock Text="{Binding Repo.PullRequestChanges}" IsVisible="{Binding Repo.HasPullRequest}"
+                                   FontSize="12" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource Brand.TextMuted}" ToolTip.Tip="The pull request's lines added and removed" />
+                        <Button x:Name="RepoChecks" IsVisible="{Binding Repo.HasCi}" Padding="6,1" FontSize="12"
+                                Background="Transparent" BorderThickness="0" ToolTip.Tip="Open the pull request's checks">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                                         Fill="{Binding Repo.Ci, Converter={x:Static local:Palette.Ci}}" />
+                                <TextBlock Text="{Binding Repo.CiText}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
                 </Border>
 
             </Grid>

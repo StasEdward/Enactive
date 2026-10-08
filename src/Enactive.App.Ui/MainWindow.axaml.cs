@@ -94,6 +94,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     /// <summary>See where it is started: the badge against work this process did not do.</summary>
     private DispatcherTimer? _inboxPoll;
+
+    // The strip at the foot of the window (RepoBarViewModel): local git every half minute while nothing runs, GitHub at
+    // most every two minutes - it is a network call, and a strip is not worth a rate limit.
+    private DispatcherTimer? _repoPoll;
+    private DateTimeOffset _pullRequestReadAt = DateTimeOffset.MinValue;
+    private int _repoReads;
+    private static readonly TimeSpan PullRequestEvery = TimeSpan.FromMinutes(2);
     private string _currentWorkspaceRoot = string.Empty;
     private readonly WorkspaceRegistry _registry = WorkspaceRegistry.Load(deferWrites: true);
 
@@ -227,6 +234,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // not about anything this session has done yet — and then on a minute, which is well inside
         // "I looked over and it was right".
         RefreshInboxButton();
+        _repoPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        _repoPoll.Tick += (_, _) => { if (!_vm.IsBusy && IsActive) _ = RefreshRepoAsync(); };
+        _repoPoll.Start();
+        if (this.FindControl<Border>("RepoBar") is { } repoBar)
+            repoBar.PointerPressed += (_, _) => _ = RefreshRepoAsync(forcePullRequest: true);
+        if (this.FindControl<Button>("RepoPullRequest") is { } pullRequest)
+            pullRequest.Click += (_, _) => OpenRepoPage(_vm.Repo.PullRequestUrl);
+        if (this.FindControl<Button>("RepoChecks") is { } checks)
+            checks.Click += (_, _) => OpenRepoPage(_vm.Repo.PullRequestUrl is { } url ? url + "/checks" : null);
+
         _inboxPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         _inboxPoll.Tick += (_, _) => RefreshInboxButton();
         _inboxPoll.Start();
@@ -619,6 +636,35 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// stays here, where the providers, the tools and the artifact store already are.
     /// </summary>
     /// <summary>The open workspace as a full path, or null when the box is empty.</summary>
+    /// <summary>
+    /// Reads the workspace's repository into the strip - and its pull request, when two minutes have passed since it was
+    /// last asked or the person asked by clicking. A read started after this one wins: a slow answer about the folder
+    /// left behind must not overwrite the one now open.
+    /// </summary>
+    private async Task RefreshRepoAsync(bool forcePullRequest = false)
+    {
+        var read = ++_repoReads;
+        var root = WorkspaceRootOrNull();
+        var repo = root is null ? null : await RepoStatusReader.ReadAsync(root, CancellationToken.None);
+        if (read != _repoReads) return;
+        _vm.Repo.Show(repo);
+        if (repo?.GitHub is null || (!forcePullRequest && DateTimeOffset.UtcNow - _pullRequestReadAt < PullRequestEvery))
+            return;
+        _pullRequestReadAt = DateTimeOffset.UtcNow;
+        var pullRequest = await RepoStatusReader.ReadPullRequestAsync(repo, CancellationToken.None);
+        if (read == _repoReads)
+            _vm.Repo.ShowPullRequest(pullRequest);
+    }
+
+    /// <summary>Opens a pull request's page in the browser - only a github.com address, which is what the strip shows.</summary>
+    private void OpenRepoPage(string? url)
+    {
+        if (url is null || !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps
+            || !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+            return;
+        _ = TopLevel.GetTopLevel(this)?.Launcher.LaunchUriAsync(uri);
+    }
+
     private string? WorkspaceRootOrNull()
     {
         var root = _vm.WorkspacePath.Trim();
@@ -929,6 +975,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     if (IsLiveWorkspace)
                         _ = LoadRunsAsync();
                     RefreshColumnState();
+                    // A run changes the files, and perhaps the branch: the strip is read again now, not in half a minute.
+                    _ = RefreshRepoAsync();
                 });
                 }
                 finally
@@ -1582,6 +1630,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             var preparingRoot = _vm.WorkspacePath.Trim();
             _workspacePreparation = _workspacePreparation.ContinueWith(_ => WorkspaceSetup.Prepare(preparingRoot),
                 CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+
+            // A different folder is a different repository, or none: read before anything else can return early.
+            _ = RefreshRepoAsync(forcePullRequest: true);
 
             var entry = _registry.Find(_vm.WorkspacePath.Trim());
             if (entry is null)
