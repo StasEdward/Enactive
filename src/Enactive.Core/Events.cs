@@ -508,6 +508,33 @@ public static class WorkEventPayload
 
     private sealed record QuickActionShape(string QuickAction);
 
+    /// <summary>
+    /// The payload of an <see cref="EventKind.ArtifactReverted"/> event: the files a rejected step's revert put back,
+    /// and the ones it left as they are, as values.
+    ///
+    /// <para>The window read the put-back paths out of the sentence, after "put back: " - and the line about the files
+    /// the review found right says "NOT put back: a.md, b.md - the review found it right ...", so it marked a.md as put
+    /// back while the file stayed exactly where it was. Rewording either line moved files between the two lists.</para>
+    /// </summary>
+    public static string RevertPayload(int? stepNo, IReadOnlyList<string> reverted, IReadOnlyList<string> kept)
+        => System.Text.Json.JsonSerializer.Serialize(new RevertShape(stepNo, reverted, kept), PayloadJson);
+
+    /// <summary>The files this event says were put back, or null for an event that carries no revert values.</summary>
+    public static IReadOnlyList<string>? RevertedPaths(this WorkEvent ev) => Revert(ev)?.Reverted;
+
+    /// <summary>The files this event says were left as they are, or null for an event that carries no revert values.</summary>
+    public static IReadOnlyList<string>? KeptPaths(this WorkEvent ev) => Revert(ev)?.Kept;
+
+    private static RevertShape? Revert(WorkEvent ev)
+    {
+        if (ev.Kind != EventKind.ArtifactReverted || string.IsNullOrEmpty(ev.PayloadJson))
+            return null;
+        try { return System.Text.Json.JsonSerializer.Deserialize<RevertShape>(ev.PayloadJson, PayloadJson); }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
+    private sealed record RevertShape(int? Step, IReadOnlyList<string> Reverted, IReadOnlyList<string> Kept);
+
     private static PlanPayloadShape? Plan(WorkEvent ev)
     {
         if (string.IsNullOrEmpty(ev.PayloadJson))

@@ -1009,7 +1009,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     // The step's work was put back after the reviewer rejected it. Its cards must stop
                     // offering to open or undo a file that is no longer the file they describe.
                     case EventKind.ArtifactReverted:
-                        MarkRevertedArtifacts(ev.Summary);
+                        MarkRevertedArtifacts(ev.RevertedPaths() ?? []);
                         break;
                     case EventKind.TaskCompleted:
                     case EventKind.TaskFailed:
@@ -1142,21 +1142,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         private readonly List<ArtifactItemViewModel> _liveArtifacts = new();
 
         /// <summary>
-        /// Marks the cards for files a rejected step wrote and the engine put back. The paths come from
-        /// the event's own summary ("Rejected work put back: a.md, b.md"), which is not ideal — but the
-        /// alternative is a payload schema for one line of text, and the card is cosmetic: the file on
-        /// disk has already been restored whatever the card says.
+        /// Marks the cards for files a rejected step wrote and the engine put back - the paths the event carries as
+        /// values (WorkEventPayload.RevertPayload). They were read out of its sentence, after "put back: ", and the line
+        /// about files the review found right reads "NOT put back: a.md, b.md - ...": a.md was marked put back while it
+        /// stayed. Only the live run's cards are marked; a run reopened from the history shows the line as a note.
         /// </summary>
-        private void MarkRevertedArtifacts(string summary)
+        private void MarkRevertedArtifacts(IReadOnlyList<string> paths)
         {
-            const string marker = "put back: ";
-            var index = summary.IndexOf(marker, StringComparison.Ordinal);
-            if (index < 0)
-                return;
-
-            var paths = summary[(index + marker.Length)..]
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
             foreach (var item in _liveArtifacts)
             {
                 if (!paths.Contains(item.RelativePath, StringComparer.OrdinalIgnoreCase))

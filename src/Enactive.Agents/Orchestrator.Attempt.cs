@@ -99,8 +99,9 @@ public sealed partial class Orchestrator
         }
     }
 
+    /// <param name="publish">Publishes one line about the revert, with its payload (WorkEventPayload.RevertPayload).</param>
     private async Task RevertRejectedAsync(ToolLoopResult result, IArtifactScope store,
-        RunScope scope, Func<string, ValueTask> publish, CancellationToken ct)
+        RunScope scope, int? stepNo, Func<string, string, ValueTask> publish, CancellationToken ct)
     {
         if (result.Kind != StepOutcomeKind.ReviewRejected || !_revertRejectedSteps) return;
         // Rejected, and still not put back: the files the review found right. The step stays rejected - nothing is built
@@ -111,9 +112,10 @@ public sealed partial class Orchestrator
         if (kept.Length > 0)
             await publish("Rejected, but NOT put back: " + string.Join(", ", kept)
                 + " - the review found it right and rejected the step for something else; it is left as it is, "
-                + "and nothing is built on it.");
+                + "and nothing is built on it.", WorkEventPayload.RevertPayload(stepNo, [], kept));
         var report = await RevertAsync(store, scope.Artifacts, ct, except: kept);
-        foreach (var line in DescribeRevert(report)) await publish(line);
+        foreach (var (line, reverted, left) in DescribeRevert(report))
+            await publish(line, WorkEventPayload.RevertPayload(stepNo, reverted, left));
     }
 
 }

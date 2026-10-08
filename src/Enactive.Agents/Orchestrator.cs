@@ -904,8 +904,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 await RunAttemptsAsync(session, attemptState, models, models.Provider, models.Model,
                     intent.Context, quickResult, plan.Title, intent.RawText, null, quickChanges, quickBefore,
                     PublishQuick, quickLifetime.Token);
-                await RevertRejectedAsync(quickResult, store, scope,
-                    line => PublishQuick(scope.Ev(EventKind.ArtifactReverted, line)), quickLifetime.Token);
+                await RevertRejectedAsync(quickResult, store, scope, null,
+                    (line, payload) => PublishQuick(scope.Event(EventKind.ArtifactReverted, line, payload)), quickLifetime.Token);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -1617,8 +1617,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     session.ReasonOf[step.Id] = outcomeReason!;
             }
 
-            await RevertRejectedAsync(stepResult, store, scope,
-                line => Emit(EventKind.ArtifactReverted, $"[{stepNumber}] {line}"), stepCt);
+            await RevertRejectedAsync(stepResult, store, scope, stepNumber,
+                (line, payload) => Publish(scope.Event(EventKind.ArtifactReverted, $"[{stepNumber}] {line}", payload)), stepCt);
 
             // What it changed, for the wave it ended in (Phase 6) - after a revert, which the files show.
             waves?.Finished(WaveStep.Of(step.Id, stepNumber, step.Title, store.TouchedPaths,
@@ -4658,20 +4658,23 @@ public sealed partial class Orchestrator : IOrchestrator
         return report;
     }
 
-    /// <summary>One line per thing worth telling the user about a revert; nothing when nothing happened.</summary>
-    private static IEnumerable<string> DescribeRevert(RevertReport report)
+    /// <summary>
+    /// One line per thing worth telling the user about a revert, with the paths it is about as values - what was put
+    /// back, what was left; nothing when nothing happened.
+    /// </summary>
+    private static IEnumerable<(string Line, IReadOnlyList<string> Reverted, IReadOnlyList<string> Kept)> DescribeRevert(RevertReport report)
     {
         if (report.Reverted.Count > 0)
-            yield return "Rejected work put back: " + string.Join(", ", report.Reverted);
+            yield return ("Rejected work put back: " + string.Join(", ", report.Reverted), report.Reverted, []);
 
         // The reason per path, not one sentence over all of them. "It changed after the step wrote
         // it" was the only reason there used to be; a path can also be kept because another step
         // wrote it afterwards, or because nothing this step did to it is on record - and telling
         // someone the wrong reason for work left in place is worse than telling them none.
         if (report.Kept.Count > 0)
-            yield return "Left as it is: "
-                       + string.Join(", ", report.Kept.Select(
-                           path => report.WhyKept(path) is { } why ? $"{path} ({why})" : path));
+            yield return ("Left as it is: "
+                          + string.Join(", ", report.Kept.Select(
+                              path => report.WhyKept(path) is { } why ? $"{path} ({why})" : path)), [], report.Kept);
     }
 
 
