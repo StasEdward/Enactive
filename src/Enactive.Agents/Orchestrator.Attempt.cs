@@ -25,14 +25,26 @@ public sealed partial class Orchestrator
             step.RestartFrom, changes, before, attemptOrigin, step.Output, step.OutputSlot, step.Boundary, step.WithholdUnchecked,
             step.Criteria, step.SubmitTool, models.ReviewOn, step.LoadedTools))
             await publish(ev);
-        if (!models.ReviewOn || !result.Succeeded) return null;
+        // The step's own word that it cannot go on, with nothing the engine found behind it, is reviewed as a finished step
+        // is (SaidBlockedOnly): whether its own part is done is the review's to say, not the report's.
+        if (!models.ReviewOn || !(result.Succeeded || SaidBlockedOnly(result))) return null;
         return await ReviewAttemptAsync(title, step.Messages, step.Journal, step.EvidenceStart,
             step.StepStart, step.Store, scope, models, stepNumber, changes, before, request,
             publish, ct, planSteps, stepNumber is { } number && session.Obligations?.AtStep(number) is { } at
                 ? at with { ScopeNote = session.ScopeNotes.GetValueOrDefault(number) } : null,
             step.OutputSlot.Values is { } handed ? CitedPlaces.TextOf(handed) : null, step.Criteria, step.OutputSlot.Values,
-            session.Builds, step.Reads, context.Restrictions, result.KeptBack);
+            session.Builds, step.Reads, context.Restrictions, result.KeptBack,
+            saidBlocked: SaidBlockedOnly(result) ? result.Reason : null);
     }
+
+    /// <summary>
+    /// The step ended on its own report that it cannot go on, and on nothing the engine measured - no refused permission,
+    /// no missing input, no tool it was kept from (StepEnding.ReportedBlocked). Such a report used to end the step without
+    /// a review: on 2026-10-08 a read-only step wrote its whole analysis, called report_blocked because "the next step
+    /// requires writing tests", and the run ended BLOCKED with the analysis done - seven minutes and the run lost.
+    /// </summary>
+    private static bool SaidBlockedOnly(ToolLoopResult result)
+        => result.Kind == StepOutcomeKind.Blocked && result.Cause == OutcomeCause.BlockedReported;
     /// <summary>One retry lifecycle for quick and DAG. Transcript, journal and read coverage stay
     /// together; provider fallback is one-shot and does not consume a review attempt.</summary>
     private async Task RunAttemptsAsync(
@@ -80,6 +92,19 @@ public sealed partial class Orchestrator
 
             if (assessed is null) return;
             var verdict = assessed.Review.Verdict;
+            // A step that said it cannot go on: the review found its own part done, and it is - the report stays in the
+            // journal as its word, and the steps after it go on; anything else, and it ends blocked as it reported. Not
+            // tried again: the step has said it cannot, and a retry would ask it to.
+            if (SaidBlockedOnly(result))
+            {
+                if (verdict is ReviewVerdict.Pass)
+                {
+                    await publish(scope.Ev(EventKind.ContextAssembled, prefix + "The step said it cannot go on, and the review found "
+                        + "its own part done: it stands as done, its report as a note - " + result.Reason, stepNumber));
+                    result.Set(StepOutcomeKind.Succeeded, null);
+                }
+                return;
+            }
             // No verdict to act on - the reviewer could not tell, no answer could be used, the budget was spent: the work
             // is done and only unconfirmed (ReviewVerdict.Missing says what that makes of the step, and why).
             if (verdict.Missing is { } missing)

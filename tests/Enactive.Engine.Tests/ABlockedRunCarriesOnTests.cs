@@ -139,6 +139,78 @@ public sealed class ABlockedRunCarriesOnTests
         Assert.Contains(AgentBlocked.ToolName, worker.RequestsFor("Write the summary")[0].Tools!.Select(t => t.Name));
     }
 
+    // ── a report with nothing the engine found behind it is reviewed ────────────────────
+
+    /// <summary>The step does its part, then says it is blocked on what the NEXT step is for - as on 2026-10-08.</summary>
+    private static ByStepChatProvider DoneThenSaysBlocked() => new ByStepChatProvider(Plan)
+        .Step("Add up the invoices", Turn.Says("10."))
+        .Step("Write the summary", Turn.Calls1("write_file", """{"path":"summary.md","content":"Total: 10"}""", "w1"),
+            new Turn("Summary written.", [new Enactive.Core.Tools.ToolCall("b1", AgentBlocked.ToolName,
+                """{"reason":"the summary is written; saying it is ready is the next step's, which this step may not do"}""")]))
+        .Step("Say it is ready", Turn.Says("Ready."));
+
+    /// <summary>
+    /// A step that did its part and then reported itself blocked on another step's work is reviewed like any finished
+    /// step: passed, it is done, its report stays as a note, and the run goes on. On 2026-10-08 a read-only step wrote
+    /// its whole analysis, said "the next step requires writing tests", and the run ended BLOCKED with the work done.
+    /// </summary>
+    [Fact]
+    public async Task A_step_that_says_it_is_blocked_after_doing_its_part_is_reviewed_and_goes_on()
+    {
+        using var fx = new EngineFixture { ReportBlocked = true };
+        var worker = DoneThenSaysBlocked();
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass(), Verdicts.Pass());
+
+        var events = await fx.RunAsync(fx.Build(worker, worker: EngineFixture.WorkerWith("write_file", "read_file"),
+            router: Routers.WithReviewer(), reviewProvider: reviewer), "add up the invoices and write a summary");
+
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+        Assert.Equal(StepOutcomeKind.Succeeded, Assert.Single(StepsDone(events), e => e.Summary.Contains("Write the summary")).StepOutcome());
+        Assert.NotEmpty(worker.RequestsFor("Say it is ready"));
+        Assert.True(fx.Exists("summary.md"));
+        Assert.Contains(reviewer.Requests.SelectMany(r => r.Messages),
+            m => m.Content?.Contains("The step reported that it cannot go on", StringComparison.Ordinal) == true);
+    }
+
+    /// <summary>Failed by the review, it ends blocked as it reported - and is not tried again: it has said it cannot.</summary>
+    [Fact]
+    public async Task A_step_that_says_it_is_blocked_and_is_not_done_ends_blocked_once()
+    {
+        using var fx = new EngineFixture { ReportBlocked = true };
+        var worker = DoneThenSaysBlocked();
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Fail("the summary does not say what it adds up"));
+
+        var events = await fx.RunAsync(fx.Build(worker, worker: EngineFixture.WorkerWith("write_file", "read_file"),
+            router: Routers.WithReviewer(), reviewProvider: reviewer), "add up the invoices and write a summary");
+
+        Assert.Equal(RunOutcomeKind.Blocked, events.Last().Outcome());
+        var step = Assert.Single(StepsDone(events), e => e.Summary.Contains("Write the summary"));
+        Assert.Equal(StepOutcomeKind.Blocked, step.StepOutcome());
+        Assert.StartsWith("the step reports it cannot go on: the summary is written", step.OutcomeReason(), StringComparison.Ordinal);
+        Assert.Equal(2, worker.RequestsFor("Write the summary").Count);   // its two turns, and no retry
+        Assert.Empty(worker.RequestsFor("Say it is ready"));
+    }
+
+    /// <summary>A block the engine found itself is not put to the review: it is a fact, not the step's word.</summary>
+    [Fact]
+    public async Task A_block_the_engine_found_is_not_reviewed()
+    {
+        using var fx = new EngineFixture { ReportBlocked = true };
+        fx.Decisions.Answer = "deny";
+        var worker = new ByStepChatProvider(Plan)
+            .Step("Add up the invoices", Turn.Says("10."))
+            .Step("Write the summary", Turn.Calls1("write_file", """{"path":"summary.md","content":"Total: 10"}""", "w1"),
+                Turn.Calls1(AgentBlocked.ToolName, """{"reason":"I may not write the file"}""", "b1"));
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+
+        var events = await fx.RunAsync(fx.Build(worker, worker: EngineFixture.WorkerWith("write_file", "read_file"),
+            policy: AskBeforeWriting(), router: Routers.WithReviewer(), reviewProvider: reviewer), "add up the invoices and write a summary");
+
+        Assert.Equal(RunOutcomeKind.Blocked, events.Last().Outcome());
+        Assert.DoesNotContain(reviewer.Requests.SelectMany(r => r.Messages),
+            m => m.Content?.Contains("The step reported that it cannot go on", StringComparison.Ordinal) == true);
+    }
+
     [Fact]
     public async Task Without_the_switch_the_step_is_not_offered_the_report()
     {

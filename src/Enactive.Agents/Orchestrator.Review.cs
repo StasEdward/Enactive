@@ -34,6 +34,9 @@ public sealed partial class Orchestrator
     /// <summary>The engine's record, for the review, of the tools this run kept back from the step.</summary>
     internal const string KeptBackTool = "engine_kept_back_tools";
 
+    /// <summary>The engine's record, for the review, of a step's own report that it cannot go on.</summary>
+    internal const string SaidBlockedTool = "engine_step_said_blocked";
+
     private sealed record AttemptReview(ReviewResult Review);
 
     /// <summary>
@@ -48,7 +51,7 @@ public sealed partial class Orchestrator
         RequestObligations? obligations = null, string? handedOn = null,
         IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null, System.Text.Json.Nodes.JsonObject? handedValues = null,
         IReadOnlyList<BuildBaseline>? measuredBefore = null, ReadLedger? reads = null,
-        IReadOnlyList<TaskRestriction>? restrictions = null, string? keptBack = null)
+        IReadOnlyList<TaskRestriction>? restrictions = null, string? keptBack = null, string? saidBlocked = null)
     {
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
         ValueTask Emit(EventKind kind, string summary) => publish(scope.Ev(kind, prefix + summary, stepNumber));
@@ -101,6 +104,14 @@ public sealed partial class Orchestrator
                 $"Kept back from this step by the engine, before any work: {keptBack}. The step could not have called them: "
                 + "where it says it could not use one, that is so, and no call would show an attempt. Whether what it did "
                 + "without them is what the step is for is yours to judge.",
+                WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
+        // The step's own report that it cannot go on, with nothing the engine found behind it (SaidBlockedOnly): what the
+        // review is asked, said where it reads the calls, once per step.
+        if (saidBlocked is not null && !journal.Actions.Skip(evidenceStart).Any(a => a.Tool == SaidBlockedTool))
+            journal.Record(stepNumber, SaidBlockedTool, "{}", ActionOutcome.Succeeded,
+                $"The step reported that it cannot go on: {saidBlocked}. Nothing the engine measured stops it. Judge it as any "
+                + "step: whether THIS step's own work is done, by its calls. Pass it if it is - its report then stands as a note, "
+                + "and the steps after it go on. Fail it if it is not, and it ends blocked as it reported.",
                 WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
         // What the plan checks this step on, decided by the engine now - a fact for the reviewer, not a judgement.
         if (stepCriteria is { Count: > 0 } && stepNumber is { } planNo
