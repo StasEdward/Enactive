@@ -119,40 +119,112 @@ public static class ShellGeography
     /// <para><b>What it may claim.</b> Nothing new. This does not decide anything - it makes the
     /// same guess with more of the command read. A variable it cannot resolve stays unknown and
     /// still asks; a variable it resolves is then judged like any written-down path, which can
-    /// come out inside OR outside. Substituting wrongly - a name reassigned later, a value built
-    /// from another variable - can hide a write, and that is the same false negative this class
-    /// already documents as expected: the adversary here is a mistaken agent, not a clever one.
-    /// </para>
+    /// come out inside OR outside. Substituting wrongly can hide a write, and that is the same false
+    /// negative this class already documents as expected: the adversary here is a mistaken agent,
+    /// not a clever one.</para>
     ///
-    /// <para>Only literal assignments, and only from this command. An assignment whose value is
-    /// itself an expression teaches nothing and is left alone.</para>
+    /// <para>Only from this command. An assignment whose value is a call, an environment variable
+    /// or a sub-expression teaches nothing and is left alone.</para>
+    ///
+    /// <para><b>Built values too, 2026-10-09 (run 7f3435).</b> A worker made a project in the scratch the ordinary way -
+    /// <c>$testCsproj = Join-Path $testProjectPath "TestForkApp.csproj"</c>, then <c>Set-Content $testCsproj</c> - and
+    /// the person was asked, twice, whether it might write outside the workspace: only a literal was read, and a path
+    /// joined from one was unknown. A value made of known parts is now known too - a double-quoted string of known
+    /// variables, a <c>Join-Path</c> of known parts - read round until nothing more is learnt. A name given two
+    /// different values is unknown again: which one a later line sees depends on where it stands, and taking either
+    /// could hide a write.</para>
     /// </summary>
     private static string WithLiteralsResolved(string command)
     {
-        // $name = "literal"  /  $name='literal'  — PowerShell, which is where this bites.
+        // $name = <value>, to the end of the statement - PowerShell, which is where this bites.
         var assignments = Regex.Matches(
-            command, @"\$(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<q>[""'])(?<value>[^""'$]*)\k<q>",
+            command, @"(?<![\w$])\$(?<name>[A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?<value>[^;\r\n]*)",
             RegexOptions.None, TimeSpan.FromSeconds(1));
 
         if (assignments.Count == 0)
             return command;
 
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match m in assignments)
-            values[m.Groups["name"].Value] = m.Groups["value"].Value;
+        for (var round = 0; round < 8; round++)
+        {
+            var seen = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            var unknown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match m in assignments)
+            {
+                var name = m.Groups["name"].Value;
+                var value = ValueOf(m.Groups["value"].Value, values);
+                if (value is null || (seen.TryGetValue(name, out var earlier) && earlier != value))
+                    unknown.Add(name);
+                seen[name] = value;
+            }
+            var known = seen.Where(kv => !unknown.Contains(kv.Key) && kv.Value is not null)
+                .ToDictionary(kv => kv.Key, kv => kv.Value!, StringComparer.OrdinalIgnoreCase);
+            if (known.Count == values.Count && known.All(kv => values.TryGetValue(kv.Key, out var v) && v == kv.Value))
+                break;
+            values = known;
+        }
+
+        if (values.Count == 0)
+            return command;
 
         // The assignment itself is not a write, and leaving it in would turn the left-hand side
         // into a candidate the moment its name is replaced by a path.
         var text = Regex.Replace(
-            command, @"\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*([""'])[^""'$]*\1\s*;?", " ",
+            command, @"(?<![\w$])\$(?<name>[A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*[^;\r\n]*;?",
+            m => values.ContainsKey(m.Groups["name"].Value) ? " " : m.Value,
             RegexOptions.None, TimeSpan.FromSeconds(1));
 
         foreach (var (name, value) in values)
             text = Regex.Replace(
-                text, @"\$\{?" + Regex.Escape(name) + @"\}?", value.Replace("$", "$$"),
+                text, @"\$\{?" + Regex.Escape(name) + @"\}?(?![A-Za-z0-9_])", value.Replace("$", "$$"),
                 RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
 
         return text;
+    }
+
+    /// <summary>
+    /// The value an assignment gives, when every part of it is known: a single-quoted string; a double-quoted one whose
+    /// variables are all known; a <c>Join-Path</c> of two known parts, positional or named. Null for anything else - a
+    /// call, an environment variable, a sub-expression - which leaves the name unknown, and the question asked.
+    /// </summary>
+    private static string? ValueOf(string expression, IReadOnlyDictionary<string, string> known)
+    {
+        var text = expression.Trim();
+        if (Regex.Match(text, @"^'(?<v>[^']*)'$", RegexOptions.None, TimeSpan.FromSeconds(1)) is { Success: true } single)
+            return single.Groups["v"].Value;
+        if (Regex.Match(text, @"^""(?<v>[^""]*)""$", RegexOptions.None, TimeSpan.FromSeconds(1)) is { Success: true } quoted)
+            return Interpolated(quoted.Groups["v"].Value, known);
+
+        var join = Regex.Match(text,
+            @"^Join-Path\s+(?:-Path\s+)?(?<a>'[^']*'|""[^""]*""|\$[A-Za-z_][A-Za-z0-9_]*|[^\s'""$-][^\s]*)\s+(?:-ChildPath\s+)?(?<b>'[^']*'|""[^""]*""|\$[A-Za-z_][A-Za-z0-9_]*|[^\s'""$-][^\s]*)$",
+            RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
+        if (!join.Success)
+            return null;
+        if (Part(join.Groups["a"].Value, known) is not { } parent || Part(join.Groups["b"].Value, known) is not { } child)
+            return null;
+        var separator = parent.Contains('\\') || child.Contains('\\') ? '\\' : '/';
+        return parent.TrimEnd('/', '\\') + separator + child.TrimStart('/', '\\');
+
+        static string? Part(string token, IReadOnlyDictionary<string, string> known)
+            => token.StartsWith('\'') ? token[1..^1]
+             : token.StartsWith('"') ? Interpolated(token[1..^1], known)
+             : token.StartsWith('$') ? known.GetValueOrDefault(token[1..])
+             : token;
+    }
+
+    /// <summary>A double-quoted string with its variables put in - or null when one of them is not known.</summary>
+    private static string? Interpolated(string body, IReadOnlyDictionary<string, string> known)
+    {
+        var unknown = false;
+        var text = Regex.Replace(body, @"\$\{?(?<name>[A-Za-z_][A-Za-z0-9_:]*)\}?",
+            m =>
+            {
+                if (known.TryGetValue(m.Groups["name"].Value, out var v)) return v;
+                unknown = true;
+                return m.Value;
+            },
+            RegexOptions.None, TimeSpan.FromSeconds(1));
+        return unknown || text.Contains("$(", StringComparison.Ordinal) ? null : text;
     }
 
     /// <summary>
