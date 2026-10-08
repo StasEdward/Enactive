@@ -253,7 +253,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // 1 = the original behaviour: one step at a time on one shared conversation.
         _maxParallelSteps = Math.Max(1, options.MaxParallelSteps);
         _evidenceBudget = Math.Max(ExecutionJournal.MinimumBudget, options.EvidenceBudget);
-        _successEvaluator = resources.Agents?.SuccessEvaluator ?? new SuccessEvaluator();
+        _successEvaluator = resources.Agents?.SuccessEvaluator ?? new SuccessEvaluator(resources.Ecosystems);
         _handover = resources.Agents?.Handover ?? new Handover();
         // Disable the local model's <think> phase by sending think:false; null leaves it to the model.
         _think = options.DisableThinking ? false : null;

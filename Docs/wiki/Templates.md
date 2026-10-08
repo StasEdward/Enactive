@@ -163,7 +163,7 @@ Tool restrictions apply by name. Denying `write_file` while allowing shell execu
 }
 ```
 
-The command runs through `run_command` after execution and is judged by its actual exit code. The default expected code is 0. Required defaults to true.
+The command runs through `run_command` after execution and is judged by its actual exit code. The default expected code is 0. Required defaults to true. A command the workspace's project type recognizes as its test runner (for .NET, `dotnet test` in any form) must also have run at least one test: one that exits as expected having run none - a solution with no test project in it, say - is not a pass but "not checked", and a required check that was not checked leaves the run incomplete.
 
 Use required criteria for completion conditions and optional criteria for advisory checks. A denied/unavailable required check is unknown, not passed. A checker that exits 0 without running meaningful tests can still pass the criterion: Enactive cannot infer that a command name selected the correct test harness.
 
