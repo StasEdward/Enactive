@@ -146,8 +146,7 @@ internal static class PlanCheckReview
             // With what the plan itself had to say (a check it kept as a proposal), which this result replaces.
             ContractNotes = [.. plan.ContractNotes, .. contract.Notes, .. notes] };
 
-        PlanResult Result(string? error) => (plan with { Checks = [.. plan.Checks, .. decidedByTheEngine], IncompleteReason = error })
-            .WithUsage(usage);
+        PlanResult Result(string? error) => plan with { Checks = [.. plan.Checks, .. decidedByTheEngine], IncompleteReason = error, Usage = usage };
     }
 
     /// <summary>A contract that passed validation, with the answer it was read from.</summary>

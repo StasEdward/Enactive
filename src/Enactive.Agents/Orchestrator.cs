@@ -472,10 +472,9 @@ public sealed partial class Orchestrator : IOrchestrator
             yield break;
         }
 
-        if (plan.PromptTokens + plan.CompletionTokens > 0)
+        if (plan.Usage.Any)
             yield return scope.Usage(
-                WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.PromptTokens, plan.CompletionTokens,
-                cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+                WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
 
         if (plan.IncompleteReason is { } incompletePlanning)
         {
@@ -498,9 +497,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
                     _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
                 replanFailure = plan.IncompleteReason;
-                if (plan.PromptTokens + plan.CompletionTokens > 0)
-                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
-                        plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+                if (plan.Usage.Any)
+                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
             }
             replanFailure ??= budget.TurnExhausted;
             if (replanFailure is not null)
@@ -530,9 +528,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
                     _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
                 unclear = plan.IncompleteReason;
-                if (plan.PromptTokens + plan.CompletionTokens > 0)
-                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
-                        plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+                if (plan.Usage.Any)
+                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
             }
             // A correction that is not a readable plan, or no plan at all, does not replace the one that was.
             if (unclear is not null || plan.Readout == PlanReadout.Unreadable || plan.Plan is null || PlanValidation.Error(plan.Plan) is not null)
@@ -570,9 +567,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
                     _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
                 unclear = plan.IncompleteReason;
-                if (plan.PromptTokens + plan.CompletionTokens > 0)
-                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
-                        plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+                if (plan.Usage.Any)
+                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
             }
             if (unclear is not null || plan.Readout == PlanReadout.Unreadable || plan.Plan is null || PlanValidation.Error(plan.Plan) is not null)
                 plan = before;
@@ -662,8 +658,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 _options.GenerationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: resume is not null || _successCriteria.Count > 0 || !_options.ProposeChecks,
                 tools: _tools.Definitions.Where(d => !DeniedToThisRun(d.Name)).ToArray(),
                 workspaceRoot: _workspace.RootPath, askWhenUnsettled: true));
-            yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
-                plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+            yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
 
             // The final checks could not be settled, and nothing is about a restriction: the person decides. With nobody to
             // ask the answer is no, and no work starts - as before; asked, the work can go on, with the checks as planned or
@@ -2319,7 +2314,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // the direction that costs money.
         return new PlanResult(
             IntentDisposition.Task, checkpoint.Title, new Plan(Guid.NewGuid(), steps),
-            PromptTokens: 0, CompletionTokens: 0, Readout: PlanReadout.Understood)
+            Readout: PlanReadout.Understood)
             { Checks = checkpoint.Checks ?? Array.Empty<SuccessCriterionDefinition>(), RestoredChecks = checkpoint.Checks is not null, Restrictions = checkpoint.Restrictions, ActionPolicy = checkpoint.ActionPolicy };
     }
 
@@ -2713,9 +2708,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         _options.GenerationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: true, tools: _tools.Definitions,
                         workspaceRoot: _workspace.RootPath));
                     if (session is not null)
-                        yield return session.Scope.Usage(WorkEventPayload.WorkPurpose.Plan, plannerModel,
-                            checkedRepair.PromptTokens, checkedRepair.CompletionTokens,
-                            cached: checkedRepair.CachedPromptTokens, created: checkedRepair.CacheCreationPromptTokens);
+                        yield return session.Scope.Usage(WorkEventPayload.WorkPurpose.Plan, plannerModel, checkedRepair.Usage);
                     if (checkedRepair.IncompleteReason is { } repairConflict)
                     {
                         result.IncompleteReason = repairConflict;

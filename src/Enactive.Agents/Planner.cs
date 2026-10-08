@@ -16,30 +16,14 @@ using Enactive.Core.Templates;
 /// </summary>
 public sealed record PlanResult(
     IntentDisposition Disposition, string Title, Plan? Plan,
-    int PromptTokens = 0, int CompletionTokens = 0,
     PlanReadout Readout = PlanReadout.Understood)
 {
     /// <summary>
-    /// How much of <see cref="PromptTokens"/> the provider served from its prompt cache. Null where
-    /// it does not report one - see <c>ChatCompletion.CachedPromptTokens</c>.
-    ///
-    /// <para>An init property so the six-argument construction above and every <c>with</c> of it
-    /// keep working. Carried for the same reason the token counts themselves are: the planning call
-    /// happens outside the tool loop, so anything it does not hand back is spent and never
-    /// counted.</para>
+    /// What planning cost - every call, its prompt cache included. Carried because the planning call happens outside the
+    /// tool loop, so anything it does not hand back is spent and never counted. One value: it was four counts beside the
+    /// TokenUsage they came from, so every result was built with 0, 0 and then had the usage laid out into them.
     /// </summary>
-    public int? CachedPromptTokens { get; init; }
-    public int? CacheCreationPromptTokens { get; init; }
-
-    /// <summary>
-    /// The same result with what planning cost. The four counts stay properties of their own - the record and its tests
-    /// read them - and this is the one place a TokenUsage is laid out into them, where every planning path did it by hand.
-    /// </summary>
-    internal PlanResult WithUsage(TokenUsage usage) => this with
-    {
-        PromptTokens = usage.Prompt, CompletionTokens = usage.Completion,
-        CachedPromptTokens = usage.Cached, CacheCreationPromptTokens = usage.Created
-    };
+    public TokenUsage Usage { get; init; } = TokenUsage.None;
 
     /// <summary>A bounded planning attempt could not complete; execution must not start.</summary>
     public string? IncompleteReason { get; init; }
@@ -156,14 +140,14 @@ public sealed class Planner
             _ => RepairPrompt, exhaustedAfter, requireComplete: true, ct);
 
         if (round is { Kind: AnswerKind.Answered, Value: { } read })
-            return read.WithUsage(round.Usage);
+            return read with { Usage = round.Usage };
 
         // Nothing readable. The request is still acted on when the model simply wandered off format twice - refusing
         // it would be worse than doing the obvious thing with it - but this is a FALLBACK and the difference travels
         // with the result instead of disappearing into a title. When the model could not be asked, or ran out of room,
         // nothing is started: a plan that did not fit is not a request for one unplanned action.
-        var fallback = new PlanResult(IntentDisposition.QuickAction, Truncate(request, 80), null, 0, 0, PlanReadout.Unreadable)
-            .WithUsage(round.Usage);
+        var fallback = new PlanResult(IntentDisposition.QuickAction, Truncate(request, 80), null, PlanReadout.Unreadable)
+            { Usage = round.Usage };
         return fallback with
         {
             // An answer that wandered off format twice is no shortfall: the fallback runs, and says it is one. The first
@@ -226,7 +210,7 @@ public sealed class Planner
             // Only a provider's failure is said: an unreadable repair leaves the plan it was asked to correct, refused as before.
             IncompleteReason = round.Kind == AnswerKind.Failed ? round.Shortfall("Plan repair") : null
         };
-        return repaired.WithUsage(round.Usage);
+        return repaired with { Usage = round.Usage };
     }
 
     /// <summary>

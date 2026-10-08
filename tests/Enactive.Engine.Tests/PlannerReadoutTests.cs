@@ -57,8 +57,8 @@ public sealed class PlannerReadoutTests
         var plan = await PlanWith(Turn.Says("thinking...").Reporting(prompt: 100, completion: 20),
                                   Turn.Says(RealPlan).Reporting(prompt: 150, completion: 30));
 
-        Assert.Equal(250, plan.PromptTokens);
-        Assert.Equal(50, plan.CompletionTokens);
+        Assert.Equal(250, plan.Usage.Prompt);
+        Assert.Equal(50, plan.Usage.Completion);
     }
 
     /// <summary>A readable answer costs one call. The recovery must not become the normal path.</summary>
