@@ -199,6 +199,21 @@ public sealed class SettingsDeclaredOnceTests
         return engine;
     }
 
+    /// <summary>
+    /// The orchestrator reads a switch where it uses it, from the options it was given. It copied each into a field of its
+    /// own - a second list beside EngineOptions that every new switch had to be added to again. What it may keep apart is
+    /// what it derives: a limit clamped, a budget given a floor - never a switch copied as it is.
+    /// </summary>
+    [Fact]
+    public void The_orchestrator_copies_no_switch_as_it_is()
+    {
+        var orchestrator = File.ReadAllText(Path.Combine(TestRepository.Root, "src", "Enactive.Agents", "Orchestrator.cs"));
+
+        var copies = System.Text.RegularExpressions.Regex.Matches(orchestrator, @"(?m)^\s*_\w+\s*=\s*options\.\w+\s*;")
+            .Select(m => m.Value.Trim()).ToArray();
+        Assert.True(copies.Length == 0, "Switches copied into fields:\n" + string.Join("\n", copies));
+    }
+
     private static object? Different(Type type, object? value, int n)
         => type == typeof(bool) ? !(bool)value!
             : type == typeof(int) ? (int)value! + 100 + n

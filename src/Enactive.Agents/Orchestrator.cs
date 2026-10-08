@@ -129,10 +129,16 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly WritableRoots _writableRoots;
 
     private readonly IModelResolver _modelResolver;
+
+    /// <summary>
+    /// The engine's switches, read where they are used. They were copied into a field each, a second list beside
+    /// EngineOptions that every new switch had to be added to again; what is kept apart below is only what this class
+    /// derives from one - a limit clamped, a budget given a floor.
+    /// </summary>
+    private readonly EngineOptions _options;
     private readonly int _reviewRetries;
     private readonly int _maxLoadedToolsPerStep;
     private readonly int _successRetries;
-    private readonly bool _proposeChecks;
     private readonly int _maxParallelSteps;
 
     /// <summary>
@@ -152,13 +158,8 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly int _evidenceBudget;
     /// <summary>One approval card at a time, however many steps are running.</summary>
     private readonly SemaphoreSlim _decisionGate = new(1, 1);
-    private readonly GenerationBudgets _generationBudgets;
-    private readonly RepairConsultation _repairConsultation;
-    private readonly int? _numCtx;
     private readonly bool? _think;
-    private readonly bool _allowImplicitToolCalls;
 
-    private readonly bool _revertRejectedSteps;
     private readonly IHandover _handover;
 
     /// <summary>
@@ -168,12 +169,6 @@ public sealed partial class Orchestrator : IOrchestrator
     /// </summary>
     private readonly IReadOnlyList<SuccessCriterionDefinition> _successCriteria;
     private readonly IReadOnlyList<IEcosystem> _ecosystems;
-    private readonly bool _stepOutputs;
-    private readonly bool _typedCriteria;
-    private readonly bool _dynamicSteps;
-    private readonly bool _validateWaves;
-    private readonly bool _reportBlocked;
-    private readonly bool _semanticCriteria;
 
     /// <summary>One per conversation, kept with the conversation itself: steps that share one, and a hand-over that
     /// refills it, are compared with the request before them (PrefixCacheWatch).</summary>
@@ -182,7 +177,6 @@ public sealed partial class Orchestrator : IOrchestrator
     /// <summary>Per run: when it began and what earlier runs had written - so a read of their files says whose they are.</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, EarlierRunsView> _earlierRuns = new();
     private readonly string _waveStore;
-    private readonly FanOutLimits _fanOut;
     private readonly ISuccessEvaluator _successEvaluator;
 
     /// <summary>
@@ -212,14 +206,8 @@ public sealed partial class Orchestrator : IOrchestrator
     /// </summary>
     public Orchestrator(RunEngineResources resources, EngineOptions options)
     {
-        _semanticCriteria = options.SemanticCriteria;
-        _validateWaves = options.ValidateWaves;
-        _reportBlocked = options.ReportBlocked;
+        _options = options;
         _waveStore = resources.WaveStore;
-        _stepOutputs = options.StepOutputs;
-        _typedCriteria = options.TypedCriteria;
-        _dynamicSteps = options.DynamicSteps;
-        _fanOut = options.FanOut;
         _ecosystems = resources.Ecosystems;
         _writableRoots = resources.WritableRoots;
         _checkpoints = resources.Checkpoints;
@@ -253,22 +241,13 @@ public sealed partial class Orchestrator : IOrchestrator
         // same reason: each attempt is a whole tool loop, paid for before anybody notices a stray
         // number. 0 restores the behaviour this had until 2026-09-08 - check once, and stop.
         _successRetries = Math.Clamp(options.SuccessRetries, 0, 5);
-        _proposeChecks = options.ProposeChecks;
         // 1 = the original behaviour: one step at a time on one shared conversation.
         _maxParallelSteps = Math.Max(1, options.MaxParallelSteps);
         _evidenceBudget = Math.Max(ExecutionJournal.MinimumBudget, options.EvidenceBudget);
         _successEvaluator = resources.Agents?.SuccessEvaluator ?? new SuccessEvaluator();
         _handover = resources.Agents?.Handover ?? new Handover();
-        _generationBudgets = options.GenerationBudgets;
-        _repairConsultation = options.RepairConsultation;
-        _numCtx = options.NumCtx;
         // Disable the local model's <think> phase by sending think:false; null leaves it to the model.
         _think = options.DisableThinking ? false : null;
-        // Off by default: executing JSON found in a reply is a way to talk the agent into acting.
-        _allowImplicitToolCalls = options.AllowImplicitToolCalls;
-        // On by default: a gate that stops the report but leaves the rejected work on disk is the
-        // state a person is most likely to pick up and use.
-        _revertRejectedSteps = options.RevertRejectedSteps;
     }
 
     public IAsyncEnumerable<WorkEvent> SubmitIntentAsync(Intent intent, CancellationToken ct)
@@ -470,11 +449,11 @@ public sealed partial class Orchestrator : IOrchestrator
                     // same request in five smaller steps cost 9.2M and finished.
                     () => _planner.PlanAsync(
                         intent.RawText, intent.Context, models.PlanProvider, models.Plan.Model, ct,
-                        _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0,
-                        turnCeiling: RunawayCeiling, outputBudget: _generationBudgets.For(GenerationPurpose.Planning),
-                        stepOutputs: _stepOutputs, typedCriteria: _typedCriteria,
-                        budget: budget.TurnExhaustedAfter, dynamicSteps: _dynamicSteps, validateWaves: _validateWaves,
-                        semanticCriteria: _semanticCriteria));
+                        _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0,
+                        turnCeiling: RunawayCeiling, outputBudget: _options.GenerationBudgets.For(GenerationPurpose.Planning),
+                        stepOutputs: _options.StepOutputs, typedCriteria: _options.TypedCriteria,
+                        budget: budget.TurnExhaustedAfter, dynamicSteps: _options.DynamicSteps, validateWaves: _options.ValidateWaves,
+                        semanticCriteria: _options.SemanticCriteria));
         }
         catch (RetryBudgetExceededException ex)
         {
@@ -516,8 +495,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 // A provider's failure comes back in the result (Planner.ReplanAsync), not as an exception to catch.
                 plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                     intent.RawText, intent.Context, plan, defect, models.PlanProvider, models.Plan.Model, ct,
-                    _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                    _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
+                    _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
+                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
                 replanFailure = plan.IncompleteReason;
                 if (plan.PromptTokens + plan.CompletionTokens > 0)
                     yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
@@ -536,7 +515,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
         // A document made from a step's items has to be declared, so the engine can reserve and assemble it.
         // The planner is asked, once and neutrally, whether its plan makes one; the answer is its to give.
-        if (resume is null && _dynamicSteps && _stepOutputs && plan.Plan is { } undeclared
+        if (resume is null && _options.DynamicSteps && _options.StepOutputs && plan.Plan is { } undeclared
             && FanOut.MissingReport(undeclared, plan.PlannedCriteria) is { } missing)
         {
             yield return scope.Ev(EventKind.ContextAssembled, missing.Diagnostic + " Asking the planner to declare it.");
@@ -548,8 +527,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 // A provider's failure comes back in the result (Planner.ReplanAsync), not as an exception to catch.
                 plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                     intent.RawText, intent.Context, plan, missing.Diagnostic, models.PlanProvider, models.Plan.Model, ct,
-                    _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                    _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
+                    _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
+                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
                 unclear = plan.IncompleteReason;
                 if (plan.PromptTokens + plan.CompletionTokens > 0)
                     yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
@@ -588,8 +567,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 // A provider's failure comes back in the result (Planner.ReplanAsync), not as an exception to catch.
                 plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                     intent.RawText, intent.Context, plan, diagnostic, models.PlanProvider, models.Plan.Model, ct,
-                    _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                    _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
+                    _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
+                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
                 unclear = plan.IncompleteReason;
                 if (plan.PromptTokens + plan.CompletionTokens > 0)
                     yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
@@ -618,11 +597,11 @@ public sealed partial class Orchestrator : IOrchestrator
 
         // Step outputs are a switch, not a suggestion the planner can take up on its own: with it off,
         // a declared output is dropped and the steps run as they always did.
-        if (!_stepOutputs && plan.Plan is { } declaring && declaring.Steps.Any(st => st.Output is not null))
+        if (!_options.StepOutputs && plan.Plan is { } declaring && declaring.Steps.Any(st => st.Output is not null))
             plan = plan with { Plan = declaring with { Steps = declaring.Steps.Select(st => st with { Output = null }).ToArray() } };
 
         // "For each" is a switch too, and needs step outputs: the items are one. Off, the step runs once.
-        if ((!_dynamicSteps || !_stepOutputs) && plan.Plan is { } eaching && eaching.Steps.Any(st => st.ForEach is not null && !st.Joins))
+        if ((!_options.DynamicSteps || !_options.StepOutputs) && plan.Plan is { } eaching && eaching.Steps.Any(st => st.ForEach is not null && !st.Joins))
             plan = plan with { Plan = eaching with { Steps = eaching.Steps.Select(st => st.Joins ? st : st with { ForEach = null }).ToArray() } };
         else if (resume is null && plan.Plan is { } growing && growing.Steps.Any(st => st.ForEach is not null))
         {
@@ -661,10 +640,10 @@ public sealed partial class Orchestrator : IOrchestrator
         // added to what the run already has - the system's own checks and the person's and template's
         // criteria stay, whatever the planner says (3.4) - and one the engine cannot check is dropped
         // with its reason, never a reason for the run to fail (3.2).
-        if (_typedCriteria && resume is null && plan.PlannedCriteria.Count > 0)
+        if (_options.TypedCriteria && resume is null && plan.PlannedCriteria.Count > 0)
         {
             var (accepted, dropped) = TypedCriteria.Validate(plan.PlannedCriteria, _workspace.RootPath, _ecosystems, plan.Plan,
-                semantic: _semanticCriteria);
+                semantic: _options.SemanticCriteria);
             foreach (var why in dropped)
                 yield return scope.Ev(EventKind.ErrorObserved, why);
             if (accepted.Count > 0)
@@ -680,7 +659,7 @@ public sealed partial class Orchestrator : IOrchestrator
             yield return scope.Ev(EventKind.ReviewRequested, "Planner is checking final criteria against the original request before execution…");
             plan = await InScopeAsync(runId, taskId, null, () => PlanCheckReview.RunAsync(plan with { Checks = CriteriaFor(plan) }, intent.RawText,
                 intent.Context, models.PlanProvider, models.Plan.Model, budget,
-                _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: resume is not null || _successCriteria.Count > 0 || !_proposeChecks,
+                _options.GenerationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: resume is not null || _successCriteria.Count > 0 || !_options.ProposeChecks,
                 tools: _tools.Definitions.Where(d => !DeniedToThisRun(d.Name)).ToArray(),
                 workspaceRoot: _workspace.RootPath, askWhenUnsettled: true));
             yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
@@ -805,7 +784,7 @@ public sealed partial class Orchestrator : IOrchestrator
             if (failing.Count > 0 && _planner.ChecksAuditEnabled)
             {
                 var decision = await InScopeAsync(scope.RunId, scope.TaskId, null, () => FailingCheckReview.RunAsync(intent.RawText, failing,
-                    models.PlanProvider, models.Plan.Model, budget, _generationBudgets.For(GenerationPurpose.Planning), ct));
+                    models.PlanProvider, models.Plan.Model, budget, _options.GenerationBudgets.For(GenerationPurpose.Planning), ct));
                 if (decision.Usage.Any)
                     yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, decision.Usage);
                 if (decision.Problem is { } problem)
@@ -1220,7 +1199,7 @@ public sealed partial class Orchestrator : IOrchestrator
         var waveDir = WaveCapture.DirFor(_waveStore, _workspace.RootPath, scope.TaskId);
         var trialDir = WaveCapture.TrialDirFor(_waveStore, _workspace.RootPath, scope.TaskId);
         var baselineTaken = session.Builds.Where(b => b.Taken).ToArray();
-        var waves = !_validateWaves || baselineTaken.Length == 0 ? null
+        var waves = !_options.ValidateWaves || baselineTaken.Length == 0 ? null
             : resume?.Waves is { } savedWaves ? WaveLedger.Resume(savedWaves, baselineTaken, _ecosystems)
             : new WaveLedger(baselineTaken);
         session.Waves = waves;
@@ -1752,16 +1731,16 @@ public sealed partial class Orchestrator : IOrchestrator
             // Room without asking: this expansion's limit, the plan's, and the run's own step budget
             // less what is already waiting for it.
             var waiting = scheduler.Snapshot().Count(p => p.Value == StepStatus.Pending);
-            var room = Math.Min(_fanOut.MaxStepsPerExpansion, _fanOut.MaxTotalSteps - all.Count);
+            var room = Math.Min(_options.FanOut.MaxStepsPerExpansion, _options.FanOut.MaxTotalSteps - all.Count);
             if (scope.Budget.RemainingSteps != int.MaxValue)
                 room = Math.Min(room, scope.Budget.RemainingSteps - waiting);
             var depth = FanOut.Depth(all, forEach);
-            if (notExpanded is null && (items.Count > room || depth > _fanOut.MaxDepth))
+            if (notExpanded is null && (items.Count > room || depth > _options.FanOut.MaxDepth))
             {
-                var over = depth > _fanOut.MaxDepth
-                    ? $"that would be {depth} levels of steps for each item, and the limit is {_fanOut.MaxDepth}"
+                var over = depth > _options.FanOut.MaxDepth
+                    ? $"that would be {depth} levels of steps for each item, and the limit is {_options.FanOut.MaxDepth}"
                     : $"{items.Count} steps is more than the {Math.Max(0, room)} this run may add without asking";
-                var canBatch = depth <= _fanOut.MaxDepth && room >= 1;
+                var canBatch = depth <= _options.FanOut.MaxDepth && room >= 1;
                 var per = canBatch ? (int)Math.Ceiling(items.Count / (double)room) : 0;
                 var options = new List<DecisionOption> { new("allow", $"Create all {items.Count} steps") };
                 if (canBatch) options.Add(new("batch", $"Group them into {room} steps of about {per} items"));
@@ -2731,7 +2710,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     var checkedRepair = await InScopeAsync(runId, taskId, null, () => PlanCheckReview.RunAsync(
                         new PlanResult(IntentDisposition.QuickAction, "Review repaired criteria", null) { Checks = revised, Restrictions = intent.Context.Restrictions, ActionPolicy = intent.Context.ActionPolicy },
                         intent.RawText, intent.Context, plannerProvider, plannerModel.Model, budget,
-                        _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: true, tools: _tools.Definitions,
+                        _options.GenerationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: true, tools: _tools.Definitions,
                         workspaceRoot: _workspace.RootPath));
                     if (session is not null)
                         yield return session.Scope.Usage(WorkEventPayload.WorkPurpose.Plan, plannerModel,
@@ -3187,7 +3166,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // engine saw no block, the step could only say so in prose, and the review failed it for a claim no call
         // supported: two attempts and two reviews to "review rejected" (run 9384e2, 2026-10-03, a task started
         // from the web that needed a shell). The switch still decides for a run that kept nothing back.
-        var mayReportBlocked = _reportBlocked || offer.Withheld.Count > 0;
+        var mayReportBlocked = _options.ReportBlocked || offer.Withheld.Count > 0;
         if (mayReportBlocked) toolDefs = [.. toolDefs, AgentBlocked.Tool];
         // For the review, which is otherwise never told: what was kept back is the engine's fact, not the step's claim.
         loopResult.KeptBack = offer.Because;
@@ -3273,7 +3252,7 @@ public sealed partial class Orchestrator : IOrchestrator
         var trimmedInARow = 0;
 
         // The window, asked once: it is a property of the provider and the model, not of a turn.
-        var probe = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think);
+        var probe = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _options.NumCtx, Think: _think);
         var statedWindow = provider.ContextWindow(probe);
 
         // Handover by how full the window is - a per-provider SETTING, not an engine constant: the
@@ -3389,11 +3368,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield break;
             }
 
-            if (_repairConsultation.Enabled && !repairAttempts.Consulted
-                && repairAttempts.FailedRepairs >= _repairConsultation.FailedRepairs)
+            if (_options.RepairConsultation.Enabled && !repairAttempts.Consulted
+                && repairAttempts.FailedRepairs >= _options.RepairConsultation.FailedRepairs)
             {
                 repairAttempts.Consulted = true;
-                var adviser = _repairConsultation.Model!;
+                var adviser = _options.RepairConsultation.Model!;
                 yield return Ev(EventKind.ContextAssembled,
                     $"Repair consultation: {repairAttempts.FailedRepairs} distinct failed repairs; asking {adviser.ProviderId}/{adviser.Model} for advice.");
                 ChatCompletion? advice = null;
@@ -3417,7 +3396,7 @@ public sealed partial class Orchestrator : IOrchestrator
                                 + "State missing evidence instead of guessing. You have no tools."),
                             ChatMessage.User("Goal:\n" + repairGoal + "\nCurrent workspace evidence:\n"
                                 + RepairAttempts.Clip(facts, 6000) + "\nFailing check:\n" + repairAttempts.Error)
-                        }, OutputTokenLimit: Math.Clamp(_repairConsultation.OutputTokens, 128, 2048));
+                        }, OutputTokenLimit: Math.Clamp(_options.RepairConsultation.OutputTokens, 128, 2048));
                         // Bound the small request by a declared context window as well.
                         var inputEstimate = Transcript.Size(adviceRequest.Messages);
                         if (adviserProvider.ContextWindow(adviceRequest) is int adviceWindow)
@@ -3519,8 +3498,8 @@ public sealed partial class Orchestrator : IOrchestrator
 
                 var engineEvidenceOnly = false;
                 Task<HandoverResult> AskForNote() => _handover.GenerateAsync(
-                    provider, new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think,
-                        OutputTokenLimit: (int)Math.Min(int.MaxValue, (long)_generationBudgets.For(GenerationPurpose.Handover) * (handoverFailures + 1)), Purpose: GenerationPurpose.Handover),
+                    provider, new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _options.NumCtx, Think: _think,
+                        OutputTokenLimit: (int)Math.Min(int.MaxValue, (long)_options.GenerationBudgets.For(GenerationPurpose.Handover) * (handoverFailures + 1)), Purpose: GenerationPurpose.Handover),
                     runBudget, ct,
                     // The size this loop MEASURED - the provider's last count plus what was added
                     // since, at the rate this conversation showed. Without it the note was fitted on a
@@ -3734,8 +3713,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 // re-reads of the conversation, in and out. RequireToolCall asks for a call; anything but the hand-over
                 // is answered, not run (below).
                 toolDefs,
-                Temperature: 0.2, NumCtx: _numCtx, Think: _think,
-                OutputTokenLimit: _generationBudgets.For(purpose), Purpose: purpose, RequireToolCall: forcedThisTurn);
+                Temperature: 0.2, NumCtx: _options.NumCtx, Think: _think,
+                OutputTokenLimit: _options.GenerationBudgets.For(purpose), Purpose: purpose, RequireToolCall: forcedThisTurn);
             if (forcedThisTurn)
                 yield return Ev(EventKind.ContextAssembled,
                     $"This turn offers only {StepOutputContract.ToolName}: the step has handed nothing on, and is to now.");
@@ -3967,7 +3946,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 messages.Add(ChatMessage.User(reason + ". Continue with a NEW complete response, not a JSON suffix. "
                     + "No tool call from the incomplete turn ran. Send smaller independent write_file (append:true) "
                     + "or edit_file actions for large files; each must have complete JSON arguments. "
-                    + "Keep reasoning and the final answer concise. Next output ceiling: " + _generationBudgets.For(purpose) + " tokens."));
+                    + "Keep reasoning and the final answer concise. Next output ceiling: " + _options.GenerationBudgets.For(purpose) + " tokens."));
                 continue;
             }
 
@@ -3989,7 +3968,7 @@ public sealed partial class Orchestrator : IOrchestrator
             var described = toolCalls is null && replyText is not null
                 ? TryRecoverImplicitToolCall(replyText, toolsOnRequest is null ? toolDefs : [.. toolDefs, .. toolsOnRequest.Waiting])
                 : null;
-            if (described is not null && _allowImplicitToolCalls)
+            if (described is not null && _options.AllowImplicitToolCalls)
             {
                 toolCalls = new List<ToolCall> { described };
                 recovered = true;
@@ -4063,7 +4042,7 @@ public sealed partial class Orchestrator : IOrchestrator
             var turnOrigin = recovered ? ToolCallOrigin.Healed
                 : resent ? ToolCallOrigin.Nudged
                 : attemptOrigin;
-            var accounting = new ToolResultAccounting(frame, _tools, repairAttempts, _repairConsultation.Enabled, turnOrigin);
+            var accounting = new ToolResultAccounting(frame, _tools, repairAttempts, _options.RepairConsultation.Enabled, turnOrigin);
             var readResults = new Dictionary<int, ToolInvocation.Result>();
             // Calls admitted ahead of the batch of reads they run in, with what each left kept until its turn comes - the
             // feed, the journal and the conversation keep the calls' order (CallAdmission.Held).

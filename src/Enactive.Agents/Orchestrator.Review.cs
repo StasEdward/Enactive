@@ -124,7 +124,7 @@ public sealed partial class Orchestrator
         // Phase 1.4: a step whose plan set semantic criteria is judged against those, and only those - its report is
         // a claim, and each verdict stands on evidence of a kind the criterion allows. A step without them is reviewed
         // as it always was.
-        var (review, mode) = _semanticCriteria && stepNumber is { } judgedNo
+        var (review, mode) = _options.SemanticCriteria && stepNumber is { } judgedNo
             && stepCriteria?.Where(c => c.Typed?.Kind == TypedCriterionKind.Semantic).ToArray() is { Length: > 0 } judged
             ? (await CriteriaReview.RunAsync(
                     new CriteriaReviewInput(title, judgedNo, LastAssistant(messages), handedOn,

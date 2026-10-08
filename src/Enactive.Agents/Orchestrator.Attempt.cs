@@ -103,7 +103,7 @@ public sealed partial class Orchestrator
     private async Task RevertRejectedAsync(ToolLoopResult result, IArtifactScope store,
         RunScope scope, int? stepNo, Func<string, string, ValueTask> publish, CancellationToken ct)
     {
-        if (result.Kind != StepOutcomeKind.ReviewRejected || !_revertRejectedSteps) return;
+        if (result.Kind != StepOutcomeKind.ReviewRejected || !_options.RevertRejectedSteps) return;
         // Rejected, and still not put back: the files the review found right. The step stays rejected - nothing is built
         // on it - but what it made right is left for the person to see, rather than thrown away with the report or the
         // other file it came with; the rest of what it changed goes back. See ReviewResult.Keep.
