@@ -62,11 +62,42 @@ internal sealed class CallAdmission(
         public IReadOnlyList<ToolDefinition> Loaded { get; set; } = [];
     }
 
+    /// <summary>
+    /// What admitting one call ahead of its turn left behind, kept until the loop reaches that call: its events, its
+    /// journal entry, how the open failures count it, its answer to the model - and the verdict, which is decided at
+    /// once. Released by <see cref="Release"/>, in the calls' order.
+    ///
+    /// <para>A read admitted ahead of the batch it runs in used to leave its events and its journal entry at once, so
+    /// a read the admission answered (the same read twice in a turn, a tool still in the catalog) stood in the run's
+    /// feed and in the journal the review reads BEFORE the reads the model had made ahead of it. Only its answer to
+    /// the model was kept back, so the conversation alone had the calls' order.</para>
+    /// </summary>
+    internal sealed class Held
+    {
+        public Verdict Verdict { get; } = new();
+        internal List<WorkEvent> Events { get; } = [];
+        internal List<ChatMessage> Replies { get; } = [];
+        internal List<Action> Records { get; } = [];
+        internal bool Released { get; set; }
+    }
+
     private readonly HashSet<string> _readsThisTurn = new(StringComparer.Ordinal);
 
-    // Where the call being admitted is answered: the conversation, or a reply kept for it until the loop reaches it.
-    private List<ChatMessage>? _into;
-    private List<ChatMessage> Replies => _into ?? frame.Messages;
+    // The call being admitted ahead of its turn, whose records are kept until the loop reaches it; null for one that is
+    // admitted in its turn, whose records are written at once.
+    private Held? _held;
+    private List<ChatMessage> Replies => _held?.Replies ?? frame.Messages;
+
+    /// <summary>
+    /// A record the admission leaves for a call - its journal entry, how the open failures count it: written now, or kept
+    /// for a call admitted ahead (<see cref="Held"/>). What the admission DECIDES (a read made once this turn, the step's
+    /// word that it is blocked) is never kept back: the next call of the batch is decided on it.
+    /// </summary>
+    private void Leave(Action record)
+    {
+        if (_held is { } held) held.Records.Add(record);
+        else record();
+    }
     private bool _onlyHandOn;
 
     /// <summary>The step's own word that it cannot go on, once it has given it; the step ends blocked when the turn does.</summary>
@@ -83,24 +114,49 @@ internal sealed class CallAdmission(
     /// Decides one call, in order, and records whatever it does not let through.
     /// </summary>
     /// <param name="park">Writes the step's place down before it stops at a question nobody is here to answer.</param>
-    /// <param name="into">
-    /// Where a call that is not let through is answered, when not in the conversation at once: a read admitted ahead of
-    /// the batch it runs in, whose answer belongs after the results of the reads before it - the conversation keeps
-    /// the calls' order. Null: the conversation.
-    /// </param>
-    public async IAsyncEnumerable<WorkEvent> AdmitAsync(ToolCall call, Verdict verdict, Action park,
-        [EnumeratorCancellation] CancellationToken ct, List<ChatMessage>? into = null)
+    public IAsyncEnumerable<WorkEvent> AdmitAsync(ToolCall call, Verdict verdict, Action park, CancellationToken ct)
+        => AdmitInOrderAsync(call, verdict, park, ct);
+
+    /// <summary>
+    /// Decides one call ahead of its turn - a read the loop would run together with the reads before it - and keeps what
+    /// it leaves until the loop reaches the call (<see cref="Release"/>), so the feed, the journal and the conversation
+    /// all have the calls in the order the model made them. Only a call nobody is asked about can be decided ahead: a
+    /// question kept back is one nobody sees, so reaching one is a fault in the caller, thrown before it is asked.
+    /// </summary>
+    public async Task<Held> AdmitAheadAsync(ToolCall call, CancellationToken ct)
     {
-        _into = into;
+        var held = new Held();
+        _held = held;
         try
         {
-            await foreach (var ev in AdmitInOrderAsync(call, verdict, park, ct))
-                yield return ev;
+            await foreach (var ev in AdmitInOrderAsync(call, held.Verdict,
+                               () => throw new InvalidOperationException("A call admitted ahead cannot stop at a question."), ct))
+            {
+                if (ev.Kind == EventKind.DecisionRequested)
+                    throw new InvalidOperationException(
+                        $"'{call.Name}' would ask somebody, and was admitted ahead of its turn; only a call that runs freely can be (RunsFreely).");
+                held.Events.Add(ev);
+            }
         }
         finally
         {
-            _into = null;
+            _held = null;
         }
+        return held;
+    }
+
+    /// <summary>
+    /// What a call admitted ahead left, written now that the loop has reached it: its journal entry and open failure, its
+    /// answer in the conversation, and its events, returned to be put in the feed here.
+    /// </summary>
+    public IReadOnlyList<WorkEvent> Release(Held held)
+    {
+        if (held.Released)
+            throw new InvalidOperationException("Already released: what a call left is written once.");
+        held.Released = true;
+        foreach (var record in held.Records) record();
+        frame.Messages.AddRange(held.Replies);
+        return held.Events;
     }
 
     private async IAsyncEnumerable<WorkEvent> AdmitInOrderAsync(ToolCall call, Verdict verdict, Action park,
@@ -117,8 +173,8 @@ internal sealed class CallAdmission(
             yield return Invoked(call);
             var onlyHandOn = $"this turn is for {StepOutputContract.ToolName} only. Hand on what you have "
                 + "established first; every tool is back on the next turn.";
-            frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, onlyHandOn, WorkspaceEffect.None);
-            frame.Open.RefusedByRule(call);
+            Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, onlyHandOn, WorkspaceEffect.None));
+            Leave(() => frame.Open.RefusedByRule(call));
             Replies.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + onlyHandOn));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {onlyHandOn}");
             yield break;
@@ -129,8 +185,8 @@ internal sealed class CallAdmission(
         {
             yield return Invoked(call);
             const string afterReport = "the step has reported it is blocked; nothing after that report is carried out.";
-            frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, afterReport, WorkspaceEffect.None);
-            frame.Open.RefusedByRule(call);
+            Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, afterReport, WorkspaceEffect.None));
+            Leave(() => frame.Open.RefusedByRule(call));
             Replies.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + afterReport));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {afterReport}");
             yield break;
@@ -147,7 +203,7 @@ internal sealed class CallAdmission(
             if (notAReport is not null)
             {
                 recorded = "Not recorded: " + notAReport;
-                frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, recorded, WorkspaceEffect.None);
+                Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, recorded, WorkspaceEffect.None));
                 yield return Ev(EventKind.ToolResult, $"{call.Name} -> failed: {recorded}");
             }
             else
@@ -155,7 +211,7 @@ internal sealed class CallAdmission(
                 ReportedBlocked = AgentBlocked.Line(blockReason!, blockNeeds);
                 recorded = "Recorded: this step ends here as BLOCKED - not done - and the run stops for a person to remove "
                     + "the cause; then this step is done again.";
-                frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, recorded, WorkspaceEffect.None);
+                Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, recorded, WorkspaceEffect.None));
                 yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {ReportedBlocked}");
             }
             Replies.Add(ChatMessage.Tool(call.Id, recorded));
@@ -171,7 +227,7 @@ internal sealed class CallAdmission(
                 ? catalog.Load(call.ArgumentsJson)
                 : catalog.Find(call.ArgumentsJson);
             verdict.Loaded = found;
-            frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, said, WorkspaceEffect.None);
+            Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, said, WorkspaceEffect.None));
             Replies.Add(ChatMessage.Tool(call.Id, said));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {said}");
             yield break;
@@ -186,8 +242,8 @@ internal sealed class CallAdmission(
             yield return Invoked(call);
             var notLoaded = $"'{call.Name}' is not loaded, so it did not run. Call {ToolBudget.LoadToolName} with its name first; "
                 + "it is callable from the turn after, with its full description.";
-            frame.Open.Failed(call, notLoaded, true, null);
-            frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notLoaded);
+            Leave(() => frame.Open.Failed(call, notLoaded, true, null));
+            Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notLoaded));
             Replies.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + notLoaded));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {notLoaded}");
             yield break;
@@ -207,7 +263,7 @@ internal sealed class CallAdmission(
             yield return Invoked(call);
             const string nothing = "Nothing was stored: this step hands nothing on as values. Finish it now with a short "
                 + "closing message - no further tool calls.";
-            frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, nothing, WorkspaceEffect.None);
+            Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, nothing, WorkspaceEffect.None));
             Replies.Add(ChatMessage.Tool(call.Id, nothing));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {nothing}");
             yield break;
@@ -219,8 +275,8 @@ internal sealed class CallAdmission(
         if (frame.Boundary?.AssembledByTheEngine(call, tools.DefinitionOf(call.Name)) is { } assembled)
         {
             yield return Invoked(call);
-            frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, assembled, WorkspaceEffect.None);
-            frame.Open.RefusedByRule(call);
+            Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, assembled, WorkspaceEffect.None));
+            Leave(() => frame.Open.RefusedByRule(call));
             Replies.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + assembled));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {assembled}");
             yield break;
@@ -243,8 +299,8 @@ internal sealed class CallAdmission(
             is { } notItsToChange)
         {
             yield return Invoked(call);
-            frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notItsToChange, WorkspaceEffect.None);
-            frame.Open.RefusedByRule(call);
+            Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notItsToChange, WorkspaceEffect.None));
+            Leave(() => frame.Open.RefusedByRule(call));
             Replies.Add(ChatMessage.Tool(call.Id, "REFUSED: " + notItsToChange));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> refused: {notItsToChange}");
             yield break;
@@ -282,9 +338,9 @@ internal sealed class CallAdmission(
         // Existence, role, an exact repeat of a command, a whole-file write over a file seen in part.
         if (await PreflightAsync(call, ct) is { } admissionRefusal)
         {
-            if (admissionRefusal.Answered) frame.Open.FoundNothing(call, admissionRefusal.Reason);
-            else frame.Open.Failed(call, admissionRefusal.Reason, admissionRefusal.DidNotRun, admissionRefusal.AsTool);
-            frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, admissionRefusal.Reason);
+            if (admissionRefusal.Answered) Leave(() => frame.Open.FoundNothing(call, admissionRefusal.Reason));
+            else Leave(() => frame.Open.Failed(call, admissionRefusal.Reason, admissionRefusal.DidNotRun, admissionRefusal.AsTool));
+            Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, admissionRefusal.Reason));
             yield return Decided(call.Name, allowed: false, admissionRefusal.Summary);
             Replies.Add(ChatMessage.Tool(call.Id, admissionRefusal.Reply));
             yield break;
@@ -296,7 +352,7 @@ internal sealed class CallAdmission(
         if (tools.DefinitionOf(call.Name)?.OnceOnly == true && taskProgress.DoneBefore(frame.TaskId, call) is { } already)
         {
             const string notAgain = "already done earlier in this task, with the same arguments; not repeated";
-            frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notAgain);
+            Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notAgain));
             yield return Decided(call.Name, allowed: false, $"{call.Name}: {notAgain}");
             Replies.Add(ChatMessage.Tool(call.Id,
                 $"ALREADY DONE: this exact {call.Name} was carried out earlier in this task, at "
@@ -348,9 +404,9 @@ internal sealed class CallAdmission(
                 // the resolution, and the policy's "no" is a door that will not open, which
                 // the model is told below to walk around. Either way there is no residue,
                 // so it stops counting once the step has changed something. See Forgiven.
-                frame.Open.Refused(call, why);
-                frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson),
-                               ActionOutcome.Refused, why);
+                Leave(() => frame.Open.Refused(call, why));
+                Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson),
+                               ActionOutcome.Refused, why));
 
                 // The model is told WHICH refusal this was. Both used to arrive as "the user
                 // did not permit this action" - the distinction was computed, recorded in the
@@ -409,9 +465,9 @@ internal sealed class CallAdmission(
                     + "allow it");
 
                 var unattendedWhy = ShellGeography.Explain(outside, frame.WorkspaceRoot);
-                frame.Open.Failed(call, "this run may not write outside the workspace");
-                frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson),
-                               ActionOutcome.Refused, "writes outside the workspace");
+                Leave(() => frame.Open.Failed(call, "this run may not write outside the workspace"));
+                Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson),
+                               ActionOutcome.Refused, "writes outside the workspace"));
                 Replies.Add(ChatMessage.Tool(call.Id, "ERROR: " + unattendedWhy));
                 yield break;
             }
@@ -461,9 +517,9 @@ internal sealed class CallAdmission(
                 // model in words it can act on. A step that quietly skipped the call would
                 // report success over work that never happened.
                 var why = ShellGeography.Explain(outside, frame.WorkspaceRoot);
-                frame.Open.Failed(call, "the user kept this command inside the workspace");
-                frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson),
-                               ActionOutcome.Refused, "writes outside the workspace");
+                Leave(() => frame.Open.Failed(call, "the user kept this command inside the workspace"));
+                Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson),
+                               ActionOutcome.Refused, "writes outside the workspace"));
                 Replies.Add(ChatMessage.Tool(call.Id, "ERROR: " + why));
                 yield break;
             }
@@ -634,7 +690,7 @@ internal sealed class CallAdmission(
         {
             frame.OutputSlot.Accept(checkedOutput);
             frame.OutputSlot.LastRefused = null;
-            frame.Open.HandedOn();
+            Leave(() => frame.Open.HandedOn());
             // What the step had shown for each item it hands a result on for, recorded now
             // and by the engine (Phase 5.1): later, only this counts as coverage.
             frame.OutputSlot.Items = EvidenceCoverage.Gather(frame.OutputSchema, checkedOutput.Values!, frame.Reads, frame.Journal.Actions, tools.Definitions,
@@ -645,7 +701,7 @@ internal sealed class CallAdmission(
                 + (unbacked is null ? "" : " " + unbacked)
                 // Said to the step when it is answered; with a note, the note is what carries on.
                 + (answered ? " Finish the step with a short closing message." : " Handed on with the handover note.");
-            frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, handed, WorkspaceEffect.None);
+            Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, handed, WorkspaceEffect.None));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {handed}");
         }
         else
@@ -655,7 +711,7 @@ internal sealed class CallAdmission(
             handed = (sameAgain ? "This is the same submission as the last one, unchanged - the problems below still stand. " : "")
                 + string.Join(" ", checkedOutput.Errors) + " Nothing was stored; send the corrected submission.";
             frame.OutputSlot.LastRefused = TaskProgress.Canonical(call.ArgumentsJson);
-            frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, handed, WorkspaceEffect.None);
+            Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, handed, WorkspaceEffect.None));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> failed: {handed}");
         }
         if (answered)

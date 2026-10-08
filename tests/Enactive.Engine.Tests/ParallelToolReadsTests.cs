@@ -175,5 +175,17 @@ public sealed class ParallelToolReadsTests
         Assert.Equal(new[] { "a", "again", "b" }, answers.Select(m => m.ToolCallId));
         Assert.StartsWith("Not run: this is the same call", answers[1].Content);
         Assert.Equal(new[] { "read 0", "read 1" }, new[] { answers[0].Content, answers[2].Content });
+
+        // The feed has the calls' order too. The answered read was admitted ahead of the batch, and its lines used to
+        // go out then - before the read the model had made first was even invoked.
+        var probeLines = events.Select((e, at) => (e, at)).Where(x => x.e.Summary.StartsWith("probe")).ToArray();
+        Assert.Collection(probeLines.Where(x => x.e.Kind == EventKind.ToolResult).Select(x => x.e.Summary),
+            first => Assert.Equal("probe -> ok: read 0", first),
+            again => Assert.StartsWith("probe -> Not run: this is the same call", again),
+            second => Assert.Equal("probe -> ok: read 1", second));
+        Assert.Equal(EventKind.ToolInvoked, probeLines[0].e.Kind);
+        Assert.Equal("probe {\"id\":0}", probeLines[0].e.Summary);
+        Assert.True(probeLines.First(x => x.e.Summary.StartsWith("probe -> Not run")).at
+            > probeLines.First(x => x.e.Summary == "probe -> ok: read 0").at);
     }
 }

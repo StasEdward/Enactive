@@ -4065,9 +4065,9 @@ public sealed partial class Orchestrator : IOrchestrator
                 : attemptOrigin;
             var accounting = new ToolResultAccounting(frame, _tools, repairAttempts, _repairConsultation.Enabled, turnOrigin);
             var readResults = new Dictionary<int, ToolInvocation.Result>();
-            // Calls admitted ahead of the batch of reads they run in, with the answer kept for one that was not let
-            // through - it joins the conversation when its turn comes, so the conversation keeps the calls' order.
-            var admittedAhead = new Dictionary<int, (CallAdmission.Verdict Verdict, List<ChatMessage> Replies)>();
+            // Calls admitted ahead of the batch of reads they run in, with what each left kept until its turn comes - the
+            // feed, the journal and the conversation keep the calls' order (CallAdmission.Held).
+            var admittedAhead = new Dictionary<int, CallAdmission.Held>();
             admission.BeginTurn(onlyHandOn: forcedThisTurn);
             ToolContext CallContext() => new(taskId, runId, _workspace.Id, context,
                 EffectivePolicyFor(worker), _workspace.RootPath, store);
@@ -4089,7 +4089,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 if (admittedAhead.Remove(callIndex, out var ahead))
                 {
                     admitted = ahead.Verdict;
-                    messages.AddRange(ahead.Replies);
+                    foreach (var ev in admission.Release(ahead))
+                        yield return ev;
                 }
                 else
                     await foreach (var ev in admission.AdmitAsync(call, admitted, ParkHere, ct))
@@ -4118,16 +4119,8 @@ public sealed partial class Orchestrator : IOrchestrator
                          next < toolCalls.Count && group.Count < ParallelToolReads.Limit && admission.RunsFreely(toolCalls[next]);
                          next++)
                     {
-                        var at = next;
-                        var aheadVerdict = new CallAdmission.Verdict();
-                        var aheadReplies = new List<ChatMessage>();
-                        await foreach (var ev in admission.AdmitAsync(toolCalls[at], aheadVerdict,
-                                           () => _progress.Park(taskId, new ParkedPosition(stepNo, messages.ToArray(),
-                                               journal.Actions.Skip(loopMark).ToArray(), toolCalls.Skip(at).ToArray())),
-                                           ct, aheadReplies))
-                            yield return ev;
-                        admittedAhead[at] = (aheadVerdict, aheadReplies);
-                        if (aheadVerdict.Run) group.Add((at, toolCalls[at]));
+                        var held = admittedAhead[next] = await admission.AdmitAheadAsync(toolCalls[next], ct);
+                        if (held.Verdict.Run) group.Add((next, toolCalls[next]));
                     }
                     if (group.Count > 1)
                     {

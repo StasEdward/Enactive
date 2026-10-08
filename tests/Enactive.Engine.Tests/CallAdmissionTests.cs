@@ -223,6 +223,57 @@ public sealed class CallAdmissionTests : IDisposable
         Assert.Equal(0, nobody.Asked);
     }
 
+    // ── a call admitted ahead of its turn ───────────────────────────────────
+
+    /// <summary>
+    /// A call admitted ahead of its turn - a read the loop runs together with the reads before it - leaves nothing until
+    /// the loop reaches it, and then exactly what it would have left in its turn: its events, its journal entry, how the
+    /// open failures count it, its answer. Written at once, they stood in the feed and the journal before the calls the
+    /// model had made ahead of it.
+    /// </summary>
+    [Fact]
+    public async Task A_call_admitted_ahead_leaves_nothing_until_it_is_released()
+    {
+        var mail = new ToolDefinition("mcp__mail__send", "Sends a message.", "{}");
+        var (_, catalog) = ToolBudget.Split([.. _tools.Definitions, mail], maxLoaded: 8);
+        var admission = Admission(3, new ScriptedDecisionHandler("allow"), catalog: catalog);
+        admission.BeginTurn(onlyHandOn: false);
+
+        var held = await admission.AdmitAheadAsync(Call(mail.Name, "{}"), CancellationToken.None);
+
+        Assert.False(held.Verdict.Run);
+        Assert.Empty(_journal.Actions);
+        Assert.Equal(0, _frame.Open.Count);
+        Assert.Empty(_messages);
+
+        var events = admission.Release(held);
+
+        Assert.Equal([EventKind.ToolInvoked, EventKind.ToolResult], events.Select(e => e.Kind));
+        Assert.Equal(ActionOutcome.Refused, Assert.Single(_journal.Actions).Outcome);
+        Assert.Equal(1, _frame.Open.Count);
+        Assert.StartsWith($"NOT RUN: '{mail.Name}' is not loaded", LastReply);
+        Assert.Throws<InvalidOperationException>(() => admission.Release(held));
+    }
+
+    /// <summary>
+    /// Only a call nobody is asked about can be admitted ahead: a question kept back until the loop reaches the call is
+    /// one nobody sees while the step waits for its answer. Thrown before anybody is asked.
+    /// </summary>
+    [Fact]
+    public async Task A_call_that_would_ask_somebody_cannot_be_admitted_ahead()
+    {
+        var decisions = new ScriptedDecisionHandler("allow");
+        var admission = Admission(2, decisions);
+        admission.BeginTurn(onlyHandOn: false);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => admission.AdmitAheadAsync(Call("run_command", """{"command":"echo hi"}"""), CancellationToken.None));
+
+        Assert.Empty(decisions.Requests);
+        Assert.Empty(_journal.Actions);
+        Assert.Empty(_messages);
+    }
+
     // ── reads that need nobody's leave ──────────────────────────────────────
 
     [Fact]
