@@ -122,17 +122,8 @@ internal static class PlanCheckReview
             budget.TurnExhaustedAfter, requireComplete: false, ct);
         var usage = round.Usage;
 
-        switch (round.Kind)
-        {
-            case AnswerKind.OutOfBudget:
-                return Result(round.Problem);
-            case AnswerKind.Failed:
-                return Result("Verification contract review failed: " + round.Problem);
-            case AnswerKind.Unusable:
-                return Result(round.Errors.FirstOrDefault() is { } refused
-                    ? "Invalid verification contract: " + refused
-                    : "Verification contract review incomplete.");
-        }
+        if (round.Shortfall("The verification contract") is { } shortfall)
+            return Result(shortfall);
 
         var (contract, said) = round.Value!;
         if (contract.Unresolved is { } unresolved)

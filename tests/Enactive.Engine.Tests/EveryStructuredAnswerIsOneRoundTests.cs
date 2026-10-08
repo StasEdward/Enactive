@@ -21,6 +21,32 @@ public sealed class EveryStructuredAnswerIsOneRoundTests
 {
     private static RunBudget Spent() => new(new ExecutionLimits(MaxTokens: 100), DateTimeOffset.UtcNow, tokensAlreadySpent: 100);
 
+    // ── what a round that gave nothing says ─────────────────────────────────
+
+    private static AnswerRound<string> Round(AnswerKind kind, bool cutOff = false, bool readUnfinished = false, params string[] errors)
+        => new(kind, kind == AnswerKind.Answered ? "x" : null, errors,
+               kind is AnswerKind.Failed or AnswerKind.OutOfBudget ? "the provider is down" : null, TokenUsage.None)
+           { CutOff = cutOff, ReadUnfinished = readUnfinished };
+
+    /// <summary>
+    /// A round that gave nothing usable says why in one wording, whoever asked. The diagnosis, the failing-check decision,
+    /// the plan and its contract each switched over the round's kind and said the same four things four ways. A reader
+    /// that judged an unfinished answer itself is quoted: "cut off" would put a vaguer word in place of its own.
+    /// </summary>
+    [Fact]
+    public void A_round_that_gave_nothing_says_why_in_one_wording()
+    {
+        Assert.Null(Round(AnswerKind.Answered).Shortfall("The plan"));
+        Assert.Equal("The plan failed: the provider is down", Round(AnswerKind.Failed).Shortfall("The plan"));
+        Assert.Equal("the provider is down", Round(AnswerKind.OutOfBudget).Shortfall("The plan"));
+        Assert.Equal("The plan was cut off at its length limit",
+            Round(AnswerKind.Unusable, cutOff: true, errors: "your answer was cut off").Shortfall("The plan"));
+        Assert.Equal("The plan could not be used: the contract ends mid-field",
+            Round(AnswerKind.Unusable, cutOff: true, readUnfinished: true, "the contract ends mid-field").Shortfall("The plan"));
+        Assert.Equal("The plan could not be used: a; b", Round(AnswerKind.Unusable, errors: ["a", "b"]).Shortfall("The plan"));
+        Assert.Equal("The plan could not be used", Round(AnswerKind.Unusable).Shortfall("The plan"));
+    }
+
     // ── the decision on a check that fails before the work ──────────────────
 
     private static readonly SuccessCriterionDefinition Site = new("site shows the report", "check-site");
@@ -58,7 +84,8 @@ public sealed class EveryStructuredAnswerIsOneRoundTests
 
         Assert.Empty(provider.Requests);
         Assert.Empty(decision.Dropped);
-        Assert.StartsWith("no budget was left to ask", decision.Problem);
+        // Said in the budget's own words, as every round that ran out is.
+        Assert.False(string.IsNullOrWhiteSpace(decision.Problem));
     }
 
     [Fact]
@@ -67,7 +94,7 @@ public sealed class EveryStructuredAnswerIsOneRoundTests
         var provider = new FakeChatProvider(new Turn("""{"checks":[{"name":"site""", FinishReason: "length"),
             new Turn("""{"checks":[{"name":"site""", FinishReason: "length"));
 
-        Assert.Equal("the decision was cut off", (await Decide(provider)).Problem);
+        Assert.Equal("the decision was cut off at its length limit", (await Decide(provider)).Problem);
     }
 
     // ── the diagnosis of a proposed check that failed after the work ────────
@@ -124,7 +151,7 @@ public sealed class EveryStructuredAnswerIsOneRoundTests
 
         var plan = await new Planner().PlanAsync("check the disks", Context, provider, "strong", CancellationToken.None);
 
-        Assert.Equal("Planner reached its output limit after one clarification; no work was started.", plan.IncompleteReason);
+        Assert.Equal("Planner clarification was cut off at its length limit; no work was started.", plan.IncompleteReason);
     }
 
     /// <summary>A plan repair whose call fails ends the run unfinished, said - from the result, not from a caught exception.</summary>

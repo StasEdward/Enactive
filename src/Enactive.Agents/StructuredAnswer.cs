@@ -37,6 +37,29 @@ internal sealed record AnswerRound<T>(
     /// after a plan that ran out of room, even when the correction that followed was unreadable for another reason.
     /// </summary>
     public bool CutOff { get; init; }
+
+    /// <summary>
+    /// The caller's reader judged an unfinished answer itself (requireComplete off), so what it said is why the round
+    /// came to nothing - "cut off" would replace the reader's own words with a vaguer one.
+    /// </summary>
+    public bool ReadUnfinished { get; init; }
+
+    /// <summary>
+    /// Why the round gave nothing usable, in one sentence about <paramref name="what"/> was asked for - or null when it
+    /// answered. One wording for every caller: the diagnosis, the decision about failing checks, the plan and its
+    /// contract each switched over the round's kind for their own, and the four said the same four things four ways.
+    /// What only one caller can add - that its criteria are kept, that no work was started - it adds to this.
+    /// </summary>
+    public string? Shortfall(string what) => Kind switch
+    {
+        AnswerKind.Answered => null,
+        AnswerKind.Failed => $"{what} failed: {Problem}",
+        // The budget's own words say what ran out; a prefix said it again.
+        AnswerKind.OutOfBudget => Problem,
+        AnswerKind.Unusable => CutOff && !ReadUnfinished ? $"{what} was cut off at its length limit"
+            : Errors.Count == 0 ? $"{what} could not be used" : $"{what} could not be used: {string.Join("; ", Errors)}",
+        _ => throw new ArgumentOutOfRangeException(nameof(Kind), Kind, "A round of asking ends in one of four ways.")
+    };
 }
 
 /// <summary>
@@ -77,7 +100,7 @@ internal static class StructuredAnswer
         IReadOnlyList<string> errors = [];
 
         AnswerRound<T> Round(AnswerKind kind, T? value = default, string? problem = null)
-            => new(kind, value, errors, problem, usage) { Asked = asked, CutOff = cutOff };
+            => new(kind, value, errors, problem, usage) { Asked = asked, CutOff = cutOff, ReadUnfinished = !requireComplete };
 
         for (var attempt = 0; attempt < attempts; attempt++)
         {

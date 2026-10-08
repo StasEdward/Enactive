@@ -67,14 +67,7 @@ internal static class FailingCheckReview
                 "Return ONLY JSON {\"checks\":[{\"name\":\"...\",\"keep\":true|false,\"reason\":\"...\"}]} with every check listed once."),
             budget.TurnExhaustedAfter, requireComplete: true, ct);
 
-        var problem = round.Kind switch
-        {
-            AnswerKind.Answered => null,
-            AnswerKind.Failed => "the decision failed: " + round.Problem,
-            AnswerKind.OutOfBudget => "no budget was left to ask: " + round.Problem,
-            _ => round.CutOff ? "the decision was cut off" : "the decision could not be read: " + string.Join("; ", round.Errors)
-        };
-        return new(round.Value ?? [], round.Usage, problem);
+        return new(round.Value ?? [], round.Usage, round.Shortfall("the decision"));
     }
 
     /// <summary>

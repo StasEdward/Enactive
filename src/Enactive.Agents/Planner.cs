@@ -166,13 +166,11 @@ public sealed class Planner
             .WithUsage(round.Usage);
         return fallback with
         {
-            IncompleteReason = round.Kind switch
-            {
-                // The first call failing used to throw, and the run ended "Planning failed: ..." - said here now.
-                AnswerKind.Failed => (round.Asked <= 1 ? "Planning failed: " : "Planner clarification failed: ") + round.Problem,
-                AnswerKind.OutOfBudget => round.Problem,
-                _ => round.CutOff ? "Planner reached its output limit after one clarification; no work was started." : null
-            }
+            // An answer that wandered off format twice is no shortfall: the fallback runs, and says it is one. The first
+            // call failing used to throw, and the run ended "Planning failed: ..." - said here now.
+            IncompleteReason = round is { Kind: AnswerKind.Unusable, CutOff: false } ? null
+                : round.Shortfall(round.Asked <= 1 ? "Planning" : "Planner clarification")
+                  + (round.CutOff ? "; no work was started." : "")
         };
     }
 
@@ -225,7 +223,8 @@ public sealed class Planner
         var repaired = round.Value ?? invalid with
         {
             Readout = PlanReadout.Unreadable,
-            IncompleteReason = round.Kind == AnswerKind.Failed ? "Plan repair failed: " + round.Problem : null
+            // Only a provider's failure is said: an unreadable repair leaves the plan it was asked to correct, refused as before.
+            IncompleteReason = round.Kind == AnswerKind.Failed ? round.Shortfall("Plan repair") : null
         };
         return repaired.WithUsage(round.Usage);
     }

@@ -54,14 +54,8 @@ internal static class CheckDiagnosis
                 "Return the corrected {decisions:[{index,kind,reason,command}]}, one decision for every failed check."),
             budget.TurnExhaustedAfter, requireComplete: true, ct);
 
-        var error = round.Kind switch
-        {
-            AnswerKind.Answered => null,
-            AnswerKind.Failed => "Check diagnosis failed: " + round.Problem,
-            AnswerKind.OutOfBudget => round.Problem,
-            _ => round.CutOff ? "Check diagnosis was incomplete."
-                : "Invalid check diagnosis; original criteria retained: " + string.Join("; ", round.Errors)
-        };
+        // Without a diagnosis nothing is repaired, so the criteria stay as they were - said, as it was for an unusable one.
+        var error = round.Shortfall("Check diagnosis") is { } shortfall ? shortfall + "; the original criteria are kept." : null;
         return new(round.Value, error, round.Usage);
     }
 
