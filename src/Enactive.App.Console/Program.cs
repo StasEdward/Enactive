@@ -579,7 +579,7 @@ try
         {
             // --autonomy is the level of the workspace this console is pointed at; a template's own
             // permissions are already narrowed to it (TemplateResolution, above).
-            Autonomy = autonomyTier.Value
+            Defaults = new(autonomyTier.Value)
         },
         decisionHandler, cts.Token);
 

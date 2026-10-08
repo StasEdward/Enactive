@@ -874,7 +874,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 await using var composed = await RunComposer.ComposeAsync(
                     CurrentEngine(),
                     new RunRequest(workspace, text, IntentSource.CommandBar, taskId, resume, spec, Stage: _vm.StageChanges)
-                        { Autonomy = _vm.AutonomyTier, WorkspaceWorkerId = CurrentWorkerId() },
+                        { Defaults = DefaultsOnScreen() },
                     this, runCancellation.Token);
 
                 _staging = composed.Artifacts as StagingArtifactStore;
@@ -1722,6 +1722,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         private ComposedEngine CurrentEngine()
             => _engine ?? throw new InvalidOperationException(_engineProblem ?? "There is no engine to run on.");
 
+        /// <summary>The slider and the worker box: the defaults of the folder on screen, which a run against it is in.</summary>
+        private WorkspaceDefaults DefaultsOnScreen() => new(_vm.AutonomyTier, CurrentWorkerId());
+
         /// <summary>
         /// The worker the worker box is on, by id - null when there are none to pick from. The box lists the
         /// engine's workers in order, so the selected row is the worker at that position.
@@ -1752,7 +1755,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             var workspace = WorkspaceInfo.Adopt(fullPath);
             // The slider and the worker box on screen, and rightly: this run is against the folder on screen.
             var request = new RunRequest(workspace, text, IntentSource.Inbox, resume?.TaskId ?? taskId, resume, spec,
-                Stage: _vm.StageChanges) { Autonomy = _vm.AutonomyTier, WorkspaceWorkerId = CurrentWorkerId() };
+                Stage: _vm.StageChanges) { Defaults = DefaultsOnScreen() };
             // Refused here, where the request was made, and in the composer's own words - see RunComposer.Refusal.
             if (RunComposer.Refusal(request) is { } refused)
             {

@@ -58,7 +58,7 @@ public sealed class RunComposerTests
 
     /// <summary>A request as a host makes one, with the level of the workspace it is in.</summary>
     private static RunRequest Request(EngineFixture fx, string prompt, IntentSource source, int autonomy = 2)
-        => new(fx.Workspace, prompt, source) { Autonomy = autonomy };
+        => new(fx.Workspace, prompt, source) { Defaults = new(autonomy) };
 
     private static async Task<List<WorkEvent>> RunAsync(ComposedEngine engine, RunRequest request, IDecisionHandler decisions)
     {
@@ -112,7 +112,7 @@ public sealed class RunComposerTests
             "Write the mail digest", new Dictionary<string, string>(), EngineComposition.PolicyFor(engine.Settings, 2), [],
             new ExecutionLimits(MaxSteps: 1), WorkerId: null, ReviewRequired: false);
 
-        var events = await RunAsync(engine, new RunRequest(fx.Workspace, spec.Goal, IntentSource.Inbox, Spec: spec) { Autonomy = 2 },
+        var events = await RunAsync(engine, new RunRequest(fx.Workspace, spec.Goal, IntentSource.Inbox, Spec: spec) { Defaults = new(2) },
             new ParkingDecisionHandler());
 
         Assert.Contains("limit of 1 step(s)", events.Last().OutcomeReason());
@@ -139,7 +139,7 @@ public sealed class RunComposerTests
             { WhenExhausted = Turn.Says("done") }, TempApprovals(), worker);
         var decisions = new ScriptedDecisionHandler("deny");
 
-        await RunAsync(engine, new RunRequest(fx.Workspace, afterFirst.Request, IntentSource.Inbox, Resume: afterFirst) { Autonomy = 3 },
+        await RunAsync(engine, new RunRequest(fx.Workspace, afterFirst.Request, IntentSource.Inbox, Resume: afterFirst) { Defaults = new(3) },
             decisions);
 
         // Autonomous would have written without asking; the Observe the run was started under asks.
@@ -204,7 +204,7 @@ public sealed class RunComposerTests
             new ExecutionLimits(), WorkerId: "writer", ReviewRequired: false);
 
         await RunAsync(engine, new RunRequest(fx.Workspace, spec.Goal, IntentSource.Inbox, Spec: spec)
-            { Autonomy = 2, WorkspaceWorkerId = "developer" }, new ParkingDecisionHandler());
+            { Defaults = new(2, "developer") }, new ParkingDecisionHandler());
 
         Assert.Equal("Technical writer", (await OnlyRecordAsync(fx)).Settings!.Worker);
     }
@@ -221,7 +221,7 @@ public sealed class RunComposerTests
             EngineFixture.WorkerWith(), Writer);
 
         await using var composed = await RunComposer.ComposeAsync(engine,
-            Request(fx, "write the notes", IntentSource.CommandBar) with { WorkspaceWorkerId = "technical WRITER" },
+            Request(fx, "write the notes", IntentSource.CommandBar) with { Defaults = new(2, "technical WRITER") },
             fx.Decisions, default);
 
         Assert.Equal("writer", composed.Intent.WorkerId);
@@ -240,7 +240,25 @@ public sealed class RunComposerTests
         var request = RunRequest.FromPhone(fx.Workspace, saved, "write the notes");
 
         Assert.Equal((IntentSource.Remote, 0, "writer", true),
-            (request.Source, request.Autonomy, request.WorkspaceWorkerId, request.Stage));
+            (request.Source, request.Defaults.Autonomy, request.Defaults.WorkerId, request.Stage));
+    }
+
+    /// <summary>
+    /// A folder's defaults are read as one value, and the registry's file keeps them as it always did: the value is
+    /// made from the fields, not written beside them, so a file read back - by this build or an older one - is unchanged.
+    /// </summary>
+    [Fact]
+    public async Task A_folder_s_defaults_are_one_value_and_its_file_keeps_them_once()
+    {
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("workspaces.json");
+        var registry = WorkspaceRegistry.Load(filePath: path);
+        registry.Touch(fx.Root);
+        registry.SaveSettings(fx.Root, 0, "writer", stageChanges: true);
+        await registry.FlushAsync();
+
+        Assert.DoesNotContain("Defaults", File.ReadAllText(path));
+        Assert.Equal(new WorkspaceDefaults(0, "writer"), WorkspaceRegistry.Load(filePath: path).Entries.Single().Defaults);
     }
 
     // ── asking a resume for something else ──────────────────────────────────
@@ -275,7 +293,7 @@ public sealed class RunComposerTests
     public async Task A_run_nobody_is_watching_cannot_stage_and_says_so_before_anything_starts(IntentSource source)
     {
         using var fx = new EngineFixture();
-        var request = new RunRequest(fx.Workspace, "answer", source, Stage: true) { Autonomy = 2 };
+        var request = new RunRequest(fx.Workspace, "answer", source, Stage: true) { Defaults = new(2) };
         var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
 
         Assert.Contains("cannot stage", RunComposer.Refusal(request));
@@ -291,13 +309,13 @@ public sealed class RunComposerTests
         var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
 
         await using (var staged = await RunComposer.ComposeAsync(engine,
-                         new RunRequest(fx.Workspace, "answer", IntentSource.CommandBar, Stage: true) { Autonomy = 2 }, fx.Decisions, default))
+                         new RunRequest(fx.Workspace, "answer", IntentSource.CommandBar, Stage: true) { Defaults = new(2) }, fx.Decisions, default))
             Assert.IsType<StagingArtifactStore>(staged.Artifacts);
 
         var checkpoint = new RunCheckpoint(Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
             "answer", "answer", null, null, [], [], [], [], 0, 0, null);
         await using var resumed = await RunComposer.ComposeAsync(engine,
-            new RunRequest(fx.Workspace, "answer", IntentSource.CommandBar, Resume: checkpoint, Stage: true) { Autonomy = 2 },
+            new RunRequest(fx.Workspace, "answer", IntentSource.CommandBar, Resume: checkpoint, Stage: true) { Defaults = new(2) },
             fx.Decisions, default);
         Assert.IsType<DiskArtifactStore>(resumed.Artifacts);
     }
@@ -383,7 +401,7 @@ public sealed class RunComposerTests
             approvals, EngineFixture.WorkerWith("write_file"));
         var deny = new ScriptedDecisionHandler("deny");
 
-        await RunAsync(engine, new RunRequest(fx.Workspace, "write the digest", IntentSource.CommandBar, Remembered: false) { Autonomy = 0 },
+        await RunAsync(engine, new RunRequest(fx.Workspace, "write the digest", IntentSource.CommandBar, Remembered: false) { Defaults = new(0) },
             deny);
 
         Assert.Contains(deny.Requests, r => r.Subject == "write_file");

@@ -46,19 +46,13 @@ public sealed record RunRequest(
     bool Remembered = true)
 {
     /// <summary>
-    /// The autonomy level of the workspace this run is in - one of the workspace defaults, with
-    /// <see cref="WorkspaceWorkerId"/>. Required, so no host can forget to say it: a level is what decides
-    /// what the run may do without asking. Which workspace's level it is, is the host's to know: the slider
-    /// on screen is about the folder on screen, and a task from a phone names a folder of its own (see
-    /// <see cref="FromPhone"/>). Ignored when resuming - a resumed run keeps the level it was started under.
+    /// The defaults of the workspace this run is in: its autonomy level and its worker. Required, so no host can
+    /// forget to say them: a level is what decides what the run may do without asking. Whose they are is the host's
+    /// to know: the slider on screen is about the folder on screen, and a task from a phone names a folder of its own
+    /// (see <see cref="FromPhone"/>). The level is ignored when resuming - a resumed run keeps the level it was started
+    /// under; the worker is used when neither this invocation nor the template names one.
     /// </summary>
-    public required int Autonomy { get; init; }
-
-    /// <summary>
-    /// The worker chosen for this workspace, by id or - as the window saved it until 2026-10-08 - by role
-    /// name. Used when neither this invocation nor the template names one.
-    /// </summary>
-    public string? WorkspaceWorkerId { get; init; }
+    public required WorkspaceDefaults Defaults { get; init; }
 
     /// <summary>
     /// A task from a phone, governed by what is saved against THE WORKSPACE IT NAMES - its level, its worker,
@@ -69,8 +63,7 @@ public sealed record RunRequest(
     public static RunRequest FromPhone(WorkspaceInfo workspace, WorkspaceEntry saved, string prompt)
         => new(workspace, prompt, IntentSource.Remote, Stage: saved.StageChanges)
         {
-            Autonomy = saved.Autonomy,
-            WorkspaceWorkerId = saved.WorkerId
+            Defaults = saved.Defaults
         };
 }
 
@@ -194,11 +187,11 @@ public static class RunComposer
             //
             // A level outside the tiers is the nearest one - and so it is recorded: a -1 from a damaged registry
             // entry is not a request to run everything without asking, nor a level to write into the run's history.
-            var autonomy = AutonomyTiers.Clamp(request.Autonomy);
+            var autonomy = AutonomyTiers.Clamp(request.Defaults.Autonomy);
             // A worker named for this invocation, then the one the template needs, then the workspace's.
             // Each read as a name that may be an id or a role (ComposedEngine.WorkerIdFor); one that names
             // nobody leaves the engine's default, as an unknown id always did.
-            var workerId = engine.WorkerIdFor(request.WorkerId ?? spec?.WorkerId ?? request.WorkspaceWorkerId);
+            var workerId = engine.WorkerIdFor(request.WorkerId ?? spec?.WorkerId ?? request.Defaults.WorkerId);
             // The history says which worker the run was ON - the template's, when it named one - and by its
             // role, which is what a person reads. It said the host's pick, which a template overrides, and in
             // the console's runs an id where the window's said a role.

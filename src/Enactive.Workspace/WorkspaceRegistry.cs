@@ -20,7 +20,21 @@ public sealed record WorkspaceEntry(
     DateTimeOffset LastOpenedAt,
     int Autonomy = 2,
     string? WorkerId = null,
-    bool StageChanges = false);
+    bool StageChanges = false)
+{
+    /// <summary>The level and the worker saved for this folder, as one value - not written to the file twice.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public WorkspaceDefaults Defaults => new(Autonomy, WorkerId);
+}
+
+/// <summary>
+/// The autonomy level and the worker chosen for a folder (GLOSSARY: workspace defaults). They govern a run in that folder
+/// unless the run names a worker of its own or its saved task does. One value because they are one idea: a run request
+/// carried them as two fields, and every host wrote the pair out.
+/// </summary>
+/// <param name="Autonomy">The level - what a run may do without asking.</param>
+/// <param name="WorkerId">The worker, by id or - as the window saved it until 2026-10-08 - by role name; null for the engine's default.</param>
+public sealed record WorkspaceDefaults(int Autonomy, string? WorkerId = null);
 
 /// <summary>
 /// The list of workspaces the app knows about, in %APPDATA%/Enactive/workspaces.json.
