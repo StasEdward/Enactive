@@ -463,14 +463,20 @@ public sealed class CapsAnnounceThemselvesTests
         Assert.Equal(0, Convert.ToInt32(result.Metadata!["skippedTooLarge"]));
     }
 
-    /// <summary>SuccessEvaluator.MaxDetailChars — a failing build's log inside a run report.</summary>
+    /// <summary>
+    /// SuccessEvaluator.MaxDetailChars — a failing build's log inside a run report: its start and its END, where the
+    /// outcome is, with the cut said. It kept the first 1,200 characters, and a test run's totals were never in them.
+    /// </summary>
     [Fact]
     public void A_criterions_output_says_how_much_of_it_is_shown()
     {
-        var detail = SuccessEvaluator.Trim(new string('e', 5_000));
+        var log = string.Join("\n", Enumerable.Range(1, 300).Select(i => $"  Passed Tests.Case{i:D3}")) + "\nFailed!  - Failed: 1, Passed: 299";
 
-        Assert.Contains("showing the first 1200 of 5000 characters", detail);
-        Assert.DoesNotContain("showing the first", SuccessEvaluator.Trim("error CS1002: ; expected"));
+        var detail = SuccessEvaluator.Trim(log);
+
+        Assert.Contains("characters not shown here; the end follows", detail);
+        Assert.EndsWith("Failed!  - Failed: 1, Passed: 299", detail);
+        Assert.DoesNotContain("not shown", SuccessEvaluator.Trim("error CS1002: ; expected"));
     }
 
 }

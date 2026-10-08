@@ -203,7 +203,9 @@ public sealed class SuccessEvaluator : ISuccessEvaluator
 
     /// <summary>
     /// Enough of the output to act on, and no more. The whole thing is already capped by the tool;
-    /// this keeps a failing build from filling the run report with its own log.
+    /// this keeps a failing build from filling the run report with its own log. Its start and its end, as every other
+    /// command output is cut (Shortening): this kept the first 1,200 characters, and the outcome a program prints last -
+    /// the totals of a test run, the error count of a build - was the part the reviewer of a criterion never saw.
     /// </summary>
     private const int MaxDetailChars = 1200;
 
@@ -213,8 +215,6 @@ public sealed class SuccessEvaluator : ISuccessEvaluator
             return "";
 
         var trimmed = text!.Trim();
-        return trimmed.Length <= MaxDetailChars
-            ? trimmed
-            : trimmed[..MaxDetailChars] + $"\n… (showing the first {MaxDetailChars} of {trimmed.Length} characters)";
+        return Enactive.Core.Execution.Shortening.HeadAndTail(trimmed, MaxDetailChars);
     }
 }

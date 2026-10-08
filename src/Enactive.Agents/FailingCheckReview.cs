@@ -102,7 +102,7 @@ internal static class FailingCheckReview
     private static string Tail(string text)
     {
         text = text.Trim();
-        return text.Length <= OutputTailChars ? text
-            : $"({text.Length - OutputTailChars} characters of the start not shown; the end follows) " + text[^OutputTailChars..];
+        // The end of each of its streams (Shortening.End): the outcome ends what the check printed, not its errors.
+        return Shortening.End(text, OutputTailChars);
     }
 }

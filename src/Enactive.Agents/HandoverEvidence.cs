@@ -115,9 +115,8 @@ internal static class HandoverEvidence
         {
             var output = last.Result.TrimEnd();
             var firstLine = output.Split('\n', 2)[0].Trim();
-            var tail = output.Length <= HandoverOutputTailChars
-                ? output
-                : "…" + output[^HandoverOutputTailChars..];
+            // Its end - and the end of each of its streams: a test runner's totals end what it printed, not its errors.
+            var tail = Enactive.Core.Execution.Shortening.End(output, HandoverOutputTailChars);
             facts.Append($"- The last command you ran: {last.Command} - {firstLine}. Its output ends:\n");
             foreach (var line in tail.Split('\n'))
                 facts.Append("    ").Append(line.TrimEnd('\r')).Append('\n');

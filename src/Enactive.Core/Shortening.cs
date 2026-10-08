@@ -48,9 +48,29 @@ public static class Shortening
     /// </summary>
     public const double FileHead = 0.6;
 
+    /// <summary>
+    /// What a command's result puts between what the program printed and what it wrote to its error stream
+    /// (ProcessExec). Every cut here keeps each side's own end, because each side ends with something: the program's
+    /// outcome is the last line of its output ("Failed! - Failed: 6, Passed: 94"), and its last error is the last line
+    /// of the other. Cut as one text, the error stream was all the end there was - run 9c0ee4, 2026-10-08: a reviewer
+    /// shown a test run that ended in six "[FAIL]" lines of stderr, with the totals line cut out of the middle above
+    /// them, failed a step for reporting totals "not evidenced by any visible call output". The step had read them.
+    /// </summary>
+    public const string StderrSection = "\n[stderr]\n";
+
     /// <summary><paramref name="text"/> unchanged when it fits, else its start and its end.</summary>
     public static string ToFit(string text, int budget, double headShare = CommandHead)
         => text.Length <= budget ? text : HeadAndTail(text, budget, headShare);
+
+    /// <summary>
+    /// The END of <paramref name="text"/>, about <paramref name="chars"/> of it, said to be the end - for a reader who
+    /// is given the outcome and nothing else (a handover's last command, a check that fails before the work). A
+    /// command's two streams each keep their end (<see cref="StderrSection"/>).
+    /// </summary>
+    public static string End(string text, int chars)
+        => text.Length <= chars ? text
+            : Streams(text) is { } streams ? EachStream(streams, chars, OneEnd)
+            : OneEnd(text, chars);
 
     /// <summary>
     /// The start and the end, with the cut marked between them.
@@ -70,6 +90,35 @@ public static class Shortening
     /// believed the label over the text in front of it (§9cc).
     /// </param>
     public static string HeadAndTail(string text, int budget, double headShare = CommandHead)
+        => text.Length <= budget ? text
+            : Streams(text) is { } streams ? EachStream(streams, budget, (part, room) => OneHeadAndTail(part, room, headShare))
+            : OneHeadAndTail(text, budget, headShare);
+
+    /// <summary>A command's output and its error stream, when the text is one with both (<see cref="StderrSection"/>).</summary>
+    private static (string Output, string Errors)? Streams(string text)
+        => text.IndexOf(StderrSection, StringComparison.Ordinal) is >= 0 and var at
+            ? (text[..at], text[(at + StderrSection.Length)..])
+            : null;
+
+    /// <summary>
+    /// Each stream cut to its share of the room, the section between them kept. A stream that fits in half the room is
+    /// kept whole and the other is given the rest; when neither does, each gets half - so neither end is ever the other
+    /// stream's to give away.
+    /// </summary>
+    private static string EachStream((string Output, string Errors) streams, int budget, Func<string, int, string> cut)
+    {
+        var room = Math.Max(0, budget - StderrSection.Length);
+        var forOutput = streams.Output.Length <= room / 2 ? streams.Output.Length
+            : streams.Errors.Length <= room / 2 ? room - streams.Errors.Length
+            : room / 2;
+        return cut(streams.Output, forOutput) + StderrSection + cut(streams.Errors, room - forOutput);
+    }
+
+    private static string OneEnd(string text, int chars)
+        => text.Length <= chars ? text
+            : $"({text.Length - chars} characters of the start not shown; the end follows) " + text[^chars..];
+
+    private static string OneHeadAndTail(string text, int budget, double headShare)
     {
         if (text.Length <= budget)
             return text;
