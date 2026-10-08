@@ -16,7 +16,7 @@ The console composes its runs exactly as the desktop does (`RunComposer`, see [A
 | Staging | Optional, in the foreground | Direct disk artifact store |
 | Template library | Built-in + Global + Workspace | Same library resolution |
 | Template criteria and limits | Yes | Yes |
-| "Allow (workspace)" approvals | Honoured | Honoured, unless `--approve` is given |
+| "Allow (workspace)" approvals | Honoured | Honoured when typed at the console, unless `--approve` is given; a scheduled run uses only "Allow (workspace, unwatched runs too)" |
 | "Allow (session)" approvals | Honoured while the app runs | None - each invocation is its own process |
 
 ## Supported commands
@@ -134,9 +134,10 @@ Unattended + Ask = Deny
 
 Templates can add restrictions but cannot grant more autonomy.
 
-A tool somebody allowed with **Allow (workspace)** for this folder is answered "allow" without asking,
-by the console as by every host - so a scheduled run is offered that tool and uses it, while every
-other tool that asks is still kept back. `--approve` is the exception: it is the answer for that
+A tool somebody allowed with **Allow (workspace)** for this folder is answered "allow" without asking
+when the command is typed at the console. A scheduled run has nobody watching it, so it uses only an
+approval given with **Allow (workspace, unwatched runs too)**: such a tool is offered and used, and
+every other tool that asks is kept back. `--approve` is the exception: it is the answer for that
 invocation, given on purpose, and a remembered approval does not overrule it. The console does not
 read the desktop workspace registry.
 

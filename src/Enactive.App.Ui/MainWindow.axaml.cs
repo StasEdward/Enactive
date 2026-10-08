@@ -2396,9 +2396,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
                     // Not offered for a shell: that approval would outlive the process, and what it
                     // grants is arbitrary command execution rather than one named action.
+                    // Two, because they grant two different things: the first holds while somebody is at the
+                    // screen, the second lets runs in the background and on a schedule use the tool too - said on
+                    // its button, so nobody gives it by clicking the first (ApprovalStore, rule 4).
                     if (request.MayBeRemembered)
+                    {
                         options.Add(new DecisionOptionViewModel(
                             "Allow (workspace)", () => ResolveDecision(tcs, allowId, () => ApprovalStore.Default.Approve(root, subject))));
+                        options.Add(new DecisionOptionViewModel(
+                            "Allow (workspace, unwatched runs too)",
+                            () => ResolveDecision(tcs, allowId, () => ApprovalStore.Default.Approve(root, subject, unwatched: true))));
+                    }
                 }
 
                 {

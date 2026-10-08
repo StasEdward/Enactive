@@ -282,18 +282,18 @@ public sealed class RunComposerTests
     // ── answers given for good ──────────────────────────────────────────────
 
     /// <summary>
-    /// "Allow for this workspace" was honoured only inside the window's approval card, so a background
-    /// or scheduled run stopped at the very question its owner had answered for good - or, where nobody
-    /// can approve, was never even offered the tool.
+    /// "Allow (workspace, unwatched runs too)" is used by a run in the background or on a schedule. Allowing for good was
+    /// honoured only inside the window's approval card, so such a run stopped at the very question its owner had answered
+    /// - or, where nobody can approve, was never even offered the tool.
     /// </summary>
     [Theory]
     [InlineData(IntentSource.Schedule)]
     [InlineData(IntentSource.Inbox)]
-    public async Task A_tool_allowed_for_this_workspace_is_used_by_a_run_nobody_is_watching(IntentSource source)
+    public async Task A_tool_allowed_for_unwatched_runs_is_used_by_a_run_nobody_is_watching(IntentSource source)
     {
         using var fx = new EngineFixture();
         var approvals = TempApprovals();
-        approvals.Approve(fx.Root, "write_file");
+        approvals.Approve(fx.Root, "write_file", unwatched: true);
         var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
             Turn.Calls1("write_file", """{"path":"digest.md","content":"mail"}"""), Turn.Says("done")),
             approvals, EngineFixture.WorkerWith("write_file"));
@@ -301,6 +301,48 @@ public sealed class RunComposerTests
         await RunAsync(engine, Request(fx, "write the digest", source, autonomy: 0), new UnattendedDecisionHandler());
 
         Assert.True(fx.Exists("digest.md"));
+    }
+
+    /// <summary>
+    /// A plain "Allow (workspace)" holds where somebody is watching, and not for a run in the background or on a
+    /// schedule: every such approval was given on a card where that was all it meant, and for a while after 468b283 it
+    /// let unwatched runs use the tool too - a widening nobody had agreed to.
+    /// </summary>
+    [Theory]
+    [InlineData(IntentSource.Schedule)]
+    [InlineData(IntentSource.Inbox)]
+    public async Task A_plain_approval_is_not_used_by_a_run_nobody_is_watching(IntentSource source)
+    {
+        using var fx = new EngineFixture();
+        var approvals = TempApprovals();
+        approvals.Approve(fx.Root, "write_file");
+        var model = new FakeChatProvider(Turn.Says(QuickAnswer),
+            Turn.Calls1("write_file", """{"path":"digest.md","content":"mail"}"""), Turn.Says("done"));
+        var engine = Engine(model, approvals, EngineFixture.WorkerWith("write_file"));
+
+        await RunAsync(engine, Request(fx, "write the digest", source, autonomy: 0), new UnattendedDecisionHandler());
+
+        Assert.False(fx.Exists("digest.md"));
+        // Not offered at all: a tool the run cannot be allowed is not one its model is told of.
+        Assert.All(model.Requests.Skip(1), r => Assert.DoesNotContain(r.Tools ?? [], t => t.Name == "write_file"));
+    }
+
+    /// <summary>...and is used, unasked, by a run somebody is watching.</summary>
+    [Fact]
+    public async Task A_plain_approval_answers_for_a_run_somebody_is_watching()
+    {
+        using var fx = new EngineFixture();
+        var approvals = TempApprovals();
+        approvals.Approve(fx.Root, "write_file");
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
+            Turn.Calls1("write_file", """{"path":"digest.md","content":"mail"}"""), Turn.Says("done")),
+            approvals, EngineFixture.WorkerWith("write_file"));
+        var person = new ScriptedDecisionHandler("deny");
+
+        await RunAsync(engine, Request(fx, "write the digest", IntentSource.CommandBar, autonomy: 0), person);
+
+        Assert.True(fx.Exists("digest.md"));
+        Assert.DoesNotContain(person.Requests, r => r.Subject == "write_file");
     }
 
     /// <summary>

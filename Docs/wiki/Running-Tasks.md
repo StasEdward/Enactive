@@ -54,7 +54,16 @@ An above-level action generally asks for one-off approval; the level is not the 
 
 Read the full action details. The card can offer a one-time approval, a session approval, or a remembered workspace approval for eligible tools. Remembered approvals are scoped to tool names, not a promise that only one particular command string will ever run.
 
-Workspace approvals are stored in `%APPDATA%\Enactive\permissions.json`, keyed by workspace identity. The legacy `<workspace>\.enactive\permissions.json` is ignored. These desktop approvals are not imported by the current console or background decision handlers.
+There are two remembered workspace approvals, and they grant different things:
+
+| Button | Holds for |
+| --- | --- |
+| **Allow (workspace)** | Runs somebody is watching: the window's command bar, the console without `--approve` |
+| **Allow (workspace, unwatched runs too)** | Those, and runs nobody is watching: background runs and scheduled runs |
+
+A run nobody is watching is offered a tool that asks only when it has the second kind of approval; every other tool that asks is kept back from it. An approval given before the second button existed is the first kind. A shell is never remembered either way, and a task from a phone is always asked afresh.
+
+Workspace approvals are stored in `%APPDATA%\Enactive\permissions.json`, keyed by workspace identity. The legacy `<workspace>\.enactive\permissions.json` is ignored.
 
 An MCP server can require approval for every call; those calls cannot be silently authorized through a remembered decision.
 

@@ -18,7 +18,9 @@ between hosts: the decision handler, the event sink, and cancellation.
 - Staging is refused for any run without someone at the screen, in the composer's own words, which
   hosts show before starting anything.
 - Remembered approvals answer for every host except a phone (which must be asked afresh each time) and
-  an explicit answer given for one invocation (the console's `--approve`).
+  an explicit answer given for one invocation (the console's `--approve`). A run nobody is watching -
+  in the background, on a schedule - uses only an approval given for unwatched runs too; a plain
+  "Allow (workspace)" holds where somebody is at the screen, which is all it meant when it was given.
 - A host does not assemble the engine either: it holds the one `EngineComposition.Build` made from the
   settings (`ComposedEngine`) and hands it over with each request. What governs the run - the workspace
   defaults, a level and a worker - travels in the request, and the composer turns them into the policy

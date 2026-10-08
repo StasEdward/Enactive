@@ -250,7 +250,9 @@ public static class RunComposer
         => request.Source == IntentSource.Remote || !request.Remembered
             ? decisions
             : new RememberedApprovals(decisions, request.Workspace.RootPath,
-                engine.Approvals ?? ApprovalStore.Default, engine.Session);
+                engine.Approvals ?? ApprovalStore.Default, engine.Session,
+                // Only the window's command bar and the console's have somebody at the screen.
+                watched: Attended(request));
 
     /// <summary>
     /// The orchestrator with the run's record and the log tap already around it.
