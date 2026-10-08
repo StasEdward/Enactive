@@ -37,7 +37,13 @@ public static class DefaultWorkers
     private const string CommandRules =
         "\n- Read command results before describing them. If output is truncated, capture the full log "
         + "in scratch and inspect the relevant parts; never present a truncated excerpt as a complete log. "
-        + "Report and resolve unexpected failures; an expected test failure is evidence, not a reason to hide it.";
+        + "Report and resolve unexpected failures; an expected test failure is evidence, not a reason to hide it."
+        // Run bb77e810, 2026-10-09: asked why tests failed, a worker traced the code by hand for two replies - 5,532 and
+        // 8,192 tokens of reasoning, seven of the step's thirteen minutes - laying out the same inputs again and again
+        // and reaching a different answer each time, without running one test. A run answers that in seconds.
+        + "\n- When you need to know what code or a command DOES with given inputs, run it - the existing test that "
+        + "covers it, the program itself, or a small script in scratch - rather than working it out in your head. "
+        + "A trace done by hand goes wrong easily and takes longer than the run.";
 
     private const string SaveOutputRules =
         "\n- To save requested command output, write_file the exact result only if it is complete. "

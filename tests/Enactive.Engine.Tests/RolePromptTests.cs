@@ -19,6 +19,8 @@ public sealed class RolePromptTests
         Assert.Contains("Never invent", text);
         Assert.Contains("go TOGETHER", text);
         Assert.Equal(commands, text.Contains("Read command results before describing them"));
+        // A role that can run things is told to run them rather than trace code by hand (run bb77e810, 2026-10-09).
+        Assert.Equal(commands, text.Contains("run it - the existing test that covers it, the program itself, or a small script in scratch"));
         Assert.Equal(writes, text.Contains("After writing a file"));
         Assert.Equal(commands && writes, text.Contains("To save requested command output"));
         if (id == "reviewer")
