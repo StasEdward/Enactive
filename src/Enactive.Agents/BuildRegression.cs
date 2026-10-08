@@ -23,6 +23,26 @@ internal sealed record BuildBaseline(IEcosystem Ecosystem, string Target, int? E
     /// <summary>The tests the run named, for a <see cref="BaselineKind.Test"/> entry.</summary>
     public TestRunReport? Tests { get; init; }
 
+    /// <summary>When it was taken; null for one kept from before the time was recorded.</summary>
+    public DateTimeOffset? TakenAt { get; init; }
+
+    /// <summary>
+    /// Kept from before the task's first attempt, and compared against by a later one - which means the workspace this run
+    /// started in is not the one it describes: earlier attempts worked in it in between.
+    /// </summary>
+    public bool FromAnEarlierAttempt { get; init; }
+
+    /// <summary>
+    /// What a baseline kept from an earlier attempt is, said beside it. "Before any work in this run" was said of it to the
+    /// reviewer, and was not so: run 9c0ee4 (2026-10-08) started in a workspace with 95 tests, six of them failing, and
+    /// was told "87 passed, 0 failed before any work in this run" - a review then guessed the failing tests were flaky,
+    /// and another doubted the run's own count of 100 because it was not 87 plus the five it added.
+    /// </summary>
+    public static string EarlierAttemptNote(DateTimeOffset? takenAt)
+        => "kept from before the FIRST attempt of this task, "
+           + (takenAt is { } at ? $"taken {at.ToLocalTime():yyyy-MM-dd HH:mm}" : "at a time not recorded")
+           + "; earlier attempts have worked in the workspace since, so it can differ from what this run started with";
+
     public bool Taken => NotTaken is null && ExitCode is not null
                          && (Kind == BaselineKind.Build ? Diagnostics is not null : Tests is not null);
 
@@ -38,7 +58,7 @@ internal sealed record BuildBaseline(IEcosystem Ecosystem, string Target, int? E
 
     /// <summary>As data, for the checkpoint and the task's own file.</summary>
     public BaselineSnapshot ToSnapshot()
-        => new(Ecosystem.Name, Kind.ToString(), Target, ExitCode, NotTaken, Diagnostics?.All, Tests);
+        => new(Ecosystem.Name, Kind.ToString(), Target, ExitCode, NotTaken, Diagnostics?.All, Tests, TakenAt);
 
     /// <summary>
     /// Back from data, against the ecosystems this engine has now. An ecosystem that is gone cannot
@@ -52,7 +72,8 @@ internal sealed record BuildBaseline(IEcosystem Ecosystem, string Target, int? E
             snapshot.Diagnostics is { } diagnostics ? DiagnosticSet.Of(diagnostics) : null, snapshot.NotTaken)
         {
             Kind = kind,
-            Tests = snapshot.Tests
+            Tests = snapshot.Tests,
+            TakenAt = snapshot.TakenAt
         };
     }
 }

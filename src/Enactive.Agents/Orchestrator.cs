@@ -807,14 +807,17 @@ public sealed partial class Orchestrator : IOrchestrator
             var kept = resume?.Baseline ?? _baselines.Load(scope.TaskId);
             if (kept is { Count: > 0 })
             {
-                builds = kept.Select(b => BuildBaseline.From(b, _ecosystems)).OfType<BuildBaseline>().ToArray();
+                builds = kept.Select(b => BuildBaseline.From(b, _ecosystems)).OfType<BuildBaseline>()
+                    .Select(b => b with { FromAnEarlierAttempt = true }).ToArray();
                 foreach (var build in builds)
-                    yield return scope.Ev(EventKind.ContextAssembled, build.Describe() + " (kept from before the first attempt)");
+                    yield return scope.Ev(EventKind.ContextAssembled, $"{build.Describe()} ({BuildBaseline.EarlierAttemptNote(build.TakenAt)})");
             }
             else if (resume is null)
             {
-                builds = await InScopeAsync(scope.RunId, scope.TaskId, null,
-                    () => BuildBaselineAsync(scope.TaskId, scope.RunId, intent.Context, ct));
+                var takenAt = DateTimeOffset.UtcNow;
+                builds = (await InScopeAsync(scope.RunId, scope.TaskId, null,
+                    () => BuildBaselineAsync(scope.TaskId, scope.RunId, intent.Context, ct)))
+                    .Select(b => b with { TakenAt = takenAt }).ToArray();
                 if (builds.Count > 0) _baselines.Save(scope.TaskId, builds.Select(b => b.ToSnapshot()).ToArray());
                 foreach (var build in builds)
                     yield return scope.Ev(EventKind.ContextAssembled, build.Describe());

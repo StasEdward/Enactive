@@ -86,8 +86,12 @@ public sealed partial class Orchestrator
         if (measuredBefore is { Count: > 0 } && measuredBefore.Where(b => b.Taken).ToArray() is { Length: > 0 } taken
             && !journal.Actions.Skip(evidenceStart).Any(a => a.Tool == MeasuredBeforeTool))
             journal.Record(stepNumber, MeasuredBeforeTool, "{}", ActionOutcome.Succeeded,
-                "Measured by the engine itself before any work in this run - its own runs, not the step's claims. They say where "
-                + "things stood BEFORE the work, not after it:\n" + string.Join("\n", taken.Select(b => "- " + b.Describe())),
+                (taken.FirstOrDefault(b => b.FromAnEarlierAttempt) is { } earlier
+                    ? $"Measured by the engine itself, {BuildBaseline.EarlierAttemptNote(earlier.TakenAt)} - the step's own calls show "
+                      + "what it found. Its own runs, not the step's claims; they say where things stood BEFORE any attempt, not after it:\n"
+                    : "Measured by the engine itself before any work in this run - its own runs, not the step's claims. They say where "
+                      + "things stood BEFORE the work, not after it:\n")
+                + string.Join("\n", taken.Select(b => "- " + b.Describe())),
                 WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
         // What the ENGINE kept back from the step: a fact for the reviewer, once per step. The step cannot call a
         // tool it was never shown, so no call shows it trying - and a review never told that read "I could not run
