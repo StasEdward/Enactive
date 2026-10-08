@@ -96,6 +96,26 @@ public sealed class SettingsDeclaredOnceTests
         Assert.Equal(3, (int)saved["Engine"]!["ReviewRetries"]!);
     }
 
+    /// <summary>
+    /// Only the names the flat layout had are moved. FanOut is a switch of the engine's but never was a top-level field
+    /// (its limits were three numbers of their own), so a stray top-level "FanOut" is nothing to move - reading the
+    /// engine's property names moved it, and would have moved any switch added later out of a field sharing its name.
+    /// </summary>
+    [Fact]
+    public void A_top_level_field_the_flat_layout_never_had_is_not_moved_in()
+    {
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("settings.json");
+        Assert.True(new AppSettings().Save(path));
+        Edit(path, root =>
+        {
+            root.AsObject().Remove("Engine");
+            root["FanOut"] = new JsonObject { ["MaxDepth"] = 9 };
+        });
+
+        Assert.Equal(FanOutLimits.Default, AppSettings.Load(path).Engine.FanOut);
+    }
+
     /// <summary>Where a file has both, the section is what was saved last - a stray top-level field does not override it.</summary>
     [Fact]
     public void The_engine_section_wins_over_a_stray_top_level_switch()

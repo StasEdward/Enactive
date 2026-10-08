@@ -27,10 +27,7 @@ internal sealed record AnswerRound<T>(
     T? Value,
     IReadOnlyList<string> Errors,
     string? Problem,
-    int PromptTokens,
-    int CompletionTokens,
-    int? CachedPromptTokens,
-    int? CacheCreationPromptTokens)
+    TokenUsage Usage)
 {
     /// <summary>How many times the model was asked - a caller says a first failure apart from a failed correction.</summary>
     public int Asked { get; init; }
@@ -74,17 +71,17 @@ internal static class StructuredAnswer
         CancellationToken ct,
         int attempts = 2)
     {
-        int prompt = 0, output = 0, asked = 0;
-        int? cached = null, created = null;
+        var usage = TokenUsage.None;
+        var asked = 0;
         var cutOff = false;
         IReadOnlyList<string> errors = [];
 
         AnswerRound<T> Round(AnswerKind kind, T? value = default, string? problem = null)
-            => new(kind, value, errors, problem, prompt, output, cached, created) { Asked = asked, CutOff = cutOff };
+            => new(kind, value, errors, problem, usage) { Asked = asked, CutOff = cutOff };
 
         for (var attempt = 0; attempt < attempts; attempt++)
         {
-            if (budget?.Invoke(prompt, output) is { } spent)
+            if (budget?.Invoke(usage.Prompt, usage.Completion) is { } spent)
                 return Round(AnswerKind.OutOfBudget, problem: spent);
 
             ChatCompletion completion;
@@ -99,10 +96,7 @@ internal static class StructuredAnswer
                 return Round(AnswerKind.Failed, problem: ex.Message);
             }
 
-            prompt += completion.PromptTokens ?? 0;
-            output += completion.CompletionTokens ?? 0;
-            cached = TokenCounts.Add(cached, completion.CachedPromptTokens);
-            created = TokenCounts.Add(created, completion.CacheCreationPromptTokens);
+            usage += TokenUsage.Of(completion);
 
             var answer = completion.Message.Content ?? "";
             // An answer cut off at its length, or one that called for a tool, is not a finished answer, however whole

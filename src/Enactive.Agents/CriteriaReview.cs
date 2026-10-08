@@ -54,13 +54,7 @@ internal static class CriteriaReview
             errors => StructuredAnswer.Listed(errors, "Return the complete corrected JSON object."),
             budget, requireComplete: true, ct);
 
-        return ReviewResult.Of(round.Kind switch
-        {
-            AnswerKind.Answered => round.Value!,
-            AnswerKind.OutOfBudget => new ReviewVerdict.OutOfBudget(round.Problem!),
-            AnswerKind.Failed => new ReviewVerdict.Unavailable("review error: " + round.Problem),
-            _ => new ReviewVerdict.Unavailable("the criteria review could not be used after correction")
-        }, round);
+        return ReviewResult.From(round, "the criteria review could not be used after correction");
     }
 
     private static string Prompt(CriteriaReviewInput input, IReadOnlyList<(string Id, SuccessCriterionDefinition C)> criteria)

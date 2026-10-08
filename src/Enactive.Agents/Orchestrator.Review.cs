@@ -148,7 +148,7 @@ public sealed partial class Orchestrator
                             restrictions),
                         models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct),
                     ReviewMode.Step);
-        await Usage(review.PromptTokens, review.CompletionTokens, review.CachedPromptTokens, review.CacheCreationPromptTokens);
+        await Usage(review.Usage.Prompt, review.Usage.Completion, review.Usage.Cached, review.Usage.Created);
         // A verdict, said; a missing one is said by the attempt, with what it makes of the step.
         switch (review.Verdict)
         {

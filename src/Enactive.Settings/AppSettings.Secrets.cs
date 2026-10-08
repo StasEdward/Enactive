@@ -38,7 +38,8 @@ public sealed partial class AppSettings
     /// reported unencrypted by hand, four places for each. The copies drifted: a password left in the clear
     /// was reported for a provider and not for SMTP, and MCP credentials that could not be decrypted were
     /// never reported at all - the server was quietly off. A new kind of secret is one entry here, and
-    /// SettingsSecretsTests fails until every field named "...Protected" is one.</para>
+    /// SettingsDeclaredOnceTests.Every_protected_field_is_one_of_the_settings_secrets fails until every field named
+    /// "...Protected" is one.</para>
     /// </summary>
     internal IReadOnlyList<SettingsSecret> Secrets()
     {

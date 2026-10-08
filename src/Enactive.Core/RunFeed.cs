@@ -1,7 +1,6 @@
 namespace Enactive.Core.History;
 
 using System.Text;
-using System.Text.Json;
 using Enactive.Core.Events;
 
 /// <summary>Where a step card stands.</summary>
@@ -614,51 +613,40 @@ public sealed class RunFeed
             return new Call(name, ev.ToolPath(), ev.ToolCommand());
 
         var (said, args) = Split(ev.Summary);
-        return new Call(said, Hint(args, "path"), Hint(args, "command") ?? args);
+        return new Call(said, WorkEventPayload.ArgumentOf(args, "path"), WorkEventPayload.ArgumentOf(args, "command") ?? args);
     }
+
+    /// <summary>
+    /// The tools a card names by what they do to a path: the line a call leaves, and the header while it runs. One table
+    /// for both, where each had a switch over the same names. Any other tool is "Ran" and "Running" by its name.
+    /// </summary>
+    private static readonly Dictionary<string, (string Did, string Doing, string Unnamed, string UnnamedDoing)> PathTools = new()
+    {
+        ["write_file"] = ("Wrote", "Writing", "a file", "a file"),
+        ["read_file"] = ("Read", "Reading", "a file", "a file"),
+        ["list_dir"] = ("Listed", "Listing", "a directory", "files"),
+    };
+
+    /// <summary>The tool a card names by the command it runs.</summary>
+    private const string CommandTool = "run_command";
 
     private static void LogInvocation(FeedCard card, Call call)
     {
-        switch (call.Name)
-        {
-            case "write_file": card.AddFileOp("Wrote", call.Path ?? "a file"); break;
-            case "read_file": card.AddFileOp("Read", call.Path ?? "a file"); break;
-            case "list_dir": card.AddFileOp("Listed", call.Path ?? "a directory"); break;
-            case "run_command": card.AddCommand(call.Command ?? "a command"); break;
-            default: card.AddGenericTool($"Ran {call.Name}"); break;
-        }
+        if (PathTools.TryGetValue(call.Name, out var tool)) card.AddFileOp(tool.Did, call.Path ?? tool.Unnamed);
+        else if (call.Name == CommandTool) card.AddCommand(call.Command ?? "a command");
+        else card.AddGenericTool($"Ran {call.Name}");
     }
 
     /// <summary>The one-line "what it is doing right now" for the card's header.</summary>
-    private static string DescribeActivity(Call call) => call.Name switch
-    {
-        "write_file" => call.Path is { } p ? $"Writing {p}…" : "Writing a file…",
-        "read_file" => call.Path is { } p ? $"Reading {p}…" : "Reading a file…",
-        "list_dir" => call.Path is { } p ? $"Listing {p}…" : "Listing files…",
-        "run_command" => call.Command is { } c
-            ? $"Running: {(c.Length <= 60 ? c : c[..60] + "…")}"
-            : "Running a command…",
-        _ => $"Running {call.Name}…"
-    };
+    private static string DescribeActivity(Call call)
+        => PathTools.TryGetValue(call.Name, out var tool) ? $"{tool.Doing} {call.Path ?? tool.UnnamedDoing}…"
+            : call.Name == CommandTool
+                ? call.Command is { } c ? $"Running: {(c.Length <= 60 ? c : c[..60] + "…")}" : "Running a command…"
+                : $"Running {call.Name}…";
 
     private static (string Name, string Args) Split(string summary)
     {
         var space = summary.IndexOf(' ');
         return space > 0 ? (summary[..space], summary[(space + 1)..]) : (summary, string.Empty);
-    }
-
-    private static string? Hint(string argsJson, string key)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(argsJson);
-            if (doc.RootElement.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String)
-                return v.GetString();
-        }
-        catch (JsonException)
-        {
-            // Best-effort only: the argument preview is shortened for the log, so it may not parse.
-        }
-        return null;
     }
 }

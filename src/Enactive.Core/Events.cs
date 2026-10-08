@@ -329,12 +329,17 @@ public static class WorkEventPayload
     private static string ToolPayload(string name, int? stepNo, string? path, string? command)
         => "{" + (stepNo is { } n ? $"\"step\":{n}," : "") + "\"tool\":" + Quote(name)
            + (path is null ? "" : ",\"toolPath\":" + Quote(path))
-           // A command line is shown in a line, not stored: the card shows 90 characters of it, the log has it whole.
+           // Clipped, because this payload is kept: the run's record holds every event of the run, and a command line can
+           // be a whole script. What reads it shows a line - 90 characters on the card, 60 in its header - and the log
+           // and the journal have the command whole; 300 keeps two long commands told apart past what any card shows.
            + (command is null ? "" : ",\"toolCommand\":" + Quote(command.Length <= 300 ? command : command[..300] + "…"))
            + "}";
 
-    /// <summary>A string argument of a call, or null when it has none or its arguments do not parse.</summary>
-    private static string? ArgumentOf(string argumentsJson, string name)
+    /// <summary>
+    /// A string argument of a call, or null when it has none or its arguments do not parse. Also how a step card reads a
+    /// record from before the call's values were kept (RunFeed) - one reader for both, where there were two.
+    /// </summary>
+    internal static string? ArgumentOf(string argumentsJson, string name)
     {
         try
         {
@@ -354,10 +359,10 @@ public static class WorkEventPayload
     public static string? ToolCommand(this WorkEvent ev) => Field(ev.PayloadJson, ToolCommandRegex);
 
     private static readonly System.Text.RegularExpressions.Regex ToolPathRegex =
-        new("\"toolPath\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("toolPath");
 
     private static readonly System.Text.RegularExpressions.Regex ToolCommandRegex =
-        new("\"toolCommand\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("toolCommand");
 
     /// <summary>
     /// The tool an event names, or null for a record written before this was carried as a value.
@@ -429,23 +434,30 @@ public static class WorkEventPayload
         catch (System.Text.Json.JsonException) { return raw.Replace("\\\"", "\"").Replace("\\\\", "\\"); }
     }
 
+    /// <summary>
+    /// A string field of a payload, by its key - one pattern for every field read this way, where each had its own copy
+    /// of the same line. The value is a JSON string, escapes and all; Field decodes it.
+    /// </summary>
+    private static System.Text.RegularExpressions.Regex FieldRegex(string key)
+        => new("\"" + key + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     private static readonly System.Text.RegularExpressions.Regex ProviderRegex =
-        new("\"provider\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("provider");
 
     private static readonly System.Text.RegularExpressions.Regex ModelRegex =
-        new("\"model\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("model");
 
     private static readonly System.Text.RegularExpressions.Regex PurposeRegex =
-        new("\"purpose\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("purpose");
 
     private static readonly System.Text.RegularExpressions.Regex RouteRegex =
-        new("\"route\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("route");
 
     private static readonly System.Text.RegularExpressions.Regex ToolRegex =
-        new("\"tool\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("tool");
 
     private static readonly System.Text.RegularExpressions.Regex ComplexityRegex =
-        new("\"complexity\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("complexity");
 
     /// <summary>
     /// Builds the payload of a <see cref="EventKind.PlanCreated"/> event: the plan's title and its

@@ -392,7 +392,8 @@ public sealed partial class AppSettings
     /// <summary>
     /// What settings.json holds that this build has no property for - read only so the engine's switches of a file
     /// written before they had their own section can be found and moved into <see cref="Engine"/>. Emptied once that is
-    /// done: anything else unknown is dropped on the next save, as it always was.
+    /// done: anything else unknown is dropped on the next save, as it always was. Public only because the serializer's
+    /// extension data has to be; not copied by Clone, since after a load there is nothing in it.
     /// </summary>
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? UnreadFields { get; set; }
@@ -499,12 +500,12 @@ public sealed partial class AppSettings
         try
         {
             {
-                var text = File.ReadAllText(file);
-                var loaded = JsonSerializer.Deserialize<AppSettings>(text, JsonOptions);
+                // Read once: the settings come from the same node that says whether the file has an "Engine" section.
+                var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(file));
+                var loaded = root?.Deserialize<AppSettings>(JsonOptions);
                 if (loaded is not null)
                 {
-                    loaded.MoveTopLevelEngineFields(System.Text.Json.Nodes.JsonNode.Parse(text) is System.Text.Json.Nodes.JsonObject root
-                                                    && root.ContainsKey(nameof(Engine)));
+                    loaded.MoveTopLevelEngineFields(root is System.Text.Json.Nodes.JsonObject fields && fields.ContainsKey(nameof(Engine)));
                     // Every secret back into memory, and a note of each that cannot be (see Secrets()).
                     loaded.UnprotectSecrets();
                     loaded.MigrateIfNeeded();
@@ -654,10 +655,23 @@ public sealed partial class AppSettings
     private HashSet<string> _unreadableSecrets = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// The engine's switches of a file written before they had a section of their own, moved into it: every top-level
-    /// field named as a property of <see cref="EngineOptions"/> - found by that name, so a switch added later needs no
-    /// line here - and the three plan-growth limits, which were spelled differently at the top level. Moved, so the
-    /// next save writes them once, in "Engine". Run on every load; a file without them is left as it is.
+    /// The engine's top-level switches of a file written before they had a section of their own, by the names they had
+    /// then. A list, not the properties of <see cref="EngineOptions"/>: an old file can hold only these, and reading the
+    /// options' names would have moved a switch added later out of any stray top-level field that happened to share its
+    /// name. A migration stays as it ran.
+    /// </summary>
+    private static readonly string[] FlatEngineSwitches =
+    [
+        "NumCtx", "GenerationBudgets", "RepairConsultation", "DisableThinking", "AllowImplicitToolCalls", "ReviewRetries",
+        "MaxLoadedToolsPerStep", "SuccessRetries", "ProposeChecks", "StepOutputs", "TypedCriteria", "DynamicSteps",
+        "ValidateWaves", "ReportBlocked", "SemanticCriteria", "RevertRejectedSteps", "MaxParallelSteps", "EvidenceBudget"
+    ];
+
+    /// <summary>
+    /// The engine's switches of a file written before they had a section of their own, moved into it: the top-level
+    /// fields of <see cref="FlatEngineSwitches"/>, and the three plan-growth limits, which were spelled differently at
+    /// the top level. Moved, so the next save writes them once, in "Engine". Run on every load; a file without them is
+    /// left as it is.
     /// </summary>
     /// <param name="fileHasEngine">The file already has an "Engine" section: what is in it wins over a stray top-level field.</param>
     private void MoveTopLevelEngineFields(bool fileHasEngine)
@@ -671,8 +685,8 @@ public sealed partial class AppSettings
         var engine = JsonSerializer.SerializeToNode(Engine, JsonOptions)!.AsObject();
         var moved = false;
 
-        foreach (var option in typeof(EngineOptions).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
-            moved |= Move(option.Name, value => engine[option.Name] = value);
+        foreach (var name in FlatEngineSwitches)
+            moved |= Move(name, value => engine[name] = value);
 
         // Phase 5.4's limits were three top-level numbers; in the engine's options they are one FanOut.
         var fanOut = engine[nameof(EngineOptions.FanOut)]!.AsObject();
@@ -891,7 +905,6 @@ public sealed partial class AppSettings
         copy.McpServers = McpServers.Select(x => x.Clone()).ToList();
         copy.Providers = Providers.Select(x => x.Clone()).ToList();
         copy.Workers = Workers.Select(x => x.Clone()).ToList();
-        copy.UnreadFields = UnreadFields is null ? null : new Dictionary<string, JsonElement>(UnreadFields);
 
         // About one file, not about the settings: the copy has not been saved anywhere.
         copy.LastSaveError = null;

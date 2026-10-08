@@ -36,12 +36,12 @@ internal static class FailingCheckReview
         """;
 
     internal sealed record Decision(IReadOnlyList<(SuccessCriterionDefinition Check, string Reason)> Dropped,
-        int PromptTokens, int CompletionTokens, int? CachedPromptTokens, int? CacheCreationPromptTokens, string? Problem = null);
+        TokenUsage Usage, string? Problem = null);
 
     public static async Task<Decision> RunAsync(string request, IReadOnlyList<(SuccessCriterionDefinition Check, CriterionResult Before)> failing,
         IChatProvider provider, string model, RunBudget budget, int outputBudget, CancellationToken ct)
     {
-        if (failing.Count == 0) return new([], 0, 0, null, null);
+        if (failing.Count == 0) return new([], TokenUsage.None);
         var shown = failing.Select(f => new
         {
             name = f.Check.Name,
@@ -74,8 +74,7 @@ internal static class FailingCheckReview
             AnswerKind.OutOfBudget => "no budget was left to ask: " + round.Problem,
             _ => round.CutOff ? "the decision was cut off" : "the decision could not be read: " + string.Join("; ", round.Errors)
         };
-        return new(round.Value ?? [], round.PromptTokens, round.CompletionTokens, round.CachedPromptTokens,
-            round.CacheCreationPromptTokens, problem);
+        return new(round.Value ?? [], round.Usage, problem);
     }
 
     /// <summary>

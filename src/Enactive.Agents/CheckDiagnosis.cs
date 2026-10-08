@@ -10,8 +10,10 @@ using Enactive.Core.Templates;
 internal sealed record CheckDecision(int Index, string Kind, string Reason, string Command);
 
 /// <summary>What the diagnosis came to - decisions for every failed check, or why there are none - and what it cost.</summary>
-internal sealed record CheckDiagnosisResult(IReadOnlyList<CheckDecision>? Decisions, string? Error,
-    int PromptTokens = 0, int CompletionTokens = 0, int? CachedPromptTokens = null, int? CacheCreationPromptTokens = null);
+internal sealed record CheckDiagnosisResult(IReadOnlyList<CheckDecision>? Decisions, string? Error, TokenUsage? Usage = null)
+{
+    public TokenUsage Spent => Usage ?? TokenUsage.None;
+}
 
 /// <summary>The planner, never the worker, adjudicates a failed model-proposed verification.
 /// One read-only round; no tools and no permission to weaken user/template criteria.</summary>
@@ -60,8 +62,7 @@ internal static class CheckDiagnosis
             _ => round.CutOff ? "Check diagnosis was incomplete."
                 : "Invalid check diagnosis; original criteria retained: " + string.Join("; ", round.Errors)
         };
-        return new(round.Value, error, round.PromptTokens, round.CompletionTokens, round.CachedPromptTokens,
-            round.CacheCreationPromptTokens);
+        return new(round.Value, error, round.Usage);
     }
 
     /// <summary>

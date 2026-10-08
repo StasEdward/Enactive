@@ -120,8 +120,7 @@ internal static class PlanCheckReview
             errors => "Invalid verification contract: " + errors[0]
                 + " Return the complete corrected contract; preserve all original requirements and restrictions.",
             budget.TurnExhaustedAfter, requireComplete: false, ct);
-        var (prompt, output, cached, created) =
-            (round.PromptTokens, round.CompletionTokens, round.CachedPromptTokens, round.CacheCreationPromptTokens);
+        var usage = round.Usage;
 
         switch (round.Kind)
         {
@@ -146,18 +145,18 @@ internal static class PlanCheckReview
             if (!askWhenUnsettled || contract.Restrictions.Count > 0 || contract.ActionPolicy is not null
                 || inputs.Restrictions.Count > 0 || inputs.ActionPolicy is not null)
                 return Result("Unresolved verification contract: " + unresolved);
-            return Result(budget.TurnExhaustedAfter(prompt, output)) with { Unsettled = unresolved };
+            return Result(budget.TurnExhaustedAfter(usage.Prompt, usage.Completion)) with { Unsettled = unresolved };
         }
         var (engineCriteria, notes) = reviewsEngineCriteria
             ? EngineCriteriaReview.Apply(decidedByTheEngine, said, request, workspaceRoot, plan.Plan)
             : (decidedByTheEngine, []);
-        return Result(budget.TurnExhaustedAfter(prompt, output)) with {
+        return Result(budget.TurnExhaustedAfter(usage.Prompt, usage.Completion)) with {
             Checks = [.. contract.Checks, .. engineCriteria], Restrictions = contract.Restrictions, ActionPolicy = contract.ActionPolicy,
             // With what the plan itself had to say (a check it kept as a proposal), which this result replaces.
             ContractNotes = [.. plan.ContractNotes, .. contract.Notes, .. notes] };
 
-        PlanResult Result(string? error) => plan with { Checks = [.. plan.Checks, .. decidedByTheEngine], PromptTokens = prompt, CompletionTokens = output,
-            CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = error };
+        PlanResult Result(string? error) => (plan with { Checks = [.. plan.Checks, .. decidedByTheEngine], IncompleteReason = error })
+            .WithUsage(usage);
     }
 
     /// <summary>A contract that passed validation, with the answer it was read from.</summary>

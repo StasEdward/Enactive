@@ -41,7 +41,7 @@ public sealed class StructuredAnswerTests
         Assert.Equal("{\"percent\":91}", round.Value);
         Assert.Contains("- no percent in the answer", provider.Requests[1].Messages.Last().Content);
         // Both calls were made, and both are paid for.
-        Assert.Equal((250, 18), (round.PromptTokens, round.CompletionTokens));
+        Assert.Equal((250, 18), (round.Usage.Prompt, round.Usage.Completion));
     }
 
     [Fact]

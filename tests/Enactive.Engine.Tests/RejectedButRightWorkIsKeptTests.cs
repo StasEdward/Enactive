@@ -84,8 +84,8 @@ public sealed class RejectedButRightWorkIsKeptTests
             new Enactive.Core.Execution.ExecutionJournal().Describe());
         // A pass keeps everything anyway: it names nothing to keep.
         Assert.IsType<ReviewVerdict.Pass>(StepVerdictReview.Read("""{"verdict":"pass","reason":"ok","calls":[],"files":["record.txt"],"keep":["record.txt"]}""", input).Verdict);
-        Assert.Equal(["record.txt"], ((ReviewVerdict.Fail)StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":["record.txt"]}""", input).Verdict).Keep);
-        Assert.Empty(((ReviewVerdict.Fail)StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":"record.txt"}""", input).Verdict).Keep);
+        Assert.Equal(["record.txt"], ((ReviewVerdict.Fail)StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":["record.txt"]}""", input).Verdict!).Keep);
+        Assert.Empty(((ReviewVerdict.Fail)StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":"record.txt"}""", input).Verdict!).Keep);
     }
 
     /// <summary>The review is told to name what it keeps, and that a change the request did not ask for is not kept.</summary>

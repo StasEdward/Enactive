@@ -44,7 +44,7 @@ public sealed class EveryStructuredAnswerIsOneRoundTests
         Assert.Equal(2, provider.Requests.Count);
         Assert.Contains("there is no JSON object in the answer", provider.Requests[1].Messages[^1].Content);
         Assert.Equal((Site, "the site is not part of the request"), Assert.Single(decision.Dropped));
-        Assert.Equal((20, 10), (decision.PromptTokens, decision.CompletionTokens));
+        Assert.Equal((20, 10), (decision.Usage.Prompt, decision.Usage.Completion));
         Assert.Null(decision.Problem);
     }
 
@@ -90,7 +90,7 @@ public sealed class EveryStructuredAnswerIsOneRoundTests
 
         Assert.Contains("index 5 is not one of the failed checks", provider.Requests[1].Messages[^1].Content);
         Assert.Equal(new CheckDecision(0, "work", "the report is missing", "check-site"), Assert.Single(diagnosis.Decisions!));
-        Assert.Equal((20, 10), (diagnosis.PromptTokens, diagnosis.CompletionTokens));
+        Assert.Equal((20, 10), (diagnosis.Spent.Prompt, diagnosis.Spent.Completion));
     }
 
     // ── the planner ─────────────────────────────────────────────────────────

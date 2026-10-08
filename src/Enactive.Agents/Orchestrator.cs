@@ -806,9 +806,8 @@ public sealed partial class Orchestrator : IOrchestrator
             {
                 var decision = await InScopeAsync(scope.RunId, scope.TaskId, null, () => FailingCheckReview.RunAsync(intent.RawText, failing,
                     models.PlanProvider, models.Plan.Model, budget, _generationBudgets.For(GenerationPurpose.Planning), ct));
-                if (decision.PromptTokens + decision.CompletionTokens > 0)
-                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, decision.PromptTokens, decision.CompletionTokens,
-                        cached: decision.CachedPromptTokens, created: decision.CacheCreationPromptTokens);
+                if (decision.Usage.Any)
+                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, decision.Usage);
                 if (decision.Problem is { } problem)
                     yield return scope.Ev(EventKind.ErrorObserved, $"Checks that already fail before the work were kept as planned: {problem}.");
                 foreach (var (check, reason) in decision.Dropped)
@@ -2632,10 +2631,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 if (plannerProvider is null || plannerModel is null) yield break;
                 var diagnosis = await InScopeAsync(runId, taskId, null, () => CheckDiagnosis.RunAsync(
                     intent.RawText, intent.Context, proposed, plannerProvider, plannerModel.Model, budget, ct));
-                if (diagnosis.PromptTokens + diagnosis.CompletionTokens > 0 && session is not null)
-                    yield return session.Scope.Usage(WorkEventPayload.WorkPurpose.Plan, plannerModel,
-                        diagnosis.PromptTokens, diagnosis.CompletionTokens,
-                        cached: diagnosis.CachedPromptTokens, created: diagnosis.CacheCreationPromptTokens);
+                if (diagnosis.Spent.Any && session is not null)
+                    yield return session.Scope.Usage(WorkEventPayload.WorkPurpose.Plan, plannerModel, diagnosis.Spent);
                 if (diagnosis.Decisions is not { } decisions)
                 {
                     result.IncompleteReason = diagnosis.Error ?? "Check diagnosis unavailable; no worker repair dispatched.";

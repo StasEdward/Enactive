@@ -549,6 +549,15 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private async Task<bool> ConfirmAsync(string headline, string detail)
         => ConfirmRequested is null || await ConfirmRequested(headline, detail);
 
+    /// <summary>
+    /// What a box that holds a number says: the number, or the fallback when it is not one, or not one the rule
+    /// accepts. A number typed wrong is not a choice, and the fallback - the engine's own default, mostly - is.
+    /// </summary>
+    private static int NumberOr(string text, int fallback, Func<int, bool> accepts)
+        => int.TryParse(text.Trim(), out var value) && accepts(value) ? value : fallback;
+
+    private static int PositiveOr(string text, int fallback) => NumberOr(text, fallback, v => v > 0);
+
     private async Task SaveAsync()
     {
         // Disabled while a connection code is applied; checked here too, because a disabled button is
@@ -563,41 +572,38 @@ internal sealed partial class SettingsViewModel : ObservableObject
         // engine's own default (EngineOptions.Default) - a number typed wrong is not a choice, and the defaults are
         // written in one place.
         var engineDefault = EngineOptions.Default;
-        var repairParts = RepairModelText.Trim().Split('/', 2);
+        var budgets = engineDefault.GenerationBudgets;
         _working.Engine = _working.Engine with
         {
             NumCtx = int.TryParse(NumCtxText.Trim(), out var n) ? n : null,
             RepairConsultation = _working.Engine.RepairConsultation with
             {
-                Model = repairParts.Length == 2 && repairParts.All(p => !string.IsNullOrWhiteSpace(p))
-                    ? new Enactive.Core.Providers.ModelRef(repairParts[0], repairParts[1]) : null,
-                FailedRepairs = int.TryParse(RepairThresholdText.Trim(), out var repairThreshold) && repairThreshold >= 2 ? repairThreshold : 0
+                // "provider/model", read as every model reference in the settings is (AppSettings.ParseRef).
+                Model = AppSettings.ParseRef(RepairModelText.Trim()),
+                // Fewer than two failed repairs is not a pattern worth a stronger model's time: 0 is "never".
+                FailedRepairs = NumberOr(RepairThresholdText, 0, v => v >= 2)
             },
             GenerationBudgets = new(
-                Action: int.TryParse(GenerationActionText.Trim(), out var genAction) && genAction > 0 ? genAction : engineDefault.GenerationBudgets.Action,
-                FileWrite: int.TryParse(GenerationFileWriteText.Trim(), out var genFileWrite) && genFileWrite > 0 ? genFileWrite : engineDefault.GenerationBudgets.FileWrite,
-                FinalAnswer: int.TryParse(GenerationFinalAnswerText.Trim(), out var genFinalAnswer) && genFinalAnswer > 0 ? genFinalAnswer : engineDefault.GenerationBudgets.FinalAnswer,
-                Handover: int.TryParse(GenerationHandoverText.Trim(), out var genHandover) && genHandover > 0 ? genHandover : engineDefault.GenerationBudgets.Handover,
-                Planner: int.TryParse(GenerationPlannerText.Trim(), out var genPlanner) && genPlanner > 0 ? genPlanner : engineDefault.GenerationBudgets.Planner),
+                Action: PositiveOr(GenerationActionText, budgets.Action),
+                FileWrite: PositiveOr(GenerationFileWriteText, budgets.FileWrite),
+                FinalAnswer: PositiveOr(GenerationFinalAnswerText, budgets.FinalAnswer),
+                Handover: PositiveOr(GenerationHandoverText, budgets.Handover),
+                Planner: PositiveOr(GenerationPlannerText, budgets.Planner)),
             DisableThinking = DisableThinking,
             AllowImplicitToolCalls = AllowImplicitToolCalls,
             // Clamped here as well as in the orchestrator: what is saved should be what will be used, or
             // the settings window shows one number while the engine quietly runs another.
-            ReviewRetries = int.TryParse(ReviewRetriesText.Trim(), out var r) ? Math.Clamp(r, 0, 5) : engineDefault.ReviewRetries,
+            ReviewRetries = Math.Clamp(NumberOr(ReviewRetriesText, engineDefault.ReviewRetries, _ => true), 0, 5),
             RevertRejectedSteps = RevertRejectedSteps,
-            MaxParallelSteps = int.TryParse(MaxParallelStepsText.Trim(), out var p) && p > 0 ? p : engineDefault.MaxParallelSteps,
+            MaxParallelSteps = PositiveOr(MaxParallelStepsText, engineDefault.MaxParallelSteps),
             // Anything unparseable or below the floor falls back to the default rather than to the
             // number typed: an evidence block too small to hold its header is not a smaller setting,
             // it is a reviewer shown nothing.
-            EvidenceBudget = int.TryParse(EvidenceBudgetText.Trim(), out var e) && e >= ExecutionJournal.MinimumBudget
-                ? e
-                : engineDefault.EvidenceBudget
+            EvidenceBudget = NumberOr(EvidenceBudgetText, engineDefault.EvidenceBudget, v => v >= ExecutionJournal.MinimumBudget)
         };
         // A number that does not parse means the default, not zero: zero here is "keep everything",
         // a deliberate choice, and reaching it by typing nonsense would be the opposite of one.
-        _working.LogRetentionDays = int.TryParse(LogRetentionDaysText.Trim(), out var d) && d >= 0
-            ? d
-            : FileLogSink.DefaultRetentionDays;
+        _working.LogRetentionDays = NumberOr(LogRetentionDaysText, FileLogSink.DefaultRetentionDays, v => v >= 0);
         _working.LogPromptBodies = LogPromptBodies;
         _working.ShellCommands = Enum.IsDefined((ShellCommandPolicy)ShellCommandsIndex)
             ? (ShellCommandPolicy)ShellCommandsIndex

@@ -31,6 +31,16 @@ public sealed record PlanResult(
     public int? CachedPromptTokens { get; init; }
     public int? CacheCreationPromptTokens { get; init; }
 
+    /// <summary>
+    /// The same result with what planning cost. The four counts stay properties of their own - the record and its tests
+    /// read them - and this is the one place a TokenUsage is laid out into them, where every planning path did it by hand.
+    /// </summary>
+    internal PlanResult WithUsage(TokenUsage usage) => this with
+    {
+        PromptTokens = usage.Prompt, CompletionTokens = usage.Completion,
+        CachedPromptTokens = usage.Cached, CacheCreationPromptTokens = usage.Created
+    };
+
     /// <summary>A bounded planning attempt could not complete; execution must not start.</summary>
     public string? IncompleteReason { get; init; }
 
@@ -146,21 +156,14 @@ public sealed class Planner
             _ => RepairPrompt, budget, requireComplete: true, ct);
 
         if (round is { Kind: AnswerKind.Answered, Value: { } read })
-            return read with
-            {
-                PromptTokens = round.PromptTokens, CompletionTokens = round.CompletionTokens,
-                CachedPromptTokens = round.CachedPromptTokens, CacheCreationPromptTokens = round.CacheCreationPromptTokens
-            };
+            return read.WithUsage(round.Usage);
 
         // Nothing readable. The request is still acted on when the model simply wandered off format twice - refusing
         // it would be worse than doing the obvious thing with it - but this is a FALLBACK and the difference travels
         // with the result instead of disappearing into a title. When the model could not be asked, or ran out of room,
         // nothing is started: a plan that did not fit is not a request for one unplanned action.
-        var fallback = new PlanResult(IntentDisposition.QuickAction, Truncate(request, 80), null,
-            round.PromptTokens, round.CompletionTokens, PlanReadout.Unreadable)
-        {
-            CachedPromptTokens = round.CachedPromptTokens, CacheCreationPromptTokens = round.CacheCreationPromptTokens
-        };
+        var fallback = new PlanResult(IntentDisposition.QuickAction, Truncate(request, 80), null, 0, 0, PlanReadout.Unreadable)
+            .WithUsage(round.Usage);
         return fallback with
         {
             IncompleteReason = round.Kind switch
@@ -224,11 +227,7 @@ public sealed class Planner
             Readout = PlanReadout.Unreadable,
             IncompleteReason = round.Kind == AnswerKind.Failed ? "Plan repair failed: " + round.Problem : null
         };
-        return repaired with
-        {
-            PromptTokens = round.PromptTokens, CompletionTokens = round.CompletionTokens,
-            CachedPromptTokens = round.CachedPromptTokens, CacheCreationPromptTokens = round.CacheCreationPromptTokens
-        };
+        return repaired.WithUsage(round.Usage);
     }
 
     /// <summary>

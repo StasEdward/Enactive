@@ -1,5 +1,6 @@
 namespace Enactive.Agents;
 
+using Enactive.Core.Chat;
 using Enactive.Core.Events;
 using Enactive.Core.Tasks;
 
@@ -64,19 +65,27 @@ public abstract record ReviewVerdict(string Notes)
 /// part of some runs. The counts cover the re-ask too, when there was one - two calls were made, and two calls were
 /// paid for.</para>
 /// </summary>
-public sealed record ReviewResult(ReviewVerdict Verdict, int PromptTokens = 0, int CompletionTokens = 0)
+public sealed record ReviewResult(ReviewVerdict Verdict)
 {
     /// <summary>
-    /// The cached share of <see cref="PromptTokens"/>, or null where nobody counted. This is the phase most likely to
-    /// have one on a real machine: review is bound to a cloud model, and a re-ask re-sends the same prefix it just sent.
+    /// What the review cost - its cached share most likely of any phase on a real machine: review is bound to a cloud
+    /// model, and a re-ask re-sends the same prefix it just sent.
     /// </summary>
-    public int? CachedPromptTokens { get; init; }
-    public int? CacheCreationPromptTokens { get; init; }
+    public TokenUsage Usage { get; init; } = TokenUsage.None;
 
-    /// <summary>A reviewer's verdict with what its round cost.</summary>
-    internal static ReviewResult Of<T>(ReviewVerdict verdict, AnswerRound<T> round)
-        => new(verdict, round.PromptTokens, round.CompletionTokens)
-        { CachedPromptTokens = round.CachedPromptTokens, CacheCreationPromptTokens = round.CacheCreationPromptTokens };
+    /// <summary>
+    /// What a reviewer's round came to, as a verdict, with what it cost: the verdict it answered, or why there is none.
+    /// The step review and the criteria review each wrote this switch; only the words for an answer that could not be
+    /// used are their own. The plan's contract review answers with a contract, not a verdict, and reads its round itself.
+    /// </summary>
+    internal static ReviewResult From(AnswerRound<ReviewVerdict> round, string unusable)
+        => new(round.Kind switch
+        {
+            AnswerKind.Answered => round.Value!,
+            AnswerKind.OutOfBudget => new ReviewVerdict.OutOfBudget(round.Problem!),
+            AnswerKind.Failed => new ReviewVerdict.Unavailable("review error: " + round.Problem),
+            _ => new ReviewVerdict.Unavailable(unusable)
+        }) { Usage = round.Usage };
 }
 
 /// <summary>Which review judged a step - named in its events ("PASS (Step review)").</summary>

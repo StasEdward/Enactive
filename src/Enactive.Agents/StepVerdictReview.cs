@@ -128,13 +128,7 @@ internal static class StepVerdictReview
             errors => StructuredAnswer.Listed(errors, "Return the corrected JSON object."),
             budget, requireComplete: true, ct);
 
-        return ReviewResult.Of(round.Kind switch
-        {
-            AnswerKind.Answered => round.Value!,
-            AnswerKind.OutOfBudget => new ReviewVerdict.OutOfBudget(round.Problem!),
-            AnswerKind.Failed => new ReviewVerdict.Unavailable("review error: " + round.Problem),
-            _ => new ReviewVerdict.Unavailable("the step's review could not be used after correction")
-        }, round);
+        return ReviewResult.From(round, "the step's review could not be used after correction");
     }
 
     private static string Prompt(StepVerdictInput input)
