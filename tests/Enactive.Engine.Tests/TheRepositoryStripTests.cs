@@ -1,6 +1,7 @@
 namespace Enactive.Engine.Tests;
 
 using System.Diagnostics;
+using System.Xml.Linq;
 using Enactive.Workspace;
 using Xunit;
 
@@ -133,5 +134,23 @@ public sealed class TheRepositoryStripTests : IDisposable
     {
         Assert.Null(await RepoStatusReader.ReadPullRequestAsync(new RepoStatus("x", "work", null, null, 0, 0, 0), default));
         Assert.Null(await RepoStatusReader.ReadPullRequestAsync(new RepoStatus("x", null, null, null, 0, 0, 0, "o/r"), default));
+    }
+
+    /// <summary>
+    /// The strip is the window's foot: the last row of the grid it is in, a row that is there and sized to it. Placed in a
+    /// row its grid did not have, it was laid in the grid's last row instead - over the current action panel, not under it.
+    /// </summary>
+    [Fact]
+    public void The_strip_is_at_the_foot_of_its_grid()
+    {
+        var window = XDocument.Load(Path.Combine(TestRepository.Root, "src", "Enactive.App.Ui", "MainWindow.axaml"));
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        var strip = window.Descendants().Single(e => (string?)e.Attribute(x + "Name") == "RepoBar");
+        var grid = strip.Parent!;
+        Assert.Equal("Grid", grid.Name.LocalName);
+        var rows = grid.Elements().Where(e => e.Name.LocalName == "Grid.RowDefinitions").Elements().ToList();
+
+        Assert.Equal(rows.Count - 1, int.Parse((string?)strip.Attribute("Grid.Row") ?? "0"));
+        Assert.Equal("Auto", (string?)rows[^1].Attribute("Height"));
     }
 }

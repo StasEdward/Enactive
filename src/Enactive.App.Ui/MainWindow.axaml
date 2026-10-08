@@ -529,6 +529,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*" />
                     <RowDefinition Height="{StaticResource CurrentActionPanelHeight}" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
             <DockPanel Grid.ColumnSpan="2" Grid.RowSpan="2" IsVisible="{Binding IsViewingLive}" LastChildFill="True">
@@ -966,7 +967,6 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />
                         <RowDefinition Height="{StaticResource CurrentActionPanelHeight}" />
-                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <Panel Grid.Column="0">
