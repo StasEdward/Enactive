@@ -139,7 +139,7 @@ public static class RunComposer
             ? "A resumed run keeps the "
               + (levelDiffers && workerDiffers ? "autonomy and role" : levelDiffers ? "autonomy" : "role")
               + " it was started with"
-              + (levelDiffers ? $" ({AutonomyTiers.Names[Math.Clamp(resume.Settings!.Autonomy, 0, AutonomyTiers.Names.Count - 1)]})" : "")
+              + (levelDiffers ? $" ({AutonomyTiers.Names[AutonomyTiers.Clamp(resume.Settings!.Autonomy)]})" : "")
               + "; ask for the same, leave it out, or start the task again instead of resuming it."
             : null;
     }
@@ -192,10 +192,9 @@ public static class RunComposer
             // - and a run that finishes its remaining steps under permissions nobody granted it is not the
             // run somebody asked to resume.
             //
-            // A level outside the tiers is clamped to the nearest one: AutonomyTiers reads anything it has
-            // no case for as Autonomous, and a -1 from a damaged registry entry is not a request to run
-            // everything without asking.
-            var autonomy = Math.Clamp(request.Autonomy, 0, AutonomyTiers.Names.Count - 1);
+            // A level outside the tiers is the nearest one - and so it is recorded: a -1 from a damaged registry
+            // entry is not a request to run everything without asking, nor a level to write into the run's history.
+            var autonomy = AutonomyTiers.Clamp(request.Autonomy);
             // A worker named for this invocation, then the one the template needs, then the workspace's.
             // Each read as a name that may be an id or a role (ComposedEngine.WorkerIdFor); one that names
             // nobody leaves the engine's default, as an unknown id always did.

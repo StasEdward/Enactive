@@ -24,12 +24,26 @@ public static class AutonomyTiers
     /// <summary>The slider positions, lowest first. The index IS the position.</summary>
     public static readonly IReadOnlyList<string> Names = ["observe", "suggest", "execute", "autonomous"];
 
+    /// <summary>The top position - the slider's maximum, and where a level above it is brought down to.</summary>
+    public static int Highest => Names.Count - 1;
+
     /// <summary>
-    /// The policy for a slider position. Anything outside 0-3 is the top tier, which is what the
-    /// window's own switch did - and it is the safe direction only because the callers pass a
-    /// slider value. <see cref="Parse"/> is where a STRING is refused rather than rounded.
+    /// A level brought into the tiers: below the lowest is the lowest, above the top is the top. The one place the
+    /// range is applied - the window setting its slider from a workspace's record, and the composer starting a run,
+    /// each wrote it out, one with a literal 3, so a tier added to <see cref="Names"/> would have been cut off in one
+    /// and not the other.
     /// </summary>
-    public static PermissionPolicy PolicyFor(int level) => level switch
+    public static int Clamp(int level) => Math.Clamp(level, 0, Highest);
+
+    /// <summary>
+    /// The policy for a slider position; a level outside the tiers is the nearest one (<see cref="Clamp"/>).
+    /// <see cref="Parse"/> is where a STRING is refused rather than rounded.
+    ///
+    /// <para>Anything the switch had no case for was the TOP tier, a negative level included - safe only because
+    /// every caller passed a slider value. A -1 from a damaged record is not a request to run everything without
+    /// asking; it is now the lowest tier.</para>
+    /// </summary>
+    public static PermissionPolicy PolicyFor(int level) => Clamp(level) switch
     {
         0 => new PermissionPolicy(PermissionLevel.Observe, ["*"], []),
         1 => new PermissionPolicy(PermissionLevel.Suggest, ["*"], []),
@@ -46,7 +60,7 @@ public static class AutonomyTiers
     /// The tier in words, as a run's record keeps it - a number alone means nothing to whoever reads that run
     /// in six months. Here rather than in the window, so a run started from the console records the same words.
     /// </summary>
-    public static string Describe(int level) => level switch
+    public static string Describe(int level) => Clamp(level) switch
     {
         0 => "Observe — read only, asks before changes",
         1 => "Suggest — prepares changes, asks to apply",

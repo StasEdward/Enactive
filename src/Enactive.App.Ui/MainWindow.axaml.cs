@@ -1590,7 +1590,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _vm.IsLoadingWorkspaceDefaults = true;
             try
             {
-                _vm.AutonomyLevel = Math.Clamp(entry.Autonomy, 0, 3);
+                _vm.AutonomyLevel = AutonomyTiers.Clamp(entry.Autonomy);
                 _vm.StageChanges = entry.StageChanges;
 
                 // By id - or by role name, as this window saved it until 2026-10-08 - and not by position:

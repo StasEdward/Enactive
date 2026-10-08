@@ -484,7 +484,8 @@
                                    FontSize="11" TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis" Margin="0,2,0,0"
                                    ToolTip.Tip="{Binding AutonomyLabel}" />
-                        <Slider Minimum="0" Maximum="3" TickFrequency="1" IsSnapToTickEnabled="True"
+                        <!-- As many positions as there are tiers (AutonomyTiers): a literal 3 would hide a tier added there. -->
+                        <Slider Minimum="0" Maximum="{Binding HighestAutonomyLevel}" TickFrequency="1" IsSnapToTickEnabled="True"
                                 Margin="0,-9,0,-9"
                                 Value="{Binding AutonomyLevel, Mode=TwoWay}" IsEnabled="{Binding IsIdle}" />
                     </StackPanel>

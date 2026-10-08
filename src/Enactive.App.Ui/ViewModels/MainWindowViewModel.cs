@@ -393,6 +393,9 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     public string AutonomyLabel { get => _autonomyLabel; set => Set(ref _autonomyLabel, value); }
 
+    /// <summary>The slider's top position: as many as there are tiers (AutonomyTiers.Highest), not a literal 3.</summary>
+    public double HighestAutonomyLevel { get; } = AutonomyTiers.Highest;
+
     /// <summary>The autonomy slider as the engine wants it: 0 Observe … 3 Autonomous.</summary>
     public int AutonomyTier => (int)Math.Round(AutonomyLevel);
 
