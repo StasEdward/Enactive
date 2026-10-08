@@ -23,7 +23,6 @@ internal sealed class ProviderEditViewModel : ObservableObject
     private readonly Action _onSaved;
 
     private string _id;
-    private string _displayName;
     private ProviderKind _kind;
     private string _baseUrl;
     private string _apiKey;
@@ -35,8 +34,7 @@ internal sealed class ProviderEditViewModel : ObservableObject
     private string _ollamaKeepAliveText;
     private string _contextWindowText;
     private string _answerReserveText;
-    private string _handoverAtText;
-    private string _workingContextText;
+    private string _handoverText;
     private string _effortText;
     private string _temperatureText;
     private bool _sendReasoningBack;
@@ -51,7 +49,6 @@ internal sealed class ProviderEditViewModel : ObservableObject
         _onSaved = onSaved;
 
         _id = config.Id;
-        _displayName = config.DisplayName;
         _kind = config.Kind;
         _baseUrl = config.BaseUrl;
         _apiKey = config.ApiKey;
@@ -63,8 +60,7 @@ internal sealed class ProviderEditViewModel : ObservableObject
         _ollamaKeepAliveText = config.OllamaKeepAliveSeconds?.ToString() ?? string.Empty;
         _contextWindowText = config.ContextWindowTokens?.ToString() ?? string.Empty;
         _answerReserveText = config.AnswerReserveTokens?.ToString() ?? string.Empty;
-        _handoverAtText = config.HandoverAtPercent?.ToString() ?? string.Empty;
-        _workingContextText = config.WorkingContextTokens?.ToString() ?? string.Empty;
+        _handoverText = WriteHandover(config.HandoverAtPercent, config.WorkingContextTokens);
         _effortText = config.Effort ?? string.Empty;
         _temperatureText = config.Temperature ?? string.Empty;
         _sendReasoningBack = config.SendReasoningBack;
@@ -81,8 +77,28 @@ internal sealed class ProviderEditViewModel : ObservableObject
     public event Action? CloseRequested;
 
     public string Id { get => _id; set => Set(ref _id, value); }
-    public string DisplayName { get => _displayName; set => Set(ref _displayName, value); }
-    public ProviderKind Kind { get => _kind; set => Set(ref _kind, value); }
+
+    public ProviderKind Kind
+    {
+        get => _kind;
+        set
+        {
+            if (!Set(ref _kind, value))
+                return;
+            OnPropertyChanged(nameof(ShowsEffort));
+            OnPropertyChanged(nameof(ShowsKeepAlive));
+            OnPropertyChanged(nameof(ShowsOpenAiOptions));
+        }
+    }
+
+    // What only one kind of provider reads, shown for that kind only. A value set for another kind is kept, not cleared:
+    // changing the kind back finds it where it was, and Apply writes it as it is.
+    /// <summary>Effort - read by the Anthropic adapter alone.</summary>
+    public bool ShowsEffort => Kind == ProviderKind.Anthropic;
+    /// <summary>Keep alive - read by the native Ollama adapter alone.</summary>
+    public bool ShowsKeepAlive => Kind == ProviderKind.OllamaNative;
+    /// <summary>The reasoning profile and reasoning sent back - read by the OpenAI-compatible adapter alone.</summary>
+    public bool ShowsOpenAiOptions => Kind == ProviderKind.OpenAiCompatible;
     public string BaseUrl { get => _baseUrl; set => Set(ref _baseUrl, value); }
     public string ApiKey { get => _apiKey; set => Set(ref _apiKey, value); }
     public string MaxTokensText { get => _maxTokensText; set => Set(ref _maxTokensText, value); }
@@ -98,11 +114,41 @@ internal sealed class ProviderEditViewModel : ObservableObject
     /// <summary>Tokens kept free for the answer — see ProviderConfig.AnswerReserveTokens.</summary>
     public string AnswerReserveText { get => _answerReserveText; set => Set(ref _answerReserveText, value); }
 
-    /// <summary>Hand over at this % of the window — see ProviderConfig.HandoverAtPercent.</summary>
-    public string HandoverAtText { get => _handoverAtText; set => Set(ref _handoverAtText, value); }
+    /// <summary>
+    /// Where a step is handed over: "75%" of the window (ProviderConfig.HandoverAtPercent), "80000" tokens of prompt
+    /// (ProviderConfig.WorkingContextTokens), or both - "75%, 80000" - when the nearer one wins, as the engine reads them.
+    /// One field because they say one thing in two units; they were two fields, side by side, read as two settings.
+    /// </summary>
+    public string HandoverText { get => _handoverText; set => Set(ref _handoverText, value); }
 
-    /// <summary>The prompt size to work at, in tokens — see ProviderConfig.WorkingContextTokens.</summary>
-    public string WorkingContextText { get => _workingContextText; set => Set(ref _workingContextText, value); }
+    internal static string WriteHandover(int? percent, int? tokens)
+        => string.Join(", ", new[] { percent is { } p ? $"{p}%" : null, tokens?.ToString() }.OfType<string>());
+
+    /// <summary>
+    /// <see cref="HandoverText"/> read back: a share of the window, a prompt size, or both - or why it is neither. Said
+    /// rather than dropped: the window's other number fields fall back to blank on what they cannot read, and a
+    /// handover point read as blank is a step that is never handed over.
+    /// </summary>
+    internal static (int? Percent, int? Tokens, string? Problem) ReadHandover(string text)
+    {
+        int? percent = null, tokens = null;
+        foreach (var part in text.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (part.EndsWith('%'))
+            {
+                if (percent is not null || !int.TryParse(part[..^1].Trim(), out var p) || p is <= 0 or >= 100)
+                    return (null, null, $"Hand a step over at: '{part}' - a share is one number between 1% and 99%.");
+                percent = p;
+            }
+            else
+            {
+                if (tokens is not null || !int.TryParse(part, out var t) || t <= 0)
+                    return (null, null, $"Hand a step over at: '{part}' - write 75% for a share of the window, 80000 for a prompt size, or both.");
+                tokens = t;
+            }
+        }
+        return (percent, tokens, null);
+    }
 
     /// <summary>How hard the model is asked to work — see ProviderConfig.Effort.</summary>
     public string EffortText { get => _effortText; set => Set(ref _effortText, value); }
@@ -193,8 +239,14 @@ internal sealed class ProviderEditViewModel : ObservableObject
 
     private void Save()
     {
+        var handover = ReadHandover(HandoverText);
+        if (handover.Problem is { } problem)
+        {
+            Status = problem;
+            return;
+        }
+
         _config.Id = Id.Trim();
-        _config.DisplayName = DisplayName.Trim();
         _config.Kind = Kind;
         _config.BaseUrl = BaseUrl.Trim();
         _config.ApiKey = ApiKey.Trim();
@@ -208,10 +260,8 @@ internal sealed class ProviderEditViewModel : ObservableObject
             int.TryParse(ContextWindowText.Trim(), out var cw) && cw > 0 ? cw : null;
         _config.AnswerReserveTokens =
             int.TryParse(AnswerReserveText.Trim(), out var ar) && ar > 0 ? ar : null;
-        _config.HandoverAtPercent =
-            int.TryParse(HandoverAtText.Trim().TrimEnd('%'), out var hp) && hp is > 0 and < 100 ? hp : null;
-        _config.WorkingContextTokens =
-            int.TryParse(WorkingContextText.Trim(), out var wc) && wc > 0 ? wc : null;
+        _config.HandoverAtPercent = handover.Percent;
+        _config.WorkingContextTokens = handover.Tokens;
         var effort = EffortText.Trim().ToLowerInvariant();
         _config.Effort = effort is "low" or "medium" or "high" or "xhigh" or "max" ? effort : null;
         var temperature = TemperatureText.Trim();

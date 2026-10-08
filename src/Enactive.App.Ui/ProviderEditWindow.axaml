@@ -5,7 +5,7 @@
         x:Class="Enactive.App.Ui.ProviderEditWindow"
         x:DataType="vm:ProviderEditViewModel"
         Title="Provider"
-        Width="620" Height="1100"
+        Width="1040" Height="760"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource Brand.Bg}"
         WindowDecorations="BorderOnly"
@@ -23,90 +23,112 @@
         <ScrollViewer>
             <StackPanel Classes="form">
 
-                <TextBlock Classes="label" Text="Id" />
-                <TextBox Text="{Binding Id}"
-                         PlaceholderText="id — e.g. ollama, anthropic, openrouter (used in providerId/model)" />
+                <!-- Two columns, which kept every field and halved the height: on the left, where the provider is and how to
+                     reach it; on the right, how a model of it is used. One column of twenty fields needed a scroll to reach
+                     the models list, which is the field everybody comes here for. A field only one kind of provider reads is
+                     shown for that kind only (ProviderEditViewModel.Shows*). -->
+                <Grid ColumnDefinitions="*,24,*">
 
-                <TextBlock Classes="label" Text="Display name" />
-                <TextBox Text="{Binding DisplayName}" PlaceholderText="display name" />
+                    <StackPanel x:Name="ConnectionColumn" Grid.Column="0" Spacing="6">
+                        <TextBlock Classes="panelHeader" Text="CONNECTION" />
 
-                <TextBlock Classes="label" Text="Kind" />
-                <ComboBox ItemsSource="{Binding Kinds}" SelectedItem="{Binding Kind}" />
+                        <TextBlock Classes="label" Text="Id" />
+                        <TextBox Text="{Binding Id}"
+                                 PlaceholderText="e.g. ollama, anthropic, openrouter (used in providerId/model)" />
 
-                <TextBlock Classes="label" Text="Base URL" />
-                <TextBox Text="{Binding BaseUrl}" PlaceholderText="base URL — e.g. http://localhost:11434/v1" />
+                        <TextBlock Classes="label" Text="Kind" />
+                        <ComboBox ItemsSource="{Binding Kinds}" SelectedItem="{Binding Kind}" HorizontalAlignment="Stretch" />
 
-                <TextBlock Classes="label" Text="API key" />
-                <TextBox Text="{Binding ApiKey}" PasswordChar="•"
-                         PlaceholderText="API key (blank for local providers)" />
+                        <TextBlock Classes="label" Text="Base URL" />
+                        <TextBox Text="{Binding BaseUrl}" PlaceholderText="e.g. http://localhost:11434/v1" />
 
-                <TextBlock Classes="label" Text="Max output tokens" />
-                <TextBox Text="{Binding MaxTokensText}"
-                         PlaceholderText="blank = auto (adjusts to the model's cap)" />
+                        <TextBlock Classes="label" Text="API key" />
+                        <TextBox Text="{Binding ApiKey}" PasswordChar="•"
+                                 PlaceholderText="blank for local providers" />
 
-                <CheckBox IsChecked="{Binding OpenAiReasoningProfile}"
-                          Content="OpenAI reasoning compatibility (developer role, no temperature)" />
-                <TextBlock Classes="label" Text="Ollama native keep alive (seconds)" />
-                <TextBox Text="{Binding OllamaKeepAliveText}" PlaceholderText="blank = server default; 0 = unload; -1 = keep resident" />
-                <TextBlock Classes="label" Text="Stream idle timeout (seconds)" />
-                <TextBox Text="{Binding StreamIdleTimeoutText}" PlaceholderText="300" />
-                <TextBlock Classes="label" Text="Non-streaming timeout (seconds)" />
-                <TextBox Text="{Binding CompletionTimeoutText}" PlaceholderText="900" />
-                <TextBlock Classes="label" Text="Extra generation tokens for reasoning" />
-                <TextBox Text="{Binding ReasoningAllowanceText}" PlaceholderText="blank = profile default; 0 = no extra allowance" />
-                <TextBlock Classes="label" Text="Temperature" />
-                <TextBox Text="{Binding TemperatureText}"
-                         PlaceholderText="blank = the engine's (0.2 worker, 0 review); a number; server = send none, the server's own applies" />
-                <CheckBox IsChecked="{Binding SendReasoningBack}"
-                          Content="Send the model's reasoning back with its earlier turns (Qwen3.6 preserve_thinking, llama.cpp --reasoning-preserve)" />
-                <TextBlock Classes="label" Text="Effort (Anthropic: low, medium, high, xhigh, max)" />
-                <TextBox Text="{Binding EffortText}" PlaceholderText="blank = the model's default (Sonnet 5: high)" />
-                <TextBlock Classes="label" Text="Context window (tokens)" />
-                <TextBox Text="{Binding ContextWindowText}"
-                         PlaceholderText="blank = assume 16000 — nothing can ask the provider" />
+                        <TextBlock Classes="label" Text="Headers" />
+                        <TextBox Classes="multiline" MinHeight="60" Text="{Binding HeadersText}"
+                                 PlaceholderText="extra headers — one Header-Name: value per line" />
 
-                <TextBlock Classes="label" Text="Tokens kept free for the answer" />
-                <TextBox Text="{Binding AnswerReserveText}"
-                         PlaceholderText="blank = an eighth of the context window" />
+                        <TextBlock Classes="label" Text="Models" />
+                        <TextBox Classes="multiline" MinHeight="120" Text="{Binding ModelsText}"
+                                 PlaceholderText="models — one per line" />
 
-                <TextBlock Classes="label" Text="Hand a step over at % of the context window" />
-                <TextBox Text="{Binding HandoverAtText}"
-                         PlaceholderText="blank = after 60 turns, as without a window (e.g. 75 for a local model)" />
+                        <!-- Ask the provider what it actually serves, then pick one to add to the list above. -->
+                        <Grid ColumnDefinitions="*,Auto">
+                            <ComboBox Grid.Column="0" HorizontalAlignment="Stretch"
+                                      ItemsSource="{Binding FetchedModels}"
+                                      SelectedItem="{Binding SelectedFetchedModel}"
+                                      PlaceholderText="fetched models…" />
+                            <Button Grid.Column="1" Margin="8,0,0,0"
+                                    Content="Fetch" Command="{Binding FetchCommand}" />
+                        </Grid>
 
-                <TextBlock Classes="label" Text="Work at this prompt size (tokens)" />
-                <TextBox Text="{Binding WorkingContextText}"
-                         PlaceholderText="blank = a share of the window, as above. Set it to keep a large window in reserve (e.g. 80000 of 131072)" />
+                        <!-- Test asks the provider whether it is there AND whether it has the first model
+                             listed above. A status check alone cannot see the commonest failure of a setup
+                             that used to work: the server is up, the key is fine, and the model was never
+                             pulled. The light beside the line is the answer, and it is grey until asked. -->
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Test" Command="{Binding TestCommand}"
+                                    ToolTip.Tip="Ask this provider for its model list, and check that the first model above is among them" />
+                            <Ellipse Width="9" Height="9" VerticalAlignment="Center"
+                                     Fill="{Binding Health, Converter={x:Static local:Palette.Health}}" />
+                        </StackPanel>
+                    </StackPanel>
 
-                <TextBlock Classes="label" Text="Headers" />
-                <TextBox Classes="multiline" MinHeight="60" Text="{Binding HeadersText}"
-                         PlaceholderText="extra headers — one Header-Name: value per line" />
+                    <StackPanel x:Name="ModelColumn" Grid.Column="2" Spacing="6">
+                        <TextBlock Classes="panelHeader" Text="MODEL" />
 
-                <TextBlock Classes="label" Text="Models" />
-                <TextBox Classes="multiline" MinHeight="100" Text="{Binding ModelsText}"
-                         PlaceholderText="models — one per line" />
+                        <TextBlock Classes="label" Text="Context window (tokens)" />
+                        <TextBox Text="{Binding ContextWindowText}"
+                                 PlaceholderText="blank = assume 16000 — nothing can ask the provider" />
 
-                <!-- Ask the provider what it actually serves, then pick one to add to the list above. -->
-                <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0">
-                    <ComboBox Grid.Column="0"
-                              ItemsSource="{Binding FetchedModels}"
-                              SelectedItem="{Binding SelectedFetchedModel}"
-                              PlaceholderText="fetched models…" />
-                    <Button Grid.Column="1" Margin="8,0,0,0"
-                            Content="Fetch" Command="{Binding FetchCommand}" />
+                        <TextBlock Classes="label" Text="Hand a step over at" />
+                        <TextBox Text="{Binding HandoverText}"
+                                 PlaceholderText="75% of the window, 80000 tokens, or both; blank = after 60 turns" />
+
+                        <TextBlock Classes="label" Text="Tokens kept free for the answer" />
+                        <TextBox Text="{Binding AnswerReserveText}"
+                                 PlaceholderText="blank = an eighth of the context window" />
+
+                        <TextBlock Classes="label" Text="Max output tokens" />
+                        <TextBox Text="{Binding MaxTokensText}"
+                                 PlaceholderText="blank = auto (adjusts to the model's cap)" />
+
+                        <TextBlock Classes="label" Text="Extra generation tokens for reasoning" />
+                        <TextBox Text="{Binding ReasoningAllowanceText}" PlaceholderText="blank = profile default; 0 = no extra allowance" />
+
+                        <TextBlock Classes="label" Text="Temperature" />
+                        <TextBox Text="{Binding TemperatureText}"
+                                 PlaceholderText="blank = the engine's (0.2 worker, 0 review); a number; server = the server's own" />
+
+                        <TextBlock Classes="label" Text="Effort (low, medium, high, xhigh, max)" IsVisible="{Binding ShowsEffort}" />
+                        <TextBox Text="{Binding EffortText}" PlaceholderText="blank = the model's default (Sonnet 5: high)"
+                                 IsVisible="{Binding ShowsEffort}" />
+
+                        <TextBlock Classes="label" Text="Keep the model loaded (seconds)" IsVisible="{Binding ShowsKeepAlive}" />
+                        <TextBox Text="{Binding OllamaKeepAliveText}" PlaceholderText="blank = server default; 0 = unload; -1 = keep resident"
+                                 IsVisible="{Binding ShowsKeepAlive}" />
+
+                        <CheckBox IsChecked="{Binding OpenAiReasoningProfile}" IsVisible="{Binding ShowsOpenAiOptions}"
+                                  Content="OpenAI reasoning compatibility (developer role, no temperature)" />
+                        <CheckBox IsChecked="{Binding SendReasoningBack}" IsVisible="{Binding ShowsOpenAiOptions}"
+                                  Content="Send the model's reasoning back with its earlier turns (Qwen3.6 preserve_thinking, llama.cpp --reasoning-preserve)" />
+
+                        <Grid ColumnDefinitions="*,12,*">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Classes="label" Text="Stream idle timeout (s)" />
+                                <TextBox Text="{Binding StreamIdleTimeoutText}" PlaceholderText="300" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Classes="label" Text="Non-streaming timeout (s)" />
+                                <TextBox Text="{Binding CompletionTimeoutText}" PlaceholderText="900" />
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
                 </Grid>
 
-                <!-- Test asks the provider whether it is there AND whether it has the first model
-                     listed above. A status check alone cannot see the commonest failure of a setup
-                     that used to work: the server is up, the key is fine, and the model was never
-                     pulled. The light beside the line is the answer, and it is grey until asked. -->
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button Content="Test" Command="{Binding TestCommand}"
-                            ToolTip.Tip="Ask this provider for its model list, and check that the first model above is among them" />
-                    <Ellipse Width="9" Height="9" VerticalAlignment="Center"
-                             Fill="{Binding Health, Converter={x:Static local:Palette.Health}}" />
-                    <TextBlock Classes="hint" Text="{Binding Status}"
-                               VerticalAlignment="Center" TextWrapping="Wrap" />
-                </StackPanel>
+                <TextBlock Classes="hint" Text="{Binding Status}" TextWrapping="Wrap" Margin="0,8,0,0" />
 
                 <!-- "Apply", not "Save", because this button does not write anything: it puts
                      the change into the Settings window's copy, and that copy reaches the file only

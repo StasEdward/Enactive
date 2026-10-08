@@ -504,7 +504,7 @@ Console.WriteLine($"  Workspace : {workspace.RootPath}");
 // wrong while the name looked right, and a banner that had said "Ollama (local)" either way would
 // have been read as confirmation.
 foreach (var p in settings.Providers)
-    Console.WriteLine($"  Provider  : {p.DisplayName} — {p.Kind} @ {p.BaseUrl}");
+    Console.WriteLine($"  Provider  : {p.Name} — {p.Kind} @ {p.BaseUrl}");
 Console.WriteLine($"  Model     : {model}");
 if (settings.Bindings.Plan is { Length: > 0 } planBinding)
     Console.WriteLine($"  Plan      : {planBinding}");

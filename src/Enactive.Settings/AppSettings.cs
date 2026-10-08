@@ -14,6 +14,14 @@ public sealed class ProviderConfig
 {
     public string Id { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// What a provider is called where it is named: its display name, or its id where it has none. The provider window
+    /// no longer asks for a display name - the id is the name people use, in every model reference - so a provider added
+    /// since has none.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string Name => string.IsNullOrWhiteSpace(DisplayName) ? Id : DisplayName;
     public ProviderKind Kind { get; set; } = ProviderKind.OpenAiCompatible;
     public string BaseUrl { get; set; } = string.Empty;
 

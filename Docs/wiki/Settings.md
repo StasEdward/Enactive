@@ -35,18 +35,33 @@ If saving fails, inspect the reported error before closing the editor. Secret-pr
 
 ## AI → Providers
 
-A provider is a named endpoint with a transport adapter, authentication, and a catalog of model IDs.
+A provider is a named endpoint with a transport adapter, authentication, and a catalog of model IDs. Its window has two columns: on the left, where the provider is and how to reach it; on the right, how its models are used. A field only one kind of provider reads is shown for that kind only; a value set before the kind changed is kept.
+
+**Connection**
 
 | Field | Guidance |
 | --- | --- |
-| ID | Stable unique key used in model references; changing it affects references |
-| Display name | Human-readable provider label |
+| ID | Stable unique key used in model references; changing it affects references. It is also the provider's name wherever one is shown, unless settings.json gives it a `DisplayName` |
 | Kind | `OllamaNative`, `Anthropic`, or `OpenAiCompatible` |
 | Base URL | API base for the selected adapter |
 | API key | Credential entered in the editor and protected when saved |
 | Headers | Provider-specific HTTP headers; use only where needed |
-| Models | Exact endpoint model names, discovered or entered manually |
-| Max output tokens | Optional per-provider response cap where the adapter supports it |
+| Models | Exact endpoint model names, discovered (Fetch) or entered manually; Test checks the first one is served |
+
+**Model**
+
+| Field | Guidance |
+| --- | --- |
+| Context window | The prompt plus answer size the provider accepts; nothing can ask a provider, so blank assumes 16,000 |
+| Hand a step over at | `75%` of the context window, `80000` tokens of prompt, or both (`75%, 80000` - the nearer one wins); blank hands over after 60 turns |
+| Tokens kept free for the answer | Blank keeps an eighth of the context window |
+| Max output tokens | Optional per-provider response cap |
+| Extra generation tokens for reasoning | Room added for a reasoning model's thinking |
+| Temperature | Blank - the engine's (0.2 for work, 0 for review); a number; `server` - none sent, the server's own applies. Every kind reads it |
+| Effort | Anthropic only: `low`, `medium`, `high`, `xhigh`, `max` |
+| Keep the model loaded | OllamaNative only: seconds; 0 unloads, -1 keeps it resident |
+| OpenAI reasoning compatibility, Send reasoning back | OpenAiCompatible only |
+| Stream idle / non-streaming timeout | Seconds; 300 and 900 by default |
 
 ### Adapter behavior
 

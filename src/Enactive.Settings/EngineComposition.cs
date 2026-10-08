@@ -131,7 +131,7 @@ public static class EngineComposition
         else if (FallbackModel(settings) is null)
             problems.Add(
                 "No model is chosen. "
-                + $"{string.Join(", ", settings.Providers.Select(p => p.DisplayName ?? p.Id))} "
+                + $"{string.Join(", ", settings.Providers.Select(p => p.Name))} "
                 + "has no model list — open Settings, edit the provider and fetch its models.");
 
         return problems;
@@ -225,7 +225,7 @@ public static class EngineComposition
         // places without the compiler or anybody reading the line noticing.
         => settings.Providers.Select(p => new ProviderDescriptor(
             Id: p.Id,
-            DisplayName: string.IsNullOrWhiteSpace(p.DisplayName) ? p.Id : p.DisplayName,
+            DisplayName: p.Name,
             Kind: p.Kind,
             BaseUrl: p.BaseUrl,
             ApiKey: string.IsNullOrEmpty(p.ApiKey) ? null : p.ApiKey,
