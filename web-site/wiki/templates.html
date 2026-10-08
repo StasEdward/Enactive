@@ -346,7 +346,7 @@ Criterion command: {test_command}</code></pre></div>
 <tr>
 <td><code>improve-tests</code></td>
 <td>Add uncovered behavior tests; <code>area</code>, required <code>test_command</code></td>
-<td>Fixed <code>dotnet build</code></td>
+<td>None (version 3)</td>
 </tr>
 <tr>
 <td><code>update-dependencies</code></td>
@@ -355,7 +355,7 @@ Criterion command: {test_command}</code></pre></div>
 </tr>
 </tbody></table>
 </div><p>Several built-ins parameterize commands in the goal while retaining literal .NET commands in their criteria. Changing a build/test input therefore does <strong>not</strong> change those literal checks. Customize their criteria to <code>{build_command}</code> / <code>{test_command}</code> when adapting them to another stack, as shown above.</p>
-<p>Improve Test Coverage deliberately checks compilation rather than requiring all tests to pass: its task may uncover existing broken behavior and forbids changing source just to make tests green. Its fixed build criterion also needs adaptation for a non-.NET project.</p>
+<p>Improve Test Coverage declares no criteria of its own (since version 3). It used to declare <code>dotnet build</code>, which fails on a non-.NET project; the engine now checks for new build errors itself, for every kind of project it recognizes. Requiring all tests to pass would fight the task, which may uncover existing broken behavior and forbids changing source just to make tests green - a proposed test check that already fails before the work is dropped. A template&#39;s own criteria also fix the list the review of the final checks may return, so a template that names its test command in its goal and declares a different check leaves that review nothing it can add.</p>
 <p>Code Review writes a report. The default Reviewer worker cannot write files or run Git, so use Developer or a deliberately configured report-writing worker for that template. A template&#39;s category/name does not automatically select a matching worker.</p>
 <h2 id="editing-json-directly">Editing JSON directly<a class="heading-anchor" href="#editing-json-directly" aria-label="Link to Editing JSON directly">#</a></h2>
 <p>Use valid JSON with enum names as strings. The editor synchronizes Form and JSON on tab changes; invalid JSON keeps you in the JSON view with an error. For fields not reliably preserved by form round-tripping, edit the file externally and reload.</p>

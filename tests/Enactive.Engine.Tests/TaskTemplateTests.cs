@@ -462,4 +462,19 @@ public sealed class TaskTemplateTests : IDisposable
         Assert.DoesNotContain("{area}", spec!.Goal);
         Assert.Equal("Cover  in the tests.", spec.Goal);
     }
+
+    /// <summary>
+    /// The coverage template declares no criteria of its own. It declared "Builds: dotnet build" - .NET's command in a
+    /// template for any project - and a template's criteria lock the review of the final checks, while its goal names a
+    /// test command the review kept adding: on 2026-10-08 that asked three times and once ended a run before it began.
+    /// The engine checks for new build errors itself, for every kind of project it knows.
+    /// </summary>
+    [Fact]
+    public void The_coverage_template_locks_no_criteria()
+    {
+        var template = Assert.Single(BuiltinTemplates.All, t => t.Id == "improve-tests");
+
+        Assert.Empty(template.SuccessCriteria);
+        Assert.Equal(3, template.Version);
+    }
 }

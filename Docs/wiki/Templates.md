@@ -236,12 +236,12 @@ The 60,000-token and 900-second limits are example starting values, not measured
 | `documentation-sync` | Correct drift; `docs_path`, default `README.md` | None |
 | `fix-bug` | Fix a described problem; required `problem`, build/test commands | Fixed `dotnet build`, `dotnet test` |
 | `code-review` | Findings report; `scope`, `report_path` | None |
-| `improve-tests` | Add uncovered behavior tests; `area`, required `test_command` | Fixed `dotnet build` |
+| `improve-tests` | Add uncovered behavior tests; `area`, required `test_command` | None (version 3) |
 | `update-dependencies` | Incremental dependency updates; `check_command`, build/test commands | Fixed `dotnet build`, `dotnet test` |
 
 Several built-ins parameterize commands in the goal while retaining literal .NET commands in their criteria. Changing a build/test input therefore does **not** change those literal checks. Customize their criteria to `{build_command}` / `{test_command}` when adapting them to another stack, as shown above.
 
-Improve Test Coverage deliberately checks compilation rather than requiring all tests to pass: its task may uncover existing broken behavior and forbids changing source just to make tests green. Its fixed build criterion also needs adaptation for a non-.NET project.
+Improve Test Coverage declares no criteria of its own (since version 3). It used to declare `dotnet build`, which fails on a non-.NET project; the engine now checks for new build errors itself, for every kind of project it recognizes. Requiring all tests to pass would fight the task, which may uncover existing broken behavior and forbids changing source just to make tests green - a proposed test check that already fails before the work is dropped. A template's own criteria also fix the list the review of the final checks may return, so a template that names its test command in its goal and declares a different check leaves that review nothing it can add.
 
 Code Review writes a report. The default Reviewer worker cannot write files or run Git, so use Developer or a deliberately configured report-writing worker for that template. A template's category/name does not automatically select a matching worker.
 

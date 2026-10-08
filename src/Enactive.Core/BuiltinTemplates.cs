@@ -250,7 +250,7 @@ public static class BuiltinTemplates
                 + "not a malfunction. Report which tests failed and why. Do NOT pass expectedExitCodes "
                 + "to a build or a restore — those are meant to succeed, and a non-zero exit there is "
                 + "a real failure to fix.",
-            Version: 2,
+            Version: 3,
             Description: "Add tests for what is not covered, and prove they can fail.",
             Category: "Development",
             Parameters: new[]
@@ -270,15 +270,13 @@ public static class BuiltinTemplates
             Permissions: new PermissionCeiling(
                 MaxLevel: PermissionLevel.Execute,
                 Deny: new[] { "git", "docker" }),
-            // "Builds", not "tests pass": the goal REQUIRES that new tests can fail, and forbids
-            // touching source to make one pass, so a criterion demanding green would fight the
-            // template's purpose. What this asks is the one thing nothing else in the run asks -
-            // did it leave compilable code - and a model rewriting a test file wholesale is exactly
-            // what breaks that.
-            SuccessCriteria: new[]
-            {
-                new SuccessCriterionDefinition("Builds", "dotnet build", 0)
-            },
+            // No criteria of its own (version 3). It declared "Builds: dotnet build" - .NET's command in a template
+            // for any project, which a Python or a JavaScript workspace fails - to ask whether the run left
+            // compilable code; the engine asks that itself now, for every kind of project it knows ("No new build
+            // errors", BuildRegression). And a template's own criteria LOCK the review of the final checks, while
+            // this goal names its test command: the review kept trying to add it, and on 2026-10-08 that asked a
+            // person three times and once ended a run before its first step.
+            SuccessCriteria: [],
             Limits: new ExecutionLimits(MaxSteps: 10),
             ReviewRequired: true,
             Builtin: true)
