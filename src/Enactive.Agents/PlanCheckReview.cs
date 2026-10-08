@@ -123,7 +123,18 @@ internal static class PlanCheckReview
         var usage = round.Usage;
 
         if (round.Shortfall("The verification contract") is { } shortfall)
+        {
+            // A LOCKED list - a template's own criteria, a resumed run's - whose review could not be read back even after
+            // the correction. The list stands as it was supplied; what is missing is only the review's word that it fits
+            // the request, which is a person's to give, as for an unresolved contract. It ended the run before any work:
+            // on 2026-10-08 a review that kept adding the request's test command to a template's locked list stopped a
+            // run at "Locked review cannot add criteria". Where a restriction is involved it stays a stop.
+            if (preserveCriteria && round.Kind == AnswerKind.Unusable && askWhenUnsettled
+                && inputs.Restrictions.Count == 0 && inputs.ActionPolicy is null)
+                return Result(budget.TurnExhaustedAfter(usage.Prompt, usage.Completion)) with
+                    { Unsettled = shortfall + ". The criteria as supplied are below; they are fixed, and were not confirmed against the request." };
             return Result(shortfall);
+        }
 
         var (contract, said) = round.Value!;
         if (contract.Unresolved is { } unresolved)

@@ -49,6 +49,17 @@ internal static class PlanCheckContract
     internal static bool IsRefusal(Exception ex)
         => ex is JsonException or InvalidOperationException or KeyNotFoundException or FormatException or OverflowException;
 
+    /// <summary>
+    /// What a locked review is told when its answer breaks the lock - the whole rule, every time. Each refusal said one
+    /// half: told it had dropped a supplied criterion, a review put it back and added the command the request names, was
+    /// refused for adding, and had no attempt left (2026-10-08, the run ended before its first step).
+    /// </summary>
+    internal static string LockedRule(IEnumerable<SuccessCriterionDefinition> supplied)
+        => "This list is fixed: return exactly these criteria - "
+           + string.Join(", ", supplied.Select(c => $"'{c.Name}' ({c.Command}, exit {c.ExpectedExitCode})"))
+           + " - each unchanged, and add none. A command the request requires that is not among them is said in unresolved, "
+           + "never added.";
+
     /// <summary>Why this answer is refused, or null when it is accepted.</summary>
     internal static string? Refusal(string answer, bool complete, PlanCheckInputs inputs)
     {
@@ -162,11 +173,11 @@ internal static class PlanCheckContract
             {
                 var match = remaining.FindIndex(c => c.Name == original.Name && c.Command == original.Command
                     && c.ExpectedExitCode == original.ExpectedExitCode);
-                if (match < 0) throw new JsonException("Locked criterion omitted or changed; report unresolved instead.");
+                if (match < 0) throw new JsonException("A locked criterion was omitted or changed. " + LockedRule(inputs.Checks));
                 checks.Add(original with { PlanningReason = remaining[match].PlanningReason });
                 remaining.RemoveAt(match);
             }
-            if (remaining.Count > 0) throw new JsonException("Locked review cannot add criteria.");
+            if (remaining.Count > 0) throw new JsonException("A criterion was added to a locked list. " + LockedRule(inputs.Checks));
         }
         if (inputs.Checks.Where(c => c.Origin == CriterionOrigin.Requested).Any(original =>
             !checks.Any(c => c.Origin == CriterionOrigin.Requested && c.Command == original.Command
