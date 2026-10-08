@@ -195,6 +195,29 @@ public sealed class RunFeedTests
         Assert.DoesNotMatch(@"Equals\(verb|verb\s*==", feed);
     }
 
+    /// <summary>
+    /// A line too long for the card - the model's words, a call's result, a command - is cut to the card's length and
+    /// marked as cut: a line that stopped short without a mark would read as the whole of it.
+    /// </summary>
+    [Fact]
+    public void A_line_too_long_for_the_card_is_cut_and_marked()
+    {
+        var words = new string('w', 400);
+        var command = new string('c', 400);
+        var result = new string('r', 400);
+
+        var card = OneStep(Step(EventKind.AssistantDelta, 1, words),
+            Invoked("run_command", System.Text.Json.JsonSerializer.Serialize(new { command }), "a command ran"),
+            Step(EventKind.ToolResult, 1, "run_command -> ok: " + result));
+
+        var note = card.Entries.Single(e => e.Kind == FeedEntryKind.Note).Label;
+        Assert.Equal(new string('w', 220) + "…", note);
+        var ran = card.Entries.Single(e => e.Kind == FeedEntryKind.Command);
+        Assert.Equal("Ran: " + new string('c', 90) + "…", ran.Label);
+        Assert.EndsWith("…", ran.Detail);
+        Assert.Equal(161, ran.Detail.Length);
+    }
+
     [Fact]
     public void A_command_card_shows_the_command_it_ran()
     {

@@ -125,7 +125,12 @@ public sealed class CapsAnnounceThemselvesTests
         ["Orchestrator.CriteriaFileChars"] = nameof(AStepIsJudgedOnItsSemanticCriteriaTests.A_file_too_long_to_show_whole_says_so_and_does_not_count_as_read),
         ["TypedCriteria.MaxHandedChars"] = nameof(AResultFileTheRequestDoesNotNameTests.A_long_handed_file_says_how_much_was_not_shown),
         ["ExecutionJournal.RepeatedChars"] = nameof(EvidenceBudgetTests.The_same_text_is_shown_once_and_the_other_call_says_where),
-        ["FailingCheckReview.OutputTailChars"] = nameof(ACheckThatFailsBeforeTheWorkIsAskedAboutTests.A_long_output_is_shown_by_its_end_and_says_it_was_cut)
+        ["FailingCheckReview.OutputTailChars"] = nameof(ACheckThatFailsBeforeTheWorkIsAskedAboutTests.A_long_output_is_shown_by_its_end_and_says_it_was_cut),
+        // A step card's lines: only what the card shows - the run log keeps the whole text - and marked where cut.
+        // Literals until they were named, which is when this census saw them.
+        ["FeedCard.NoteChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked),
+        ["FeedCard.DetailChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked),
+        ["FeedCard.CommandChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked)
     };
 
     /// <summary>
