@@ -35,6 +35,11 @@ using Enactive.Core.Tools;
 /// stops at 8000 characters, so the copy comes out partial and looks complete. Both are required:
 /// with write_file alone, copy_file would let a worker duplicate content it is not allowed to
 /// read, which is the one way this table could widen access rather than name it.</item>
+/// <item><c>write_file</c> → <c>restore_file</c>: putting a file back as it was before the run is a
+/// write of content the file already had - what a worker that may overwrite it could do by hand, and
+/// did, badly (run bb77e810). It shows the model nothing it could not read. Shipped in the built-in
+/// roles only, it reached nobody with a saved team (run 457159, 2026-10-09: "registered and named by
+/// no role").</item>
 /// </list>
 ///
 /// <para>Deliberately NOT here: anything that reaches outside the workspace or hands a command line
@@ -64,6 +69,7 @@ public static class WorkerTools
         (["write_file"], "create_directory"),
         (["write_file"], "move_file"),
         (["write_file", "read_file"], "copy_file"),
+        (["write_file"], "restore_file"),
         (["read_file"], "search_files"),
         (["read_file"], "count_matches"),
         (["read_file"], "file_stats"),

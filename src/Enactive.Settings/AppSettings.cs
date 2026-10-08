@@ -359,7 +359,8 @@ public enum ShellCommandPolicy
 public sealed partial class AppSettings
 {
     /// <summary>The newest settings.json schema this build writes. See <see cref="SchemaVersion"/>.</summary>
-    public const int CurrentSchemaVersion = 6;
+    // 7: restore_file reaches the saved teams (WorkerTools.WithImplied, run on every version bump).
+    public const int CurrentSchemaVersion = 7;
 
     /// <summary>
     /// settings.json schema version. Files written before 2026-09-06 have no such field and read as 1,
