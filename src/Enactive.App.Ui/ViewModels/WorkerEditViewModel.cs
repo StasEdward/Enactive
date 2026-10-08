@@ -113,17 +113,18 @@ internal sealed class WorkerEditViewModel : ObservableObject
     /// <summary>
     /// What the current selection actually permits. Spelled out because the dangerous states are the
     /// silent ones: nothing ticked is a worker that cannot act at all, and "*" is unrestricted access
-    /// regardless of the other boxes.
+    /// regardless of the other boxes. Asked of ToolAllowlist, which says what a role's list reaches for the gate
+    /// and every screen: the hint tested the list for "*" itself, a second copy of that rule.
     /// </summary>
     public string ToolsHint
     {
         get
         {
             var selected = Tools.Where(t => t.IsSelected).Select(t => t.Name).ToList();
-            if (selected.Contains("*"))
-                return "\"*\" is selected — this worker may call EVERY tool, including shell commands.";
+            if (ToolAllowlist.GrantsEverything(selected))
+                return $"\"{ToolAllowlist.Everything}\" is selected — this worker may call EVERY tool, including shell commands.";
             return selected.Count == 0
-                ? "Nothing selected — this worker cannot call any tool. Tick \"*\" for unrestricted access."
+                ? $"Nothing selected — this worker cannot call any tool. Tick \"{ToolAllowlist.Everything}\" for unrestricted access."
                 : $"{selected.Count} tool(s): {string.Join(", ", selected)}.";
         }
     }

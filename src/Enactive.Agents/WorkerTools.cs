@@ -75,7 +75,7 @@ public static class WorkerTools
     /// purpose because an empty list means "no tools", and <c>mcp__*</c> covers whatever an MCP
     /// server turns out to expose.
     /// </summary>
-    private static readonly string[] Wildcards = ["mcp__*", "*"];
+    private static readonly string[] Wildcards = ["mcp__*", ToolAllowlist.Everything];
 
     /// <summary>
     /// Every tool the settings editor should offer: the ones the host actually registered, the
