@@ -174,25 +174,19 @@ internal sealed class CallAdmission(
         // A turn that offered only the hand-over: anything else is answered, not run.
         if (_onlyHandOn && call.Name != StepOutputContract.ToolName)
         {
-            yield return Invoked(call);
             var onlyHandOn = $"this turn is for {StepOutputContract.ToolName} only. Hand on what you have "
                 + "established first; every tool is back on the next turn.";
-            trail.Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, onlyHandOn, WorkspaceEffect.None));
-            trail.Leave(() => frame.Open.RefusedByRule(call));
-            trail.Reply(ChatMessage.Tool(call.Id, "NOT RUN: " + onlyHandOn));
-            yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {onlyHandOn}");
+            foreach (var ev in NotRunByRule(call, onlyHandOn, trail))
+                yield return ev;
             yield break;
         }
 
         // A step that has said it cannot go on does nothing more in this turn.
         if (ReportedBlocked is not null)
         {
-            yield return Invoked(call);
             const string afterReport = "the step has reported it is blocked; nothing after that report is carried out.";
-            trail.Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, afterReport, WorkspaceEffect.None));
-            trail.Leave(() => frame.Open.RefusedByRule(call));
-            trail.Reply(ChatMessage.Tool(call.Id, "NOT RUN: " + afterReport));
-            yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {afterReport}");
+            foreach (var ev in NotRunByRule(call, afterReport, trail))
+                yield return ev;
             yield break;
         }
 
@@ -278,11 +272,8 @@ internal sealed class CallAdmission(
         // d91b6a45: a page step read it, got "File not found", and ended INCOMPLETE on that.
         if (frame.Boundary?.AssembledByTheEngine(call, tools.DefinitionOf(call.Name)) is { } assembled)
         {
-            yield return Invoked(call);
-            trail.Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, assembled, WorkspaceEffect.None));
-            trail.Leave(() => frame.Open.RefusedByRule(call));
-            trail.Reply(ChatMessage.Tool(call.Id, "NOT RUN: " + assembled));
-            yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {assembled}");
+            foreach (var ev in NotRunByRule(call, assembled, trail))
+                yield return ev;
             yield break;
         }
 
@@ -737,6 +728,20 @@ internal sealed class CallAdmission(
             frame.Journal.Record(frame.StepNo, call.Name, call.ArgumentsJson, ActionOutcome.Refused,
                 reason + "; nothing executed", WorkspaceEffect.None);
         }
+    }
+
+    /// <summary>
+    /// A call the engine's own rule turns away before it runs - a turn kept for the hand-over, a step that has said it is
+    /// blocked, a look at a document the engine assembles: shown as invoked, journalled and counted as refused by rule,
+    /// and answered NOT RUN with the reason. Written three times, word for word, until it was one.
+    /// </summary>
+    private IEnumerable<WorkEvent> NotRunByRule(ToolCall call, string why, Trail trail)
+    {
+        yield return Invoked(call);
+        trail.Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, why, WorkspaceEffect.None));
+        trail.Leave(() => frame.Open.RefusedByRule(call));
+        trail.Reply(ChatMessage.Tool(call.Id, "NOT RUN: " + why));
+        yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {why}");
     }
 
     private WorkEvent Ev(EventKind kind, string summary)
