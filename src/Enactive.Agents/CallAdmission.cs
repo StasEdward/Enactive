@@ -391,10 +391,20 @@ internal sealed class CallAdmission(
             var approved = false;
             if (gate == PermissionDecision.Ask)
             {
+                // What a removal takes away, said where the person decides. The question was the path and nothing more;
+                // on 2026-10-09 (run 7f3435) it was allowed for a test file the run had found - 24,733 bytes of older
+                // tests - which the step then rewrote as 954.
+                var takesAway = await WhatItTakesAwayAsync(call, ct);
                 yield return Ev(EventKind.DecisionRequested,
-                    $"Approve tool '{call.Name}'? {Compact(call.ArgumentsJson)}");
+                    $"Approve tool '{call.Name}'? {Compact(call.ArgumentsJson)}" + (takesAway is null ? "" : " " + takesAway));
 
                 var decisionRequest = _access.Approval(call, frame.TaskId, frame.RunId, frame.WorkspaceRoot);
+                if (takesAway is not null)
+                    decisionRequest = decisionRequest with
+                    {
+                        Detail = takesAway + "\n" + decisionRequest.Detail,
+                        FullDetail = takesAway + "\n\n" + decisionRequest.FullText
+                    };
                 DecisionOutcome outcome;
                 try { outcome = await ToolAccess.AskAsync(decisions, decisionGate, decisionRequest, ct); }
                 catch (DecisionPendingException) { park(); throw; }
@@ -769,6 +779,43 @@ internal sealed class CallAdmission(
         trail.Leave(() => frame.Open.RefusedByRule(call));
         trail.Reply(ChatMessage.Tool(call.Id, "NOT RUN: " + why));
         yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {why}");
+    }
+
+    /// <summary>
+    /// What a call that takes files away would take, for the person asked to allow it: for each file, whether it was
+    /// there before the run, whether the run has changed it since, and how big it is. Null for a call that takes nothing.
+    /// </summary>
+    internal async Task<string?> WhatItTakesAwayAsync(ToolCall call, CancellationToken ct)
+    {
+        var said = new List<string>();
+        foreach (var path in ChangeLimitGuard.RemovedPaths(call, tools.DefinitionOf(call.Name)))
+        {
+            var rel = ShellLookup.Normal(path);
+            string full;
+            try { full = WorkspaceGuard.ResolveInside(frame.WorkspaceRoot, rel); }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException) { continue; }
+            if (!File.Exists(full)) continue;
+
+            long bytes; int lines;
+            try
+            {
+                bytes = new FileInfo(full).Length;
+                lines = 0;
+                foreach (var b in await File.ReadAllBytesAsync(full, ct)) if (b == (byte)'\n') lines++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+            var size = $"{bytes:N0} bytes, {lines:N0} lines";
+            var before = await frame.Store.BeforeRunAsync(rel, ct);
+            said.Add(before.State switch
+            {
+                BeforeRunState.Absent => $"'{rel}' was made by this run ({size}).",
+                BeforeRunState.Untouched => $"'{rel}' existed before this run ({size}); this run has not changed it.",
+                BeforeRunState.Kept => $"'{rel}' existed before this run ({before.Content!.Length:N0} bytes then); this run has changed it since - now {size}.",
+                BeforeRunState.Lost => $"'{rel}' existed before this run; this run has changed it since - now {size}.",
+                _ => $"'{rel}' ({size}): whether it existed before this run is not known."
+            });
+        }
+        return said.Count == 0 ? null : "It takes away: " + string.Join(" ", said);
     }
 
     private WorkEvent Ev(EventKind kind, string summary)

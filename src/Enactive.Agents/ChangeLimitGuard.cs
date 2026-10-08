@@ -49,8 +49,11 @@ internal sealed class ChangeLimitGuard(
     internal const int ShownChars = 4000;
 
     private readonly object _gate = new();
-    private readonly HashSet<(int?, string)> _allowed = [];
-    private readonly Dictionary<(int?, string), int> _refused = [];
+    // By step, file, and whether the change takes the file away: an edit allowed is not a removal allowed. Run 7f3435,
+    // 2026-10-09: a step's edit of a test file the run found was allowed, and the same step then deleted the file -
+    // 24,733 bytes of older tests - without the question being put again.
+    private readonly HashSet<(int?, string, bool)> _allowed = [];
+    private readonly Dictionary<(int?, string, bool), int> _refused = [];
 
     /// <summary>What a check decided: the refusal the step is told, or null to go ahead - and what asking cost.</summary>
     internal sealed record Decision(string? Refusal, TokenUsage Usage, string? Note = null)
@@ -68,6 +71,7 @@ internal sealed class ChangeLimitGuard(
     {
         if (definition?.ChangedPathArguments is not { Count: > 0 } arguments || definition.RestoresRunStart) return Decision.GoAhead;
 
+        var removed = RemovedPaths(call, definition).Select(ShellLookup.Normal).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var asked = new List<(string Path, string? Now)>();
         foreach (var path in WriteBoundary.PathsOf(call, arguments))
         {
@@ -77,7 +81,7 @@ internal sealed class ChangeLimitGuard(
                 || rel.StartsWith(WorkspaceGuard.ReservedFolder + "/", StringComparison.OrdinalIgnoreCase))
                 continue;
             lock (_gate)
-                if (_allowed.Contains((stepNo, rel.ToLowerInvariant()))) continue;
+                if (_allowed.Contains((stepNo, rel.ToLowerInvariant(), removed.Contains(rel)))) continue;
 
             string full;
             try { full = WorkspaceGuard.ResolveInside(workspaceRoot, rel); }
@@ -90,7 +94,7 @@ internal sealed class ChangeLimitGuard(
         if (asked.Count == 0) return Decision.GoAhead;
 
         lock (_gate)
-            if (asked.FirstOrDefault(a => _refused.GetValueOrDefault((stepNo, a.Path.ToLowerInvariant())) >= AsksPerFile) is { Path: { } spent })
+            if (asked.FirstOrDefault(a => _refused.GetValueOrDefault((stepNo, a.Path.ToLowerInvariant(), removed.Contains(a.Path))) >= AsksPerFile) is { Path: { } spent })
                 return new($"'{spent}' was not changed: this step's changes to it were refused {AsksPerFile} times against what the "
                            + $"request says may be changed ({Quoted()}), and it is not asked again. Leave it as it is, or hand on "
                            + "why the step cannot be done without changing it.", TokenUsage.None);
@@ -98,7 +102,7 @@ internal sealed class ChangeLimitGuard(
         var messages = new List<ChatMessage>
         {
             ChatMessage.System(Instruction),
-            ChatMessage.User(Question(stepTitle, saidByStep, call, asked))
+            ChatMessage.User(Question(stepTitle, saidByStep, call, asked, removed))
         };
         var round = await StructuredAnswer.AskAsync(provider, messages,
             current => new ChatRequest(model.Model, current, Temperature: 0, Purpose: GenerationPurpose.Planning,
@@ -114,7 +118,7 @@ internal sealed class ChangeLimitGuard(
         lock (_gate)
             foreach (var (path, _) in asked)
             {
-                var key = (stepNo, path.ToLowerInvariant());
+                var key = (stepNo, path.ToLowerInvariant(), removed.Contains(path));
                 if (verdict.Allow) _allowed.Add(key);
                 else _refused[key] = _refused.GetValueOrDefault(key) + 1;
             }
@@ -144,7 +148,8 @@ internal sealed class ChangeLimitGuard(
         Return ONLY JSON {"allow":true|false,"reason":"..."}; the reason is said to the step when the change is refused.
         """;
 
-    private string Question(string? stepTitle, string? saidByStep, ToolCall call, IReadOnlyList<(string Path, string? Now)> asked)
+    private string Question(string? stepTitle, string? saidByStep, ToolCall call, IReadOnlyList<(string Path, string? Now)> asked,
+        IReadOnlySet<string> removed)
     {
         var sb = new StringBuilder();
         sb.AppendLine("The request:").AppendLine(request).AppendLine();
@@ -156,6 +161,8 @@ internal sealed class ChangeLimitGuard(
             sb.AppendLine("What the step said as it made the change:").AppendLine(Cut(saidByStep.Trim()));
         sb.AppendLine();
         sb.AppendLine($"The change: {call.Name} {Cut(call.ArgumentsJson ?? "")}");
+        foreach (var gone in asked.Where(a => removed.Contains(a.Path)))
+            sb.AppendLine($"It takes {gone.Path} away: the file is gone from where it was, whole.");
         foreach (var (path, now) in asked.Where(a => a.Now is not null))
             sb.AppendLine().AppendLine($"{path} as it is now:").AppendLine(now);
         return sb.ToString();
@@ -178,6 +185,20 @@ internal sealed class ChangeLimitGuard(
         }
         catch (JsonException) { return (null, ["the answer is not valid JSON"]); }
     }
+
+    /// <summary>
+    /// The paths a call takes away: every path a deleting tool names, and where a moving tool moves FROM - its first
+    /// changed path (ReadLedger reads a move the same way). The file is gone from there either way.
+    /// </summary>
+    internal static IEnumerable<string> RemovedPaths(ToolCall call, ToolDefinition? definition)
+        => definition is { ChangedPathArguments: { Count: > 0 } arguments, FileCoverage: var coverage }
+            ? coverage switch
+            {
+                FileCoverageBehavior.Delete => WriteBoundary.PathsOf(call, arguments),
+                FileCoverageBehavior.Move => WriteBoundary.PathsOf(call, [arguments[0]]),
+                _ => []
+            }
+            : [];
 
     private string Quoted() => string.Join("; ", limits.Select(l => $"\"{l}\""));
 
