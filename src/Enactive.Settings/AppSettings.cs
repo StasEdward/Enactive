@@ -385,7 +385,8 @@ public sealed partial class AppSettings
     /// <summary>
     /// The engine's switches - one property each, declared once, in <see cref="EngineOptions"/>, with its default.
     /// Kept in settings.json as one "Engine" object; a file written before it held them at the top level, and they are
-    /// moved in on load (see <see cref="MoveTopLevelEngineFields"/>).
+    /// moved in on load (see <see cref="MoveTopLevelEngineFields"/>) - and copied out to the top level again on save,
+    /// for a build from before the section that reads the same file (see <see cref="Serialized"/>).
     /// </summary>
     public EngineOptions Engine { get; set; } = new();
 
@@ -634,7 +635,7 @@ public sealed partial class AppSettings
             try
             {
                 var temporary = file + ".tmp";
-                File.WriteAllText(temporary, JsonSerializer.Serialize(this, JsonOptions));
+                File.WriteAllText(temporary, Serialized());
                 File.Move(temporary, file, overwrite: true);
             }
             finally
@@ -655,25 +656,31 @@ public sealed partial class AppSettings
     private HashSet<string> _unreadableSecrets = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// The engine's top-level switches of a file written before they had a section of their own, by the names they had
-    /// then. A list, not the properties of <see cref="EngineOptions"/>: an old file can hold only these, and reading the
-    /// options' names would have moved a switch added later out of any stray top-level field that happened to share its
-    /// name. A migration stays as it ran.
+    /// The engine's switches as a file written before they had a section of their own held them: the top-level name,
+    /// and where that value lives in "Engine" now. The plan-growth limits were three top-level numbers; in the engine's
+    /// options they are one FanOut. A table, not the properties of <see cref="EngineOptions"/>: an old file can hold
+    /// only these, and reading the options' names would have moved a switch added later out of any stray top-level
+    /// field that happened to share its name. Frozen - it is what builds from before the section read, not what this
+    /// one has.
     /// </summary>
-    private static readonly string[] FlatEngineSwitches =
+    private static readonly (string TopLevel, string[] InEngine)[] TopLevelEngineFields =
     [
-        "NumCtx", "GenerationBudgets", "RepairConsultation", "DisableThinking", "AllowImplicitToolCalls", "ReviewRetries",
-        "MaxLoadedToolsPerStep", "SuccessRetries", "ProposeChecks", "StepOutputs", "TypedCriteria", "DynamicSteps",
-        "ValidateWaves", "ReportBlocked", "SemanticCriteria", "RevertRejectedSteps", "MaxParallelSteps", "EvidenceBudget"
+        .. new[]
+        {
+            "NumCtx", "GenerationBudgets", "RepairConsultation", "DisableThinking", "AllowImplicitToolCalls", "ReviewRetries",
+            "MaxLoadedToolsPerStep", "SuccessRetries", "ProposeChecks", "StepOutputs", "TypedCriteria", "DynamicSteps",
+            "ValidateWaves", "ReportBlocked", "SemanticCriteria", "RevertRejectedSteps", "MaxParallelSteps", "EvidenceBudget"
+        }.Select(name => (name, new[] { name })),
+        ("MaxStepsPerExpansion", [nameof(EngineOptions.FanOut), nameof(FanOutLimits.MaxStepsPerExpansion)]),
+        ("MaxTotalSteps", [nameof(EngineOptions.FanOut), nameof(FanOutLimits.MaxTotalSteps)]),
+        ("MaxFanOutDepth", [nameof(EngineOptions.FanOut), nameof(FanOutLimits.MaxDepth)]),
     ];
 
     /// <summary>
-    /// The engine's switches of a file written before they had a section of their own, moved into it: the top-level
-    /// fields of <see cref="FlatEngineSwitches"/>, and the three plan-growth limits, which were spelled differently at
-    /// the top level. Moved, so the next save writes them once, in "Engine". Run on every load; a file without them is
-    /// left as it is.
+    /// The engine's switches of a file written before they had a section of their own, moved into it (see
+    /// <see cref="TopLevelEngineFields"/>). Run on every load; a file without them is left as it is.
     /// </summary>
-    /// <param name="fileHasEngine">The file already has an "Engine" section: what is in it wins over a stray top-level field.</param>
+    /// <param name="fileHasEngine">The file already has an "Engine" section: what is in it wins over a top-level field.</param>
     private void MoveTopLevelEngineFields(bool fileHasEngine)
     {
         if (UnreadFields is not { Count: > 0 } unread)
@@ -685,27 +692,40 @@ public sealed partial class AppSettings
         var engine = JsonSerializer.SerializeToNode(Engine, JsonOptions)!.AsObject();
         var moved = false;
 
-        foreach (var name in FlatEngineSwitches)
-            moved |= Move(name, value => engine[name] = value);
-
-        // Phase 5.4's limits were three top-level numbers; in the engine's options they are one FanOut.
-        var fanOut = engine[nameof(EngineOptions.FanOut)]!.AsObject();
-        moved |= Move("MaxStepsPerExpansion", value => fanOut[nameof(FanOutLimits.MaxStepsPerExpansion)] = value);
-        moved |= Move("MaxTotalSteps", value => fanOut[nameof(FanOutLimits.MaxTotalSteps)] = value);
-        moved |= Move("MaxFanOutDepth", value => fanOut[nameof(FanOutLimits.MaxDepth)] = value);
+        foreach (var (topLevel, inEngine) in TopLevelEngineFields)
+        {
+            if (!unread.Remove(topLevel, out var value))
+                continue;
+            var section = inEngine[..^1].Aggregate(engine, (node, name) => node[name]!.AsObject());
+            section[inEngine[^1]] = System.Text.Json.Nodes.JsonNode.Parse(value.GetRawText());
+            moved = true;
+        }
 
         if (moved && !fileHasEngine)
             Engine = engine.Deserialize<EngineOptions>(JsonOptions) ?? new();
         // Not written back: a field no build reads any more (the old review switches) stays gone, as before.
         UnreadFields = null;
+    }
 
-        bool Move(string name, Action<System.Text.Json.Nodes.JsonNode?> set)
-        {
-            if (!unread.Remove(name, out var value))
-                return false;
-            set(System.Text.Json.Nodes.JsonNode.Parse(value.GetRawText()));
-            return true;
-        }
+    /// <summary>
+    /// The settings as written to disk: "Engine", and the same values again at the top level under the names
+    /// <see cref="TopLevelEngineFields"/> gives them.
+    ///
+    /// <para>The copy is for a build from before the section, reading the same settings.json - an older install
+    /// beside this one, or a release rolled back. Written to "Engine" only, the file left such a build nothing: it ran
+    /// on its own defaults without a word, and its next save dropped the section it did not know, so this build,
+    /// opening the file again, had lost every switch a person had set. With the copy the older build runs on the same
+    /// values, and what it saves comes back here through <see cref="MoveTopLevelEngineFields"/>. On load the section
+    /// wins where both are there, so the copy is never read while the section is.</para>
+    /// </summary>
+    private string Serialized()
+    {
+        var root = JsonSerializer.SerializeToNode(this, JsonOptions)!.AsObject();
+        var engine = root[nameof(Engine)]!.AsObject();
+        foreach (var (topLevel, inEngine) in TopLevelEngineFields)
+            // A switch whose value is null (NumCtx unset) is written as null, as the older build wrote it.
+            root[topLevel] = inEngine.Aggregate<string, System.Text.Json.Nodes.JsonNode?>(engine, (node, name) => node?[name])?.DeepClone();
+        return root.ToJsonString(JsonOptions);
     }
 
     private string ProtectOrPreserve(string plaintext, string stored)

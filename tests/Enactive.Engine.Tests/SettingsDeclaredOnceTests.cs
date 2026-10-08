@@ -32,14 +32,55 @@ public sealed class SettingsDeclaredOnceTests
     {
         using var fx = new EngineFixture();
         var path = fx.PathOf("settings.json");
-        var engine = new EngineOptions { FanOut = new FanOutLimits(91, 92, 93) };
-        var n = 0;
-        foreach (var option in typeof(EngineOptions).GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                     .Where(p => p.Name != nameof(EngineOptions.FanOut)))
-            option.SetValue(engine, Different(option.PropertyType, option.GetValue(EngineOptions.Default), ++n));
+        var engine = EveryEngineSwitchChanged();
         Assert.True(new AppSettings { Engine = engine }.Save(path));
 
         Assert.Equal(engine, AppSettings.Load(path).Engine);
+    }
+
+    /// <summary>
+    /// What a build from before the "Engine" section reads - its top-level switches, by the names it had for them -
+    /// is in the saved file too, with the values this build runs on. Written to the section only, the file left such
+    /// a build (an older install beside this one, a release rolled back) running on its own defaults without a word.
+    /// </summary>
+    [Fact]
+    public void A_build_from_before_the_engine_section_reads_the_same_switches()
+    {
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("settings.json");
+        Assert.True(new AppSettings { Engine = EveryEngineSwitchChanged() }.Save(path));
+
+        var saved = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        var engine = saved["Engine"]!;
+        Assert.All(OlderBuildsSwitches, field =>
+        {
+            var inEngine = field.InEngine.Aggregate(engine, (node, name) => node[name]!);
+            Assert.True(JsonNode.DeepEquals(inEngine, saved[field.TopLevel]), $"{field.TopLevel}: {saved[field.TopLevel]?.ToJsonString() ?? "missing"}, Engine has {inEngine.ToJsonString()}");
+        });
+    }
+
+    /// <summary>
+    /// A build from before the section saves the file without it - it drops what it does not know - and with whatever
+    /// a person changed there. Opened here again, nothing is lost: the switches come back from the top level, the
+    /// change with them. Before the copy this build found no section and nothing at the top level, and every switch
+    /// a person had set was back at its default.
+    /// </summary>
+    [Fact]
+    public void Switches_saved_by_a_build_from_before_the_section_come_back()
+    {
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("settings.json");
+        var engine = EveryEngineSwitchChanged();
+        Assert.True(new AppSettings { Engine = engine }.Save(path));
+        Edit(path, root =>
+        {
+            // What the older build's save leaves: no "Engine", and two switches it was used to change.
+            root.AsObject().Remove("Engine");
+            root["MaxParallelSteps"] = 5;
+            root["MaxTotalSteps"] = 77;
+        });
+
+        Assert.Equal(engine with { MaxParallelSteps = 5, FanOut = engine.FanOut with { MaxTotalSteps = 77 } }, AppSettings.Load(path).Engine);
     }
 
     /// <summary>A new installation runs on the engine's own defaults: there is no other set.</summary>
@@ -64,7 +105,8 @@ public sealed class SettingsDeclaredOnceTests
 
     /// <summary>
     /// A file from before the switches had their own section held them at the top level - and the plan-growth limits
-    /// under names of their own. They are moved into "Engine" on load, and the next save writes them there only.
+    /// under names of their own. They are moved into "Engine" on load; the next save writes them there, and copies them
+    /// to the top level for a build from before the section.
     /// </summary>
     [Fact]
     public void A_file_from_before_the_engine_section_moves_its_switches_in()
@@ -91,9 +133,10 @@ public sealed class SettingsDeclaredOnceTests
         }, loaded.Engine);
         Assert.True(loaded.Save(path));
         var saved = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
-        Assert.False(saved.ContainsKey("ReviewRetries"));
-        Assert.False(saved.ContainsKey("MaxStepsPerExpansion"));
         Assert.Equal(3, (int)saved["Engine"]!["ReviewRetries"]!);
+        Assert.Equal(7, (int)saved["Engine"]!["FanOut"]!["MaxStepsPerExpansion"]!);
+        Assert.Equal(3, (int)saved["ReviewRetries"]!);
+        Assert.Equal(7, (int)saved["MaxStepsPerExpansion"]!);
     }
 
     /// <summary>
@@ -126,6 +169,34 @@ public sealed class SettingsDeclaredOnceTests
         Edit(path, root => root["ReviewRetries"] = 0);
 
         Assert.Equal(4, AppSettings.Load(path).Engine.ReviewRetries);
+    }
+
+    /// <summary>
+    /// The switches a build from before the "Engine" section reads at the top level, and where each is in the section.
+    /// Spelled out here rather than read from AppSettings: it is what those builds read, and it does not change.
+    /// </summary>
+    private static readonly (string TopLevel, string[] InEngine)[] OlderBuildsSwitches =
+    [
+        .. new[]
+        {
+            "NumCtx", "GenerationBudgets", "RepairConsultation", "DisableThinking", "AllowImplicitToolCalls", "ReviewRetries",
+            "MaxLoadedToolsPerStep", "SuccessRetries", "ProposeChecks", "StepOutputs", "TypedCriteria", "DynamicSteps",
+            "ValidateWaves", "ReportBlocked", "SemanticCriteria", "RevertRejectedSteps", "MaxParallelSteps", "EvidenceBudget"
+        }.Select(name => (name, new[] { name })),
+        ("MaxStepsPerExpansion", ["FanOut", "MaxStepsPerExpansion"]),
+        ("MaxTotalSteps", ["FanOut", "MaxTotalSteps"]),
+        ("MaxFanOutDepth", ["FanOut", "MaxDepth"]),
+    ];
+
+    /// <summary>Every switch set to something other than its default, each to a value of its own.</summary>
+    private static EngineOptions EveryEngineSwitchChanged()
+    {
+        var engine = new EngineOptions { FanOut = new FanOutLimits(91, 92, 93) };
+        var n = 0;
+        foreach (var option in typeof(EngineOptions).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                     .Where(p => p.Name != nameof(EngineOptions.FanOut)))
+            option.SetValue(engine, Different(option.PropertyType, option.GetValue(EngineOptions.Default), ++n));
+        return engine;
     }
 
     private static object? Different(Type type, object? value, int n)
