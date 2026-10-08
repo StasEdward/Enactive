@@ -71,10 +71,15 @@ internal static class TimelineTones
 
 internal static class TemplateEdges
 {
+    /// <summary>
+    /// Where a template comes from, as its edge says - every origin named. One added later is a failure here, as it is
+    /// in the palette; it was drawn as a workspace's own without a word.
+    /// </summary>
     public static TemplateEdge Of(TemplateOrigin origin) => origin switch
     {
         TemplateOrigin.Builtin => TemplateEdge.Builtin,
         TemplateOrigin.Global => TemplateEdge.Global,
-        _ => TemplateEdge.Workspace
+        TemplateOrigin.Workspace => TemplateEdge.Workspace,
+        _ => throw new ArgumentOutOfRangeException(nameof(origin), origin, "A template's origin with no edge.")
     };
 }

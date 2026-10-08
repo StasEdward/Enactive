@@ -140,15 +140,22 @@ internal sealed class StepCardViewModel : ObservableObject
     /// blocked one is the same to look at, since nothing went wrong in it and it goes on once its cause is put
     /// right.
     /// </summary>
-    internal static CardTone ToneOf(FeedCard card) => card.WaitingForYou ? CardTone.NeedsYou : card.Status switch
+    internal static CardTone ToneOf(FeedCard card) => card.WaitingForYou ? CardTone.NeedsYou : ToneOf(card.Status);
+
+    /// <summary>
+    /// A status's tone, every one named. A status added to the feed later is a failure here, as it is in the palette - it
+    /// was drawn as Pending without a word, a step that had started looking as though it had not.
+    /// </summary>
+    internal static CardTone ToneOf(FeedCardStatus status) => status switch
     {
+        FeedCardStatus.Pending => CardTone.Pending,
         FeedCardStatus.Running => CardTone.Running,
         FeedCardStatus.Done => CardTone.Done,
         FeedCardStatus.Failed => CardTone.Failed,
         FeedCardStatus.Skipped => CardTone.Skipped,
         FeedCardStatus.Unverified => CardTone.Unverified,
         FeedCardStatus.Blocked => CardTone.NeedsYou,
-        _ => CardTone.Pending
+        _ => throw new ArgumentOutOfRangeException(nameof(status), status, "A step card's status with no tone.")
     };
 
     private static StepEntry Row(FeedEntry entry)

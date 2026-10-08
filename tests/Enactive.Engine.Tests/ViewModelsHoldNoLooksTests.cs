@@ -81,6 +81,23 @@ public sealed class ViewModelsHoldNoLooksTests
         Assert.True(spelled.Length == 0, "Event kinds spelled out in Palette.cs: " + string.Join(", ", spelled));
     }
 
+    // ── every state is named ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Every status a step card can have has its tone, and every origin of a template its edge - and a value with none
+    /// is a failure, as it is in the palette's tables. These two quietly answered Pending and Workspace for anything
+    /// they did not name, one step before the palette that would have said so.
+    /// </summary>
+    [Fact]
+    public void A_state_the_looks_do_not_name_is_a_failure_not_a_fallback()
+    {
+        Assert.All(Enum.GetValues<FeedCardStatus>(), status => StepCardViewModel.ToneOf(status));
+        Assert.All(Enum.GetValues<Enactive.Workspace.TemplateOrigin>(), origin => TemplateEdges.Of(origin));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => StepCardViewModel.ToneOf((FeedCardStatus)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => TemplateEdges.Of((Enactive.Workspace.TemplateOrigin)99));
+    }
+
     // ── what moved into the step cards ──────────────────────────────────────
 
     private static readonly Guid Run = Guid.NewGuid();
