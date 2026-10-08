@@ -44,9 +44,14 @@ public sealed record ComposedEngine(
     LogHub Log,
     SessionApprovals Session)
 {
+    /// <summary>
+    /// The planner every run of this engine plans with. Settable because tests replace it - one that does not audit its
+    /// checks keeps a scripted run to the turns it scripted; nothing else does.
+    /// </summary>
     public Planner Planner { get; init; } = new();
 
-    public IPermissionEngine Permissions { get; init; } = new PermissionEngine();
+    /// <summary>How a tier's policy decides a call. One for every engine: nothing replaces it, so nothing can.</summary>
+    public IPermissionEngine Permissions { get; } = new PermissionEngine();
 
     /// <summary>The approvals given "for this workspace"; null for the store every host shares. Set by tests only.</summary>
     public ApprovalStore? Approvals { get; init; }
