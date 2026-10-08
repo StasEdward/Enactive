@@ -46,7 +46,7 @@ public sealed class ARefusedContractSaysWhatIsWrongTests
     [InlineData("checks")]
     [InlineData("forbidden_effects")]
     [InlineData("action_policy")]
-    [InlineData("unresolved")]
+    // Not "unresolved": left out, it is null - nothing declined (AFinalCheckPassesOnTheCodesTheRequestNamesTests).
     public void A_part_of_the_contract_that_is_not_there_is_named(string part)
     {
         var answer = Answer();
