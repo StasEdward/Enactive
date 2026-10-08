@@ -81,16 +81,27 @@ public sealed class FeedCard
         Version++;
     }
 
+    // How long a line on a step card may be. These are the lengths the card was first drawn with (4132edf, 2026-09-03),
+    // and nothing recorded says what went wrong at another length: they keep each entry to a line or two, which is what
+    // a card is for. They cut only what the card SHOWS - the complete text is in the run log, and nothing a review
+    // reads, nor anything a model is told, is made from these lines.
+    /// <summary>A note - the model's own words between calls, a warning, a remark.</summary>
+    private const int NoteChars = 220;
+    /// <summary>A call's one-line result, under the call.</summary>
+    private const int DetailChars = 160;
+    /// <summary>A command line, after "Ran: ".</summary>
+    private const int CommandChars = 90;
+
     /// <summary>
     /// Buffers a chunk of the assistant's streamed reply. It is never shown verbatim - it is folded into a
-    /// single short note the next time a tool runs or the step ends. The card shows a 220-character preview;
-    /// the complete text lives in the run log.
+    /// single short note the next time a tool runs or the step ends. The card shows a preview of
+    /// <see cref="NoteChars"/>; the complete text lives in the run log.
     /// </summary>
     internal void AppendAssistantText(string delta)
     {
         foreach (var character in delta)
         {
-            if (_noteBuffer.Length > 220) break;
+            if (_noteBuffer.Length > NoteChars) break;
             if (_noteBuffer.Length == 0 && char.IsWhiteSpace(character)) continue;
             _noteBuffer.Append(character is '\r' or '\n' ? ' ' : character);
         }
@@ -101,7 +112,7 @@ public sealed class FeedCard
         FlushPendingNote();
         _tools++;
         _commands++;
-        Add(FeedEntryKind.Command, "Ran: " + Truncate(commandText, 90));
+        Add(FeedEntryKind.Command, "Ran: " + Truncate(commandText, CommandChars));
     }
 
     /// <summary>
@@ -129,7 +140,7 @@ public sealed class FeedCard
     {
         if (_entries.Count == 0)
             return;
-        var flat = Truncate(text.Replace('\n', ' ').Replace('\r', ' ').Trim(), 160);
+        var flat = Truncate(text.Replace('\n', ' ').Replace('\r', ' ').Trim(), DetailChars);
         if (flat.Length == 0)
             return;
         _entries[^1].Detail = flat;
@@ -165,7 +176,7 @@ public sealed class FeedCard
 
     private void AddNoteEntry(string text)
     {
-        var flat = Truncate(text.Replace('\n', ' ').Replace('\r', ' ').Trim(), 220);
+        var flat = Truncate(text.Replace('\n', ' ').Replace('\r', ' ').Trim(), NoteChars);
         if (flat.Length == 0)
             return;
         _notes++;
