@@ -32,18 +32,9 @@ using Enactive.Core.Tools;
 /// <param name="readFile">A workspace file as the run sees it - a proposal staged for it, or what is on disk; null when there is neither.</param>
 /// <param name="reviewed">Whether a reviewer judges this step when it ends.</param>
 internal sealed class StepEnding(
-    ExecutionJournal journal,
-    IReadOnlyList<ToolDefinition> definitions,
-    List<ChatMessage> messages,
-    StepProgress progress,
-    Guid taskId,
-    Guid runId,
-    int? stepNo,
-    string workspaceRoot,
+    StepFrame frame,
     Func<string, CancellationToken, Task<string?>> readFile,
     IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null,
-    StepOutputSchema? outputSchema = null,
-    StepOutputSlot? outputSlot = null,
     bool reviewed = false)
 {
     /// <summary>One turn as the step ends it - or not.</summary>
@@ -94,7 +85,7 @@ internal sealed class StepEnding(
     }
 
     /// <summary>The calls this step made that did not go through and nothing has made good - written by the admission and the accounting of results.</summary>
-    public OpenFailures Open { get; } = new(definitions);
+    public OpenFailures Open => frame.Open;
 
     // A reply that describes a call instead of making one earns exactly ONE re-ask per step; without
     // the cap a model that keeps explaining itself would burn every iteration on the same nudge.
@@ -128,10 +119,10 @@ internal sealed class StepEnding(
         // attached, four turns running; its reasoning said "I need to stop repeating", and the step was stopped as
         // stuck, the report step after it skipped. The repeat is not run - it would say what it said - and the step
         // ends on its message by the ordinary road: the same end-of-step checks, and the review.
-        if (!turn.OnlyHandOn && !string.IsNullOrWhiteSpace(turn.ReplyText) && calls is { Count: > 0 } && progress.OnlyRepeats(calls))
+        if (!turn.OnlyHandOn && !string.IsNullOrWhiteSpace(turn.ReplyText) && calls is { Count: > 0 } && frame.Progress.OnlyRepeats(calls))
         {
             foreach (var call in calls)
-                messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: this exact call already ran in this step, and nothing has "
+                frame.Messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: this exact call already ran in this step, and nothing has "
                     + "changed since - its result is above. The step ends with your message."));
             yield return Ev(EventKind.ContextAssembled, "The step said it was done and repeated "
                 + string.Join("; ", calls.Select(c => $"{c.Name} {Compact(c.ArgumentsJson)}"))
@@ -147,7 +138,7 @@ internal sealed class StepEnding(
 
         if (turn.OnlyHandOn)
         {
-            messages.Add(ChatMessage.User($"Nothing was handed on. Carry on with the step, and hand its result on with "
+            frame.Messages.Add(ChatMessage.User($"Nothing was handed on. Carry on with the step, and hand its result on with "
                 + $"{StepOutputContract.ToolName} when you have it."));
             yield return Ev(EventKind.ContextAssembled, $"The turn for {StepOutputContract.ToolName} was answered with text; the step carries on.");
             yield break;
@@ -157,7 +148,7 @@ internal sealed class StepEnding(
         {
             _repairRequested = true;
             _resendAsked = true;
-            messages.Add(ChatMessage.User(
+            frame.Messages.Add(ChatMessage.User(
                 $"Your reply described a '{described.Name}' call in plain text instead of invoking it. "
                 + "Nothing was executed. If you meant to act, send it again as a real tool call. "
                 + "If that JSON was only an example or an explanation, reply with your final answer."));
@@ -200,12 +191,12 @@ internal sealed class StepEnding(
         // the plan named, found the previous run's report under another name, said nothing needed doing, and
         // the run failed on the missing file five seconds later. Once, as an ordinary turn; nothing is taken
         // from prose, and what still fails after it is shown to the reviewer as the engine's own finding.
-        if (!_criteriaNudged && stepCriteria is { Count: > 0 } && stepNo is { } planNo
-            && TypedCriteria.OfStep(stepCriteria, planNo - 1, workspaceRoot)
+        if (!_criteriaNudged && stepCriteria is { Count: > 0 } && frame.StepNo is { } planNo
+            && TypedCriteria.OfStep(stepCriteria, planNo - 1, frame.WorkspaceRoot)
                 .Where(r => r.Outcome == CriterionOutcome.Failed).ToArray() is { Length: > 0 } failing)
         {
             _criteriaNudged = true;
-            messages.Add(ChatMessage.User("Before this step ends: the plan checks this step's work, and the engine finds "
+            frame.Messages.Add(ChatMessage.User("Before this step ends: the plan checks this step's work, and the engine finds "
                 + (failing.Length == 1 ? "this fails" : "these fail") + ":\n"
                 + string.Join("\n", failing.Select(r => $"- {r.Name}: {r.Detail}"))
                 + "\nMake the work meet " + (failing.Length == 1 ? "it" : "them") + " - the path and the text are the plan's, "
@@ -220,13 +211,13 @@ internal sealed class StepEnding(
         // three steps that had written their findings never heard the reminder. It is an ordinary
         // turn: limits, budget and cancellation apply to it as to any other, and it makes nothing
         // that did not finish into something that did.
-        if (outputSchema is not null && outputSlot is { Values: null, Nudged: false })
+        if (frame.OutputSchema is not null && frame.OutputSlot is { Values: null, Nudged: false })
         {
-            outputSlot.Nudged = true;
-            messages.Add(ChatMessage.User(
+            frame.OutputSlot.Nudged = true;
+            frame.Messages.Add(ChatMessage.User(
                 $"This step is not finished until it hands its result on with {StepOutputContract.ToolName}. "
                 + "Call it now with the step's result: "
-                + string.Join(", ", outputSchema.Fields.Where(f => f.Required).Select(f => f.Name)) + "."
+                + string.Join(", ", frame.OutputSchema.Fields.Where(f => f.Required).Select(f => f.Name)) + "."
                 + (Open.Count > 0
                     ? " These calls are still open and keep the step unfinished: " + Open.Describe()
                     : "")));
@@ -256,7 +247,7 @@ internal sealed class StepEnding(
             if (!_openCallsNudged)
             {
                 _openCallsNudged = true;
-                messages.Add(ChatMessage.User("Before this step ends: "
+                frame.Messages.Add(ChatMessage.User("Before this step ends: "
                     + (Open.Count == 1 ? "this call" : $"these {Open.Count} calls")
                     + " did not go through, and nothing since has made "
                     + (Open.Count == 1 ? "it" : "them") + " good:\n" + unresolved
@@ -272,7 +263,7 @@ internal sealed class StepEnding(
             if (reviewed)
             {
                 _openCallsForReview = unresolved;
-                journal.Record(stepNo, "engine_open_calls", "{}", ActionOutcome.Succeeded,
+                frame.Journal.Record(frame.StepNo, "engine_open_calls", "{}", ActionOutcome.Succeeded,
                     "Checked by the engine as this step ended: calls that did not go through and that nothing made good, "
                     + "after the step was told of them once:\n" + unresolved
                     + "\nJudge whether the step's result stands without them. A result that depends on one of them is not "
@@ -300,7 +291,7 @@ internal sealed class StepEnding(
 
         // A step that was to hand its result on as values and has not: told once, with the
         // fields, and then not called finished - the steps after it would have nothing.
-        if (outputSchema is not null && outputSlot is { Values: null })
+        if (frame.OutputSchema is not null && frame.OutputSlot is { Values: null })
         {
             verdict.Ends(StepOutcomeKind.Incomplete,
                 $"the step finished without handing on its declared output ({StepOutputContract.ToolName}), "
@@ -378,6 +369,6 @@ internal sealed class StepEnding(
     }
 
     private WorkEvent Ev(EventKind kind, string summary)
-        => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
-               stepNo is { } n ? $"{{\"step\":{n}}}" : null);
+        => new(Guid.NewGuid(), frame.TaskId, frame.RunId, DateTimeOffset.UtcNow, kind, summary,
+               frame.StepNo is { } n ? $"{{\"step\":{n}}}" : null);
 }

@@ -3159,7 +3159,6 @@ public sealed partial class Orchestrator : IOrchestrator
         // Two gates, deliberately not merged: the role answers "may this WORKER do this", the offer
         // answers "may this RUN do this". A role is saved and belongs to the person; a run's policy
         // and its handler are chosen for the occasion.
-        var toolAccess = new ToolAccess(_tools, _permissions);
         var offer = OfferFor(worker);
 
         // A tool that may change files without saying which cannot be held to a write boundary. The
@@ -3242,8 +3241,10 @@ public sealed partial class Orchestrator : IOrchestrator
         // characters - exactly the margin that decides whether the last turn fits.
         var toolsOverhead = toolDefs.Sum(d => d.Name.Length + d.Description.Length + d.JsonSchema.Length + 16);
 
-        // Repetition, counted. Not turns - see StallLimit.
-        var progress = new StepProgress(_tools.Definitions);
+        // The step being worked, as the modules that decide about it read it - its record of repetition (counted, not
+        // turns - see StallLimit) included, which a handover starts over (StepFrame.StartOver).
+        var frame = new StepFrame(taskId, runId, stepNo, _workspace, _tools.Definitions, messages, journal, reads, store,
+            outputSchema, outputSlot, submitTool, boundary, changes, stepStart);
 
         // How many times this step has already started over with a handover, and how many turns
         // the CURRENT conversation has taken. The iteration counter keeps counting the whole step,
@@ -3328,14 +3329,13 @@ public sealed partial class Orchestrator : IOrchestrator
         // when the turn does.
         // Whether each turn ends the step, and how - in one order, with its once-only reminders (see StepEnding). It
         // keeps the step's open calls, which the admission and the accounting of results write to and this loop does not.
-        var stepEnding = new StepEnding(journal, _tools.Definitions, messages, progress, taskId, runId, stepNo, _workspace.RootPath,
+        var stepEnding = new StepEnding(frame,
             async (path, token) => await store.TryReadPendingAsync(path, token) ?? await ReadOrNullAsync(path, token),
-            stepCriteria, outputSchema, outputSlot, reviewed);
+            stepCriteria, reviewed);
 
-        var admission = new CallAdmission(_tools, toolAccess, worker, EffectivePolicyFor(worker), offer, reads, store,
-            journal, stepEnding.Open, messages, progress, _progress, _decisions, _decisionGate, granted, _writableRoots,
-            _workspace.RootPath, _workspace.Id, taskId, runId, stepNo, toolsOnRequest, mayReportBlocked,
-            outputSchema, outputSlot, submitTool, path => OutputPathExists(path, store), boundary, changes, stepStart);
+        var admission = new CallAdmission(frame, _tools, _permissions, worker, EffectivePolicyFor(worker), offer, _progress,
+            _decisions, _decisionGate, granted, _writableRoots, toolsOnRequest, mayReportBlocked,
+            path => OutputPathExists(path, store));
 
         // The transcript's size when lastPromptTokens was measured, so what has been added since
         // can be estimated on top of a real count rather than instead of one.
@@ -3595,8 +3595,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     // not stop calling tools - it calls the SAME one, with the same arguments,
                     // until something else stops it". After a handover there is no same
                     // conversation to go round in.
-                    progress = new StepProgress(_tools.Definitions);
-                    reads.ForgetDiscardedReads();
+                    frame.StartOver();
                     trimmedInARow = 0;
 
                     if (restartFrom is not null)
@@ -4031,17 +4030,17 @@ public sealed partial class Orchestrator : IOrchestrator
 
             // Freeze prior successes, not repeat decisions: a write in this batch can change the
             // generation before a later command reaches its gate.
-            progress.BeginTurn();
+            frame.Progress.BeginTurn();
 
             // Did this turn do anything the step had not already done? A stuck model does not stop
             // calling tools - it calls the SAME one, with the same arguments, until something else
             // stops it. That is the shape worth detecting, and unlike a turn count it does not grow
             // with the size of the job: seven new files are seven turns of progress, while one file
             // read three times is three turns of nothing however big the project is.
-            var advanced = progress.Advanced(toolCalls);
-            if (!advanced && progress.Stalled >= StallLimit)
+            var advanced = frame.Progress.Advanced(toolCalls);
+            if (!advanced && frame.Progress.Stalled >= StallLimit)
             {
-                var repeated = progress.Describe();
+                var repeated = frame.Progress.Describe();
                 loopResult.Set(StepOutcomeKind.Incomplete,
                     $"stopped after {StallLimit} turns that only repeated earlier tool calls: {repeated}");
                 yield return Ev(EventKind.ErrorObserved,
@@ -4064,8 +4063,7 @@ public sealed partial class Orchestrator : IOrchestrator
             var turnOrigin = recovered ? ToolCallOrigin.Healed
                 : resent ? ToolCallOrigin.Nudged
                 : attemptOrigin;
-            var accounting = new ToolResultAccounting(_tools, progress, stepEnding.Open, reads, journal,
-                repairAttempts, _repairConsultation.Enabled, stepNo, turnOrigin);
+            var accounting = new ToolResultAccounting(frame, _tools, repairAttempts, _repairConsultation.Enabled, turnOrigin);
             var readResults = new Dictionary<int, ToolInvocation.Result>();
             // Calls admitted ahead of the batch of reads they run in, with the answer kept for one that was not let
             // through - it joins the conversation when its turn comes, so the conversation keeps the calls' order.
@@ -4076,7 +4074,6 @@ public sealed partial class Orchestrator : IOrchestrator
             WorkEvent Invoked(ToolCall item) => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
                 EventKind.ToolInvoked, $"{item.Name} {Compact(item.ArgumentsJson)}",
                 WorkEventPayload.ToolPayload(item, stepNo));
-            bool CanRunRead(ToolCall item) => toolAccess.CanRunRead(item, worker, EffectivePolicyFor(worker), offer);
 
             for (var callIndex = 0; callIndex < toolCalls.Count; callIndex++)
             {
@@ -4114,11 +4111,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 // it does not let through does not run. Before 2026-10-08 the batch ran first and the admission saw its
                 // reads afterwards, so one it then refused had already been made and its result was thrown away - the
                 // same read twice in a turn, which the admission says is made once, was made twice.
-                if (readResults.Count == 0 && CanRunRead(call))
+                if (readResults.Count == 0 && admission.RunsFreely(call))
                 {
                     var group = new List<(int Index, ToolCall Call)> { (callIndex, call) };
                     for (var next = callIndex + 1;
-                         next < toolCalls.Count && group.Count < ParallelToolReads.Limit && CanRunRead(toolCalls[next]);
+                         next < toolCalls.Count && group.Count < ParallelToolReads.Limit && admission.RunsFreely(toolCalls[next]);
                          next++)
                     {
                         var at = next;
@@ -4164,7 +4161,6 @@ public sealed partial class Orchestrator : IOrchestrator
                 }
                 var result = invocation.Value;
                 var failure = accounting.Record(call, invocation);
-                if (result.Success) boundary?.Succeeded(call);
                 // Written the moment it is done, not at a boundary: a process that dies next must
                 // still know this was sent.
                 if (result.Success && !result.DidNotRun && _tools.DefinitionOf(call.Name)?.OnceOnly == true)
@@ -4228,13 +4224,13 @@ public sealed partial class Orchestrator : IOrchestrator
                 // each result identical to the last and nothing saying so. Whether a nudge would
                 // have moved it is not knowable; that it was owed one is.
                 if (!advanced)
-                    reply += progress.Stalled >= StallLimit - 1
+                    reply += frame.Progress.Stalled >= StallLimit - 1
                         ? "\n\n[This is a call you have already made in this step, and it is being "
-                          + "counted as no progress. One more turn that only repeats earlier calls "
+                          + "counted as no frame.Progress. One more turn that only repeats earlier calls "
                           + "and this step will be stopped as stuck. Change something, or say what "
                           + "you are stuck on and stop.]"
                         : "\n\n[This is a call you have already made in this step, and it is being "
-                          + "counted as no progress. If you know what to change, change it now; if "
+                          + "counted as no frame.Progress. If you know what to change, change it now; if "
                           + "you are finished, say so.]";
 
                 messages.Add(ChatMessage.Tool(call.Id, reply));

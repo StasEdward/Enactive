@@ -23,19 +23,15 @@ public sealed class StepEndingTests : IDisposable
     private readonly ToolRegistry _tools = new(EngineFixture.ShippedTools());
     private readonly List<ChatMessage> _messages = [];
     private readonly ExecutionJournal _journal = new();
-    private readonly StepProgress _progress;
-
-    public StepEndingTests()
-    {
-        _progress = new StepProgress(_tools.Definitions);
-    }
-
     public void Dispose() => _fx.Dispose();
 
+    private StepFrame Frame(StepOutputSchema? schema = null, StepOutputSlot? slot = null)
+        => new(Guid.NewGuid(), Guid.NewGuid(), 1, _fx.Workspace, _tools.Definitions, _messages, _journal, new ReadLedger(),
+            _fx.Artifacts.BeginStep(), schema, slot);
+
     private StepEnding Ending(IReadOnlyList<SuccessCriterionDefinition>? criteria = null, StepOutputSchema? schema = null,
-        StepOutputSlot? slot = null, bool reviewed = false)
-        => new(_journal, _tools.Definitions, _messages, _progress, Guid.NewGuid(), Guid.NewGuid(), stepNo: 1, _fx.Root,
-            (_, _) => Task.FromResult<string?>(null), criteria, schema, slot, reviewed);
+        StepOutputSlot? slot = null, bool reviewed = false, StepFrame? frame = null)
+        => new(frame ?? Frame(schema, slot), (_, _) => Task.FromResult<string?>(null), criteria, reviewed);
 
     private static StepEnding.Turn Says(string? reply, IReadOnlyList<ToolCall>? calls = null, bool onlyHandOn = false,
         ToolCall? described = null, int actionsTaken = 1, int reasoning = 0, int? completion = null, int? prompt = null, int? window = null)
@@ -95,9 +91,10 @@ public sealed class StepEndingTests : IDisposable
     public async Task A_step_that_says_it_is_done_and_only_repeats_ends_on_its_message()
     {
         var check = Call("run_command", """{"command":"chkdsk C:"}""");
-        _progress.Advanced([check]);
+        var frame = Frame();
+        frame.Progress.Advanced([check]);
 
-        var verdict = await End(Ending(), Says("All disks are healthy.", [check with { Id = "again" }]));
+        var verdict = await End(Ending(frame: frame), Says("All disks are healthy.", [check with { Id = "again" }]));
 
         Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Succeeded), (verdict.Next, verdict.Kind));
         Assert.StartsWith("NOT RUN: this exact call already ran", LastTold);
@@ -286,5 +283,22 @@ public sealed class StepEndingTests : IDisposable
         var orchestrator = File.ReadAllText(Path.Combine(TestRepository.Root, "src", "Enactive.Agents", "Orchestrator.cs"));
 
         Assert.DoesNotContain("penFailures", orchestrator, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Nor the admission's gates, nor the step's boundary after a call: the loop asks the admission what may run together
+    /// (CallAdmission.RunsFreely), and the accounting of a result tells the boundary what the call changed. The loop held
+    /// the gates and asked them itself, and marked the boundary beside the accounting.
+    /// </summary>
+    [Fact]
+    public void The_tool_loop_holds_neither_the_admission_s_gates_nor_the_boundary_s_record()
+    {
+        var orchestrator = File.ReadAllText(Path.Combine(TestRepository.Root, "src", "Enactive.Agents", "Orchestrator.cs"));
+
+        // The gates themselves - not ToolAccess.AskAsync, the one way any part of the engine asks a person under the
+        // shared gate.
+        Assert.DoesNotContain("new ToolAccess(", orchestrator, StringComparison.Ordinal);
+        Assert.DoesNotContain(".CanRunRead(", orchestrator, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Succeeded(call)", orchestrator, StringComparison.Ordinal);
     }
 }

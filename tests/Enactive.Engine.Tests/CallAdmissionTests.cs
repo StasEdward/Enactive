@@ -27,15 +27,13 @@ public sealed class CallAdmissionTests : IDisposable
     private readonly List<ChatMessage> _messages = [];
     private readonly GrantedRoots _granted = new();
     private readonly TaskProgress _tasks;
-    private readonly StepProgress _progress;
     private readonly Guid _taskId = Guid.NewGuid();
     private readonly ExecutionJournal _journal = new();
-    private OpenFailures _open = null!;
+    private StepFrame _frame = null!;
 
     public CallAdmissionTests()
     {
         _tasks = new TaskProgress(_fx.Root);
-        _progress = new StepProgress(_tools.Definitions);
     }
 
     public void Dispose() => _fx.Dispose();
@@ -44,7 +42,8 @@ public sealed class CallAdmissionTests : IDisposable
         WriteBoundary? boundary = null, ToolBudget? catalog = null, bool mayReportBlocked = false,
         StepOutputSchema? schema = null, StepOutputSlot? slot = null)
     {
-        _open = new OpenFailures(_tools.Definitions);
+        _frame = new StepFrame(_taskId, Guid.NewGuid(), 1, _fx.Workspace, _tools.Definitions, _messages, _journal,
+            new ReadLedger(), _fx.Artifacts.BeginStep(), schema, slot, boundary: boundary);
         worker ??= EngineFixture.WorkerWith("read_file", "write_file", "run_command", "send_email");
         var policy = AutonomyTiers.PolicyFor(autonomy);
         var permissions = new PermissionEngine();
@@ -53,12 +52,10 @@ public sealed class CallAdmissionTests : IDisposable
             tool => permissions.Evaluate(policy, tool, _tools.RequiredLevelOf(tool)) is var d
                     && d == PermissionDecision.Allow && _tools.RequiresApprovalOf(tool) ? PermissionDecision.Ask : d,
             decisions.CanApproveTool);
-        return new CallAdmission(_tools, new ToolAccess(_tools, permissions), worker, policy, offer, new ReadLedger(),
-            _fx.Artifacts.BeginStep(), _journal, _open, _messages, _progress, _tasks,
+        return new CallAdmission(_frame, _tools, permissions, worker, policy, offer, _tasks,
             decisions, new SemaphoreSlim(1, 1), _granted,
             new WritableRoots(Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-roots.json")),
-            _fx.Root, _fx.Workspace.Id, _taskId, Guid.NewGuid(), stepNo: 1, catalog, mayReportBlocked,
-            outputSchema: schema, outputSlot: slot, boundary: boundary);
+            catalog, mayReportBlocked);
     }
 
     private static async Task<(bool Run, CallAdmission.Verdict Verdict)> Admit(CallAdmission admission, ToolCall call)
@@ -149,9 +146,9 @@ public sealed class CallAdmissionTests : IDisposable
         var admission = Admission(3, new ScriptedDecisionHandler("allow"));
         var status = Call("run_command", """{"command":"git status"}""");
         var version = _tools.WorkspaceVersion(_fx.Workspace.Id);
-        _progress.Resulted(status, new ToolResult(true, "clean", null, [], new Dictionary<string, object?>(),
+        _frame.Progress.Resulted(status, new ToolResult(true, "clean", null, [], new Dictionary<string, object?>(),
             WorkspaceEffect: WorkspaceEffect.None), version, version);
-        _progress.BeginTurn();
+        _frame.Progress.BeginTurn();
         admission.BeginTurn(onlyHandOn: false);
 
         var (repeat, _) = await Admit(admission, status);
@@ -275,7 +272,7 @@ public sealed class CallAdmissionTests : IDisposable
 
         admission.NotRun([Call("write_file", """{"path":"disks.md","content":"C: 9""")], "model output reached its token limit");
 
-        Assert.Equal(1, _open.Count);
+        Assert.Equal(1, _frame.Open.Count);
         var recorded = Assert.Single(_journal.Actions);
         Assert.Equal((ActionOutcome.Refused, "model output reached its token limit; nothing executed"), (recorded.Outcome, recorded.Output));
     }
@@ -303,5 +300,54 @@ public sealed class CallAdmissionTests : IDisposable
         Assert.StartsWith("This is the same submission as the last one", _journal.Actions[1].Output);
         Assert.EndsWith("Handed on with the handover note.", _journal.Actions[2].Output);
         Assert.Equal(ActionOutcome.Succeeded, _journal.Actions[2].Outcome);
+    }
+
+    // ── the step's frame, read as it is now ─────────────────────────────────
+
+    /// <summary>
+    /// A handover starts the step's record of what it has done over (StepFrame.StartOver), and the admission reads the
+    /// record as it is now. It used to keep the one it was built with, so a command made before the handover was refused
+    /// as "already ran" after it - the very repeat the handover exists to allow.
+    /// </summary>
+    [Fact]
+    public async Task After_a_handover_a_command_from_before_it_is_not_refused_as_a_repeat()
+    {
+        var admission = Admission(3, new ScriptedDecisionHandler("allow"));
+        var status = Call("run_command", """{"command":"git status"}""");
+        var version = _tools.WorkspaceVersion(_fx.Workspace.Id);
+        _frame.Progress.Resulted(status, new ToolResult(true, "clean", null, [], new Dictionary<string, object?>(),
+            WorkspaceEffect: WorkspaceEffect.None), version, version);
+
+        _frame.StartOver();
+        _frame.Progress.BeginTurn();
+        admission.BeginTurn(onlyHandOn: false);
+        var (run, _) = await Admit(admission, status);
+
+        Assert.True(run);
+    }
+
+    /// <summary>
+    /// What the loop may run together is what the admission lets through without asking - asked of the admission, by the
+    /// test its own free-read path uses, where the loop held the gates and asked them itself.
+    /// </summary>
+    [Theory]
+    [InlineData("read_file", """{"path":"disks.md"}""", 0, true)]
+    [InlineData("write_file", """{"path":"disks.md","content":"x"}""", 3, false)]
+    [InlineData("send_email", """{"to":"ops@example.com"}""", 3, false)]
+    public async Task A_read_runs_freely_exactly_when_the_admission_lets_it_through_unasked(string tool, string arguments, int autonomy, bool freely)
+    {
+        _fx.Write("disks.md", "C: 91%");
+        var decisions = new ScriptedDecisionHandler("deny");
+        var admission = Admission(autonomy, decisions);
+        admission.BeginTurn(onlyHandOn: false);
+        var call = Call(tool, arguments);
+
+        Assert.Equal(freely, admission.RunsFreely(call));
+        if (freely)
+        {
+            var (run, _) = await Admit(admission, call);
+            Assert.True(run);
+            Assert.Empty(decisions.Requests);
+        }
     }
 }
