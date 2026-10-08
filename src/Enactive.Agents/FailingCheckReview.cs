@@ -55,38 +55,56 @@ internal static class FailingCheckReview
             ChatMessage.User(RequestObligations.ExecutionPrompt(request) + "\n\nChecks that already fail before any work:\n"
                 + JsonSerializer.Serialize(shown))
         };
-        ChatCompletion completion;
-        try
-        {
-            completion = await provider.CompleteAsync(GenerationAllowance.Fit(new ChatRequest(model, messages, Temperature: 0,
-                Purpose: GenerationPurpose.Planning, OutputTokenLimit: Math.Max(1, outputBudget)), provider), ct);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { return new([], 0, 0, null, null, "the decision failed: " + ex.Message); }
 
-        var prompt = completion.PromptTokens ?? 0;
-        var output = completion.CompletionTokens ?? 0;
-        if (completion.FinishReason is "length" or "max_tokens" || completion.Message.ToolCalls is { Count: > 0 })
-            return new([], prompt, output, completion.CachedPromptTokens, completion.CacheCreationPromptTokens, "the decision was cut off");
-        var dropped = new List<(SuccessCriterionDefinition, string)>();
+        // The round every structured answer is asked through (StructuredAnswer): an answer that cannot be used is told
+        // what was wrong once, and the turn's budget is kept. This was asked once, by hand, and an unreadable answer
+        // kept a check the request may not ask to pass; the budget it was handed was never looked at.
+        var round = await StructuredAnswer.AskAsync(provider, messages,
+            current => new ChatRequest(model, current, Temperature: 0, Purpose: GenerationPurpose.Planning,
+                OutputTokenLimit: Math.Max(1, outputBudget)),
+            (answer, _) => Read(answer, failing.Select(f => f.Check).ToArray()),
+            errors => StructuredAnswer.Listed(errors,
+                "Return ONLY JSON {\"checks\":[{\"name\":\"...\",\"keep\":true|false,\"reason\":\"...\"}]} with every check listed once."),
+            budget.TurnExhaustedAfter, requireComplete: true, ct);
+
+        var problem = round.Kind switch
+        {
+            AnswerKind.Answered => null,
+            AnswerKind.Failed => "the decision failed: " + round.Problem,
+            AnswerKind.OutOfBudget => "no budget was left to ask: " + round.Problem,
+            _ => round.CutOff ? "the decision was cut off" : "the decision could not be read: " + string.Join("; ", round.Errors)
+        };
+        return new(round.Value ?? [], round.PromptTokens, round.CompletionTokens, round.CachedPromptTokens,
+            round.CacheCreationPromptTokens, problem);
+    }
+
+    /// <summary>
+    /// The checks an answer drops, with why. Lenient about each entry - one it cannot read, or one that keeps its
+    /// check, leaves the check as planned - and strict only about the answer being the object asked for at all.
+    /// </summary>
+    private static (IReadOnlyList<(SuccessCriterionDefinition Check, string Reason)>? Value, IReadOnlyList<string> Errors) Read(
+        string answer, IReadOnlyList<SuccessCriterionDefinition> failing)
+    {
+        if (ModelText.ExtractJsonObject(ModelText.StripThink(answer)) is not { } json)
+            return (null, ["there is no JSON object in the answer"]);
         try
         {
-            if (ModelText.ExtractJsonObject(ModelText.StripThink(completion.Message.Content ?? "")) is not { } json)
-                return new([], prompt, output, completion.CachedPromptTokens, completion.CacheCreationPromptTokens, "no JSON in the decision");
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty("checks", out var checks) && checks.ValueKind == JsonValueKind.Array)
-                foreach (var item in checks.EnumerateArray())
-                {
-                    if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("name", out var name) || name.ValueKind != JsonValueKind.String
-                        || !item.TryGetProperty("keep", out var keep) || keep.ValueKind != JsonValueKind.False)
-                        continue;
-                    var check = failing.Select(f => f.Check).FirstOrDefault(c => c.Name == name.GetString());
-                    var reason = item.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString()! : "";
-                    if (check is not null && dropped.All(d => d.Item1 != check)) dropped.Add((check, reason));
-                }
+            if (!doc.RootElement.TryGetProperty("checks", out var checks) || checks.ValueKind != JsonValueKind.Array)
+                return (null, ["the object has no \"checks\" array"]);
+            var dropped = new List<(SuccessCriterionDefinition, string)>();
+            foreach (var item in checks.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("name", out var name) || name.ValueKind != JsonValueKind.String
+                    || !item.TryGetProperty("keep", out var keep) || keep.ValueKind != JsonValueKind.False)
+                    continue;
+                var check = failing.FirstOrDefault(c => c.Name == name.GetString());
+                var reason = item.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString()! : "";
+                if (check is not null && dropped.All(d => d.Item1 != check)) dropped.Add((check, reason));
+            }
+            return (dropped, []);
         }
-        catch (JsonException) { return new([], prompt, output, completion.CachedPromptTokens, completion.CacheCreationPromptTokens, "the decision was not JSON"); }
-        return new(dropped, prompt, output, completion.CachedPromptTokens, completion.CacheCreationPromptTokens);
+        catch (JsonException) { return (null, ["the answer is not valid JSON"]); }
     }
 
     private static string Tail(string text)

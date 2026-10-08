@@ -30,7 +30,17 @@ internal sealed record AnswerRound<T>(
     int PromptTokens,
     int CompletionTokens,
     int? CachedPromptTokens,
-    int? CacheCreationPromptTokens);
+    int? CacheCreationPromptTokens)
+{
+    /// <summary>How many times the model was asked - a caller says a first failure apart from a failed correction.</summary>
+    public int Asked { get; init; }
+
+    /// <summary>
+    /// Whether any answer of the round was cut off at its length limit - not only the last. The planner starts no work
+    /// after a plan that ran out of room, even when the correction that followed was unreadable for another reason.
+    /// </summary>
+    public bool CutOff { get; init; }
+}
 
 /// <summary>
 /// Asks a model for a structured answer - a verdict, a contract - and, when the answer cannot be used, tells it
@@ -64,12 +74,13 @@ internal static class StructuredAnswer
         CancellationToken ct,
         int attempts = 2)
     {
-        int prompt = 0, output = 0;
+        int prompt = 0, output = 0, asked = 0;
         int? cached = null, created = null;
+        var cutOff = false;
         IReadOnlyList<string> errors = [];
 
         AnswerRound<T> Round(AnswerKind kind, T? value = default, string? problem = null)
-            => new(kind, value, errors, problem, prompt, output, cached, created);
+            => new(kind, value, errors, problem, prompt, output, cached, created) { Asked = asked, CutOff = cutOff };
 
         for (var attempt = 0; attempt < attempts; attempt++)
         {
@@ -79,6 +90,7 @@ internal static class StructuredAnswer
             ChatCompletion completion;
             try
             {
+                asked++;
                 completion = await provider.CompleteAsync(GenerationAllowance.Fit(request(messages), provider), ct);
             }
             catch (OperationCanceledException) { throw; }
@@ -95,6 +107,7 @@ internal static class StructuredAnswer
             var answer = completion.Message.Content ?? "";
             // An answer cut off at its length, or one that called for a tool, is not a finished answer, however whole
             // the JSON in it looks.
+            cutOff |= completion.FinishReason is "length" or "max_tokens";
             var unfinished = completion.FinishReason is "length" or "max_tokens"
                 ? "your answer was cut off at its length limit; return the JSON object alone, and keep it short"
                 : completion.Message.ToolCalls is { Count: > 0 }

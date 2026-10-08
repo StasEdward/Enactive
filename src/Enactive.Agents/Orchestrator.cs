@@ -473,7 +473,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0,
                         turnCeiling: RunawayCeiling, outputBudget: _generationBudgets.For(GenerationPurpose.Planning),
                         stepOutputs: _stepOutputs, typedCriteria: _typedCriteria,
-                        beforeRetry: budget.TurnExhaustedAfter, dynamicSteps: _dynamicSteps, validateWaves: _validateWaves,
+                        budget: budget.TurnExhaustedAfter, dynamicSteps: _dynamicSteps, validateWaves: _validateWaves,
                         semanticCriteria: _semanticCriteria));
         }
         catch (RetryBudgetExceededException ex)
@@ -512,17 +512,14 @@ public sealed partial class Orchestrator : IOrchestrator
             string? replanFailure = budget.TurnExhausted;
             if (replanFailure is null)
             {
-                try
-                {
-                    ct.ThrowIfCancellationRequested();
-                    plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
-                        intent.RawText, intent.Context, plan, defect, models.PlanProvider, models.Plan.Model, ct,
-                        _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                        _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { replanFailure = "Plan repair failed: " + ex.Message; }
-                if (replanFailure is null && plan.PromptTokens + plan.CompletionTokens > 0)
+                ct.ThrowIfCancellationRequested();
+                // A provider's failure comes back in the result (Planner.ReplanAsync), not as an exception to catch.
+                plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
+                    intent.RawText, intent.Context, plan, defect, models.PlanProvider, models.Plan.Model, ct,
+                    _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
+                    _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
+                replanFailure = plan.IncompleteReason;
+                if (plan.PromptTokens + plan.CompletionTokens > 0)
                     yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
                         plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
             }
@@ -547,17 +544,14 @@ public sealed partial class Orchestrator : IOrchestrator
             string? unclear = budget.TurnExhausted;
             if (unclear is null)
             {
-                try
-                {
-                    ct.ThrowIfCancellationRequested();
-                    plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
-                        intent.RawText, intent.Context, plan, missing.Diagnostic, models.PlanProvider, models.Plan.Model, ct,
-                        _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                        _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { unclear = "the planner could not be asked: " + ex.Message; }
-                if (unclear is null && plan.PromptTokens + plan.CompletionTokens > 0)
+                ct.ThrowIfCancellationRequested();
+                // A provider's failure comes back in the result (Planner.ReplanAsync), not as an exception to catch.
+                plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
+                    intent.RawText, intent.Context, plan, missing.Diagnostic, models.PlanProvider, models.Plan.Model, ct,
+                    _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
+                    _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
+                unclear = plan.IncompleteReason;
+                if (plan.PromptTokens + plan.CompletionTokens > 0)
                     yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
                         plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
             }
@@ -590,17 +584,14 @@ public sealed partial class Orchestrator : IOrchestrator
             string? unclear = budget.TurnExhausted;
             if (unclear is null)
             {
-                try
-                {
-                    ct.ThrowIfCancellationRequested();
-                    plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
-                        intent.RawText, intent.Context, plan, diagnostic, models.PlanProvider, models.Plan.Model, ct,
-                        _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                        _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { unclear = "the planner could not be asked: " + ex.Message; }
-                if (unclear is null && plan.PromptTokens + plan.CompletionTokens > 0)
+                ct.ThrowIfCancellationRequested();
+                // A provider's failure comes back in the result (Planner.ReplanAsync), not as an exception to catch.
+                plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
+                    intent.RawText, intent.Context, plan, diagnostic, models.PlanProvider, models.Plan.Model, ct,
+                    _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
+                    _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
+                unclear = plan.IncompleteReason;
+                if (plan.PromptTokens + plan.CompletionTokens > 0)
                     yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
                         plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
             }
@@ -2641,10 +2632,10 @@ public sealed partial class Orchestrator : IOrchestrator
                 if (plannerProvider is null || plannerModel is null) yield break;
                 var diagnosis = await InScopeAsync(runId, taskId, null, () => CheckDiagnosis.RunAsync(
                     intent.RawText, intent.Context, proposed, plannerProvider, plannerModel.Model, budget, ct));
-                if (diagnosis.Completion is { } usage && session is not null)
+                if (diagnosis.PromptTokens + diagnosis.CompletionTokens > 0 && session is not null)
                     yield return session.Scope.Usage(WorkEventPayload.WorkPurpose.Plan, plannerModel,
-                        usage.PromptTokens ?? 0, usage.CompletionTokens ?? 0,
-                        cached: usage.CachedPromptTokens, created: usage.CacheCreationPromptTokens);
+                        diagnosis.PromptTokens, diagnosis.CompletionTokens,
+                        cached: diagnosis.CachedPromptTokens, created: diagnosis.CacheCreationPromptTokens);
                 if (diagnosis.Decisions is not { } decisions)
                 {
                     result.IncompleteReason = diagnosis.Error ?? "Check diagnosis unavailable; no worker repair dispatched.";
