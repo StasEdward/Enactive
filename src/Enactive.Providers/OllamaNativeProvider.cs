@@ -121,10 +121,13 @@ public sealed class OllamaNativeProvider : IChatProvider
             payload["keep_alive"] = keepAlive;
         var maxTokens = OutputTokenBudget.Resolve(request, _descriptor);
         var contextWindow = ContextWindow(request);
-        if (request.Temperature is not null || contextWindow is not null || maxTokens is not null)
+        // The provider's temperature, as the other two adapters read it: the engine's, its own, or none (the server's).
+        // This one sent the engine's whatever the provider said, so the setting did nothing for an Ollama model.
+        var temperature = _descriptor.TemperatureFor(request);
+        if (temperature is not null || contextWindow is not null || maxTokens is not null)
         {
             var options = new Dictionary<string, object?>();
-            if (request.Temperature is { } t) options["temperature"] = t;
+            if (temperature is { } t) options["temperature"] = t;
             if (contextWindow is { } nc) options["num_ctx"] = nc;
             if (maxTokens is { } limit) options["num_predict"] = limit;
             payload["options"] = options;
