@@ -132,7 +132,7 @@ public sealed class Planner
         string request, WorkContext context, IChatProvider provider, string model,
         CancellationToken ct, int? maxSteps = null, bool proposeChecks = false,
         int? turnCeiling = null, int outputBudget = 4096,
-        Func<int, int, string?>? budget = null, bool stepOutputs = false, bool typedCriteria = false,
+        Func<int, int, string?>? exhaustedAfter = null, bool stepOutputs = false, bool typedCriteria = false,
         bool dynamicSteps = false, bool validateWaves = false, bool semanticCriteria = false)
     {
         var messages = new List<ChatMessage>
@@ -153,7 +153,7 @@ public sealed class Planner
             current => new ChatRequest(model, current, Temperature: 0.0, Purpose: GenerationPurpose.Planning,
                 OutputTokenLimit: Math.Max(1, outputBudget)),
             (answer, _) => Parse(answer, request) is { } plan ? (plan, []) : (null, ["no plan in the reply"]),
-            _ => RepairPrompt, budget, requireComplete: true, ct);
+            _ => RepairPrompt, exhaustedAfter, requireComplete: true, ct);
 
         if (round is { Kind: AnswerKind.Answered, Value: { } read })
             return read.WithUsage(round.Usage);
@@ -218,7 +218,7 @@ public sealed class Planner
             (answer, _) => Parse(answer, request) is { Disposition: IntentDisposition.Task, Plan.Steps.Count: > 0 } plan
                 ? (plan, [])
                 : (null, ["no corrected task DAG in the reply"]),
-            correction: null, budget: null, requireComplete: true, ct, attempts: 1);
+            correction: null, exhaustedAfter: null, requireComplete: true, ct, attempts: 1);
 
         var repaired = round.Value ?? invalid with
         {

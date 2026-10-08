@@ -452,7 +452,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0,
                         turnCeiling: RunawayCeiling, outputBudget: _options.GenerationBudgets.For(GenerationPurpose.Planning),
                         stepOutputs: _options.StepOutputs, typedCriteria: _options.TypedCriteria,
-                        budget: budget.TurnExhaustedAfter, dynamicSteps: _options.DynamicSteps, validateWaves: _options.ValidateWaves,
+                        exhaustedAfter: budget.TurnExhaustedAfter, dynamicSteps: _options.DynamicSteps, validateWaves: _options.ValidateWaves,
                         semanticCriteria: _options.SemanticCriteria));
         }
         catch (RetryBudgetExceededException ex)

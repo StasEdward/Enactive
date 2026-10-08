@@ -81,7 +81,10 @@ internal static class StructuredAnswer
     /// What the model is told when an answer cannot be used, from what was wrong with it. Null for a round of one attempt,
     /// which never asks again: the plan's repair handed in <c>_ => ""</c>, a correction that could not be said.
     /// </param>
-    /// <param name="budget">Why the model may not be asked again, given what this round has spent - or null when it may.</param>
+    /// <param name="exhaustedAfter">
+    /// Why the model may not be asked again, given what this round has spent - or null when it may. Not a budget: the
+    /// check against one (RunBudget.TurnExhaustedAfter), named for what it answers.
+    /// </param>
     /// <param name="requireComplete">
     /// Refuse an answer cut off at its length limit, or one that called a tool, before reading it. Off only for a reader
     /// that judges an unfinished answer itself.
@@ -92,7 +95,7 @@ internal static class StructuredAnswer
         Func<List<ChatMessage>, ChatRequest> request,
         Func<string, bool, (T? Value, IReadOnlyList<string> Errors)> read,
         Func<IReadOnlyList<string>, string>? correction,
-        Func<int, int, string?>? budget,
+        Func<int, int, string?>? exhaustedAfter,
         bool requireComplete,
         CancellationToken ct,
         int attempts = 2)
@@ -110,7 +113,7 @@ internal static class StructuredAnswer
 
         for (var attempt = 0; attempt < attempts; attempt++)
         {
-            if (budget?.Invoke(usage.Prompt, usage.Completion) is { } spent)
+            if (exhaustedAfter?.Invoke(usage.Prompt, usage.Completion) is { } spent)
                 return Round(AnswerKind.OutOfBudget, problem: spent);
 
             ChatCompletion completion;
