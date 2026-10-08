@@ -122,6 +122,22 @@ internal static class PlanCheckContract
             }
             restrictions.Add(new(ForbiddenTaskEffect.FileDeletion, quote));
         }
+        // Optional, unlike the parts above: left out, the request sets no limit on what may be changed. Each quote is the
+        // request's own words, as a ban's is - the limit the engine holds a change to is what the request says, not the
+        // review's paraphrase of it.
+        if (root.TryGetProperty("change_limits", out var limits) && limits.ValueKind != JsonValueKind.Null)
+        {
+            if (limits.ValueKind != JsonValueKind.Array)
+                throw new JsonException("change_limits must be a list: [{source_quote}], or [] when the request sets none.");
+            foreach (var item in limits.EnumerateArray())
+            {
+                var quote = Required(item, "source_quote");
+                if (!request.Contains(quote, StringComparison.Ordinal))
+                    throw new JsonException("A change limit's source_quote is not in the request word for word.");
+                if (!restrictions.Any(r => r.Effect == ForbiddenTaskEffect.FileChange && r.SourceQuote == quote))
+                    restrictions.Add(new(ForbiddenTaskEffect.FileChange, quote));
+            }
+        }
         if (inputs.Restrictions.Any(r => !restrictions.Any(n => n.Effect == r.Effect)))
             throw new JsonException("Previously established task restrictions cannot be removed.");
         TaskActionPolicy? actionPolicy = null;

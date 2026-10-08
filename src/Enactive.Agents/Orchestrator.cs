@@ -836,7 +836,7 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
-        var session = new RunSession(scope, messages) { Builds = builds };
+        var session = new RunSession(scope, messages) { Builds = builds, ChangeLimits = ChangeLimitsFor(intent, models, scope) };
         // What finished steps handed on comes back with them: their dependents, resumed, receive it.
         foreach (var finished in resume?.Steps ?? [])
         {
@@ -2771,7 +2771,7 @@ public sealed partial class Orchestrator : IOrchestrator
             await foreach (var repairEvent in RunToolLoopAsync(
                 taskId, runId, provider, model, worker, messages, artifacts,
                 intent.Context, store, journal, new ReadLedger(), null, loop, budget, granted, ct, providerId,
-                attemptOrigin: ToolCallOrigin.Retry))
+                attemptOrigin: ToolCallOrigin.Retry, changeLimits: session?.ChangeLimits, stepTitle: "Repair the failing final checks"))
                 yield return repairEvent;
 
             report = await InScopeAsync(runId, taskId, null,
@@ -3084,7 +3084,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // to it, marked, instead of ending the step unfinished (amendment A).
         bool reviewed = false,
         // What the step has loaded from its tool catalog so far - the step's, shared by its attempts (ToolBudget).
-        List<string>? loadedTools = null)
+        List<string>? loadedTools = null,
+        // What the request says may be changed, and the step's title for the question (ChangeLimitGuard).
+        ChangeLimitGuard? changeLimits = null, string? stepTitle = null)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -3323,7 +3325,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
         var admission = new CallAdmission(frame, _tools, _permissions, worker, EffectivePolicyFor(worker), offer, _progress,
             _decisions, _decisionGate, granted, _writableRoots, toolsOnRequest, mayReportBlocked,
-            path => OutputPathExists(path, store));
+            path => OutputPathExists(path, store), changeLimits, stepTitle);
 
         // The transcript's size when lastPromptTokens was measured, so what has been added since
         // can be estimated on top of a real count rather than instead of one.

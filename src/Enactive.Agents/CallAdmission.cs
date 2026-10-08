@@ -48,7 +48,11 @@ internal sealed class CallAdmission(
     // Whether the step may say it cannot go on (Phase 7.2).
     bool mayReportBlocked = false,
     // Whether a path a hand-over names exists - for the step as it sees the workspace.
-    Func<string, bool>? outputPathExists = null)
+    Func<string, bool>? outputPathExists = null,
+    // What the request says may be changed, held against the first change to each file the run found - and the step's
+    // title, which the question names (ChangeLimitGuard).
+    ChangeLimitGuard? changeLimits = null,
+    string? stepTitle = null)
 {
     // Who may call what, and what a policy allows - the admission's own, not the loop's: the loop asks RunsFreely.
     private readonly ToolAccess _access = new(tools, permissions);
@@ -299,6 +303,29 @@ internal sealed class CallAdmission(
             trail.Reply(ChatMessage.Tool(call.Id, "REFUSED: " + notItsToChange));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> refused: {notItsToChange}");
             yield break;
+        }
+
+        // What the request says may be changed: the first change a step makes to a file the run found is put to the
+        // planning model against the request's own words (ChangeLimitGuard). After the step's own limits, so a call they
+        // refuse costs no question.
+        if (changeLimits is not null)
+        {
+            var said = frame.Messages.LastOrDefault(m => m.Role == ChatRole.Assistant)?.Content;
+            var limit = await changeLimits.CheckAsync(frame.StepNo, stepTitle, said, call, tools.DefinitionOf(call.Name),
+                frame.Store, frame.WorkspaceRoot, ct);
+            if (limit.Usage.Any)
+                yield return changeLimits.UsageEvent(frame.TaskId, frame.RunId, frame.StepNo, limit.Usage);
+            if (limit.Note is { } unchecked_)
+                yield return Ev(EventKind.ErrorObserved, unchecked_);
+            if (limit.Refusal is { } againstTheRequest)
+            {
+                yield return Invoked(call);
+                trail.Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, againstTheRequest, WorkspaceEffect.None));
+                trail.Leave(() => frame.Open.RefusedByRule(call));
+                trail.Reply(ChatMessage.Tool(call.Id, "REFUSED: " + againstTheRequest));
+                yield return Ev(EventKind.ToolResult, $"{call.Name} -> refused: {againstTheRequest}");
+                yield break;
+            }
         }
 
         // ── A read that needs nobody's leave ──────────────────────────────

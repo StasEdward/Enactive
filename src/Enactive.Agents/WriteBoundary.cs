@@ -182,7 +182,7 @@ internal sealed class WriteBoundary(
         return false;
     }
 
-    private static IEnumerable<string> PathsOf(ToolCall call, IReadOnlyList<string> arguments)
+    internal static IEnumerable<string> PathsOf(ToolCall call, IReadOnlyList<string> arguments)
     {
         var found = new List<string>();
         try

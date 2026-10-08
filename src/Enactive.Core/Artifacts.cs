@@ -69,6 +69,13 @@ public interface IArtifactStore
     bool CanRestore(string relativePath) => false;
 
     /// <summary>
+    /// How the file at a path stood before this run first changed it: untouched by the run, made by it, or its bytes
+    /// as the run found them. What tells a file the run found from one it made (ChangeLimitGuard), and what a step
+    /// that puts a file back is given. Unknown for a store that keeps no record of what it displaced.
+    /// </summary>
+    Task<BeforeRun> BeforeRunAsync(string relativePath, CancellationToken ct) => Task.FromResult(BeforeRun.Unknown);
+
+    /// <summary>
     /// Removes a file, recording it the same way a write is recorded so it can be put back.
     ///
     /// Exists because a rename is a write plus a removal, and doing the removal outside the store —
@@ -256,6 +263,7 @@ public sealed class ArtifactScope : IArtifactScope
         => _store.TryOpenPendingAsync(relativePath, ct);
     public IReadOnlyCollection<string> PendingPaths => _store.PendingBy(_owner);
     public bool CanRestore(string relativePath) => _store.CanRestore(relativePath);
+    public Task<BeforeRun> BeforeRunAsync(string relativePath, CancellationToken ct) => _store.BeforeRunAsync(relativePath, ct);
 
     // Steps do not nest, so a scope opened from a scope is a scope on the store beneath it.
     public IArtifactScope BeginStep() => _store.BeginStep();
@@ -300,7 +308,38 @@ internal sealed class UnownedScope : IArtifactScope
         => _store.TryOpenPendingAsync(relativePath, ct);
     public IReadOnlyCollection<string> PendingPaths => _store.PendingPaths;
     public bool CanRestore(string relativePath) => _store.CanRestore(relativePath);
+    public Task<BeforeRun> BeforeRunAsync(string relativePath, CancellationToken ct) => _store.BeforeRunAsync(relativePath, ct);
     public IArtifactScope BeginStep() => this;
+}
+
+/// <summary>How a file stood before the run first changed it - see <see cref="IArtifactStore.BeforeRunAsync"/>.</summary>
+public enum BeforeRunState
+{
+    /// <summary>The store keeps no record that would say.</summary>
+    Unknown,
+
+    /// <summary>The run has not changed it through the store: as it is now is as the run found it.</summary>
+    Untouched,
+
+    /// <summary>The run made it: before the run there was no such file.</summary>
+    Absent,
+
+    /// <summary>The run changed it, and its bytes as the run found it are in <see cref="BeforeRun.Content"/>.</summary>
+    Kept,
+
+    /// <summary>The run changed it, and how it was cannot be had back.</summary>
+    Lost
+}
+
+public sealed record BeforeRun(BeforeRunState State, byte[]? Content = null)
+{
+    public static BeforeRun Unknown { get; } = new(BeforeRunState.Unknown);
+    public static BeforeRun Untouched { get; } = new(BeforeRunState.Untouched);
+    public static BeforeRun Absent { get; } = new(BeforeRunState.Absent);
+    public static BeforeRun Lost { get; } = new(BeforeRunState.Lost);
+
+    /// <summary>Whether the file was in the workspace before the run - unknown counted as not known to be.</summary>
+    public bool Existed => State is BeforeRunState.Untouched or BeforeRunState.Kept or BeforeRunState.Lost;
 }
 
 /// <summary>

@@ -144,6 +144,9 @@ internal static class StepVerdictReview
             if (rule.Effect == ForbiddenTaskEffect.FileDeletion)
                 sb.AppendLine($"The request forbids deleting files (\"{rule.SourceQuote}\"): a step that deleted a file of the "
                     + "workspace fails, whatever its reason - putting it back after does not undo that.");
+            else if (rule.Effect == ForbiddenTaskEffect.FileChange)
+                sb.AppendLine($"The request limits what may be changed (\"{rule.SourceQuote}\"): a step whose changes go against "
+                    + "it fails, whatever else it did.");
         if (input.Owns is { Count: > 0 } owns)
         {
             sb.AppendLine("Lines of the request the plan gives this step - it does or checks its part of each; the step is not done while a part of one that is its own is not:");

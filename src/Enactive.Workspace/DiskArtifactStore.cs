@@ -168,6 +168,33 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
         => LastWrite(relativePath) is { ExistedBefore: true } write
            && (write.AppendBeforeLength is not null || write.BackupPath is { } backup && File.Exists(backup));
 
+    /// <summary>
+    /// How the path stood before the run first changed it. The first write's backup holds the bytes it displaced; a
+    /// first write that only appended displaced nothing, and the file's first bytes up to where it appended are still
+    /// how it was - a later write that replaces them backs them up first (PreserveAppendPrefixes).
+    /// </summary>
+    public async Task<BeforeRun> BeforeRunAsync(string relativePath, CancellationToken ct)
+    {
+        var first = FirstWrite(relativePath);
+        if (first is null) return BeforeRun.Untouched;
+        if (!first.ExistedBefore) return BeforeRun.Absent;
+        try
+        {
+            if (first.BackupPath is { } backup && File.Exists(backup))
+                return new BeforeRun(BeforeRunState.Kept, await File.ReadAllBytesAsync(backup, ct));
+            if (first.AppendBeforeLength is { } length && ResolveInsideRoot(relativePath) is var full && File.Exists(full))
+            {
+                await using var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                if (stream.Length < length) return BeforeRun.Lost;
+                var bytes = new byte[length];
+                await stream.ReadExactlyAsync(bytes, ct);
+                return new BeforeRun(BeforeRunState.Kept, bytes);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
+        return BeforeRun.Lost;
+    }
+
     /// <summary>The state this path was in before the run first touched it.</summary>
     public FileWriteRecord? FirstWrite(string relativePath)
     {

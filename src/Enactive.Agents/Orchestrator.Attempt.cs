@@ -4,6 +4,7 @@ using Enactive.Core.Context;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Events;
 using Enactive.Core.Execution;
+using Enactive.Core.Intents;
 using Enactive.Core.Providers;
 using Enactive.Core.Tasks;
 
@@ -23,7 +24,7 @@ public sealed partial class Orchestrator
             models.Worker, step.Messages, scope.Artifacts, context, step.Store, step.Journal, step.Reads,
             stepNumber, result, scope.Budget, scope.Granted, ct, model.ProviderId,
             step.RestartFrom, changes, before, attemptOrigin, step.Output, step.OutputSlot, step.Boundary, step.WithholdUnchecked,
-            step.Criteria, step.SubmitTool, models.ReviewOn, step.LoadedTools))
+            step.Criteria, step.SubmitTool, models.ReviewOn, step.LoadedTools, session.ChangeLimits, title))
             await publish(ev);
         // The step's own word that it cannot go on, with nothing the engine found behind it, is reviewed as a finished step
         // is (SaidBlockedOnly): whether its own part is done is the review's to say, not the report's.
@@ -45,6 +46,18 @@ public sealed partial class Orchestrator
     /// </summary>
     private static bool SaidBlockedOnly(ToolLoopResult result)
         => result.Kind == StepOutcomeKind.Blocked && result.Cause == OutcomeCause.BlockedReported;
+
+    /// <summary>
+    /// The run's guard on what the request says may be changed - only when it says something (a change limit in the
+    /// contract): a run whose request sets none asks nothing. Put to the planning model, the one that read the request
+    /// for the plan and its limits.
+    /// </summary>
+    private ChangeLimitGuard? ChangeLimitsFor(Intent intent, RunModels models, RunScope scope)
+        => intent.Context.Restrictions.Where(r => r.Effect == Enactive.Core.Tools.ForbiddenTaskEffect.FileChange)
+                .Select(r => r.SourceQuote).ToArray() is { Length: > 0 } limits
+            ? new ChangeLimitGuard(intent.RawText, limits, models.PlanProvider, models.Plan, scope.Budget,
+                _options.GenerationBudgets.For(Enactive.Core.Chat.GenerationPurpose.Planning))
+            : null;
     /// <summary>One retry lifecycle for quick and DAG. Transcript, journal and read coverage stay
     /// together; provider fallback is one-shot and does not consume a review attempt.</summary>
     private async Task RunAttemptsAsync(
