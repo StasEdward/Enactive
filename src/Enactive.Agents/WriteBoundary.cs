@@ -83,7 +83,13 @@ internal sealed class WriteBoundary(
             // doing a later step's work here. Where the workspace could not be measured, nothing is taken as its own.
             var takesAwayItsOwn = readOnly && definition.FileCoverage == FileCoverageBehavior.Delete
                                   && madeByThisStep?.Contains(rel) == true;
-            if (readOnly && !takesAwayItsOwn && !rel.StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase))
+            // The scratch folder itself as well as what is in it. Only what was under it passed, so a read-only step that
+            // made the folder for a diagnostic was refused - with a refusal that says the folder is its own - and took it
+            // for "no files at all": it gave up the diagnostic and traced the code by hand for 8,192 tokens of reasoning
+            // (run bb77e810, 2026-10-09).
+            var inScratch = rel.Equals(WorkspaceGuard.ScratchPrefix, StringComparison.OrdinalIgnoreCase)
+                            || rel.StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase);
+            if (readOnly && !takesAwayItsOwn && !inScratch)
                 return $"'{rel}' was not changed: " + ReadOnlyRefusal;
             if (items is null) continue;
 
