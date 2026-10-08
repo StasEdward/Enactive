@@ -47,11 +47,15 @@ internal sealed class RunEventViewModel
         When = at.ToLocalTime().ToString("HH:mm:ss");
         Kind = kind;
         Summary = summary;
+        Tone = TimelineTones.Of(kind);
     }
 
     public string When { get; }
     public string Kind { get; }
     public string Summary { get; }
+
+    /// <summary>How the line reads - what its colour says (Palette.Timeline).</summary>
+    public TimelineTone Tone { get; }
 }
 
 /// <summary>

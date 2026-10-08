@@ -50,6 +50,37 @@ public sealed class ViewModelsHoldNoLooksTests
         Assert.DoesNotMatch(@"PackageReference\s+Include=""Avalonia", project);
     }
 
+    // ── a run's timeline ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// A line of a run's timeline reads as its kind says - read as an EventKind, not compared with names spelled out.
+    /// The folded reply is quiet; a kind an older build recorded, which this one does not know, is plain.
+    /// </summary>
+    [Theory]
+    [InlineData("TaskFailed", nameof(TimelineTone.Failed))]
+    [InlineData("ErrorObserved", nameof(TimelineTone.Failed))]
+    [InlineData("ReviewFailed", nameof(TimelineTone.Refused))]
+    [InlineData("TaskCompleted", nameof(TimelineTone.Succeeded))]
+    [InlineData("ToolResult", nameof(TimelineTone.Quiet))]
+    [InlineData(TimelineTones.AssistantNote, nameof(TimelineTone.Quiet))]
+    [InlineData("StepStarted", nameof(TimelineTone.Plain))]
+    [InlineData("AKindFromAnOlderBuild", nameof(TimelineTone.Plain))]
+    public void A_timeline_line_reads_as_its_kind_says(string kind, string tone)
+        => Assert.Equal(tone, TimelineTones.Of(kind).ToString());
+
+    /// <summary>
+    /// The palette spells no event kind out. Its timeline table compared the recorded kind with "ErrorObserved",
+    /// "ReviewFailed" and the rest, so a kind renamed in Core would have gone plain there without a word.
+    /// </summary>
+    [Fact]
+    public void The_palette_spells_no_event_kind_out()
+    {
+        var palette = File.ReadAllText(Path.Combine(TestRepository.Root, "src", "Enactive.App.Ui", "Palette.cs"));
+
+        var spelled = Enum.GetNames<EventKind>().Where(name => palette.Contains($"\"{name}\"", StringComparison.Ordinal)).ToArray();
+        Assert.True(spelled.Length == 0, "Event kinds spelled out in Palette.cs: " + string.Join(", ", spelled));
+    }
+
     // ── what moved into the step cards ──────────────────────────────────────
 
     private static readonly Guid Run = Guid.NewGuid();

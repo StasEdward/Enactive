@@ -120,9 +120,9 @@
                                     <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,1">
                                         <TextBlock Text="{Binding When}" Classes="hint"
                                                    FontFamily="Consolas, Menlo, monospace" />
-                                        <TextBlock Text="{Binding Kind}" Foreground="{Binding Kind, Converter={x:Static local:Palette.TimelineKind}}"
+                                        <TextBlock Text="{Binding Kind}" Foreground="{Binding Tone, Converter={x:Static local:Palette.Timeline}}"
                                                    FontSize="11" Width="120" />
-                                        <TextBlock Text="{Binding Summary}" Foreground="{Binding Kind, Converter={x:Static local:Palette.TimelineKind}}"
+                                        <TextBlock Text="{Binding Summary}" Foreground="{Binding Tone, Converter={x:Static local:Palette.Timeline}}"
                                                    FontSize="12" TextWrapping="Wrap" />
                                     </StackPanel>
                                 </DataTemplate>

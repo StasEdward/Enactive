@@ -202,13 +202,14 @@ internal static class Palette
     });
 
     /// <summary>A line of a run's timeline, by the kind of event it was.</summary>
-    public static readonly IValueConverter TimelineKind = Map<string>(kind => kind switch
+    public static readonly IValueConverter Timeline = Map<TimelineTone>(tone => tone switch
     {
-        "ErrorObserved" or "TaskFailed" => Brand.Danger,
-        "ReviewFailed" => Brand.Warning,
-        "ReviewPassed" or "TaskCompleted" => Brand.Success,
-        "ToolInvoked" or "ToolResult" or "assistant" => Brand.TextMuted,
-        _ => Brand.TextBody
+        TimelineTone.Failed => Brand.Danger,
+        TimelineTone.Refused => Brand.Warning,
+        TimelineTone.Succeeded => Brand.Success,
+        TimelineTone.Quiet => Brand.TextMuted,
+        TimelineTone.Plain => Brand.TextBody,
+        _ => throw Unknown(tone)
     });
 
     /// <summary>

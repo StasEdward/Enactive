@@ -33,7 +33,7 @@ internal static class RunTimeline
                 return;
             if (text.Length > MaxAssistantText)
                 text = text[..MaxAssistantText] + "…";
-            rows.Add(new RunEventViewModel(bufferAt, "assistant", text));
+            rows.Add(new RunEventViewModel(bufferAt, TimelineTones.AssistantNote, text));
         }
 
         foreach (var e in run.Events)

@@ -1032,7 +1032,7 @@
                                                        Foreground="{DynamicResource Brand.TextMuted}"
                                                        TextTrimming="CharacterEllipsis" Margin="0,0,10,0" />
                                             <TextBlock Grid.Column="2" Text="{Binding Summary}"
-                                                       Foreground="{Binding Kind, Converter={x:Static local:Palette.TimelineKind}}"
+                                                       Foreground="{Binding Tone, Converter={x:Static local:Palette.Timeline}}"
                                                        FontSize="12" TextWrapping="Wrap" />
                                         </Grid>
                                     </DataTemplate>

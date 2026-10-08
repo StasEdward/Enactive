@@ -26,6 +26,7 @@ public sealed class PaletteTests
         { nameof(Palette.Reach), typeof(ModelReach) },
         { nameof(Palette.Health), typeof(Enactive.Providers.ProviderHealth) },
         { nameof(Palette.Template), typeof(TemplateEdge) },
+        { nameof(Palette.Timeline), typeof(TimelineTone) },
         { nameof(Palette.Schedule), typeof(ScheduleState) },
         { nameof(Palette.LogLevel), typeof(Enactive.Core.Diagnostics.LogLevel) },
     };

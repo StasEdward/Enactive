@@ -1,5 +1,6 @@
 namespace Enactive.App.Ui.ViewModels;
 
+using Enactive.Core.Events;
 using Enactive.Workspace;
 
 // What the view models say about what they show, for the view to draw (Palette). Each is the fact a colour, a weight
@@ -35,6 +36,38 @@ internal enum ModelReach { Local, Cloud, Unknown }
 
 /// <summary>What a template's edge says: where it comes from, or that it is the one being edited.</summary>
 internal enum TemplateEdge { Builtin, Global, Workspace, Selected }
+
+/// <summary>
+/// How a line of a run's timeline reads: something went wrong, a review refused the work, the run or a review ended well,
+/// the machinery of a call - or none of those, the plain line most of a run is.
+/// </summary>
+internal enum TimelineTone { Failed, Refused, Succeeded, Quiet, Plain }
+
+internal static class TimelineTones
+{
+    /// <summary>The kind of a timeline line that is the assistant's reply folded into one note (RunTimeline).</summary>
+    public const string AssistantNote = "assistant";
+
+    /// <summary>
+    /// The tone of a recorded line, by its kind. A run's record keeps the kind as text; it is read as an
+    /// <see cref="EventKind"/> here, where the palette compared the text with names it spelled out - a kind renamed in
+    /// Core would have kept its old spelling there and gone plain without a word. A kind this build does not know - one
+    /// an older build recorded - is plain, which is what it is.
+    /// </summary>
+    public static TimelineTone Of(string kind)
+        => kind == AssistantNote ? TimelineTone.Quiet
+            : Enum.TryParse<EventKind>(kind, out var known) ? Of(known)
+            : TimelineTone.Plain;
+
+    private static TimelineTone Of(EventKind kind) => kind switch
+    {
+        EventKind.ErrorObserved or EventKind.TaskFailed => TimelineTone.Failed,
+        EventKind.ReviewFailed => TimelineTone.Refused,
+        EventKind.ReviewPassed or EventKind.TaskCompleted => TimelineTone.Succeeded,
+        EventKind.ToolInvoked or EventKind.ToolResult => TimelineTone.Quiet,
+        _ => TimelineTone.Plain
+    };
+}
 
 internal static class TemplateEdges
 {
