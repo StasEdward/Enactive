@@ -31,6 +31,9 @@
                 <!-- The confirm is the DESTRUCTIVE one here, so it is plain with danger text.
                      Ember stays on the safe choice, which is also the default: a window closed
                      by accident is exactly what this dialog exists to prevent. -->
+                <!-- A second way to go ahead, shown only when the question has one (ChooseAsync). -->
+                <Button x:Name="AlternativeButton" Foreground="{DynamicResource Brand.Danger}"
+                        Padding="14,4" IsVisible="False" />
                 <Button x:Name="ConfirmButton" Foreground="{DynamicResource Brand.Danger}"
                         Padding="14,4" />
                 <Button x:Name="CancelButton" Classes="primary" Padding="14,4" IsDefault="True" />

@@ -2254,21 +2254,45 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private async Task ForgetUnfinishedAsync(RunCheckpoint checkpoint)
     {
-        if (!await ConfirmWindow.AskAsync(
-                this,
-                $"Delete the unfinished run “{RunTitle.OneLine(checkpoint.Title)}”?",
-                $"It can no longer be resumed: the {checkpoint.Remaining} step(s) left will not be run. "
-                + "The files it changed stay in your workspace, and its history, if it has any, stays in the list.",
-                "Delete", "Keep"))
-            return;
-
         var path = _vm.WorkspacePath.Trim();
         if (string.IsNullOrEmpty(path))
             return;
+        var workspace = WorkspaceFrom(path);
+
+        // What it changed, from the record the store kept on disk (DiskArtifactStore.ChangesOf). The files are put back
+        // only when the person says so, and the question names them. A run interrupted before the record existed, or
+        // whose record was pruned, has nothing to name, and is asked as before.
+        var changes = DiskArtifactStore.ChangesOf(workspace, checkpoint.RunId);
+        var headline = $"Delete the unfinished run “{RunTitle.OneLine(checkpoint.Title)}”?";
+        var cannotResume = $"It can no longer be resumed: the {checkpoint.Remaining} step(s) left will not be run. "
+                           + "Its history, if it has any, stays in the list.";
+        var putBack = false;
+        if (changes.Count == 0)
+        {
+            if (!await ConfirmWindow.AskAsync(this, headline,
+                    cannotResume + " No record of the files it changed is kept, so they stay as they are.", "Delete", "Keep"))
+                return;
+        }
+        else
+        {
+            var choice = await ConfirmWindow.ChooseAsync(this, headline, cannotResume + "\n\n" + UnfinishedChanges.Describe(changes),
+                "Delete and put the files back", "Delete, keep the files", "Keep");
+            if (choice == ConfirmChoice.Cancel)
+                return;
+            putBack = choice == ConfirmChoice.Confirm;
+        }
+
+        if (putBack)
+        {
+            var report = await DiskArtifactStore.PutBackRunAsync(workspace, checkpoint.RunId, CancellationToken.None);
+            if (report.Kept.Count > 0)
+                _vm.Runs.Fail($"Put back {report.Reverted.Count} file(s); left {report.Kept.Count} as they are: "
+                              + string.Join("; ", report.Kept.Select(p => $"{p} ({report.Reasons?.GetValueOrDefault(p) ?? "kept"})")));
+        }
 
         try
         {
-            await new JsonCheckpointStore(WorkspaceFrom(path)).DeleteAsync(checkpoint.RunId, CancellationToken.None);
+            await new JsonCheckpointStore(workspace).DeleteAsync(checkpoint.RunId, CancellationToken.None);
         }
         catch (Exception ex)
         {

@@ -395,6 +395,10 @@ public sealed partial class Orchestrator : IOrchestrator
         var scope = new RunScope(
             runId, taskId, budget, artifacts, _writableRoots.For(_workspace.RootPath));
 
+        // The store keeps its record of what it displaced beside its copies, under this run's id, and reads the record of
+        // the run this one carries on - see IArtifactStore.BeginRun.
+        _artifacts.BeginRun(runId, resume?.RunId);
+
         // The working area is made before the worker is told it has one, and the engine's own
         // folder is kept out of the person's next commit. A prompt that promises a folder and a
         // folder that does not exist are a defect, however sensible the laziness was: an agent
@@ -837,6 +841,28 @@ public sealed partial class Orchestrator : IOrchestrator
         }
 
         var session = new RunSession(scope, messages) { Builds = builds, ChangeLimits = ChangeLimitsFor(intent, models, scope) };
+
+        // A step the interrupted run was in the middle of is done again from its beginning - so what it had already changed
+        // is put back first, as it was before that step. Left in place, it was the ground the step began again on: on
+        // 2026-10-09 a step had broken a source file on purpose to check a test, the app was restarted, and the break stayed
+        // in the workspace for the next run to find. A file changed since, or by a finished step after, is left and said.
+        // Not a step that stopped at a question: it is carried on from where it stopped, and what it did stands
+        // (TaskProgress.Park) - putting its files back would take away work its conversation says is done. Numbered as
+        // the run numbers them, by place in the plan.
+        if (resume?.Steps.Select((s, i) => (Step: s, No: i + 1))
+                .Where(s => s.Step.Status is not ("Done" or "Failed" or "Skipped") && !_progress.HasParked(scope.TaskId, s.No))
+                .Select(s => s.Step.Id).ToArray() is { Length: > 0 } interrupted)
+        {
+            var putBack = await _artifacts.PutBackStepsAsync(interrupted, ct);
+            if (putBack.Reverted.Count > 0)
+                yield return scope.Ev(EventKind.ContextAssembled,
+                    $"Put back {putBack.Reverted.Count} file(s) the interrupted step(s) had changed, as they were before those steps: "
+                    + string.Join(", ", putBack.Reverted) + ". The step(s) are done again from their beginning.");
+            if (putBack.Kept.Count > 0)
+                yield return scope.Ev(EventKind.ErrorObserved,
+                    "Left as they are, though the interrupted step(s) had changed them: "
+                    + string.Join("; ", putBack.Kept.Select(p => $"{p} ({putBack.Reasons?.GetValueOrDefault(p) ?? "kept"})")) + ".");
+        }
         // What finished steps handed on comes back with them: their dependents, resumed, receive it.
         foreach (var finished in resume?.Steps ?? [])
         {
@@ -1507,8 +1533,9 @@ public sealed partial class Orchestrator : IOrchestrator
             string? outcomeReason = null;
 
             // This step owns its writes. Review retries keep the transcript and evidence;
-            // only terminal rejection may restore this owner's files.
-            var store = _artifacts.BeginStep();
+            // only terminal rejection may restore this owner's files. Recorded as this step's, by its id, so a run that
+            // carries this one on after an interruption knows which writes were a step it does again.
+            var store = _artifacts.BeginStep(step.Id);
 
             // The record of what has been done, over the same ground as `convo` above: shared with
             // the rest of the run when the conversation is, this step's own when it is not.

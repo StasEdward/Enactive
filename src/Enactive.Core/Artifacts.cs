@@ -76,6 +76,26 @@ public interface IArtifactStore
     Task<BeforeRun> BeforeRunAsync(string relativePath, CancellationToken ct) => Task.FromResult(BeforeRun.Unknown);
 
     /// <summary>
+    /// The run this store serves, and the interrupted run it carries on, when it does. A store that keeps its record of
+    /// what it displaced only in memory loses it with the process: on 2026-10-09 a run was stopped by a restart halfway
+    /// through a step that had broken a source file on purpose, and nothing could tell afterwards which kept copy was
+    /// which file - the break stayed, and the next run "fixed" it from a guess. Bound to a run, the record is kept beside
+    /// the copies, and a run that carries another on reads that run's record too.
+    /// </summary>
+    void BeginRun(Guid runId, Guid? continues) { }
+
+    /// <summary>A view for one step of the plan, whose writes are recorded as that step's - see <see cref="BeginStep()"/>.</summary>
+    IArtifactScope BeginStep(Guid step) => BeginStep();
+
+    /// <summary>
+    /// Puts back what the named steps of the run this one carries on had changed, file by file, to how each was before
+    /// those steps first changed it - a file still as they left it, and changed by no other step after them. What the
+    /// steps of an interrupted run had done is not the run's work when the run carries on: those steps are done again
+    /// from their beginning.
+    /// </summary>
+    Task<RevertReport> PutBackStepsAsync(IReadOnlyCollection<Guid> steps, CancellationToken ct) => Task.FromResult(RevertReport.Empty);
+
+    /// <summary>
     /// Removes a file, recording it the same way a write is recorded so it can be put back.
     ///
     /// Exists because a rename is a write plus a removal, and doing the removal outside the store —
@@ -264,6 +284,7 @@ public sealed class ArtifactScope : IArtifactScope
     public IReadOnlyCollection<string> PendingPaths => _store.PendingBy(_owner);
     public bool CanRestore(string relativePath) => _store.CanRestore(relativePath);
     public Task<BeforeRun> BeforeRunAsync(string relativePath, CancellationToken ct) => _store.BeforeRunAsync(relativePath, ct);
+    public IArtifactScope BeginStep(Guid step) => _store.BeginStep(step);
 
     // Steps do not nest, so a scope opened from a scope is a scope on the store beneath it.
     public IArtifactScope BeginStep() => _store.BeginStep();

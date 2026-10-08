@@ -42,7 +42,9 @@ public sealed class GenericVerificationContractTests
                 request_quote = "Run custom-verify --strict.", expectedExitCode = 0, reason = "Original requested check" } },
             action_policy = (object?)null, forbidden_effects = Array.Empty<object>(), unresolved = conflict ? "Saved criterion cannot be safely verified" : null
         })));
-        var resumed = new FakeChatProvider(Turn.Calls1("read_file", """{"path":"two.txt"}"""), Turn.Says("done"));
+        // Step two is done again from its beginning, and what the first attempt's step two wrote is put back before it
+        // (WhatAnInterruptedRunChangedIsKeptTests) - so it writes two.txt again rather than finding it there.
+        var resumed = new FakeChatProvider(Turn.Calls1("write_file", """{"path":"two.txt","content":"done"}"""), Turn.Says("done"));
         var events = await fx.ResumeAsync(fx.Build(new MapProviderFactory(resumed, (Routers.PlannerProviderId, contractReviewer)),
             router: Routers.WithPlannerOn(), checkpoints: store,
             successCriteria: [new("changed host setting", "do-not-run")]), restored);
