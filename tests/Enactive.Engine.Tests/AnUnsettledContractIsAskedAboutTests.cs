@@ -103,6 +103,90 @@ public sealed class AnUnsettledContractIsAskedAboutTests
         Assert.Empty(commands.Seen);
     }
 
+    // ── a locked list whose review cannot be read back ─────────────────────
+
+    /// <summary>A review of a template's locked list that keeps the list and adds a check of its own - refused, every time.</summary>
+    private const string AddsOne = """
+        {"sources":[{"id":"O001","assessment":"a disk report"}],
+         "checks":[{"name":"Builds","command":"verify-build","origin":"declared","request_quote":null,"expectedExitCode":0,"reason":"kept"},
+                   {"name":"extra","command":"extra-check","origin":"proposed","request_quote":null,"expectedExitCode":0,"reason":"added"}],
+         "action_policy":null,"forbidden_effects":[],"unresolved":null}
+        """;
+
+    private static async Task<(List<WorkEvent> Events, Commands Commands, EngineFixture Fx, FakeChatProvider Planner)> Locked(
+        string answer, string? because = null)
+    {
+        var fx = new EngineFixture { PlannerOverride = new Planner() };
+        fx.Decisions.Answer = answer;
+        fx.Decisions.Because = because;
+        var commands = new Commands();
+        fx.ToolsOverride = EngineFixture.ShippedTools().Where(t => t.Definition.Name != "run_command").Append(commands).ToArray();
+        var planner = new FakeChatProvider(Turn.Says("""{"disposition":"quick_action","title":"report"}"""), Turn.Says(AddsOne), Turn.Says(AddsOne));
+        var worker = new FakeChatProvider(Turn.Calls1("write_file", """{"path":"report.txt","content":"C: 120 GB free"}"""), Turn.Says("Written."));
+        var events = await fx.RunAsync(fx.Build(new MapProviderFactory(worker, (Routers.PlannerProviderId, planner)),
+            router: Routers.WithPlannerOn(), successCriteria: [new("Builds", "verify-build")]), "Write a disk report.");
+        return (events, commands, fx, planner);
+    }
+
+    /// <summary>
+    /// A template's locked criteria whose review could not be read back even after the correction are a question for the
+    /// person, not the end of the run: on 2026-10-08 a review that kept adding the request's test command to a template's
+    /// locked list ended a run at "Locked review cannot add criteria" before its first step. Allowed, the work goes on
+    /// with the template's criteria as supplied.
+    /// </summary>
+    [Fact]
+    public async Task A_locked_list_the_review_cannot_settle_is_asked_about_and_kept()
+    {
+        var (events, commands, fx, planner) = await Locked("allow");
+        using var _ = fx;
+
+        var asked = Assert.Single(fx.Decisions.Requests);
+        Assert.Contains("verify-build", asked.FullDetail, StringComparison.Ordinal);
+        Assert.True(fx.Exists("report.txt"));
+        Assert.Contains("verify-build", commands.Seen);
+        Assert.DoesNotContain("extra-check", commands.Seen);
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+
+        // The correction said the whole rule - keep these, add none - where each refusal said only the half it broke.
+        var correction = planner.Requests[2].Messages[^1].Content ?? "";
+        Assert.Contains("This list is fixed: return exactly these criteria - 'Builds' (verify-build, exit 0) - each unchanged, and add none.",
+            correction, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Where the run already carries a restriction - a resumed run's ban on deleting files - an unreadable review of its
+    /// locked list stays a stop: the person is not asked to wave through criteria nobody has checked against the ban.
+    /// </summary>
+    [Fact]
+    public async Task A_locked_list_under_a_restriction_is_not_put_to_a_person()
+    {
+        var plan = new PlanResult(Enactive.Core.Tasks.IntentDisposition.QuickAction, "report", null)
+        {
+            Checks = [new("Builds", "verify-build") { Origin = CriterionOrigin.Declared }],
+            Restrictions = [new(ForbiddenTaskEffect.FileDeletion, "do not delete any file")]
+        };
+
+        var result = await PlanCheckReview.RunAsync(plan, "Write a disk report and do not delete any file.",
+            new Enactive.Core.Context.WorkContext(null, "workspace", null, null, null, [], []),
+            new FakeChatProvider(Turn.Says(AddsOne), Turn.Says(AddsOne)), "plan-model",
+            new(ExecutionLimits.None, DateTimeOffset.UtcNow), 4096, default, preserveCriteria: true, askWhenUnsettled: true);
+
+        Assert.Null(result.Unsettled);
+        Assert.Contains("could not be used", result.IncompleteReason, StringComparison.Ordinal);
+    }
+
+    /// <summary>With nobody to say yes, it is still a stop - as an unresolved contract is.</summary>
+    [Fact]
+    public async Task A_locked_list_the_review_cannot_settle_starts_no_work_with_no_one_to_ask()
+    {
+        var (events, commands, fx, _) = await Locked("deny", because: "--approve deny");
+        using var _f = fx;
+
+        Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
+        Assert.False(fx.Exists("report.txt"));
+        Assert.Empty(commands.Seen);
+    }
+
     /// <summary>
     /// Run 52bc38, 2026-10-03: the request had a typing mistake in it, the question came up, the person pressed
     /// Stop to type it again - and the run went into the history as "Incomplete: Unresolved verification

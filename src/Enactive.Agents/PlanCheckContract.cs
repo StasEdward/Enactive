@@ -49,6 +49,21 @@ internal static class PlanCheckContract
     internal static bool IsRefusal(Exception ex)
         => ex is JsonException or InvalidOperationException or KeyNotFoundException or FormatException or OverflowException;
 
+    /// <summary>Whether two criteria pass on the same exit codes - one code, or a list, in any order.</summary>
+    private static bool SamePassingCodes(SuccessCriterionDefinition a, SuccessCriterionDefinition b)
+        => a.PassingExitCodes.Order().SequenceEqual(b.PassingExitCodes.Order());
+
+    /// <summary>
+    /// What a locked review is told when its answer breaks the lock - the whole rule, every time. Each refusal said one
+    /// half: told it had dropped a supplied criterion, a review put it back and added the command the request names, was
+    /// refused for adding, and had no attempt left (2026-10-08, the run ended before its first step).
+    /// </summary>
+    internal static string LockedRule(IEnumerable<SuccessCriterionDefinition> supplied)
+        => "This list is fixed: return exactly these criteria - "
+           + string.Join(", ", supplied.Select(c => $"'{c.Name}' ({c.Command}, exit {c.PassingExitCodesText})"))
+           + " - each unchanged, and add none. A command the request requires that is not among them is said in unresolved, "
+           + "never added.";
+
     /// <summary>Why this answer is refused, or null when it is accepted.</summary>
     internal static string? Refusal(string answer, bool complete, PlanCheckInputs inputs)
     {
@@ -132,7 +147,16 @@ internal static class PlanCheckContract
         {
             var name = Required(item, "name"); var command = Required(item, "command");
             var origin = Required(item, "origin"); var reason = Required(item, "reason");
-            var exit = Part(item, "expectedExitCode", "A check").GetInt32();
+            // The exit codes that pass: one, or - where the request itself says which count as success - a list. The engine
+            // judges by a list already (SuccessCriterionDefinition.ExpectedExitCodes); this contract could not carry one, so
+            // a request saying a test command's exit 1 is a finding, not a failure, was "unresolved" every time it was
+            // reviewed - asked of a person on 2026-09-29 and again on 2026-10-08.
+            var codes = item.ValueKind == JsonValueKind.Object && item.TryGetProperty("expectedExitCodes", out var listed)
+                && listed.ValueKind == JsonValueKind.Array && listed.GetArrayLength() > 0
+                ? listed.EnumerateArray().Select(c => c.GetInt32()).Distinct().ToArray() : null;
+            var exit = codes is not null && !(item.TryGetProperty("expectedExitCode", out var single) && single.ValueKind == JsonValueKind.Number)
+                ? (codes.Contains(0) ? 0 : codes[0])
+                : Part(item, "expectedExitCode", "A check").GetInt32();
             var quote = Part(item, "request_quote", "A check");
             string? text = null;
             if (preserveCriteria)
@@ -147,12 +171,17 @@ internal static class PlanCheckContract
                 text = Required(item, "request_quote");
                 if (!request.Contains(text, StringComparison.Ordinal) || !text.Contains(command, StringComparison.Ordinal))
                     throw new JsonException("Requested commands require exact original request provenance.");
+                // A code other than 0 passes only where the request says so: each is in the request's own words. Without
+                // this a review could make any command pass on any code, and call it what the request asked.
+                if ((codes ?? [exit]).FirstOrDefault(c => c != 0 && !Regex.IsMatch(request, $@"(?<![\d-]){c}(?!\d)",
+                        RegexOptions.None, TimeSpan.FromMilliseconds(100))) is var unsaid and not 0)
+                    throw new JsonException($"Exit code {unsaid} is not in the request; a requested check passes on 0, or on the codes the request itself names.");
             }
-            else if (origin != "proposed" || quote.ValueKind != JsonValueKind.Null || exit != 0)
+            else if (origin != "proposed" || quote.ValueKind != JsonValueKind.Null || exit != 0 || codes is { Length: > 1 })
                 throw new JsonException("Proposed checks require null provenance and exit 0.");
             checks.Add(new(name, command, exit, Origin: origin == "requested" ? CriterionOrigin.Requested
                 : origin == "declared" ? CriterionOrigin.Declared : CriterionOrigin.Proposed)
-                { RequestQuote = text, PlanningReason = reason });
+                { RequestQuote = text, PlanningReason = reason, ExpectedExitCodes = codes is { Length: > 1 } ? codes : null });
         }
         if (preserveCriteria)
         {
@@ -161,16 +190,16 @@ internal static class PlanCheckContract
             foreach (var original in inputs.Checks)
             {
                 var match = remaining.FindIndex(c => c.Name == original.Name && c.Command == original.Command
-                    && c.ExpectedExitCode == original.ExpectedExitCode);
-                if (match < 0) throw new JsonException("Locked criterion omitted or changed; report unresolved instead.");
+                    && SamePassingCodes(c, original));
+                if (match < 0) throw new JsonException("A locked criterion was omitted or changed. " + LockedRule(inputs.Checks));
                 checks.Add(original with { PlanningReason = remaining[match].PlanningReason });
                 remaining.RemoveAt(match);
             }
-            if (remaining.Count > 0) throw new JsonException("Locked review cannot add criteria.");
+            if (remaining.Count > 0) throw new JsonException("A criterion was added to a locked list. " + LockedRule(inputs.Checks));
         }
         if (inputs.Checks.Where(c => c.Origin == CriterionOrigin.Requested).Any(original =>
             !checks.Any(c => c.Origin == CriterionOrigin.Requested && c.Command == original.Command
-                && c.ExpectedExitCode == original.ExpectedExitCode)))
+                && SamePassingCodes(c, original))))
             throw new JsonException("An existing requested criterion was omitted or changed. Preserve it, or report an unresolved conflict.");
         if (actionPolicy is not null && checks.Any(c => !actionPolicy.AllowedTools.Contains("run_command")
             || !actionPolicy.AllowsCommand(c.Command)))

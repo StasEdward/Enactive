@@ -73,11 +73,21 @@ public sealed class LogAnalyst
     public static int BudgetChars(int? contextWindowTokens)
         => Math.Max(4_000, (int)((contextWindowTokens ?? 16_000) * 0.60) * CharsPerToken);
 
+    /// <param name="numCtx">
+    /// The engine's num_ctx, sent with every request as a step's request sends it; the window the log is cut to is the
+    /// PROVIDER's answer for such a request (<see cref="IChatProvider.ContextWindow"/>), as it is for a step. The window
+    /// used to look the provider's declared window up in its own settings, falling back to num_ctx: an Ollama model
+    /// with num_ctx set and no declared window was sent a log cut to num_ctx in a request that did not carry it - so
+    /// Ollama loaded its own small default and cut the prompt without a word - and a cloud model with no declared
+    /// window was sent a log cut to an Ollama setting.
+    /// </param>
     public async Task<LogAnalysisResult> AnalyseAsync(
-        string log, IChatProvider provider, string model, int? contextWindowTokens, CancellationToken ct)
+        string log, IChatProvider provider, string model, int? numCtx, CancellationToken ct)
     {
         var text = log ?? "";
-        var budget = BudgetChars(contextWindowTokens);
+        ChatRequest RequestFor(List<ChatMessage> messages) => new(model, messages, Temperature: 0.0, NumCtx: numCtx);
+        var window = provider.ContextWindow(RequestFor([]));
+        var budget = BudgetChars(window);
 
         // Digest FIRST when the log does not fit, and excerpt only what is left. An excerpt of a
         // log that does not fit keeps one run's opening and another run's ending and drops
@@ -96,7 +106,7 @@ public sealed class LogAnalyst
             // is not this application's at all - and none of those announce themselves. So the
             // excerpt stays as the floor: cruder, and it cannot come out empty.
             if (Recognised(stats))
-                return await SendAsync(digest, stats, provider, model, contextWindowTokens, ct);
+                return await SendAsync(digest, stats, provider, model, RequestFor, budget, ct);
         }
 
         var lines = text.Replace("\r\n", "\n").Split('\n');
@@ -120,8 +130,7 @@ public sealed class LogAnalyst
                 + Task)
         };
 
-        var completion = await provider.CompleteAsync(
-            new ChatRequest(model, messages, Temperature: 0.0), ct);
+        var completion = await provider.CompleteAsync(RequestFor(messages), ct);
 
         var answer = completion.Message.Content ?? "";
 
@@ -150,13 +159,13 @@ public sealed class LogAnalyst
     /// </summary>
     private async Task<LogAnalysisResult> SendAsync(
         string digest, DigestStats stats, IChatProvider provider, string model,
-        int? contextWindowTokens, CancellationToken ct)
+        Func<List<ChatMessage>, ChatRequest> requestFor, int budget, CancellationToken ct)
     {
         // A digest of an enormous log can still overrun; the excerpt then applies to the digest,
         // whose lines are already the interesting ones. Cutting the middle out of a summary loses
         // far less than cutting it out of a log.
         var lines = digest.Replace("\r\n", "\n").Split('\n');
-        var shown = Excerpt(lines, BudgetChars(contextWindowTokens), out var sent);
+        var shown = Excerpt(lines, budget, out var sent);
 
         var messages = new List<ChatMessage>
         {
@@ -183,8 +192,7 @@ public sealed class LogAnalyst
                 + Task)
         };
 
-        var completion = await provider.CompleteAsync(
-            new ChatRequest(model, messages, Temperature: 0.0), ct);
+        var completion = await provider.CompleteAsync(requestFor(messages), ct);
 
         return new LogAnalysisResult(
             Interpret(completion.Message.Content ?? ""),

@@ -49,6 +49,30 @@ public sealed class AKeptOutputIsReadNotRunAgainTests : IDisposable
         Assert.True(last - first + 1 < keptLines.Length);
     }
 
+    /// <summary>
+    /// A command that printed a long output AND a long error stream is cut in each (Shortening), so the model is not shown
+    /// two parts of it: both are named, each with its read_file call, and every line not shown is in one of them.
+    /// </summary>
+    [Fact]
+    public void Both_parts_not_shown_are_named_when_both_streams_are_cut()
+    {
+        var output = Log(2_000);
+        var errors = string.Join("\n", Enumerable.Range(1, 2_000).Select(i => $"warn {i:D5}: /wiki/page-{i} -> slow"));
+        var result = ProcessExec.BuildResult("Command", 0, output, errors, workspaceRoot: _root);
+
+        var shown = result.Output!;
+        var calls = Call.Matches(shown);
+        Assert.Equal(2, calls.Count);
+        var kept = File.ReadAllText(Path.Combine(_root, calls[0].Groups["path"].Value)).Split('\n');
+        var ranges = calls.Select(c => (First: int.Parse(c.Groups["offset"].Value),
+            Last: int.Parse(c.Groups["offset"].Value) + int.Parse(c.Groups["limit"].Value) - 1)).ToArray();
+
+        for (var n = 1; n <= kept.Length; n++)
+            if (!shown.Contains(kept[n - 1], StringComparison.Ordinal))
+                Assert.Contains(ranges, r => n >= r.First && n <= r.Last);
+        Assert.True(ranges[0].Last < ranges[1].First, $"{ranges[0]} {ranges[1]}");
+    }
+
     [Fact]
     public void An_output_that_fits_is_not_kept()
     {

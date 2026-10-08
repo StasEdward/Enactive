@@ -20,7 +20,7 @@ public sealed class ACallThatDidNotRunShowsNothingDoneTests
         return new StepVerdictInput("send the report", "Send the report", 1, [], "Sent.", null, [], journal.Describe());
     }
 
-    private static (ReviewResult? Result, IReadOnlyList<string> Errors) Pass(StepVerdictInput input, string calls)
+    private static (ReviewVerdict? Verdict, IReadOnlyList<string> Errors) Pass(StepVerdictInput input, string calls)
         => StepVerdictReview.Read($$"""{"verdict":"pass","reason":"the report was sent","calls":[{{calls}}],"files":[]}""", input);
 
     /// <summary>THE ONE THAT MATTERS: a pass resting only on a refused call goes back, and says why.</summary>
@@ -35,7 +35,7 @@ public sealed class ACallThatDidNotRunShowsNothingDoneTests
 
     [Fact]
     public void A_pass_resting_on_a_tool_that_failed_goes_back()
-        => Assert.Null(Pass(Input(("send_email", ActionOutcome.Failed, "SMTP 550: mailbox unavailable", null)), "1").Result);
+        => Assert.Null(Pass(Input(("send_email", ActionOutcome.Failed, "SMTP 550: mailbox unavailable", null)), "1").Verdict);
 
     /// <summary>A process that ran and failed shows what it showed: a check that had to fail, failing.</summary>
     [Fact]
@@ -44,7 +44,7 @@ public sealed class ACallThatDidNotRunShowsNothingDoneTests
         var (result, errors) = Pass(Input(("run_command", ActionOutcome.Failed, "2 broken links", 1)), "1");
 
         Assert.Empty(errors);
-        Assert.True(result!.Pass);
+        Assert.IsType<ReviewVerdict.Pass>(result);
     }
 
     /// <summary>A refused call beside one that worked counts for nothing, and costs no second round.</summary>
@@ -55,7 +55,7 @@ public sealed class ACallThatDidNotRunShowsNothingDoneTests
             ("send_email", ActionOutcome.Succeeded, "Sent to the owner with 1 attachment", null)), "1, 2");
 
         Assert.Empty(errors);
-        Assert.True(result!.Pass);
+        Assert.IsType<ReviewVerdict.Pass>(result);
     }
 
     /// <summary>A fail may cite a refused call: what did not happen is what a fail is about.</summary>
@@ -66,7 +66,7 @@ public sealed class ACallThatDidNotRunShowsNothingDoneTests
             Input(("send_email", ActionOutcome.Refused, "not permitted", null)));
 
         Assert.Empty(errors);
-        Assert.False(result!.Pass);
+        Assert.IsType<ReviewVerdict.Fail>(result);
     }
 }
 
@@ -96,7 +96,7 @@ public sealed class AnUnfinishedReviewIsNoVerdictTests
         var provider = new FakeChatProvider(Turn.Says(PassJson) with { FinishReason = "length" }, Turn.Says(PassJson));
         var result = await StepVerdictReview.RunAsync(Input(), provider, "reviewer", null, CancellationToken.None);
 
-        Assert.True(result.Pass);
+        Assert.IsType<ReviewVerdict.Pass>(result.Verdict);
         Assert.Equal(2, provider.Requests.Count);
         Assert.Contains("cut off at its length limit", provider.Requests[1].Messages.Last().Content, StringComparison.Ordinal);
     }
@@ -106,8 +106,7 @@ public sealed class AnUnfinishedReviewIsNoVerdictTests
     {
         var result = await Review(Turn.Says(PassJson) with { FinishReason = "max_tokens" }, Turn.Says(PassJson) with { FinishReason = "length" });
 
-        Assert.False(result.Pass);
-        Assert.True(result.VerdictUnavailable);
+        Assert.IsType<ReviewVerdict.Unavailable>(result.Verdict);
     }
 
     [Fact]
@@ -116,7 +115,6 @@ public sealed class AnUnfinishedReviewIsNoVerdictTests
         var call = new Enactive.Core.Tools.ToolCall("t1", "read_file", """{"path":"report.md"}""");
         var result = await Review(new Turn(PassJson, [call]), new Turn(PassJson, [call]));
 
-        Assert.False(result.Pass);
-        Assert.True(result.VerdictUnavailable);
+        Assert.IsType<ReviewVerdict.Unavailable>(result.Verdict);
     }
 }

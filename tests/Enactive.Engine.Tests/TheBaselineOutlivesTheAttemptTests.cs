@@ -76,7 +76,7 @@ public sealed class TheBaselineOutlivesTheAttemptTests
             Turn.Calls1("delete_file", """{"path":"draft.md"}""", "d1"), Turn.Says("tidied")),
             Editor, checkpoints: checkpoints, decisions: new ParkingDecisionHandler()), checkpoint);
 
-        Assert.Contains(resumed, e => e.Summary.Contains("(kept from before the first attempt)", StringComparison.Ordinal));
+        Assert.Contains(resumed, e => e.Summary.Contains("(kept from before the FIRST attempt of this task, taken ", StringComparison.Ordinal));
         var check = Check(resumed, BuildRegression.Name);
         Assert.StartsWith("FAIL", check.Summary, StringComparison.Ordinal);
         Assert.Contains("W2 in pages/new.page: empty title", check.Summary, StringComparison.Ordinal);
@@ -105,10 +105,70 @@ public sealed class TheBaselineOutlivesTheAttemptTests
         var question = Assert.Single(ledger.Pending());
         ledger.Answer(taskId, question.RequestId, "allow");
 
-        var second = await Submit(fx, fx.Build(new FakeChatProvider(Work()), Editor, decisions: new ParkingDecisionHandler()), taskId);
+        var secondProvider = new FakeChatProvider(Work());
+        var second = await Submit(fx, fx.Build(secondProvider, Editor, decisions: new ParkingDecisionHandler()), taskId);
 
         Assert.Equal(RunOutcomeKind.Completed, second.Last().Outcome());
         Assert.Contains("W2 in pages/new.page", Check(second, BuildRegression.Name).Summary, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A baseline kept for a later attempt is said to be what it is - from before the FIRST attempt, and when - to the
+    /// reviewer and in the run's log; it was "measured before any work in this run". Run 9c0ee4 (2026-10-08) was told 87
+    /// tests passed and none failed before it began, in a workspace that had 95 tests, six failing, when it did.
+    /// </summary>
+    [Fact]
+    public async Task A_later_attempt_is_told_its_baseline_is_from_before_the_first()
+    {
+        using var fx = Wiki();
+        var ledger = new DecisionLedger(fx.Root);
+        var taskId = Guid.NewGuid();
+        Turn[] Work() =>
+        [
+            Turn.Says(QuickAction),
+            Turn.Calls1("write_file", """{"path":"pages/new.page","content":"a page"}""", "w1"),
+            Turn.Calls1("delete_file", """{"path":"draft.md"}""", "d1"),
+            Turn.Says("done")
+        ];
+        static bool Says(FakeChatProvider reviewer, string text)
+            => reviewer.Requests.SelectMany(r => r.Messages).Any(m => m.Content?.Contains(text, StringComparison.Ordinal) == true);
+
+        // A run that takes its own baseline says so: one without a question, so it reaches its review.
+        using (var fresh = Wiki())
+        {
+            var freshReviewer = new FakeChatProvider(Verdicts.Pass());
+            await Submit(fresh, fresh.Build(new FakeChatProvider(Turn.Says(QuickAction),
+                    Turn.Calls1("write_file", """{"path":"pages/new.page","content":"a page"}""", "w1"), Turn.Says("done")),
+                Editor, router: Routers.WithReviewer(), reviewProvider: freshReviewer), Guid.NewGuid());
+            Assert.True(Says(freshReviewer, "before any work in this run"), "a run's own baseline");
+        }
+
+        await Submit(fx, fx.Build(new FakeChatProvider(Work()), Editor, decisions: new ParkingDecisionHandler(),
+            router: Routers.WithReviewer(), reviewProvider: new FakeChatProvider(Verdicts.Pass())), taskId);
+        ledger.Answer(taskId, Assert.Single(ledger.Pending()).RequestId, "allow");
+        var reviewer = new FakeChatProvider(Verdicts.Pass());
+        var second = await Submit(fx, fx.Build(new FakeChatProvider(Work()), Editor, decisions: new ParkingDecisionHandler(),
+            router: Routers.WithReviewer(), reviewProvider: reviewer), taskId);
+
+        Assert.True(Says(reviewer, "kept from before the FIRST attempt of this task, taken "), "the later attempt's");
+        Assert.False(Says(reviewer, "before any work in this run"));
+        Assert.Contains(second, e => e.Kind == EventKind.ContextAssembled
+            && e.Summary.Contains("kept from before the FIRST attempt of this task, taken ", StringComparison.Ordinal));
+    }
+
+    /// <summary>The time a baseline was taken is kept with it, beside the task, and read back with it.</summary>
+    [Fact]
+    public void When_a_baseline_was_taken_is_kept_with_it()
+    {
+        using var fx = Wiki();
+        var taken = new DateTimeOffset(2026, 10, 8, 15, 2, 0, TimeSpan.Zero);
+        var store = new BaselineStore(fx.Root);
+        var task = Guid.NewGuid();
+        store.Save(task, [new Enactive.Core.Builds.BaselineSnapshot("wikilint", "Build", "wiki", 0, null, TakenAt: taken)]);
+
+        Assert.Equal(taken, Assert.Single(store.Load(task)!).TakenAt);
+        Assert.Contains("taken " + taken.ToLocalTime().ToString("yyyy-MM-dd HH:mm"), BuildBaseline.EarlierAttemptNote(taken), StringComparison.Ordinal);
+        Assert.Contains("at a time not recorded", BuildBaseline.EarlierAttemptNote(null), StringComparison.Ordinal);
     }
 
     // ── test status ──────────────────────────────────────────────────────────────────────

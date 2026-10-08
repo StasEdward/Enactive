@@ -16,8 +16,9 @@ internal static class AgentBlocked
     internal static ToolDefinition Tool { get; } = new(ToolName,
         "Say that this step CANNOT go on, and why - only for something outside the step that it cannot do or get: "
         + "a permission it was refused, a file or input that does not exist, information or a decision only the person has. "
-        + "Not for a hard task, and not instead of doing what can be done. It ends the step as BLOCKED - not done; the run "
-        + "stops there until a person removes the cause, and then this step is done again.",
+        + "Not for a hard task, and not instead of doing what can be done. Not because a later step needs what this step "
+        + "may not do: a step that has done its own part is done - finish with its result. It ends the step as BLOCKED - not "
+        + "done; the run stops there until a person removes the cause, and then this step is done again.",
         """
         {"type":"object","properties":{
           "reason":{"type":"string","description":"What stops the step, as a fact: what is missing or refused, and where."},

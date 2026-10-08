@@ -51,6 +51,43 @@ public sealed class TheProvidersOwnSamplingAndReasoningTests
             Assert.False(server.RootElement.TryGetProperty("temperature", out _));
     }
 
+    private sealed class OllamaCapture : HttpMessageHandler
+    {
+        public string? Body;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Body = await request.Content!.ReadAsStringAsync(ct);
+            return new(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"message":{"role":"assistant","content":"ok"},"done":true,"done_reason":"stop"}""")
+            };
+        }
+    }
+
+    private static async Task<JsonElement?> OllamaTemperature(double? own = null, bool server = false)
+    {
+        using var handler = new OllamaCapture();
+        using var http = new HttpClient(handler);
+        var descriptor = new ProviderDescriptor("ollama", "ollama", ProviderKind.OllamaNative, "http://127.0.0.1:11434", null, [],
+            Temperature: own, ServerTemperature: server);
+        await new OllamaNativeProvider(http, descriptor).CompleteAsync(new("model", [ChatMessage.User("hello")], Temperature: 0.2), default);
+        using var sent = JsonDocument.Parse(handler.Body!);
+        return sent.RootElement.TryGetProperty("options", out var options) && options.TryGetProperty("temperature", out var t)
+            ? t.Clone() : null;
+    }
+
+    /// <summary>
+    /// The native Ollama adapter reads the provider's temperature as the other two do. It sent the engine's whatever the
+    /// provider said, so the field in the provider window did nothing for an Ollama model.
+    /// </summary>
+    [Fact]
+    public async Task An_ollama_model_gets_the_providers_temperature_too()
+    {
+        Assert.Equal(0.2, (await OllamaTemperature())!.Value.GetDouble());
+        Assert.Equal(0.6, (await OllamaTemperature(own: 0.6))!.Value.GetDouble());
+        Assert.Null(await OllamaTemperature(server: true));
+    }
+
     [Fact]
     public async Task The_reasoning_goes_back_with_the_models_own_turns_only_where_the_provider_is_told_to()
     {

@@ -31,7 +31,7 @@ public sealed class AnArgumentTheToolRefusedTests
     private static ToolContext Context(EngineFixture fx)
         => new(TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: fx.Workspace.Id,
                Context: null!, PermissionPolicy: PermissionPolicy.PermissiveDefault,
-               WorkspaceRoot: fx.Root, Artifacts: fx.Artifacts, Services: null!);
+               WorkspaceRoot: fx.Root, Artifacts: fx.Artifacts);
 
     /// <summary>The reported call, verbatim, and the two tools that take the same argument.</summary>
     [Theory]

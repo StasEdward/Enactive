@@ -25,7 +25,7 @@ public sealed class ReadingFiveFilesInOneTurnTests
     private static ToolContext Context(EngineFixture fx)
         => new(TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: fx.Workspace.Id,
                Context: null!, PermissionPolicy: PermissionPolicy.PermissiveDefault,
-               WorkspaceRoot: fx.Root, Artifacts: fx.Artifacts, Services: null!);
+               WorkspaceRoot: fx.Root, Artifacts: fx.Artifacts);
 
     private static Task<ToolResult> Read(EngineFixture fx, params string[] paths)
         => new ReadFilesTool().InvokeAsync(

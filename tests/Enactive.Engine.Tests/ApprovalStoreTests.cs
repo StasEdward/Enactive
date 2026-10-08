@@ -171,4 +171,45 @@ public sealed class ApprovalStoreTests : IDisposable
 
         Assert.False(_store.Approves(workspace, "read_file"));
     }
+
+    // ── Rule 4: a plain approval answers only where somebody is watching ────
+
+    /// <summary>
+    /// "Allow (workspace)" holds for a run somebody is watching; a run in the background or on a schedule uses only an
+    /// approval given for unwatched runs too. Every plain approval was given on a card where it held only while
+    /// somebody was there, and for a while it let unwatched runs use the tool as well.
+    /// </summary>
+    [Fact]
+    public void A_plain_approval_does_not_answer_for_a_run_nobody_is_watching()
+    {
+        var granted = Workspace("granted");
+
+        _store.Approve(granted, "send_email");
+
+        Assert.True(_store.Approves(granted, "send_email"));
+        Assert.False(_store.Approves(granted, "send_email", unwatched: true));
+    }
+
+    [Fact]
+    public void An_approval_for_unwatched_runs_answers_for_both()
+    {
+        var granted = Workspace("granted");
+
+        _store.Approve(granted, "send_email", unwatched: true);
+
+        Assert.True(_store.Approves(granted, "send_email", unwatched: true));
+        Assert.True(_store.Approves(granted, "send_email"));
+    }
+
+    /// <summary>A record written before approvals had a scope holds where somebody is watching, and nowhere else.</summary>
+    [Fact]
+    public void An_approval_recorded_before_the_scope_existed_holds_only_where_somebody_is_watching()
+    {
+        var granted = Workspace("granted");
+        File.WriteAllText(Path.Combine(_root, "permissions.json"),
+            $$"""{"{{WorkspaceInfo.IdFor(granted):N}}":["send_email"]}""");
+
+        Assert.True(_store.Approves(granted, "send_email"));
+        Assert.False(_store.Approves(granted, "send_email", unwatched: true));
+    }
 }

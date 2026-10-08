@@ -247,24 +247,12 @@ if (EngineComposition.Missing(settings) is { Count: > 0 } notConfigured)
 }
 
 var engine = EngineComposition.Build(settings, http, logHub);
-var providerFactory = engine.Providers;
-var workerProvider = engine.Workers;
-var modelResolver = engine.Models;
 var model = engine.DefaultModel;
 
 logHub.Info(LogSource.System,
     $"Enactive console starting — providers={string.Join(", ", settings.Providers.Select(p => $"{p.Id}:{p.Kind}"))}, "
     + $"model={model}, log dir={FileLogSink.DefaultDirectory()}");
-var artifactStore = new DiskArtifactStore(workspace);
-// Whether there is an account to send from. The tool is registered either way - the roles name
-// it, and the set they name and the set the host registers have to be the same - and it tells
-// the model in its own description when there is nowhere to send.
-var mailAccount = EngineComposition.Mail(settings);
-
-IToolRegistry toolRegistry = new LoggingToolRegistry(
-    new ToolRegistry(BuiltInTools.Create(mailAccount, EngineComposition.Web(settings))), logHub);
-var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), memoryStore);
-var workers = workerProvider.All;
+var workers = engine.Workers.All;
 
 // ── The role this run is given ────────────────────────────────────────────────
 //   --role developer | reviewer | ops | writer
@@ -272,19 +260,18 @@ var workers = workerProvider.All;
 // Which role runs a task decides which tools it may call at all, and that is half of what there is
 // to check about permissions: a task that reaches for a shell because the tool it needed was never
 // granted looks exactly like a task the policy refused, and they are different facts.
-var roleId = Option("--role");
+// By id or by role name, the one rule every host reads a worker's name by (ComposedEngine.WorkerIdFor).
+var roleText = Option("--role");
+var roleId = engine.WorkerIdFor(roleText);
 
-if (roleId is { Length: > 0 }
-    && !workers.Any(w => string.Equals(w.Id, roleId, StringComparison.OrdinalIgnoreCase)))
+if (roleText is { Length: > 0 } && roleId is null)
 {
     // Named and refused, with the list. An unknown role silently falling back to the default would
     // produce a run under a role nobody asked for, reported as though it had been honoured.
-    Console.Error.WriteLine($"There is no role '{roleId}'.");
+    Console.Error.WriteLine($"There is no role '{roleText}'.");
     Console.Error.WriteLine($"  Roles: {string.Join(", ", workers.Select(w => w.Id))}");
     return 64;
 }
-var planner = new Planner();
-var permissionEngine = new PermissionEngine();
 
 // ── The tier this run acts under ──────────────────────────────────────────────
 //   --autonomy observe | suggest | execute | autonomous   (or 0-3)
@@ -492,19 +479,20 @@ if (args.Contains("--resume", StringComparer.OrdinalIgnoreCase))
         return 0;
     }
 
+    // A resumed run continues under the tier and role it was started with (RunComposer.ResumeRefusal):
+    // asking for others is refused, asking for the same is not.
+    if (RunComposer.ResumeRefusal(resumeFrom, autonomyText is null ? null : autonomyTier.Value, roleId,
+            engine.Workers.Default.Id) is { } refusedResume)
+    {
+        Console.Error.WriteLine(refusedResume);
+        return 64;
+    }
+
     command = resumeFrom.Request;
     Console.WriteLine(
         $"Resuming a run stopped on {resumeFrom.At.ToLocalTime():yyyy-MM-dd HH:mm}: "
         + $"{resumeFrom.Finished} of {resumeFrom.Steps.Count} step(s) were done.");
 }
-
-var orchestrator = RunEngineComposition.Build(
-    new RunEngineResources(providerFactory, modelResolver, workerProvider, toolRegistry,
-        artifactStore, workspace, planner, permissionEngine, decisionHandler,
-        spec?.Permissions ?? permissionPolicy, new EmptyServiceProvider(), engine.Router),
-    RunEngineOptions.Capture(settings), checkpoints: checkpointStore, settings: resumeFrom?.Settings,
-    successCriteria: spec?.SuccessCriteria, limits: spec?.Limits);
-var runRecorder = new RunRecorder(runStore, memoryStore, workspace.Id, spec: spec?.Snapshot());
 
 // ── Run ──────────────────────────────────────────────────────────────────────
 using var cts = new CancellationTokenSource();
@@ -516,7 +504,7 @@ Console.WriteLine($"  Workspace : {workspace.RootPath}");
 // wrong while the name looked right, and a banner that had said "Ollama (local)" either way would
 // have been read as confirmation.
 foreach (var p in settings.Providers)
-    Console.WriteLine($"  Provider  : {p.DisplayName} — {p.Kind} @ {p.BaseUrl}");
+    Console.WriteLine($"  Provider  : {p.Name} — {p.Kind} @ {p.BaseUrl}");
 Console.WriteLine($"  Model     : {model}");
 if (settings.Bindings.Plan is { Length: > 0 } planBinding)
     Console.WriteLine($"  Plan      : {planBinding}");
@@ -524,21 +512,14 @@ if (settings.Bindings.Review is { Length: > 0 } reviewBinding)
     Console.WriteLine($"  Review    : {reviewBinding}");
 Console.WriteLine($"  Shells    : {settings.ShellCommands}");
 Console.WriteLine($"  Command   : {command}");
-Console.WriteLine($"  Autonomy  : {AutonomyTiers.Names[autonomyTier.Value]}");
-Console.WriteLine($"  Role      : {roleId ?? DefaultWorkers.DefaultId}");
+Console.WriteLine($"  Autonomy  : {AutonomyTiers.Names[resumeFrom?.Settings?.Autonomy ?? autonomyTier.Value]}");
+Console.WriteLine($"  Role      : {resumeFrom?.Settings?.Worker ?? roleId ?? DefaultWorkers.DefaultId}");
 Console.WriteLine($"  Approvals : {approve ?? (spec is null ? "asked at this console" : "refused, unattended")}");
 Console.WriteLine(new string('-', 72));
 
-var focus = new IntentFocus(workspace.Id);
-var workContext = await contextProvider.BuildAsync(focus, cts.Token);
-var intent = new Intent(
-    Guid.NewGuid(), command,
-    // A scheduled run says so about itself. IntentSource.Schedule existed from the first version
-    // and had never been used by anything.
-    spec is null ? IntentSource.CommandBar : IntentSource.Schedule,
-    // --role wins over a template's own worker: it is the more specific instruction, typed for
-    // this invocation.
-    workContext, DateTimeOffset.UtcNow, roleId ?? spec?.WorkerId);
+// Composed inside the run's try below: connecting a configured MCP server can fail, and a scheduled run
+// that failed to start must still end with an exit code and its Inbox item.
+ComposedRun? composed = null;
 
 // ── The scheduled run's copy of the result ────────────────────────────────────
 // Exactly one Inbox item per scheduled run, whatever ending it reaches - including the ones that
@@ -559,7 +540,7 @@ async Task FileScheduledOutcome(RunRecord? known = null)
             // By header first, then the one record: reading every run whole to find the newest is
             // how a workspace pays for its history on every invocation.
             var header = (await runStore.LoadSummariesAsync(CancellationToken.None))
-                .Where(r => r.TaskId == (resumeFrom?.TaskId ?? intent.Id))
+                .Where(r => r.TaskId == (resumeFrom?.TaskId ?? composed?.Intent.Id))
                 .OrderByDescending(r => r.StartedAt)
                 .FirstOrDefault();
 
@@ -581,13 +562,28 @@ var streaming = false;
 RunOutcomeKind? outcome = null;
 try
 {
-    var runStream = resumeFrom is null
-        ? orchestrator.SubmitIntentAsync(intent, cts.Token)
-        // A fresh context on purpose: what is on this machine is a fact about now, not about the
-        // run that stopped.
-        : orchestrator.ResumeRunAsync(resumeFrom, workContext, cts.Token);
+    // The same composition every host uses (RunComposer). What this host keeps: who answers (above), where the
+    // events go (stdout, below), and Ctrl+C.
+    composed = await RunComposer.ComposeAsync(
+        engine,
+        new RunRequest(workspace, command,
+            // A scheduled run says so about itself. IntentSource.Schedule existed from the first version
+            // and had never been used by anything.
+            spec is null ? IntentSource.CommandBar : IntentSource.Schedule,
+            Resume: resumeFrom, Spec: spec,
+            // --role wins over a template's own worker: it is the more specific instruction, typed for
+            // this invocation.
+            WorkerId: roleId,
+            // --approve is the answer for this invocation, given on purpose; a standing approval must not overrule it.
+            Remembered: approve is null)
+        {
+            // --autonomy is the level of the workspace this console is pointed at; a template's own
+            // permissions are already narrowed to it (TemplateResolution, above).
+            Defaults = new(autonomyTier.Value)
+        },
+        decisionHandler, cts.Token);
 
-    await foreach (var ev in runRecorder.RecordAsync(runStream.TeeToLog(logHub, cts.Token), cts.Token))
+    await foreach (var ev in composed.Events(cts.Token))
     {
         // Assistant text arrives token by token — print it inline as a live stream.
         if (ev.Kind == EventKind.AssistantDelta)
@@ -652,6 +648,11 @@ catch (Exception ex)
     await FileScheduledOutcome();
     return RunReport.ExitCodeFor(RunOutcomeKind.Failed);
 }
+finally
+{
+    // The MCP servers the run started are child processes; they end with the run, however it ended.
+    if (composed is not null) await composed.DisposeAsync();
+}
 
 Console.WriteLine(new string('-', 72));
 
@@ -663,7 +664,7 @@ Console.WriteLine(new string('-', 72));
 // Found by header and then read whole: the report needs every event of THIS run, and none of any
 // other. Reading them all to pick one was how a workspace with a long history paid for its history
 // on every headless invocation.
-var reportTaskId = resumeFrom?.TaskId ?? intent.Id;
+var reportTaskId = resumeFrom?.TaskId ?? composed!.Intent.Id;
 var latest = (await runStore.LoadSummariesAsync(CancellationToken.None))
     .Where(r => r.TaskId == reportTaskId)
     .OrderByDescending(r => r.StartedAt)
@@ -718,12 +719,6 @@ Console.WriteLine(
 
 Console.WriteLine("Done.");
 return RunReport.ExitCodeFor(outcome ?? RunOutcomeKind.Incomplete);
-
-// A no-op service provider: the slice's tools do not resolve anything from DI yet.
-sealed class EmptyServiceProvider : IServiceProvider
-{
-    public object? GetService(Type serviceType) => null;
-}
 
 /// <summary>
 /// One answer, to every question, decided before the run started.

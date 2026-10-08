@@ -417,7 +417,7 @@ public sealed class EngineFixture : IDisposable
     public ToolContext ContextFor(IArtifactStore? store = null)
         => new(TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: Workspace.Id,
                Context: null!, PermissionPolicy: PermissionPolicy.PermissiveDefault,
-               WorkspaceRoot: Root, Artifacts: store ?? Artifacts, Services: null!);
+               WorkspaceRoot: Root, Artifacts: store ?? Artifacts);
 
     public string PathOf(string relative) => Path.Combine(Root, relative);
     public bool Exists(string relative) => File.Exists(PathOf(relative));
@@ -570,42 +570,64 @@ public sealed class EngineFixture : IDisposable
         // surrounded by the shipped roles - see TeamAround for why that is the honest default.
         IReadOnlyList<Worker>? team = null)
     {
-        // The set a host registers, not a convenient subset: a role's allowlist can only be
-        // exercised against the tools that actually exist, and git/docker were missing here while
-        // both shipping hosts register them.
-        var tools = new ToolRegistry(ToolsOverride ?? ShippedTools());
+        var main = worker ?? (team is { Count: > 0 } ? team[0] : WorkerWith("write_file", "read_file", "list_dir", "run_command"));
+        return new Orchestrator(Resources(providers, main, team) with
+        {
+            Artifacts = artifacts ?? Artifacts,
+            Decisions = decisions ?? Decisions,
+            Policy = policy ?? PermissionPolicy.PermissiveDefault,
+            Router = router,
+            SuccessCriteria = successCriteria ?? [],
+            Limits = limits ?? ExecutionLimits.None,
+            Checkpoints = checkpoints,
+            Settings = settings
+        },
+        EngineOptions.Default with
+        {
+            ProposeChecks = ProposeChecks,
+            GenerationBudgets = GenerationBudgetsOverride ?? EngineOptions.Default.GenerationBudgets,
+            RepairConsultation = RepairConsultationOverride ?? EngineOptions.Default.RepairConsultation,
+            ReviewRetries = reviewRetries,
+            AllowImplicitToolCalls = allowImplicitToolCalls,
+            RevertRejectedSteps = revertRejectedSteps,
+            MaxParallelSteps = maxParallelSteps,
+            EvidenceBudget = evidenceBudget,
+            SuccessRetries = successRetries,
+            StepOutputs = StepOutputs, TypedCriteria = TypedCriteria, DynamicSteps = DynamicSteps,
+            FanOut = FanOut ?? FanOutLimits.Default, ValidateWaves = ValidateWaves,
+            ReportBlocked = ReportBlocked, SemanticCriteria = SemanticCriteria
+        });
+    }
 
-        return new Orchestrator(WorkspaceChangesOverride ?? new Enactive.Workspace.WorkspaceChangesFactory(),
-            providers,
-            new ModelResolver(),
-            team is { Count: > 0 }
-                ? new StaticWorkerProvider(team, (worker ?? team[0]).Id)
-                : TeamAround(worker ?? WorkerWith("write_file", "read_file", "list_dir", "run_command")),
-            tools,
-            artifacts ?? Artifacts,
-            Workspace,
-            PlannerOverride ?? new Planner(checksAuditEnabled: false),
-            new PermissionEngine(),
-            decisions ?? Decisions,
-            policy ?? PermissionPolicy.PermissiveDefault,
-            new EmptyServices(),
-            proposeChecks: ProposeChecks,
-            generationBudgets: GenerationBudgetsOverride,
-            repairConsultation: RepairConsultationOverride,
-            router: router,
-            reviewRetries: reviewRetries,
-            allowImplicitToolCalls: allowImplicitToolCalls,
-            revertRejectedSteps: revertRejectedSteps,
-            successCriteria: successCriteria,
-            limits: limits,
-            maxParallelSteps: maxParallelSteps,
-            evidenceBudget: evidenceBudget,
-            successRetries: successRetries,
-            checkpoints: checkpoints,
-            settings: settings,
-            ecosystems: EcosystemsOverride,
-            stepOutputs: StepOutputs, typedCriteria: TypedCriteria, dynamicSteps: DynamicSteps, fanOut: FanOut, validateWaves: ValidateWaves,
-            waveStore: WaveStore, reportBlocked: ReportBlocked, semanticCriteria: SemanticCriteria);
+    /// <summary>
+    /// What a run in this fixture is given, before a test changes any of it: the scripted model, the worker in
+    /// its team, the tools a host registers, this workspace and its artifact store. A test that builds its own
+    /// orchestrator starts from this and says only what differs (<c>with { ... }</c>).
+    /// </summary>
+    public RunEngineResources Resources(IChatProviderFactory providers, Worker worker, IReadOnlyList<Worker>? team = null)
+    {
+        var models = new ModelResolver();
+        return new RunEngineResources
+        {
+            Providers = providers,
+            Models = models,
+            Workers = team is { Count: > 0 }
+                ? new StaticWorkerProvider(team, worker.Id)
+                : TeamAround(worker),
+            // The set a host registers, not a convenient subset: a role's allowlist can only be
+            // exercised against the tools that actually exist, and git/docker were missing here while
+            // both shipping hosts register them.
+            Tools = new ToolRegistry(ToolsOverride ?? ShippedTools()),
+            Artifacts = Artifacts,
+            Workspace = Workspace,
+            WorkspaceChanges = WorkspaceChangesOverride ?? new WorkspaceChangesFactory(),
+            Planner = PlannerOverride ?? new Planner(checksAuditEnabled: false),
+            Permissions = new PermissionEngine(),
+            Decisions = Decisions,
+            Policy = PermissionPolicy.PermissiveDefault,
+            Ecosystems = EcosystemsOverride ?? [],
+            WaveStore = WaveStore
+        };
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>
@@ -689,10 +711,6 @@ public sealed class EngineFixture : IDisposable
         try { if (Directory.Exists(WaveStore)) Directory.Delete(WaveStore, recursive: true); } catch { }
     }
 
-    private sealed class EmptyServices : IServiceProvider
-    {
-        public object? GetService(Type serviceType) => null;
-    }
 }
 
 /// <summary>Assertion helpers over an event list — the engine's only public output.</summary>

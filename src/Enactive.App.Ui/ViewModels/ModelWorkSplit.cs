@@ -1,7 +1,6 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
-using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Events;
 using Enactive.Core.History;
@@ -22,10 +21,7 @@ internal sealed class ModelWorkSplit : ObservableObject
 {
     private readonly Dictionary<string, ProviderWork> _byProvider = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Where a provider runs. Unknown is its own answer, never quietly folded into either.</summary>
-    public enum Reach { Local, Cloud, Unknown }
-
-    private sealed record ProviderWork(Reach Where)
+    private sealed record ProviderWork(ModelReach Where)
     {
         public int Prompt { get; set; }
         public int Completion { get; set; }
@@ -41,7 +37,7 @@ internal sealed class ModelWorkSplit : ObservableObject
     /// Records one turn. <paramref name="where"/> is decided by the caller, which is the only place
     /// that knows a provider's address: the engine records the provider id and stops there.
     /// </summary>
-    public void Add(string? providerId, Reach where, int promptTokens, int completionTokens)
+    public void Add(string? providerId, ModelReach where, int promptTokens, int completionTokens)
     {
         var key = string.IsNullOrWhiteSpace(providerId) ? "(unknown)" : providerId;
 
@@ -60,7 +56,7 @@ internal sealed class ModelWorkSplit : ObservableObject
     /// readable the same way a live one is, or the answer depends on wording.
     /// </summary>
     public static ModelWorkSplit From(
-        Enactive.Core.History.RunRecord record, Func<string?, Reach> classify)
+        Enactive.Core.History.RunRecord record, Func<string?, ModelReach> classify)
     {
         var split = new ModelWorkSplit();
 
@@ -96,7 +92,7 @@ internal sealed class ModelWorkSplit : ObservableObject
     {
         var total = _byProvider.Values.Sum(w => (long)w.Prompt + w.Completion);
 
-        var groups = new[] { Reach.Local, Reach.Cloud, Reach.Unknown }
+        var groups = new[] { ModelReach.Local, ModelReach.Cloud, ModelReach.Unknown }
             .Select(reach => (Reach: reach, Work: _byProvider.Values.Where(w => w.Where == reach).ToArray()))
             .Where(g => g.Work.Length > 0)
             .ToArray();
@@ -110,8 +106,8 @@ internal sealed class ModelWorkSplit : ObservableObject
             Rows.Add(new ModelWorkRow(
                 Label: reach switch
                 {
-                    Reach.Local => "local",
-                    Reach.Cloud => "cloud",
+                    ModelReach.Local => "local",
+                    ModelReach.Cloud => "cloud",
                     _ => "unknown"
                 },
                 // Percent of TOKENS, not of calls: it is the closer proxy for how much thinking each
@@ -120,17 +116,12 @@ internal sealed class ModelWorkSplit : ObservableObject
                     ? $"{MainWindowViewModel.Compact((int)Math.Min(int.MaxValue, tokens))} · "
                       + $"{calls} call{(calls == 1 ? "" : "s")} · {tokens * 100 / total}%"
                     : $"{calls} call{(calls == 1 ? "" : "s")}",
-                Edge: reach switch
-                {
-                    Reach.Local => Brand.Success,
-                    Reach.Cloud => Brand.Info,
-                    _ => Brand.TextFaint
-                }));
+                Reach: reach));
         }
 
         OnPropertyChanged(nameof(HasAny));
     }
 }
 
-/// <summary>One line of the split — the same green/blue local/remote language the provider list uses.</summary>
-internal sealed record ModelWorkRow(string Label, string Detail, IBrush Edge);
+/// <summary>One line of the split — drawn in the same green/blue local/remote language the provider list uses (Palette.Reach).</summary>
+internal sealed record ModelWorkRow(string Label, string Detail, ModelReach Reach);

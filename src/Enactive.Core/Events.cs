@@ -1,5 +1,7 @@
 ﻿namespace Enactive.Core.Events;
 
+using Enactive.Core.Tools;
+
 /// <summary>Kinds of events emitted during a run. The Timeline is a projection over these.</summary>
 public enum EventKind
 {
@@ -311,7 +313,56 @@ public static class WorkEventPayload
     /// this file already carries the scar of.</para>
     /// </summary>
     public static string ToolPayload(string name, int? stepNo = null)
-        => "{" + (stepNo is { } n ? $"\"step\":{n}," : "") + "\"tool\":" + Quote(name) + "}";
+        => ToolPayload(name, stepNo, path: null, command: null);
+
+    /// <summary>
+    /// The payload of a call's <see cref="EventKind.ToolInvoked"/> event: the tool, and what a step card shows of the
+    /// call - the path it names and the command it runs - as values, read from its WHOLE arguments.
+    ///
+    /// <para>The card read them back out of the summary, "<c>name {arguments}</c>": rewording that sentence would have
+    /// turned "Wrote disks.md" into "Ran write_file", and the arguments there are cut at 120 characters, so a
+    /// write_file whose content ran past it was no JSON at all and its card said "Wrote a file".</para>
+    /// </summary>
+    public static string ToolPayload(ToolCall call, int? stepNo = null)
+        => ToolPayload(call.Name, stepNo, ArgumentOf(call.ArgumentsJson, "path"), ArgumentOf(call.ArgumentsJson, "command"));
+
+    private static string ToolPayload(string name, int? stepNo, string? path, string? command)
+        => "{" + (stepNo is { } n ? $"\"step\":{n}," : "") + "\"tool\":" + Quote(name)
+           + (path is null ? "" : ",\"toolPath\":" + Quote(path))
+           // Clipped, because this payload is kept: the run's record holds every event of the run, and a command line can
+           // be a whole script. What reads it shows a line - 90 characters on the card, 60 in its header - and the log
+           // and the journal have the command whole; 300 keeps two long commands told apart past what any card shows.
+           + (command is null ? "" : ",\"toolCommand\":" + Quote(command.Length <= 300 ? command : command[..300] + "…"))
+           + "}";
+
+    /// <summary>
+    /// A string argument of a call, or null when it has none or its arguments do not parse. Also how a step card reads a
+    /// record from before the call's values were kept (RunFeed) - one reader for both, where there were two.
+    /// </summary>
+    internal static string? ArgumentOf(string argumentsJson, string name)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty(name, out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
+    /// <summary>The path a tool call names, as a value - null when it names none, or for a record from before.</summary>
+    public static string? ToolPath(this WorkEvent ev) => Field(ev.PayloadJson, ToolPathRegex);
+
+    /// <summary>The command a tool call runs, as a value - null when it runs none, or for a record from before.</summary>
+    public static string? ToolCommand(this WorkEvent ev) => Field(ev.PayloadJson, ToolCommandRegex);
+
+    private static readonly System.Text.RegularExpressions.Regex ToolPathRegex =
+        FieldRegex("toolPath");
+
+    private static readonly System.Text.RegularExpressions.Regex ToolCommandRegex =
+        FieldRegex("toolCommand");
 
     /// <summary>
     /// The tool an event names, or null for a record written before this was carried as a value.
@@ -383,23 +434,30 @@ public static class WorkEventPayload
         catch (System.Text.Json.JsonException) { return raw.Replace("\\\"", "\"").Replace("\\\\", "\\"); }
     }
 
+    /// <summary>
+    /// A string field of a payload, by its key - one pattern for every field read this way, where each had its own copy
+    /// of the same line. The value is a JSON string, escapes and all; Field decodes it.
+    /// </summary>
+    private static System.Text.RegularExpressions.Regex FieldRegex(string key)
+        => new("\"" + key + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     private static readonly System.Text.RegularExpressions.Regex ProviderRegex =
-        new("\"provider\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("provider");
 
     private static readonly System.Text.RegularExpressions.Regex ModelRegex =
-        new("\"model\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("model");
 
     private static readonly System.Text.RegularExpressions.Regex PurposeRegex =
-        new("\"purpose\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("purpose");
 
     private static readonly System.Text.RegularExpressions.Regex RouteRegex =
-        new("\"route\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("route");
 
     private static readonly System.Text.RegularExpressions.Regex ToolRegex =
-        new("\"tool\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("tool");
 
     private static readonly System.Text.RegularExpressions.Regex ComplexityRegex =
-        new("\"complexity\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        FieldRegex("complexity");
 
     /// <summary>
     /// Builds the payload of a <see cref="EventKind.PlanCreated"/> event: the plan's title and its
@@ -430,6 +488,52 @@ public static class WorkEventPayload
 
     /// <summary>The step titles this event carries, or null when it carries none.</summary>
     public static IReadOnlyList<string>? PlanSteps(this WorkEvent ev) => Plan(ev)?.Steps;
+
+    /// <summary>
+    /// Builds the payload of the event that announces a quick action: its title, as a value. The step card and
+    /// the window header read it from the sentence "Quick action: &lt;title&gt;" - live and in the history - so
+    /// rewording that sentence would have renamed a run's only card. Not a route: a quick action is not a model choice.
+    /// </summary>
+    public static string QuickActionPayload(string title)
+        => System.Text.Json.JsonSerializer.Serialize(new QuickActionShape(title), PayloadJson);
+
+    /// <summary>The quick action's title this event carries, or null for one that is not that announcement.</summary>
+    public static string? QuickActionTitle(this WorkEvent ev)
+    {
+        if (string.IsNullOrEmpty(ev.PayloadJson) || !ev.PayloadJson.Contains("quickAction", StringComparison.Ordinal))
+            return null;
+        try { return System.Text.Json.JsonSerializer.Deserialize<QuickActionShape>(ev.PayloadJson, PayloadJson)?.QuickAction; }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
+    private sealed record QuickActionShape(string QuickAction);
+
+    /// <summary>
+    /// The payload of an <see cref="EventKind.ArtifactReverted"/> event: the files a rejected step's revert put back,
+    /// and the ones it left as they are, as values.
+    ///
+    /// <para>The window read the put-back paths out of the sentence, after "put back: " - and the line about the files
+    /// the review found right says "NOT put back: a.md, b.md - the review found it right ...", so it marked a.md as put
+    /// back while the file stayed exactly where it was. Rewording either line moved files between the two lists.</para>
+    /// </summary>
+    public static string RevertPayload(int? stepNo, IReadOnlyList<string> reverted, IReadOnlyList<string> kept)
+        => System.Text.Json.JsonSerializer.Serialize(new RevertShape(stepNo, reverted, kept), PayloadJson);
+
+    /// <summary>The files this event says were put back, or null for an event that carries no revert values.</summary>
+    public static IReadOnlyList<string>? RevertedPaths(this WorkEvent ev) => Revert(ev)?.Reverted;
+
+    /// <summary>The files this event says were left as they are, or null for an event that carries no revert values.</summary>
+    public static IReadOnlyList<string>? KeptPaths(this WorkEvent ev) => Revert(ev)?.Kept;
+
+    private static RevertShape? Revert(WorkEvent ev)
+    {
+        if (ev.Kind != EventKind.ArtifactReverted || string.IsNullOrEmpty(ev.PayloadJson))
+            return null;
+        try { return System.Text.Json.JsonSerializer.Deserialize<RevertShape>(ev.PayloadJson, PayloadJson); }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
+    private sealed record RevertShape(int? Step, IReadOnlyList<string> Reverted, IReadOnlyList<string> Kept);
 
     private static PlanPayloadShape? Plan(WorkEvent ev)
     {

@@ -87,7 +87,8 @@ public sealed class AStepHandsOnBeforeItBreaksOffTests
         Assert.Contains(events, e => e.Summary.Contains("fresh conversation and continuing", StringComparison.Ordinal));
         Assert.DoesNotContain(events, e => e.Summary.Contains("Handover note not written", StringComparison.Ordinal));
         Assert.Contains(events, e => e.Kind == EventKind.ToolResult && e.Summary.StartsWith(
-            $"{StepOutputContract.ToolName} -> ok: Accepted as this step's output (revision 1), handed on with the handover note", StringComparison.Ordinal));
+            $"{StepOutputContract.ToolName} -> ok: Accepted as this step's output (revision 1); the steps after it receive these values.", StringComparison.Ordinal)
+            && e.Summary.EndsWith("Handed on with the handover note.", StringComparison.Ordinal));
         Assert.Equal(1, Asked(provider, AgainHandOn));                           // the fresh start knows it was handed on
         Assert.Contains(events, e => e.Kind == EventKind.StepOutputRecorded && e.Summary.Contains("claims 1-2 right", StringComparison.Ordinal));
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());

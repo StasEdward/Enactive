@@ -1,7 +1,8 @@
 namespace Enactive.App.Ui.ViewModels;
 
+using Enactive.Agents;
+
 using System.Collections.ObjectModel;
-using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Providers;
 using Enactive.Core.Execution;
@@ -30,15 +31,10 @@ internal sealed class ProviderRow : ObservableObject
     public string Name => Config.Id;
     public string Meta => $"{Config.Kind}  ·  {Config.BaseUrl}";
 
-    /// <summary>
-    /// Green when the provider is on this machine, blue when it is not. That is the one thing about
-    /// a provider worth seeing without reading: whether your code leaves the box to reach it.
-    /// </summary>
-    public IBrush EdgeBrush => IsLocal ? Brand.Success : Brand.Info;
-
     public string Reach => IsLocal ? "local" : "remote";
 
-    private bool IsLocal =>
+    /// <summary>On this machine - drawn green, and blue when not (Palette.Local).</summary>
+    public bool IsLocal =>
         Config.BaseUrl.Contains("localhost", StringComparison.OrdinalIgnoreCase)
         || Config.BaseUrl.Contains("127.0.0.1", StringComparison.Ordinal)
         || Config.BaseUrl.Contains("[::1]", StringComparison.Ordinal);
@@ -47,7 +43,7 @@ internal sealed class ProviderRow : ObservableObject
     {
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(Meta));
-        OnPropertyChanged(nameof(EdgeBrush));
+        OnPropertyChanged(nameof(IsLocal));
         OnPropertyChanged(nameof(Reach));
 
         // A card that was edited has not been re-checked, and the light must not go on claiming
@@ -66,14 +62,12 @@ internal sealed class ProviderRow : ObservableObject
         {
             _health = value;
             OnPropertyChanged();
-            OnPropertyChanged(nameof(HealthBrush));
             OnPropertyChanged(nameof(HealthTip));
         }
     }
 
     private ProviderStatus _health = ProviderStatus.Unknown;
 
-    public IBrush HealthBrush => ProviderEditViewModel.BrushFor(Health.Health);
 
     /// <summary>
     /// The summary AND the time it was learned.
@@ -106,16 +100,16 @@ internal sealed class WorkerRow : ObservableObject
     public string Meta => Config.Summary();
 
     /// <summary>
-    /// The worker's permission level on the same green-blue-yellow-red scale the autonomy slider
-    /// uses, because it is the same question: how much this one may do without asking.
+    /// The worker's permission level, drawn on the same green-blue-yellow-red scale the autonomy slider
+    /// uses (Palette.Autonomy), because it is the same question: how much this one may do without asking.
     /// </summary>
-    public IBrush EdgeBrush => Brand.Autonomy((int)Config.Level);
+    public int Autonomy => (int)Config.Level;
 
     public void Refresh()
     {
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(Meta));
-        OnPropertyChanged(nameof(EdgeBrush));
+        OnPropertyChanged(nameof(Autonomy));
     }
 }
 
@@ -299,23 +293,23 @@ internal sealed partial class SettingsViewModel : ObservableObject
         InitializeWeb();
         InitializeWritableRoots();
 
-        _numCtxText = _working.NumCtx?.ToString() ?? string.Empty;
-        _generationAction = _working.GenerationBudgets.Action.ToString();
-        _generationFileWrite = _working.GenerationBudgets.FileWrite.ToString();
-        _generationFinalAnswer = _working.GenerationBudgets.FinalAnswer.ToString();
-        _generationHandover = _working.GenerationBudgets.Handover.ToString();
-        _generationPlanner = _working.GenerationBudgets.Planner.ToString();
-        _repairModel = _working.RepairConsultation.Model is { } repairModel ? repairModel.ProviderId + "/" + repairModel.Model : "";
-        _repairThreshold = _working.RepairConsultation.FailedRepairs.ToString();
+        _numCtxText = _working.Engine.NumCtx?.ToString() ?? string.Empty;
+        _generationAction = _working.Engine.GenerationBudgets.Action.ToString();
+        _generationFileWrite = _working.Engine.GenerationBudgets.FileWrite.ToString();
+        _generationFinalAnswer = _working.Engine.GenerationBudgets.FinalAnswer.ToString();
+        _generationHandover = _working.Engine.GenerationBudgets.Handover.ToString();
+        _generationPlanner = _working.Engine.GenerationBudgets.Planner.ToString();
+        _repairModel = _working.Engine.RepairConsultation.Model is { } repairModel ? repairModel.ProviderId + "/" + repairModel.Model : "";
+        _repairThreshold = _working.Engine.RepairConsultation.FailedRepairs.ToString();
 
         _globalInstructions = _working.GlobalInstructions;
-        _disableThinking = _working.DisableThinking;
+        _disableThinking = _working.Engine.DisableThinking;
         _verifyWrites = _working.VerifyWrites;
-        _allowImplicitToolCalls = _working.AllowImplicitToolCalls;
-        _reviewRetriesText = _working.ReviewRetries.ToString();
-        _revertRejectedSteps = _working.RevertRejectedSteps;
-        _maxParallelStepsText = _working.MaxParallelSteps.ToString();
-        _evidenceBudgetText = _working.EvidenceBudget.ToString();
+        _allowImplicitToolCalls = _working.Engine.AllowImplicitToolCalls;
+        _reviewRetriesText = _working.Engine.ReviewRetries.ToString();
+        _revertRejectedSteps = _working.Engine.RevertRejectedSteps;
+        _maxParallelStepsText = _working.Engine.MaxParallelSteps.ToString();
+        _evidenceBudgetText = _working.Engine.EvidenceBudget.ToString();
         _logRetentionDaysText = _working.LogRetentionDays.ToString();
         _logPromptBodies = _working.LogPromptBodies;
         _shellCommandsIndex = (int)_working.ShellCommands;
@@ -555,6 +549,15 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private async Task<bool> ConfirmAsync(string headline, string detail)
         => ConfirmRequested is null || await ConfirmRequested(headline, detail);
 
+    /// <summary>
+    /// What a box that holds a number says: the number, or the fallback when it is not one, or not one the rule
+    /// accepts. A number typed wrong is not a choice, and the fallback - the engine's own default, mostly - is.
+    /// </summary>
+    private static int NumberOr(string text, int fallback, Func<int, bool> accepts)
+        => int.TryParse(text.Trim(), out var value) && accepts(value) ? value : fallback;
+
+    private static int PositiveOr(string text, int fallback) => NumberOr(text, fallback, v => v > 0);
+
     private async Task SaveAsync()
     {
         // Disabled while a connection code is applied; checked here too, because a disabled button is
@@ -563,40 +566,44 @@ internal sealed partial class SettingsViewModel : ObservableObject
             return;
 
         await _startupLoad;
-        _working.NumCtx = int.TryParse(NumCtxText.Trim(), out var n) ? n : null;
-        var repairParts = RepairModelText.Trim().Split('/', 2);
-        _working.RepairConsultation = _working.RepairConsultation with {
-            Model = repairParts.Length == 2 && repairParts.All(p => !string.IsNullOrWhiteSpace(p))
-                ? new Enactive.Core.Providers.ModelRef(repairParts[0], repairParts[1]) : null,
-            FailedRepairs = int.TryParse(RepairThresholdText.Trim(), out var repairThreshold) && repairThreshold >= 2 ? repairThreshold : 0
-        };
-        _working.GenerationBudgets = new(
-            Action: int.TryParse(GenerationActionText.Trim(), out var genAction) && genAction > 0 ? genAction : new Enactive.Core.Chat.GenerationBudgets().Action,
-            FileWrite: int.TryParse(GenerationFileWriteText.Trim(), out var genFileWrite) && genFileWrite > 0 ? genFileWrite : new Enactive.Core.Chat.GenerationBudgets().FileWrite,
-            FinalAnswer: int.TryParse(GenerationFinalAnswerText.Trim(), out var genFinalAnswer) && genFinalAnswer > 0 ? genFinalAnswer : new Enactive.Core.Chat.GenerationBudgets().FinalAnswer,
-            Handover: int.TryParse(GenerationHandoverText.Trim(), out var genHandover) && genHandover > 0 ? genHandover : new Enactive.Core.Chat.GenerationBudgets().Handover,
-            Planner: int.TryParse(GenerationPlannerText.Trim(), out var genPlanner) && genPlanner > 0 ? genPlanner : new Enactive.Core.Chat.GenerationBudgets().Planner);
         _working.GlobalInstructions = GlobalInstructions;
-        _working.DisableThinking = DisableThinking;
         _working.VerifyWrites = VerifyWrites;
-        _working.AllowImplicitToolCalls = AllowImplicitToolCalls;
-        // Clamped here as well as in the orchestrator: what is saved should be what will be used, or
-        // the settings window shows one number while the engine quietly runs another.
-        _working.ReviewRetries = int.TryParse(ReviewRetriesText.Trim(), out var r) ? Math.Clamp(r, 0, 5) : 1;
-        _working.RevertRejectedSteps = RevertRejectedSteps;
-        _working.MaxParallelSteps = int.TryParse(MaxParallelStepsText.Trim(), out var p) && p > 0 ? p : 1;
-        // Anything unparseable or below the floor falls back to the default rather than to the
-        // number typed: an evidence block too small to hold its header is not a smaller setting,
-        // it is a reviewer shown nothing.
-        _working.EvidenceBudget = int.TryParse(EvidenceBudgetText.Trim(), out var e)
-                                  && e >= ExecutionJournal.MinimumBudget
-            ? e
-            : ExecutionJournal.DefaultBudget;
+        // The engine's switches, as one new value of the settings' own section. What does not parse falls back to the
+        // engine's own default (EngineOptions.Default) - a number typed wrong is not a choice, and the defaults are
+        // written in one place.
+        var engineDefault = EngineOptions.Default;
+        var budgets = engineDefault.GenerationBudgets;
+        _working.Engine = _working.Engine with
+        {
+            NumCtx = int.TryParse(NumCtxText.Trim(), out var n) ? n : null,
+            RepairConsultation = _working.Engine.RepairConsultation with
+            {
+                // "provider/model", read as every model reference in the settings is (AppSettings.ParseRef).
+                Model = AppSettings.ParseRef(RepairModelText.Trim()),
+                // Fewer than two failed repairs is not a pattern worth a stronger model's time: 0 is "never".
+                FailedRepairs = NumberOr(RepairThresholdText, 0, v => v >= 2)
+            },
+            GenerationBudgets = new(
+                Action: PositiveOr(GenerationActionText, budgets.Action),
+                FileWrite: PositiveOr(GenerationFileWriteText, budgets.FileWrite),
+                FinalAnswer: PositiveOr(GenerationFinalAnswerText, budgets.FinalAnswer),
+                Handover: PositiveOr(GenerationHandoverText, budgets.Handover),
+                Planner: PositiveOr(GenerationPlannerText, budgets.Planner)),
+            DisableThinking = DisableThinking,
+            AllowImplicitToolCalls = AllowImplicitToolCalls,
+            // Clamped here as well as in the orchestrator: what is saved should be what will be used, or
+            // the settings window shows one number while the engine quietly runs another.
+            ReviewRetries = Math.Clamp(NumberOr(ReviewRetriesText, engineDefault.ReviewRetries, _ => true), 0, 5),
+            RevertRejectedSteps = RevertRejectedSteps,
+            MaxParallelSteps = PositiveOr(MaxParallelStepsText, engineDefault.MaxParallelSteps),
+            // Anything unparseable or below the floor falls back to the default rather than to the
+            // number typed: an evidence block too small to hold its header is not a smaller setting,
+            // it is a reviewer shown nothing.
+            EvidenceBudget = NumberOr(EvidenceBudgetText, engineDefault.EvidenceBudget, v => v >= ExecutionJournal.MinimumBudget)
+        };
         // A number that does not parse means the default, not zero: zero here is "keep everything",
         // a deliberate choice, and reaching it by typing nonsense would be the opposite of one.
-        _working.LogRetentionDays = int.TryParse(LogRetentionDaysText.Trim(), out var d) && d >= 0
-            ? d
-            : FileLogSink.DefaultRetentionDays;
+        _working.LogRetentionDays = NumberOr(LogRetentionDaysText, FileLogSink.DefaultRetentionDays, v => v >= 0);
         _working.LogPromptBodies = LogPromptBodies;
         _working.ShellCommands = Enum.IsDefined((ShellCommandPolicy)ShellCommandsIndex)
             ? (ShellCommandPolicy)ShellCommandsIndex

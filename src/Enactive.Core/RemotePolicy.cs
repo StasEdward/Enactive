@@ -24,9 +24,9 @@ using Enactive.Core.Tools;
 /// </para>
 ///
 /// <para><b>In Core since 2026-09-10.</b> It lived in <c>Enactive.Remote.Host</c>, which meant the
-/// only code that could apply it was the remote stack — so <c>UnattendedRun</c>, which composes
-/// every run nobody is sitting in front of, had to live up in the WinExe to reach it, where no test
-/// project could see it. A rule this load-bearing does not belong behind a project reference.</para>
+/// only code that could apply it was the remote stack — so the composition of every run nobody is
+/// sitting in front of (today <c>RunComposer</c>, which composes every run) had to live up in the
+/// WinExe to reach it, where no test project could see it. A rule this load-bearing does not belong behind a project reference.</para>
 /// </summary>
 public static class RemotePolicy
 {

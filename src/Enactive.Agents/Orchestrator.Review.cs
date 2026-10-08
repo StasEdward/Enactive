@@ -34,7 +34,10 @@ public sealed partial class Orchestrator
     /// <summary>The engine's record, for the review, of the tools this run kept back from the step.</summary>
     internal const string KeptBackTool = "engine_kept_back_tools";
 
-    private sealed record AttemptReview(ReviewResult Review, string? BudgetExhausted = null);
+    /// <summary>The engine's record, for the review, of a step's own report that it cannot go on.</summary>
+    internal const string SaidBlockedTool = "engine_step_said_blocked";
+
+    private sealed record AttemptReview(ReviewResult Review);
 
     /// <summary>
     /// Shared review/proof phase of an attempt. Callers own retries, rollback, checkpoints and
@@ -48,7 +51,7 @@ public sealed partial class Orchestrator
         RequestObligations? obligations = null, string? handedOn = null,
         IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null, System.Text.Json.Nodes.JsonObject? handedValues = null,
         IReadOnlyList<BuildBaseline>? measuredBefore = null, ReadLedger? reads = null,
-        IReadOnlyList<TaskRestriction>? restrictions = null, string? keptBack = null)
+        IReadOnlyList<TaskRestriction>? restrictions = null, string? keptBack = null, string? saidBlocked = null)
     {
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
         ValueTask Emit(EventKind kind, string summary) => publish(scope.Ev(kind, prefix + summary, stepNumber));
@@ -60,7 +63,7 @@ public sealed partial class Orchestrator
         }
 
         if (scope.Budget.TurnExhausted is { } beforeReview)
-            return new(new ReviewResult(false, beforeReview), BudgetExhausted: beforeReview);
+            return new(new ReviewResult(new ReviewVerdict.OutOfBudget(beforeReview)));
         await Emit(EventKind.ReviewRequested, stepNumber is null ? "reviewing…" : "reviewing with reasoner…");
 
         // The places the report and the handed-on result cite, opened by the engine now and recorded as its
@@ -86,8 +89,12 @@ public sealed partial class Orchestrator
         if (measuredBefore is { Count: > 0 } && measuredBefore.Where(b => b.Taken).ToArray() is { Length: > 0 } taken
             && !journal.Actions.Skip(evidenceStart).Any(a => a.Tool == MeasuredBeforeTool))
             journal.Record(stepNumber, MeasuredBeforeTool, "{}", ActionOutcome.Succeeded,
-                "Measured by the engine itself before any work in this run - its own runs, not the step's claims. They say where "
-                + "things stood BEFORE the work, not after it:\n" + string.Join("\n", taken.Select(b => "- " + b.Describe())),
+                (taken.FirstOrDefault(b => b.FromAnEarlierAttempt) is { } earlier
+                    ? $"Measured by the engine itself, {BuildBaseline.EarlierAttemptNote(earlier.TakenAt)} - the step's own calls show "
+                      + "what it found. Its own runs, not the step's claims; they say where things stood BEFORE any attempt, not after it:\n"
+                    : "Measured by the engine itself before any work in this run - its own runs, not the step's claims. They say where "
+                      + "things stood BEFORE the work, not after it:\n")
+                + string.Join("\n", taken.Select(b => "- " + b.Describe())),
                 WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
         // What the ENGINE kept back from the step: a fact for the reviewer, once per step. The step cannot call a
         // tool it was never shown, so no call shows it trying - and a review never told that read "I could not run
@@ -97,6 +104,14 @@ public sealed partial class Orchestrator
                 $"Kept back from this step by the engine, before any work: {keptBack}. The step could not have called them: "
                 + "where it says it could not use one, that is so, and no call would show an attempt. Whether what it did "
                 + "without them is what the step is for is yours to judge.",
+                WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
+        // The step's own report that it cannot go on, with nothing the engine found behind it (SaidBlockedOnly): what the
+        // review is asked, said where it reads the calls, once per step.
+        if (saidBlocked is not null && !journal.Actions.Skip(evidenceStart).Any(a => a.Tool == SaidBlockedTool))
+            journal.Record(stepNumber, SaidBlockedTool, "{}", ActionOutcome.Succeeded,
+                $"The step reported that it cannot go on: {saidBlocked}. Nothing the engine measured stops it. Judge it as any "
+                + "step: whether THIS step's own work is done, by its calls. Pass it if it is - its report then stands as a note, "
+                + "and the steps after it go on. Fail it if it is not, and it ends blocked as it reported.",
                 WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
         // What the plan checks this step on, decided by the engine now - a fact for the reviewer, not a judgement.
         if (stepCriteria is { Count: > 0 } && stepNumber is { } planNo
@@ -124,7 +139,7 @@ public sealed partial class Orchestrator
         // Phase 1.4: a step whose plan set semantic criteria is judged against those, and only those - its report is
         // a claim, and each verdict stands on evidence of a kind the criterion allows. A step without them is reviewed
         // as it always was.
-        var (review, mode) = _semanticCriteria && stepNumber is { } judgedNo
+        var (review, mode) = _options.SemanticCriteria && stepNumber is { } judgedNo
             && stepCriteria?.Where(c => c.Typed?.Kind == TypedCriterionKind.Semantic).ToArray() is { Length: > 0 } judged
             ? (await CriteriaReview.RunAsync(
                     new CriteriaReviewInput(title, judgedNo, LastAssistant(messages), handedOn,
@@ -148,18 +163,18 @@ public sealed partial class Orchestrator
                             restrictions),
                         models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct),
                     ReviewMode.Step);
-        await Usage(review.PromptTokens, review.CompletionTokens, review.CachedPromptTokens, review.CacheCreationPromptTokens);
-        if (review.BudgetExhausted is { } reviewSpent)
-            return new(review, BudgetExhausted: reviewSpent);
-        if (review.IncompleteReason is not null) return new(review);
-        if (!review.Pass)
+        await Usage(review.Usage.Prompt, review.Usage.Completion, review.Usage.Cached, review.Usage.Created);
+        // A verdict, said; a missing one is said by the attempt, with what it makes of the step.
+        switch (review.Verdict)
         {
-            await Emit(EventKind.ReviewFailed, $"FAIL ({mode} review): {review.Notes}");
-            return new(review);
+            case ReviewVerdict.Fail fail:
+                await Emit(EventKind.ReviewFailed, $"FAIL ({mode} review): {fail.Notes}");
+                break;
+            case ReviewVerdict.Pass pass:
+                await Emit(EventKind.ReviewPassed,
+                    $"PASS ({mode} review){(string.IsNullOrEmpty(pass.Notes) ? "" : ": " + pass.Notes)}");
+                break;
         }
-
-        await Emit(EventKind.ReviewPassed,
-            $"PASS ({mode} review){(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}");
         return new(review);
     }
 

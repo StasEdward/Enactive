@@ -1,6 +1,7 @@
 namespace Enactive.Settings;
 
 using Enactive.Agents;
+using Enactive.Core.Chat;
 using Enactive.Core.Orchestration;
 using Enactive.Core.Permissions;
 using Enactive.Core.Mail;
@@ -8,22 +9,78 @@ using Enactive.Core.Providers;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Providers;
+using Enactive.Tools;
+using Enactive.Tools.Mcp;
 using Enactive.Workspace;
 
 /// <summary>
-/// The engine's pieces, built from what a person configured. Everything a host needs before it can
-/// submit anything, and nothing that belongs to any one run.
+/// The engine's pieces, built from what a person configured: everything a run needs that is not about
+/// any one run - the providers, the team, the models, the tools, the settings as they stood when it was
+/// built. A host holds the current one and hands it to <see cref="RunComposer"/> with each request; it
+/// assembles none of it.
+///
+/// <para><b>Why one object, built in one place.</b> Until 2026-10-08 each host put a run's environment
+/// together itself from about a dozen objects, and the copies had drifted: the window cloned the MCP
+/// configurations and the console did not, the window passed its session approvals and the console
+/// passed none, the window built a model resolver and router of its own and threw away the ones
+/// <see cref="EngineComposition.Build"/> had made, and the two named the worker differently - a role
+/// name in one, an id in the other. Built here, there is no second copy to drift.</para>
+///
+/// <para>A snapshot: the window builds a new one when the settings are saved, and a run keeps the one it
+/// was started with - so a run whose settings changed underneath it is not a thing that can happen.</para>
 /// </summary>
-/// <param name="DefaultModel">
-/// The default worker's preferred model, for a host that wants to show or record what it is about
-/// to run on. A convenience: it is already inside <paramref name="Workers"/>.
+/// <param name="Session">
+/// The approvals given "for this session" in this process. The host's, handed in, because it outlives
+/// the engine: saving the settings builds a new engine, and must not forget what was allowed.
 /// </param>
 public sealed record ComposedEngine(
-    ChatProviderFactory Providers,
+    IChatProviderFactory Providers,
     IWorkerProvider Workers,
     IModelRouter Router,
     ModelResolver Models,
-    string DefaultModel);
+    IToolRegistry BuiltInTools,
+    IReadOnlyList<McpServerConfig> McpServers,
+    AppSettings Settings,
+    LogHub Log,
+    SessionApprovals Session)
+{
+    /// <summary>
+    /// The planner every run of this engine plans with. Settable because tests replace it - one that does not audit its
+    /// checks keeps a scripted run to the turns it scripted; nothing else does.
+    /// </summary>
+    public Planner Planner { get; init; } = new();
+
+    /// <summary>How a tier's policy decides a call. One for every engine: nothing replaces it, so nothing can.</summary>
+    public IPermissionEngine Permissions { get; } = new PermissionEngine();
+
+    /// <summary>The approvals given "for this workspace"; null for the store every host shares. Set by tests only.</summary>
+    public ApprovalStore? Approvals { get; init; }
+
+    /// <summary>The settings' own section, as it stood when the engine was built: a record, so the editor's later changes are a new one.</summary>
+    public EngineOptions EngineOptions { get; } = Settings.Engine;
+
+    /// <summary>The default worker's preferred model, for a host that wants to show what it is about to run on.</summary>
+    public string DefaultModel => Workers.Default.ModelPolicy.Preferred.Model;
+
+    /// <summary>
+    /// The worker a saved or typed name refers to - its id, or null when there is none by that name.
+    ///
+    /// <para>By id first, then by role name, either way ignoring case. The id is what is saved now; the
+    /// role name is what the window saved against a workspace until 2026-10-08 (the field was called
+    /// WorkerId all along), and what a person types. Looking a role name up as an id quietly found the
+    /// default worker instead - which is what the log analysis did for every role whose name was not its
+    /// id.</para>
+    /// </summary>
+    public string? WorkerIdFor(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+
+        var wanted = name.Trim();
+        return (Workers.All.FirstOrDefault(w => string.Equals(w.Id, wanted, StringComparison.OrdinalIgnoreCase))
+                ?? Workers.All.FirstOrDefault(w => string.Equals(w.Role.Trim(), wanted, StringComparison.OrdinalIgnoreCase)))?.Id;
+    }
+}
 
 /// <summary>
 /// Settings in, an engine out — for every host, from one piece of code.
@@ -74,40 +131,63 @@ public static class EngineComposition
         else if (FallbackModel(settings) is null)
             problems.Add(
                 "No model is chosen. "
-                + $"{string.Join(", ", settings.Providers.Select(p => p.DisplayName ?? p.Id))} "
+                + $"{string.Join(", ", settings.Providers.Select(p => p.Name))} "
                 + "has no model list — open Settings, edit the provider and fetch its models.");
 
         return problems;
     }
 
     /// <summary>
-    /// Providers, team, router and default model, from what a person configured.
+    /// The whole engine - providers, team, router, tools, settings - from what a person configured.
     /// </summary>
+    /// <param name="session">
+    /// The host's "for this session" approvals, which must survive the engine being rebuilt; a host
+    /// that has no session (the console, one run per process) passes none and gets an empty one.
+    /// </param>
+    /// <param name="metrics">Told of every model call's cost - the window's performance panel.</param>
     /// <exception cref="InvalidOperationException">
     /// When <see cref="Missing"/> is not empty. A precondition, not a runtime path: there is nothing
     /// to compose an engine out of, and the alternative — inventing a model name so the call can
     /// return something — is the defect this whole class was written for.
     /// </exception>
-    public static ComposedEngine Build(AppSettings settings, HttpClient http, LogHub log)
+    public static ComposedEngine Build(AppSettings settings, HttpClient http, LogHub log,
+        SessionApprovals? session = null, Action<ModelCallMetrics>? metrics = null)
     {
         if (Missing(settings) is { Count: > 0 } problems)
             throw new InvalidOperationException(string.Join(" ", problems));
 
         var providers = new ChatProviderFactory(Descriptors(settings), http, log)
         {
-            PromptBodies = settings.LogPromptBodies
+            PromptBodies = settings.LogPromptBodies,
+            MetricsReported = metrics
         };
 
-        var workers = Workers(settings);
         var models = new ModelResolver();
 
         return new ComposedEngine(
             providers,
-            workers,
+            Workers(settings),
             Router(settings, models),
             models,
-            workers.Default.ModelPolicy.Preferred.Model);
+            Tools(settings),
+            // Cloned, as the window always did: a run reads them minutes after it was started, and a
+            // configuration object edited after that must not change what the run connects to.
+            settings.McpServers.Select(c => c.Clone()).ToArray(),
+            settings,
+            log,
+            session ?? new SessionApprovals());
     }
+
+    /// <summary>
+    /// The built-in tools, configured as the person set them. The configured MCP servers are connected on
+    /// top of these for each run (RunComposer), because they are processes that belong to the run.
+    ///
+    /// <para>Built with the engine, so rebuilt whenever the settings are: reported 2026-09-22, an SMTP account
+    /// filled in and saved while <c>send_email</c> went on telling the agent it was unavailable, because the
+    /// window had read the account once when it opened.</para>
+    /// </summary>
+    public static IToolRegistry Tools(AppSettings settings)
+        => new ToolRegistry(BuiltInTools.Create(Mail(settings), Web(settings)));
 
     /// <summary>
     /// The mail account <c>send_email</c> uses, as the tool wants it — or
@@ -141,24 +221,31 @@ public static class EngineComposition
 
     /// <summary>Every configured endpoint, as the provider factory wants them.</summary>
     public static IReadOnlyList<ProviderDescriptor> Descriptors(AppSettings settings)
+        // By name, every one: six int? follow one another here, and positionally two of them could change
+        // places without the compiler or anybody reading the line noticing.
         => settings.Providers.Select(p => new ProviderDescriptor(
-            p.Id,
-            string.IsNullOrWhiteSpace(p.DisplayName) ? p.Id : p.DisplayName,
-            p.Kind,
-            p.BaseUrl,
-            string.IsNullOrEmpty(p.ApiKey) ? null : p.ApiKey,
-            p.Models,
-            p.Headers.Count > 0 ? p.Headers : null,
-            p.MaxTokens,
-            p.ContextWindowTokens,
-            p.AnswerReserveTokens,
-            p.HandoverAtPercent, p.StreamIdleTimeoutSeconds, p.OpenAiReasoningProfile, p.OllamaKeepAliveSeconds, p.CompletionTimeoutSeconds, p.ReasoningTokenAllowance,
-            p.WorkingContextTokens,
-            string.IsNullOrWhiteSpace(p.Effort) ? null : p.Effort.Trim().ToLowerInvariant(),
-            double.TryParse(p.Temperature?.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var t)
-                && t is >= 0 and <= 2 ? t : null,
-            string.Equals(p.Temperature?.Trim(), "server", StringComparison.OrdinalIgnoreCase),
-            p.SendReasoningBack)).ToList();
+            Id: p.Id,
+            DisplayName: p.Name,
+            Kind: p.Kind,
+            BaseUrl: p.BaseUrl,
+            ApiKey: string.IsNullOrEmpty(p.ApiKey) ? null : p.ApiKey,
+            Models: p.Models,
+            Headers: p.Headers.Count > 0 ? p.Headers : null,
+            MaxTokens: p.MaxTokens,
+            ContextWindowTokens: p.ContextWindowTokens,
+            AnswerReserveTokens: p.AnswerReserveTokens,
+            HandoverAtPercent: p.HandoverAtPercent,
+            StreamIdleTimeoutSeconds: p.StreamIdleTimeoutSeconds,
+            OpenAiReasoningProfile: p.OpenAiReasoningProfile,
+            OllamaKeepAliveSeconds: p.OllamaKeepAliveSeconds,
+            CompletionTimeoutSeconds: p.CompletionTimeoutSeconds,
+            ReasoningTokenAllowance: p.ReasoningTokenAllowance,
+            WorkingContextTokens: p.WorkingContextTokens,
+            Effort: string.IsNullOrWhiteSpace(p.Effort) ? null : p.Effort.Trim().ToLowerInvariant(),
+            Temperature: double.TryParse(p.Temperature?.Trim(), System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var t) && t is >= 0 and <= 2 ? t : null,
+            ServerTemperature: string.Equals(p.Temperature?.Trim(), "server", StringComparison.OrdinalIgnoreCase),
+            SendReasoningBack: p.SendReasoningBack)).ToList();
 
     /// <summary>
     /// The configured team, or the built-in one when a person has never edited it. Global

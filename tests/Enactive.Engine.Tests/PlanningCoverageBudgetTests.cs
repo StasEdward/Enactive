@@ -53,8 +53,8 @@ public sealed class PlanningCoverageBudgetTests
             new(fx.Workspace.Id, fx.Workspace.Name, null, null, null, [], []), provider, "model", default);
         Assert.Single(provider.Requests);
         Assert.NotNull(result.IncompleteReason);
-        Assert.Equal(30, result.PromptTokens);
-        Assert.Equal(10, result.CompletionTokens);
+        Assert.Equal(30, result.Usage.Prompt);
+        Assert.Equal(10, result.Usage.Completion);
     }
 
     [Fact]

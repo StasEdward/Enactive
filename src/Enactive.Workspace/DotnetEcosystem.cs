@@ -69,6 +69,15 @@ public sealed class DotnetEcosystem : IEcosystem
     // question the baseline asks.
     public string TestCommand(string target) => $"dotnet test \"{target}\" -nologo --logger \"console;verbosity=normal\"";
 
+    /// <summary>`dotnet test`, with or without a target and options - the SDK's test runner, as people type it.</summary>
+    public bool RunsTests(string command)
+    {
+        var words = command.Trim().Split((char[]?)null, 3, StringSplitOptions.RemoveEmptyEntries);
+        return words.Length >= 2
+            && (words[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) || words[0].Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase))
+            && words[1].Equals("test", StringComparison.OrdinalIgnoreCase);
+    }
+
     // `  Passed Probe.Sums.Is_positive(n: 2) [< 1 ms]` - two spaces, the verdict, the name (which may
     // hold spaces and brackets of its own), and the duration in square brackets at the end.
     private static readonly Regex TestLine = new(

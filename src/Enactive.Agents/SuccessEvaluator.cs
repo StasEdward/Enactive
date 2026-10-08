@@ -19,8 +19,10 @@ using Enactive.Core.Tools;
 /// command, a missing tool and a process that would not start are all
 /// <see cref="CriterionOutcome.Unknown"/>, which is not a pass and not an accusation.</para>
 /// </summary>
-public sealed class SuccessEvaluator : ISuccessEvaluator
+public sealed class SuccessEvaluator(IReadOnlyList<Enactive.Core.Builds.IEcosystem>? ecosystems = null) : ISuccessEvaluator
 {
+    private readonly IReadOnlyList<Enactive.Core.Builds.IEcosystem> _ecosystems = ecosystems ?? [];
+
     public async Task<SuccessReport> EvaluateAsync(
         IReadOnlyList<SuccessCriterionDefinition> criteria,
         IToolRegistry tools,
@@ -40,7 +42,7 @@ public sealed class SuccessEvaluator : ISuccessEvaluator
         {
             ct.ThrowIfCancellationRequested();
             results.Add(await EvaluateOneAsync(
-                criterion, tools, permissions, policy, decisions, context, taskId, ct));
+                criterion, tools, permissions, policy, decisions, context, taskId, _ecosystems, ct));
         }
 
         return new SuccessReport(results);
@@ -54,6 +56,7 @@ public sealed class SuccessEvaluator : ISuccessEvaluator
         IDecisionHandler decisions,
         ToolContext context,
         Guid taskId,
+        IReadOnlyList<Enactive.Core.Builds.IEcosystem> ecosystems,
         CancellationToken ct)
     {
         // A criterion stated as a type the engine understands is decided by the engine: no shell,
@@ -170,6 +173,9 @@ public sealed class SuccessEvaluator : ISuccessEvaluator
                 + Trim(result.Error ?? result.Output));
 
         var passed = criterion.PassesOn(exitCode);
+        if (passed && RanNoTests(ecosystems, criterion.Command, result.Output ?? "") is { } runner)
+            return Unknown($"'{criterion.Command}' runs {runner}'s tests and exited {exitCode}, but nothing it printed is a test it "
+                + "ran - a test command that runs no tests has verified nothing. " + Trim(result.Output ?? result.Error));
         return new CriterionResult(
             criterion.Name, criterion.Command, criterion.Required,
             passed ? CriterionOutcome.Passed : CriterionOutcome.Failed,
@@ -177,6 +183,21 @@ public sealed class SuccessEvaluator : ISuccessEvaluator
             passed ? null : Trim(result.Output ?? result.Error),
             criterion.Origin,
             criterion.AlreadyPassing) { Output = result.Output ?? result.Error };
+    }
+
+    /// <summary>
+    /// The ecosystem whose tests the command runs, when what it printed names no test it ran - or null. A test command
+    /// judged by its exit code alone passed having run nothing: on 2026-10-08 a requested final check, 'dotnet test' at a
+    /// workspace root whose solution holds no test project, printed only that the projects were up to date, exited 0, and
+    /// was a PASS - the very case the request had said was not one. Which command runs tests, and how its output reads,
+    /// is the ecosystem's to say.
+    /// </summary>
+    private static string? RanNoTests(IReadOnlyList<Enactive.Core.Builds.IEcosystem> ecosystems, string command, string output)
+    {
+        if (ecosystems.FirstOrDefault(e => e.RunsTests(command)) is not { } runner)
+            return null;
+        var report = runner.ParseTests(output);
+        return report is { Cases.Count: > 0 } or { Summary.Total: > 0 } ? null : runner.Name;
     }
 
     private static bool TryExitCode(ToolResult result, out int exitCode)
@@ -203,7 +224,9 @@ public sealed class SuccessEvaluator : ISuccessEvaluator
 
     /// <summary>
     /// Enough of the output to act on, and no more. The whole thing is already capped by the tool;
-    /// this keeps a failing build from filling the run report with its own log.
+    /// this keeps a failing build from filling the run report with its own log. Its start and its end, as every other
+    /// command output is cut (Shortening): this kept the first 1,200 characters, and the outcome a program prints last -
+    /// the totals of a test run, the error count of a build - was the part the reviewer of a criterion never saw.
     /// </summary>
     private const int MaxDetailChars = 1200;
 
@@ -213,8 +236,6 @@ public sealed class SuccessEvaluator : ISuccessEvaluator
             return "";
 
         var trimmed = text!.Trim();
-        return trimmed.Length <= MaxDetailChars
-            ? trimmed
-            : trimmed[..MaxDetailChars] + $"\n… (showing the first {MaxDetailChars} of {trimmed.Length} characters)";
+        return Enactive.Core.Execution.Shortening.HeadAndTail(trimmed, MaxDetailChars);
     }
 }

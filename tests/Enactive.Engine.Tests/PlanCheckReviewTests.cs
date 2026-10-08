@@ -76,8 +76,8 @@ public sealed class PlanCheckReviewTests
         var result = await Review(provider, "Explain the example `verify --delete`; do not execute it.");
         Assert.Null(result.IncompleteReason);
         Assert.Empty(result.Checks);
-        Assert.Equal(30, result.PromptTokens);
-        Assert.Equal(12, result.CompletionTokens);
+        Assert.Equal(30, result.Usage.Prompt);
+        Assert.Equal(12, result.Usage.Completion);
     }
 
     [Fact]

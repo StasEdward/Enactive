@@ -1,7 +1,6 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
-using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.History;
 using Enactive.Core.Inbox;
@@ -24,27 +23,12 @@ internal sealed class InboxItemViewModel : ObservableObject
     public string Kind => Item.Kind;
     public string When => Item.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 
-    /// <summary>What the item is: a finished result, a decision nobody was there to answer, an error.</summary>
-    public IBrush KindBrush => Item.Kind.ToLowerInvariant() switch
-    {
-        "result" => Brand.Success,
-        "decision" => Brand.Amber,
-        "error" => Brand.Danger,
-        _ => Brand.TextMuted
-    };
-
+    /// <summary>Unread items carry their weight, the way an unread mail does (Palette.Bold).</summary>
     public bool IsUnread
     {
         get => _isUnread;
-        set
-        {
-            if (Set(ref _isUnread, value))
-                OnPropertyChanged(nameof(TitleWeight));
-        }
+        set => Set(ref _isUnread, value);
     }
-
-    /// <summary>Unread items carry their weight, the way an unread mail does.</summary>
-    public FontWeight TitleWeight => IsUnread ? FontWeight.SemiBold : FontWeight.Normal;
 }
 
 /// <summary>One answer a waiting question offers, as a button.</summary>
@@ -63,21 +47,15 @@ internal sealed class RunEventViewModel
         When = at.ToLocalTime().ToString("HH:mm:ss");
         Kind = kind;
         Summary = summary;
-        Brush = kind switch
-        {
-            "ErrorObserved" or "TaskFailed" => Brand.Danger,
-            "ReviewFailed" => Brand.Warning,
-            "ReviewPassed" or "TaskCompleted" => Brand.Success,
-            "ToolInvoked" or "ToolResult" => Brand.TextMuted,
-            "assistant" => Brand.TextMuted,
-            _ => Brand.TextBody
-        };
+        Tone = TimelineTones.Of(kind);
     }
 
     public string When { get; }
     public string Kind { get; }
     public string Summary { get; }
-    public IBrush Brush { get; }
+
+    /// <summary>How the line reads - what its colour says (Palette.Timeline).</summary>
+    public TimelineTone Tone { get; }
 }
 
 /// <summary>

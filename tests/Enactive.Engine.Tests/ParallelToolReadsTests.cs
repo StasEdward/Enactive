@@ -140,4 +140,52 @@ public sealed class ParallelToolReadsTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
         Assert.Equal(4, cleaned);
     }
+
+    /// <summary>
+    /// Every read of a batch is admitted before the batch runs, and one the admission does not let through is not made.
+    /// The batch used to run first: the same read twice in a turn - made once, says the admission - was made twice and
+    /// the second result thrown away. The others still run together, and the answers keep the calls' order.
+    /// </summary>
+    [Fact]
+    public async Task A_read_the_admission_refuses_is_not_made_ahead_in_its_batch()
+    {
+        using var fx = new EngineFixture();
+        var made = new List<int>();
+        var bothIn = Signal();
+        var arrived = 0;
+        var probe = new Probe(async (args, _, ct) =>
+        {
+            using var json = JsonDocument.Parse(args);
+            var id = json.RootElement.GetProperty("id").GetInt32();
+            lock (made) made.Add(id);
+            if (Interlocked.Increment(ref arrived) == 2) bothIn.TrySetResult();
+            // The two reads that are made run together: each waits for the other to have started.
+            await bothIn.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+            return ToolResults.Ok($"read {id}");
+        });
+        fx.ToolsOverride = [probe];
+        var calls = new[] { new ToolCall("a", "probe", "{\"id\":0}"), new("again", "probe", "{\"id\":0}"), new("b", "probe", "{\"id\":1}") };
+        var provider = new FakeChatProvider(Turn.Says(Plan), new Turn(Calls: calls), Turn.Says("done"));
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.WorkerWith("probe")), "Read twice");
+
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+        Assert.Equal(new[] { 0, 1 }, made.Order());
+        var answers = provider.Requests.Last().Messages.Where(m => m.Role == ChatRole.Tool).ToArray();
+        Assert.Equal(new[] { "a", "again", "b" }, answers.Select(m => m.ToolCallId));
+        Assert.StartsWith("Not run: this is the same call", answers[1].Content);
+        Assert.Equal(new[] { "read 0", "read 1" }, new[] { answers[0].Content, answers[2].Content });
+
+        // The feed has the calls' order too. The answered read was admitted ahead of the batch, and its lines used to
+        // go out then - before the read the model had made first was even invoked.
+        var probeLines = events.Select((e, at) => (e, at)).Where(x => x.e.Summary.StartsWith("probe")).ToArray();
+        Assert.Collection(probeLines.Where(x => x.e.Kind == EventKind.ToolResult).Select(x => x.e.Summary),
+            first => Assert.Equal("probe -> ok: read 0", first),
+            again => Assert.StartsWith("probe -> Not run: this is the same call", again),
+            second => Assert.Equal("probe -> ok: read 1", second));
+        Assert.Equal(EventKind.ToolInvoked, probeLines[0].e.Kind);
+        Assert.Equal("probe {\"id\":0}", probeLines[0].e.Summary);
+        Assert.True(probeLines.First(x => x.e.Summary.StartsWith("probe -> Not run")).at
+            > probeLines.First(x => x.e.Summary == "probe -> ok: read 0").at);
+    }
 }

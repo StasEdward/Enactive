@@ -102,7 +102,7 @@ public sealed class ARefusedPlanContractReplaysTests(ITestOutputHelper output)
                 var recorded = PlanCheckCorpus.Read(file);
                 Assert.Equal("plan-model", recorded.Model);
                 Assert.Equal(recorded.Refusal, PlanCheckCorpus.Replay(recorded));
-                Assert.Equal("Invalid verification contract: " + recorded.Refusal, result.IncompleteReason);
+                Assert.Equal("The verification contract could not be used: " + recorded.Refusal, result.IncompleteReason);
             }
         }
         finally { Directory.Delete(root, true); }

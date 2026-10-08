@@ -2,6 +2,7 @@ namespace Enactive.App.Ui.ViewModels;
 
 using Enactive.App.Ui.Mvvm;
 using Enactive.Tools.Web;
+using Enactive.Settings;
 
 /// <summary>
 /// The Web pane: whether tasks may read the web (fetch_url), where search goes (web_search, a SearXNG server),
@@ -63,8 +64,9 @@ internal sealed partial class SettingsViewModel
             var tools = WebSearchUrl.Trim().Length > 0 && !HasWebProblem
                 ? $"{FetchUrlTool.Name} and {WebSearchTool.Name}"
                 : $"{FetchUrlTool.Name} (no search server, so no {WebSearchTool.Name})";
-            var roles = _working.Workers
-                .Where(w => w.Tools.Contains("*") || w.Tools.Contains(FetchUrlTool.Name) || w.Tools.Contains(WebSearchTool.Name))
+            // The role gate's own rule (WebRoles): this read the lists with case, and said nobody could read the
+            // web while the engine was letting a role naming Fetch_Url through.
+            var roles = WebRoles.Reaching(_working.Workers)
                 .Select(w => string.IsNullOrWhiteSpace(w.Role) ? w.Id : w.Role)
                 .ToArray();
             return roles.Length == 0

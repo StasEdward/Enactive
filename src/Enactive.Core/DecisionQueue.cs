@@ -28,6 +28,10 @@ public sealed class SessionApprovals
     public bool Approves(DecisionRequest request)
         => Key(request) is { } key && _items.ContainsKey(key);
 
+    /// <summary>Whether a call to this tool in this workspace would be approved - asked before there is a request, to decide what a run is offered.</summary>
+    public bool Approves(string workspaceRoot, string tool)
+        => !string.IsNullOrWhiteSpace(tool) && _items.ContainsKey(KeyOf(workspaceRoot, tool));
+
     public void Remember(DecisionRequest request)
     {
         if (Key(request) is { } key) _items.TryAdd(key, 0);
@@ -36,8 +40,13 @@ public sealed class SessionApprovals
     private static (string Root, string Tool)? Key(DecisionRequest request)
     {
         if (request.RequiresExplicitAnswer || request.Action is not { } action || string.IsNullOrWhiteSpace(request.Subject)) return null;
-        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(action.WorkingDirectory));
+        return KeyOf(action.WorkingDirectory, request.Subject);
+    }
+
+    private static (string Root, string Tool) KeyOf(string workspaceRoot, string tool)
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspaceRoot));
         if (OperatingSystem.IsWindows()) root = root.ToUpperInvariant();
-        return (root, request.Subject.ToUpperInvariant());
+        return (root, tool.ToUpperInvariant());
     }
 }

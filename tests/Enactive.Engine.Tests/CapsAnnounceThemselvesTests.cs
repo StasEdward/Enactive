@@ -31,7 +31,7 @@ public sealed class CapsAnnounceThemselvesTests
     private static ToolContext Context(EngineFixture fx, IArtifactStore? store = null)
         => new(TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: fx.Workspace.Id,
                Context: null!, PermissionPolicy: PermissionPolicy.PermissiveDefault,
-               WorkspaceRoot: fx.Root, Artifacts: store ?? fx.Artifacts, Services: null!);
+               WorkspaceRoot: fx.Root, Artifacts: store ?? fx.Artifacts);
 
     // ── the census ──────────────────────────────────────────────────────────
 
@@ -125,7 +125,12 @@ public sealed class CapsAnnounceThemselvesTests
         ["Orchestrator.CriteriaFileChars"] = nameof(AStepIsJudgedOnItsSemanticCriteriaTests.A_file_too_long_to_show_whole_says_so_and_does_not_count_as_read),
         ["TypedCriteria.MaxHandedChars"] = nameof(AResultFileTheRequestDoesNotNameTests.A_long_handed_file_says_how_much_was_not_shown),
         ["ExecutionJournal.RepeatedChars"] = nameof(EvidenceBudgetTests.The_same_text_is_shown_once_and_the_other_call_says_where),
-        ["FailingCheckReview.OutputTailChars"] = nameof(ACheckThatFailsBeforeTheWorkIsAskedAboutTests.A_long_output_is_shown_by_its_end_and_says_it_was_cut)
+        ["FailingCheckReview.OutputTailChars"] = nameof(ACheckThatFailsBeforeTheWorkIsAskedAboutTests.A_long_output_is_shown_by_its_end_and_says_it_was_cut),
+        // A step card's lines: only what the card shows - the run log keeps the whole text - and marked where cut.
+        // Literals until they were named, which is when this census saw them.
+        ["FeedCard.NoteChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked),
+        ["FeedCard.DetailChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked),
+        ["FeedCard.CommandChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked)
     };
 
     /// <summary>
@@ -458,14 +463,20 @@ public sealed class CapsAnnounceThemselvesTests
         Assert.Equal(0, Convert.ToInt32(result.Metadata!["skippedTooLarge"]));
     }
 
-    /// <summary>SuccessEvaluator.MaxDetailChars — a failing build's log inside a run report.</summary>
+    /// <summary>
+    /// SuccessEvaluator.MaxDetailChars — a failing build's log inside a run report: its start and its END, where the
+    /// outcome is, with the cut said. It kept the first 1,200 characters, and a test run's totals were never in them.
+    /// </summary>
     [Fact]
     public void A_criterions_output_says_how_much_of_it_is_shown()
     {
-        var detail = SuccessEvaluator.Trim(new string('e', 5_000));
+        var log = string.Join("\n", Enumerable.Range(1, 300).Select(i => $"  Passed Tests.Case{i:D3}")) + "\nFailed!  - Failed: 1, Passed: 299";
 
-        Assert.Contains("showing the first 1200 of 5000 characters", detail);
-        Assert.DoesNotContain("showing the first", SuccessEvaluator.Trim("error CS1002: ; expected"));
+        var detail = SuccessEvaluator.Trim(log);
+
+        Assert.Contains("characters not shown here; the end follows", detail);
+        Assert.EndsWith("Failed!  - Failed: 1, Passed: 299", detail);
+        Assert.DoesNotContain("not shown", SuccessEvaluator.Trim("error CS1002: ; expected"));
     }
 
 }

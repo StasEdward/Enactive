@@ -68,6 +68,10 @@ public sealed record TestRunReport(IReadOnlyList<TestCaseResult> Cases, TestRunS
 /// workspace as it was BEFORE the first attempt, not as the first attempt left it.
 /// </summary>
 /// <param name="Kind">"Build" or "Test".</param>
+/// <param name="TakenAt">
+/// When it was taken - said with it when a later attempt compares against it, since that attempt's workspace is not
+/// the one it describes. Null in a snapshot written before the time was kept.
+/// </param>
 public sealed record BaselineSnapshot(
     string Ecosystem,
     string Kind,
@@ -75,4 +79,5 @@ public sealed record BaselineSnapshot(
     int? ExitCode,
     string? NotTaken,
     IReadOnlyList<BuildDiagnostic>? Diagnostics = null,
-    TestRunReport? Tests = null);
+    TestRunReport? Tests = null,
+    DateTimeOffset? TakenAt = null);

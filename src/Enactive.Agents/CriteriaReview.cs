@@ -38,45 +38,23 @@ internal static class CriteriaReview
         One entry for every criterion, by id. A fail says what is wrong, concretely enough to be put right.
         """;
 
+    /// <param name="budget">Why the reviewer may not be asked (again), given what this review has spent - or null when it may.</param>
     public static async Task<ReviewResult> RunAsync(CriteriaReviewInput input, IReadOnlyList<SuccessCriterionDefinition> criteria,
         Func<ExecutedAction, EvidenceKind, bool> admits, IChatProvider provider, string model,
-        Func<int, int, string?>? beforeRetry, CancellationToken ct)
+        Func<int, int, string?>? budget, CancellationToken ct)
     {
         var numbered = criteria.Select((c, i) => ($"C{i + 1}", c)).ToArray();
-        var messages = new List<ChatMessage> { ChatMessage.System(Instruction), ChatMessage.User(Prompt(input, numbered)) };
-        int prompt = 0, output = 0;
-        int? cached = null, created = null;
-        for (var attempt = 0; attempt < 2; attempt++)
-        {
-            if (attempt > 0 && beforeRetry?.Invoke(prompt, output) is { } spent)
-                return new ReviewResult(false, spent, prompt, output) { BudgetExhausted = spent };
-            ChatCompletion completion;
-            try
-            {
-                completion = await provider.CompleteAsync(GenerationAllowance.Fit(new ChatRequest(model, messages, Temperature: 0,
-                    Purpose: GenerationPurpose.Review, OutputTokenLimit: 4096 + 512 * numbered.Length), provider), ct);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                return new ReviewResult(false, "review error: " + ex.Message, prompt, output)
-                    { IncompleteReason = "review error: " + ex.Message, VerdictUnavailable = true };
-            }
-            prompt += completion.PromptTokens ?? 0;
-            output += completion.CompletionTokens ?? 0;
-            cached = TokenCounts.Add(cached, completion.CachedPromptTokens);
-            created = TokenCounts.Add(created, completion.CacheCreationPromptTokens);
-            var answer = completion.Message.Content ?? "";
-            var (result, errors) = Read(answer, input, numbered, admits);
-            if (errors.Count == 0 && result is not null)
-                return result with { PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached, CacheCreationPromptTokens = created };
-            messages.Add(ChatMessage.Assistant(answer));
-            messages.Add(ChatMessage.User("Your answer could not be used:\n" + string.Join("\n", errors.Select(e => "- " + e))
-                + "\nReturn the complete corrected JSON object."));
-        }
-        const string why = "the criteria review could not be used after correction";
-        return new ReviewResult(false, why, prompt, output)
-            { IncompleteReason = why, VerdictUnavailable = true, CachedPromptTokens = cached, CacheCreationPromptTokens = created };
+        // A cut-off answer, or one that called a tool, is refused before it is read - as the step's review always did.
+        // This one used to read either as a finished verdict, and a cut-off JSON that happened to parse was one.
+        var round = await StructuredAnswer.AskAsync(provider,
+            [ChatMessage.System(Instruction), ChatMessage.User(Prompt(input, numbered))],
+            messages => new ChatRequest(model, messages, Temperature: 0, Purpose: GenerationPurpose.Review,
+                OutputTokenLimit: 4096 + 512 * numbered.Length),
+            (answer, _) => Read(answer, input, numbered, admits),
+            errors => StructuredAnswer.Listed(errors, "Return the complete corrected JSON object."),
+            budget, requireComplete: true, ct);
+
+        return ReviewResult.From(round, "the criteria review could not be used after correction");
     }
 
     private static string Prompt(CriteriaReviewInput input, IReadOnlyList<(string Id, SuccessCriterionDefinition C)> criteria)
@@ -101,7 +79,7 @@ internal static class CriteriaReview
     }
 
     /// <summary>The answer checked and read; each criterion's verdict stands only on evidence of a kind it allows.</summary>
-    internal static (ReviewResult? Result, IReadOnlyList<string> Errors) Read(string answer, CriteriaReviewInput input,
+    internal static (ReviewVerdict? Verdict, IReadOnlyList<string> Errors) Read(string answer, CriteriaReviewInput input,
         IReadOnlyList<(string Id, SuccessCriterionDefinition C)> criteria, Func<ExecutedAction, EvidenceKind, bool> admits)
     {
         if (ModelText.ExtractJsonObject(ModelText.StripThink(answer)) is not { } json) return (null, ["no JSON object"]);
@@ -153,14 +131,11 @@ internal static class CriteriaReview
         if (failed.Length > 0)
         {
             var advice = string.Join("\n", failed.Select(v => $"- {v.C.Typed!.Text}: {v.Why}"));
-            return (new ReviewResult(false, lines) { RepairAdvice = "These criteria of the step are not met:\n" + advice }, []);
+            return (new ReviewVerdict.Fail(lines, "These criteria of the step are not met:\n" + advice, []), []);
         }
         var unknown = verdicts.Where(v => v.Verdict == "unknown").ToArray();
         if (unknown.Length > 0)
-            return (new ReviewResult(false, lines)
-            {
-                IncompleteReason = lines, VerdictUnavailable = true, Undecided = true
-            }, []);
-        return (new ReviewResult(true, lines), []);
+            return (new ReviewVerdict.Undecided(lines), []);
+        return (new ReviewVerdict.Pass(lines), []);
     }
 }

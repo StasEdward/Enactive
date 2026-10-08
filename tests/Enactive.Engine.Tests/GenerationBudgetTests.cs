@@ -42,10 +42,10 @@ public sealed class GenerationBudgetTests
     [Fact]
     public void Generation_settings_round_trip_and_clone()
     {
-        var settings = new Enactive.Settings.AppSettings { GenerationBudgets = new(101, 202, 303, 404) };
+        var settings = new Enactive.Settings.AppSettings { Engine = new() { GenerationBudgets = new(101, 202, 303, 404) } };
         var restored = JsonSerializer.Deserialize<Enactive.Settings.AppSettings>(JsonSerializer.Serialize(settings))!;
-        Assert.Equal(settings.GenerationBudgets, restored.GenerationBudgets);
-        Assert.Equal(settings.GenerationBudgets, settings.Clone().GenerationBudgets);
+        Assert.Equal(settings.Engine.GenerationBudgets, restored.Engine.GenerationBudgets);
+        Assert.Equal(settings.Engine.GenerationBudgets, settings.Clone().Engine.GenerationBudgets);
     }
 
     [Fact]

@@ -11,7 +11,7 @@
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
 <div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><a href="remote-access.html">Remote access</a><a href="remote-security.html">Remote security</a><p class="nav-group">Configuration</p><a href="settings.html" aria-current="page">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
-<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Settings</span></div><p class="eyebrow">Configuration · Enactive</p><h1>Settings</h1><div class="page-meta"><span>10 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Settings.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#configuration-layers">Configuration layers</a><a href="#saving-and-cancelling">Saving and cancelling</a><a href="#general-account-and-about">General, Account, and About</a><a href="#ai--providers">AI → Providers</a><a href="#ai--team">AI → Team</a><a href="#ai--phases">AI → Phases</a><a href="#ai--general">AI → General</a><a href="#ai--mcp">AI → MCP</a><a href="#web">Web</a><a href="#environment-defaults-and-migration">Environment defaults and migration</a><a href="#remote-access">Remote access</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="configuration-layers">Configuration layers<a class="heading-anchor" href="#configuration-layers" aria-label="Link to Configuration layers">#</a></h2>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Settings</span></div><p class="eyebrow">Configuration · Enactive</p><h1>Settings</h1><div class="page-meta"><span>12 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Settings.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#configuration-layers">Configuration layers</a><a href="#saving-and-cancelling">Saving and cancelling</a><a href="#general-account-and-about">General, Account, and About</a><a href="#ai--providers">AI → Providers</a><a href="#ai--team">AI → Team</a><a href="#ai--phases">AI → Phases</a><a href="#ai--general">AI → General</a><a href="#ai--mcp">AI → MCP</a><a href="#web">Web</a><a href="#environment-defaults-and-migration">Environment defaults and migration</a><a href="#remote-access">Remote access</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="configuration-layers">Configuration layers<a class="heading-anchor" href="#configuration-layers" aria-label="Link to Configuration layers">#</a></h2>
 <div class="table-wrap" tabindex="0" role="region" aria-label="Layer / Controls / Persistence"><table>
 <thead>
 <tr>
@@ -51,7 +51,8 @@
 <td>Process environment</td>
 </tr>
 </tbody></table>
-</div><p>There is no independent Workspace Providers/Phases file in the current desktop implementation. Global instructions and phase bindings are application-wide. “Workspace versus Global” in the template editor selects a template&#39;s storage scope, not a separate full application-settings profile.</p>
+</div><p>The engine&#39;s switches - review retries, parallel steps, evidence budget, thinking, the phase switches and the rest - are one <code>&quot;Engine&quot;</code> object in <code>settings.json</code>. A file written before that section existed held them at the top level; they are moved into it the first time the file is loaded, with their values. A switch the file does not mention keeps its default. Every save also copies those older switches back to the top level, under the names they had, so a build from before the section that reads the same file (an older install beside this one, or a release rolled back) runs on the same values. If that build saves the file, it drops the section it does not know; this one then reads the switches from the top level again, with anything changed there. Where a file has both, the section wins.</p>
+<p>There is no independent Workspace Providers/Phases file in the current desktop implementation. Global instructions and phase bindings are application-wide. “Workspace versus Global” in the template editor selects a template&#39;s storage scope, not a separate full application-settings profile.</p>
 <h2 id="saving-and-cancelling">Saving and cancelling<a class="heading-anchor" href="#saving-and-cancelling" aria-label="Link to Saving and cancelling">#</a></h2>
 <p>Most settings are edited on a copy and take effect through the outer <strong>Save</strong> action. Cancel discards those unsaved edits. Provider/worker/MCP sub-editors update that draft; finish by saving the main Settings window.</p>
 <p>Template files are the exception: their editor saves immediately, and deletion is immediate after its confirmation. Outer Cancel cannot undo those file operations.</p>
@@ -61,7 +62,8 @@
 <p><strong>Account</strong> is currently a placeholder. Enactive has no desktop account system of its own; provider credentials live under AI → Providers.</p>
 <p><strong>About</strong> shows application/build/runtime information and component versions, useful when diagnosing mixed or stale application files.</p>
 <h2 id="ai--providers">AI → Providers<a class="heading-anchor" href="#ai--providers" aria-label="Link to AI → Providers">#</a></h2>
-<p>A provider is a named endpoint with a transport adapter, authentication, and a catalog of model IDs.</p>
+<p>A provider is a named endpoint with a transport adapter, authentication, and a catalog of model IDs. Its window has two columns: on the left, where the provider is and how to reach it; on the right, how its models are used. A field only one kind of provider reads is shown for that kind only; a value set before the kind changed is kept.</p>
+<p><strong>Connection</strong></p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="Field / Guidance"><table>
 <thead>
 <tr>
@@ -71,11 +73,7 @@
 </thead>
 <tbody><tr>
 <td>ID</td>
-<td>Stable unique key used in model references; changing it affects references</td>
-</tr>
-<tr>
-<td>Display name</td>
-<td>Human-readable provider label</td>
+<td>Stable unique key used in model references; changing it affects references. It is also the provider&#39;s name wherever one is shown, unless settings.json gives it a <code>DisplayName</code></td>
 </tr>
 <tr>
 <td>Kind</td>
@@ -95,11 +93,56 @@
 </tr>
 <tr>
 <td>Models</td>
-<td>Exact endpoint model names, discovered or entered manually</td>
+<td>Exact endpoint model names, discovered (Fetch) or entered manually; Test checks the first one is served</td>
+</tr>
+</tbody></table>
+</div><p><strong>Model</strong></p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Field / Guidance"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Guidance</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Context window</td>
+<td>The prompt plus answer size the provider accepts; nothing can ask a provider, so blank assumes 16,000</td>
+</tr>
+<tr>
+<td>Hand a step over at</td>
+<td><code>75%</code> of the context window, <code>80000</code> tokens of prompt, or both (<code>75%, 80000</code> - the nearer one wins); blank hands over after 60 turns</td>
+</tr>
+<tr>
+<td>Tokens kept free for the answer</td>
+<td>Blank keeps an eighth of the context window</td>
 </tr>
 <tr>
 <td>Max output tokens</td>
-<td>Optional per-provider response cap where the adapter supports it</td>
+<td>Optional per-provider response cap</td>
+</tr>
+<tr>
+<td>Extra generation tokens for reasoning</td>
+<td>Room added for a reasoning model&#39;s thinking</td>
+</tr>
+<tr>
+<td>Temperature</td>
+<td>Blank - the engine&#39;s (0.2 for work, 0 for review); a number; <code>server</code> - none sent, the server&#39;s own applies. Every kind reads it</td>
+</tr>
+<tr>
+<td>Effort</td>
+<td>Anthropic only: <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code></td>
+</tr>
+<tr>
+<td>Keep the model loaded</td>
+<td>OllamaNative only: seconds; 0 unloads, -1 keeps it resident</td>
+</tr>
+<tr>
+<td>OpenAI reasoning compatibility, Send reasoning back</td>
+<td>OpenAiCompatible only</td>
+</tr>
+<tr>
+<td>Stream idle / non-streaming timeout</td>
+<td>Seconds; 300 and 900 by default</td>
 </tr>
 </tbody></table>
 </div><h3 id="adapter-behavior">Adapter behavior<a class="heading-anchor" href="#adapter-behavior" aria-label="Link to Adapter behavior">#</a></h3>
@@ -172,7 +215,7 @@
 <td>Execute</td>
 </tr>
 </tbody></table>
-</div><p>The worker&#39;s tool allowlist is authoritative: an empty list permits no tools; <code>*</code> permits all registered tools. MCP additionally supports <code>mcp__*</code>, a server prefix such as <code>mcp__example__*</code>, or an exact discovered tool name.</p>
+</div><p>The worker&#39;s tool allowlist is authoritative: an empty list permits no tools; <code>*</code> permits all registered tools. MCP additionally supports <code>mcp__*</code>, a server prefix such as <code>mcp__example__*</code>, or an exact discovered tool name. Names and patterns are compared ignoring case. A trailing <code>*</code> is a pattern only after <code>mcp__</code>: built-in tools are granted by name, so <code>write_*</code> is just a name and grants nothing. The run, the MCP and SMTP screens, and the advice a worker is given all read a role by this one rule.</p>
 <p>Worker instructions are augmented at runtime with shared honesty rules, optional read-back guidance, and Global instructions. Put role-specific behavior in the worker and project/task-specific requirements in a template or request.</p>
 <p>Fallback addresses supported execution-provider failures. It does not automatically replace a weak model because a review failed and does not configure Plan/Review failover.</p>
 <h2 id="ai--phases">AI → Phases<a class="heading-anchor" href="#ai--phases" aria-label="Link to AI → Phases">#</a></h2>

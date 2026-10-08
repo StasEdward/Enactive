@@ -8,6 +8,10 @@
   <ItemGroup>
     <PackageReference Include="MailKit" Version="4.18.0" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- AppSettings.Secrets(): the list of settings secrets, which a test checks every protected field against. -->
+    <InternalsVisibleTo Include="Enactive.Engine.Tests" />
+  </ItemGroup>
 
   <!--
     What a person configured, and what builds an engine from it.

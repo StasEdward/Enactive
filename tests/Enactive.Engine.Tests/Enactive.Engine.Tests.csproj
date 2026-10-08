@@ -45,6 +45,8 @@
     <Compile Include="../../src/Enactive.App.Ui/SchedulePolicy.cs" Link="Ui/SchedulePolicy.cs" />
     <Compile Include="../../src/Enactive.App.Ui/TrayHint.cs" Link="Ui/TrayHint.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/WorkerEditViewModel.cs" Link="Ui/WorkerEditViewModel.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/ViewModels/StepCardViewModel.cs" Link="Ui/StepCardViewModel.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/ViewModels/Looks.cs" Link="Ui/Looks.cs" />
     <Using Include="Xunit" />
   </ItemGroup>
 

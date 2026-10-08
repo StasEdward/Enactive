@@ -43,7 +43,11 @@ public static class McpReach
     /// </summary>
     /// <param name="registered">Every tool name the run's registry holds, MCP and built-in alike.</param>
     /// <param name="allows">The role gate, as the engine reaches it: does this worker carry this tool.</param>
-    public static string? Unreached(IEnumerable<string> registered, Func<string, bool> allows)
+    /// <param name="role">
+    /// The role, named in the sentence: a run says it once for each role that cannot reach a server, and two roles that
+    /// cannot were one identical sentence, said once for the first and never for the second.
+    /// </param>
+    public static string? Unreached(IEnumerable<string> registered, Func<string, bool> allows, string? role = null)
     {
         // Per server: how many tools it contributed, and how many of those the role may call.
         var tally = new Dictionary<string, (int Tools, int Allowed)>(StringComparer.OrdinalIgnoreCase);
@@ -71,7 +75,7 @@ public static class McpReach
         // pays for every tool definition it is offered, in every prompt of every step.
         var one = unreachable[0].Key;
 
-        return $"MCP server(s) started and offered to nobody: {named}. This worker's role names no "
+        return $"MCP server(s) started and offered to nobody: {named}. {(role is null ? "This worker's role" : $"The {role} role")} names no "
              + $"tool from them, so the run pays to start them and cannot use them. Add "
              + $"\"{Prefix}{one}__*\" (that server) or \"{Prefix}*\" (all of them) to the role under "
              + "Settings → AI → Team, or turn the server off.";

@@ -22,7 +22,7 @@ public sealed class McpTests
     };
     private static ToolContext Context(EngineFixture fx) => new(Guid.NewGuid(), Guid.NewGuid(), fx.Workspace.Id,
         new WorkContext(fx.Workspace.Id, "test", null, null, null, [], []), PermissionPolicy.PermissiveDefault,
-        fx.Root, fx.Artifacts, new Services());
+        fx.Root, fx.Artifacts);
 
     [Fact]
     public async Task Stdio_discovers_all_pages_calls_tools_and_disposes_process()
@@ -125,9 +125,10 @@ public sealed class McpTests
         var provider = new FakeChatProvider(script);
         var handler = new ScriptedDecisionHandler(answer);
         var worker = EngineFixture.WorkerWith(pattern) with { DefaultLevel = PermissionLevel.Autonomous };
-        var engine = new Orchestrator(new Enactive.Workspace.WorkspaceChangesFactory(),new SingleProviderFactory(provider), new ModelResolver(), new StaticWorkerProvider(worker),
-            tools, fx.Artifacts, fx.Workspace, new Planner(checksAuditEnabled: false), new PermissionEngine(), handler,
-            new PermissionPolicy(PermissionLevel.Autonomous, ["*"], []), new Services());
+        var engine = new Orchestrator(fx.Resources(new SingleProviderFactory(provider), worker, [worker]) with
+        {
+            Tools = tools, Decisions = handler, Policy = new PermissionPolicy(PermissionLevel.Autonomous, ["*"], [])
+        }, EngineOptions.Default);
         var events = await fx.RunAsync(engine, "use MCP");
         Assert.Equal(decisions, handler.Requests.Count);
         Assert.Equal(called, events.Any(e => e.Kind == Enactive.Core.Events.EventKind.ToolInvoked
@@ -175,7 +176,6 @@ public sealed class McpTests
 
     private static bool Exited(int pid)
     { try { using var process = Process.GetProcessById(pid); return process.HasExited || process.WaitForExit(3000); } catch (ArgumentException) { return true; } }
-    private sealed class Services : IServiceProvider { public object? GetService(Type type) => null; }
     private sealed class McpHttpHandler : HttpMessageHandler
     {
         public bool SawAuthorization; public int Calls;

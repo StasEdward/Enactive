@@ -13,6 +13,8 @@
 | Resolved run specification | One template resolved with concrete answers and permissions | Stored with a run |
 | Environment | Storage backend, logging, console model/endpoint, initial desktop defaults | Process environment |
 
+The engine's switches - review retries, parallel steps, evidence budget, thinking, the phase switches and the rest - are one `"Engine"` object in `settings.json`. A file written before that section existed held them at the top level; they are moved into it the first time the file is loaded, with their values. A switch the file does not mention keeps its default. Every save also copies those older switches back to the top level, under the names they had, so a build from before the section that reads the same file (an older install beside this one, or a release rolled back) runs on the same values. If that build saves the file, it drops the section it does not know; this one then reads the switches from the top level again, with anything changed there. Where a file has both, the section wins.
+
 There is no independent Workspace Providers/Phases file in the current desktop implementation. Global instructions and phase bindings are application-wide. “Workspace versus Global” in the template editor selects a template's storage scope, not a separate full application-settings profile.
 
 ## Saving and cancelling
@@ -33,18 +35,33 @@ If saving fails, inspect the reported error before closing the editor. Secret-pr
 
 ## AI → Providers
 
-A provider is a named endpoint with a transport adapter, authentication, and a catalog of model IDs.
+A provider is a named endpoint with a transport adapter, authentication, and a catalog of model IDs. Its window has two columns: on the left, where the provider is and how to reach it; on the right, how its models are used. A field only one kind of provider reads is shown for that kind only; a value set before the kind changed is kept.
+
+**Connection**
 
 | Field | Guidance |
 | --- | --- |
-| ID | Stable unique key used in model references; changing it affects references |
-| Display name | Human-readable provider label |
+| ID | Stable unique key used in model references; changing it affects references. It is also the provider's name wherever one is shown, unless settings.json gives it a `DisplayName` |
 | Kind | `OllamaNative`, `Anthropic`, or `OpenAiCompatible` |
 | Base URL | API base for the selected adapter |
 | API key | Credential entered in the editor and protected when saved |
 | Headers | Provider-specific HTTP headers; use only where needed |
-| Models | Exact endpoint model names, discovered or entered manually |
-| Max output tokens | Optional per-provider response cap where the adapter supports it |
+| Models | Exact endpoint model names, discovered (Fetch) or entered manually; Test checks the first one is served |
+
+**Model**
+
+| Field | Guidance |
+| --- | --- |
+| Context window | The prompt plus answer size the provider accepts; nothing can ask a provider, so blank assumes 16,000 |
+| Hand a step over at | `75%` of the context window, `80000` tokens of prompt, or both (`75%, 80000` - the nearer one wins); blank hands over after 60 turns |
+| Tokens kept free for the answer | Blank keeps an eighth of the context window |
+| Max output tokens | Optional per-provider response cap |
+| Extra generation tokens for reasoning | Room added for a reasoning model's thinking |
+| Temperature | Blank - the engine's (0.2 for work, 0 for review); a number; `server` - none sent, the server's own applies. Every kind reads it |
+| Effort | Anthropic only: `low`, `medium`, `high`, `xhigh`, `max` |
+| Keep the model loaded | OllamaNative only: seconds; 0 unloads, -1 keeps it resident |
+| OpenAI reasoning compatibility, Send reasoning back | OpenAiCompatible only |
+| Stream idle / non-streaming timeout | Seconds; 300 and 900 by default |
 
 ### Adapter behavior
 
@@ -89,7 +106,7 @@ For example, `ollama/qwen3-coder:30b` identifies a model under the configured pr
 | Ops | Read/search/list, shell, Git, Docker | Execute |
 | Writer | Read/search/list, write/edit, directories/moves | Execute |
 
-The worker's tool allowlist is authoritative: an empty list permits no tools; `*` permits all registered tools. MCP additionally supports `mcp__*`, a server prefix such as `mcp__example__*`, or an exact discovered tool name.
+The worker's tool allowlist is authoritative: an empty list permits no tools; `*` permits all registered tools. MCP additionally supports `mcp__*`, a server prefix such as `mcp__example__*`, or an exact discovered tool name. Names and patterns are compared ignoring case. A trailing `*` is a pattern only after `mcp__`: built-in tools are granted by name, so `write_*` is just a name and grants nothing. The run, the MCP and SMTP screens, and the advice a worker is given all read a role by this one rule.
 
 Worker instructions are augmented at runtime with shared honesty rules, optional read-back guidance, and Global instructions. Put role-specific behavior in the worker and project/task-specific requirements in a template or request.
 

@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using Enactive.Agents;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Permissions;
+using Enactive.Core.Tools;
 using Enactive.Settings;
 
 /// <summary>One tool the worker may or may not use. A row in the tools list, not a checkbox built in code.</summary>
@@ -61,7 +62,9 @@ internal sealed class WorkerEditViewModel : ObservableObject
         // of being dropped. The order and the rule live in WorkerTools, where they are tested.
         foreach (var tool in WorkerTools.Offerable(toolCatalog, config.Tools))
         {
-            var toggle = new ToolToggle(tool, config.Tools.Contains(tool));
+            // Ticked when the list holds it by the allowlist's case rule - Offerable tells the rows apart ignoring
+            // case, so reading with case left Write_File's row unticked and Save took the tool away.
+            var toggle = new ToolToggle(tool, ToolAllowlist.Holds(config.Tools, tool));
             // An empty selection now means NO tools, which is invisible in a list of unticked boxes —
             // so the hint under the list has to react to every toggle, not just to Save.
             toggle.PropertyChanged += (_, _) => OnPropertyChanged(nameof(ToolsHint));
@@ -110,17 +113,18 @@ internal sealed class WorkerEditViewModel : ObservableObject
     /// <summary>
     /// What the current selection actually permits. Spelled out because the dangerous states are the
     /// silent ones: nothing ticked is a worker that cannot act at all, and "*" is unrestricted access
-    /// regardless of the other boxes.
+    /// regardless of the other boxes. Asked of ToolAllowlist, which says what a role's list reaches for the gate
+    /// and every screen: the hint tested the list for "*" itself, a second copy of that rule.
     /// </summary>
     public string ToolsHint
     {
         get
         {
             var selected = Tools.Where(t => t.IsSelected).Select(t => t.Name).ToList();
-            if (selected.Contains("*"))
-                return "\"*\" is selected — this worker may call EVERY tool, including shell commands.";
+            if (ToolAllowlist.GrantsEverything(selected))
+                return $"\"{ToolAllowlist.Everything}\" is selected — this worker may call EVERY tool, including shell commands.";
             return selected.Count == 0
-                ? "Nothing selected — this worker cannot call any tool. Tick \"*\" for unrestricted access."
+                ? $"Nothing selected — this worker cannot call any tool. Tick \"{ToolAllowlist.Everything}\" for unrestricted access."
                 : $"{selected.Count} tool(s): {string.Join(", ", selected)}.";
         }
     }

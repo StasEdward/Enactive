@@ -24,19 +24,14 @@ public sealed class RunCompositionRefactorTests
         var provider = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"write","steps":[]}"""),
             Turn.Calls1("write_file", """{"path":"result.txt","content":"kept"}"""), Turn.Says("done"));
-        var settings = new AppSettings { ProposeChecks = false,
-            GenerationBudgets = new(Action: 1234) };
-        var options = RunEngineOptions.Capture(settings);
-        settings.GenerationBudgets = new(Action: 9999);
+        var settings = new AppSettings { Engine = new() { ProposeChecks = false, GenerationBudgets = new(Action: 1234) } };
+        var options = settings.Engine;
+        // The editor changes the settings after the run took its switches: a new value, not the one the run holds.
+        settings.Engine = settings.Engine with { GenerationBudgets = new(Action: 9999) };
         var artifacts = staged ? (Enactive.Core.Artifacts.IArtifactStore)new StagingArtifactStore(fx.Root) : fx.Artifacts;
-        var models = new ModelResolver();
         var worker = EngineFixture.WorkerWith("write_file");
-        var resources = new RunEngineResources(new SingleProviderFactory(provider), models,
-            new StaticWorkerProvider([worker], worker.Id),
-            new ToolRegistry(EngineFixture.ShippedTools()), artifacts, fx.Workspace, new Planner(checksAuditEnabled: false),
-            new PermissionEngine(), fx.Decisions, PermissionPolicy.PermissiveDefault,
-            new Services(), new ModelRouter(models));
-        var events = await fx.RunAsync(RunEngineComposition.Build(resources, options), "Write result.txt");
+        var resources = fx.Resources(new SingleProviderFactory(provider), worker, [worker]) with { Artifacts = artifacts };
+        var events = await fx.RunAsync(new Orchestrator(resources, options), "Write result.txt");
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
         Assert.Equal(!staged, fx.Exists("result.txt"));
         Assert.Equal(staged ? "kept" : null, await artifacts.TryReadPendingAsync("result.txt", default));
@@ -67,10 +62,5 @@ public sealed class RunCompositionRefactorTests
         Assert.Equal(0, separate.StepStart);
         Assert.NotSame(first.Journal, separate.Journal);
         Assert.NotSame(first.Reads, separate.Reads);
-    }
-
-    private sealed class Services : IServiceProvider
-    {
-        public object? GetService(Type serviceType) => null;
     }
 }

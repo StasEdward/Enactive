@@ -2,6 +2,7 @@ namespace Enactive.Agents;
 
 using Enactive.Core.Artifacts;
 using Enactive.Core.Context;
+using Enactive.Core.Chat;
 using Enactive.Core.Events;
 using Enactive.Core.Execution;
 using Enactive.Core.Providers;
@@ -110,6 +111,10 @@ public sealed class RunScope
     /// The share of the prompt the provider served from its cache, when it says. Null - not zero -
     /// where it does not, which is every local runtime and every phase before 2026-09-11.
     /// </param>
+    /// <summary>What a phase cost, as one value - see <see cref="TokenUsage"/>.</summary>
+    public WorkEvent Usage(string purpose, ModelRef reference, TokenUsage usage, int? stepNo = null)
+        => Usage(purpose, reference, usage.Prompt, usage.Completion, stepNo, usage.Cached, usage.Created);
+
     public WorkEvent Usage(string purpose, ModelRef reference, int prompt, int completion,
                            int? stepNo = null, int? cached = null, int? created = null)
     {

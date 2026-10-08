@@ -12,37 +12,17 @@ using Enactive.Core.Tools;
 /// is where a person can act on it. The rule itself is the role gate's, kept in one place here and
 /// pinned by tests, rather than re-derived by eye in a view model.</para>
 ///
-/// <para>Matching mirrors <c>Orchestrator.Allows</c>: <c>*</c> reaches everything, and an
-/// <c>mcp__…*</c> pattern reaches a server when the pattern and the server's prefix are prefixes of
-/// one another — so <c>mcp__*</c> and <c>mcp__dotnet__*</c> both reach <c>dotnet</c>, and
-/// <c>mcp__other__*</c> reaches nothing of it.</para>
+/// <para>Matching is <see cref="ToolAllowlist.ReachesServer"/>, the same rule the engine's role gate
+/// asks: <c>*</c> reaches everything, an <c>mcp__…*</c> pattern reaches a server when the pattern and
+/// the server's prefix are prefixes of one another - so <c>mcp__*</c> and <c>mcp__dotnet__*</c> both
+/// reach <c>dotnet</c>, and <c>mcp__other__*</c> reaches nothing of it - and one of its tools named
+/// exactly reaches it too. It used to be its own copy of the rule, and differed from the gate on case.</para>
 /// </summary>
 public static class McpRoles
 {
     /// <summary>Whether this role could call anything from the named server.</summary>
     public static bool Reaches(WorkerConfig worker, string serverId)
-    {
-        if (worker.Tools.Contains("*", StringComparer.Ordinal))
-            return true;
-
-        var prefix = $"{McpReach.Prefix}{serverId}__";
-
-        foreach (var pattern in worker.Tools)
-        {
-            if (!pattern.StartsWith(McpReach.Prefix, StringComparison.Ordinal))
-                continue;
-
-            // An exact tool name (no trailing *) names one tool of one server, which still reaches
-            // it; a wildcard reaches it when either side is a prefix of the other.
-            var head = pattern.EndsWith('*') ? pattern[..^1] : pattern;
-
-            if (prefix.StartsWith(head, StringComparison.Ordinal)
-                || head.StartsWith(prefix, StringComparison.Ordinal))
-                return true;
-        }
-
-        return false;
-    }
+        => ToolAllowlist.ReachesServer(worker.Tools, serverId);
 
     /// <summary>
     /// The enabled servers no role can call — started by every run, offered to nobody.

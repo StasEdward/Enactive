@@ -195,7 +195,7 @@ internal static partial class ProcessExec
     {
         var combined = stdout;
         if (stderr.Length > 0)
-            combined += "\n[stderr]\n" + stderr;
+            combined += Shortening.StderrSection + stderr;
         combined = combined.Trim();
 
         // Asked of the WHOLE output, before it is shortened: an error the cut fell through would
@@ -569,8 +569,8 @@ internal static partial class ProcessExec
     /// </summary>
     private static string? Kept(string whole, string shown, string workspaceRoot)
     {
-        var notice = NotShownNotice().Match(shown);
-        if (!notice.Success) return null;
+        var notices = NotShownNotice().Matches(shown);
+        if (notices.Count == 0) return null;
         try
         {
             var folder = WorkspaceGuard.ResolveInside(workspaceRoot, KeptOutputFolder);
@@ -580,17 +580,32 @@ internal static partial class ProcessExec
             foreach (var old in new DirectoryInfo(folder).GetFiles("*.txt").OrderByDescending(f => f.Name).Skip(KeptOutputs))
                 try { old.Delete(); } catch (IOException) { } catch (UnauthorizedAccessException) { }
 
-            // Lines as read_file counts them: the head ends part-way into line `first`, the tail begins part-way into
-            // line `last`; both are read again, so nothing between the two is missed.
-            var head = shown[..notice.Index];
-            var tail = shown[(notice.Index + notice.Length)..];
-            var first = head.Count(c => c == '\n') + 1;
-            var last = whole[..(whole.Length - tail.Length)].Count(c => c == '\n') + 1;
+            // Lines as read_file counts them: what is shown before a cut ends part-way into line `first`, what is shown
+            // after it begins part-way into line `last`; both are read again, so nothing between the two is missed. One
+            // cut, or one in each of the command's two streams (Shortening.StderrSection) - the shown piece between those
+            // two is found in the whole output by the section it carries.
+            var ranges = new List<(int First, int Last)>();
+            var shownEnd = 0;
+            for (var i = 0; i < notices.Count; i++)
+            {
+                var after = shown[(notices[i].Index + notices[i].Length)..(i + 1 < notices.Count ? notices[i + 1].Index : shown.Length)];
+                var afterAt = i + 1 == notices.Count ? whole.Length - after.Length
+                    : after.IndexOf(Shortening.StderrSection, StringComparison.Ordinal) is >= 0 and var section
+                        ? whole.IndexOf(Shortening.StderrSection, StringComparison.Ordinal) - section
+                        : -1;
+                var before = shown[(i == 0 ? 0 : notices[i - 1].Index + notices[i - 1].Length)..notices[i].Index];
+                shownEnd = (i == 0 ? 0 : shownEnd) + before.Length;
+                if (afterAt < shownEnd) return null;
+                ranges.Add((whole[..shownEnd].Count(c => c == '\n') + 1, whole[..afterAt].Count(c => c == '\n') + 1));
+                shownEnd = afterAt;
+            }
             var lines = whole.Count(c => c == '\n') + 1;
             var path = KeptOutputFolder + "/" + name;
-            return $"\n… (the whole output, {lines} lines, is kept in {path}. Lines {first}-{last} are the part not "
-                 + $"shown here; read them with read_file {{\"path\":\"{path}\",\"offset\":{first},\"limit\":{last - first + 1}}} "
-                 + "instead of running the command again, which would be cut the same way.)";
+            return $"\n… (the whole output, {lines} lines, is kept in {path}. "
+                 + $"{(ranges.Count == 1 ? "Lines" : "The lines")} {string.Join(" and ", ranges.Select(r => $"{r.First}-{r.Last}"))} "
+                 + $"{(ranges.Count == 1 ? "are the part" : "are the parts")} not shown here; read them with "
+                 + string.Join(" and ", ranges.Select(r => $"read_file {{\"path\":\"{path}\",\"offset\":{r.First},\"limit\":{r.Last - r.First + 1}}}"))
+                 + " instead of running the command again, which would be cut the same way.)";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return null; }
     }

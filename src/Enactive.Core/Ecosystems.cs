@@ -30,6 +30,13 @@ public interface IEcosystem
 
     string TestCommand(string target);
 
+    /// <summary>
+    /// Whether a command runs this ecosystem's tests - the one a person gives as "the test command", in whatever form:
+    /// its output is then read by <see cref="ParseTests"/>, and a run that names no test has verified nothing. Defaulted to
+    /// no, so an ecosystem that cannot tell changes nothing.
+    /// </summary>
+    bool RunsTests(string command) => false;
+
     /// <summary>What the build printed, as diagnostics with workspace-relative paths.</summary>
     IReadOnlyList<BuildDiagnostic> ParseDiagnostics(string output, string workspaceRoot);
 

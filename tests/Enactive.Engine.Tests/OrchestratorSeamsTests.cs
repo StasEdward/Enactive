@@ -1,5 +1,6 @@
 namespace Enactive.Engine.Tests;
 
+using System.Text.Json;
 using Enactive.Agents;
 using Enactive.Core.Chat;
 using Enactive.Core.Events;
@@ -26,15 +27,13 @@ public sealed class OrchestratorSeamsTests
             : """{"disposition":"quick_action","title":"answer","steps":[]}"""), Turn.Says("answer"));
         var success = new SpySuccess();
         var worker = EngineFixture.WorkerWith();
-        var models = new ModelResolver();
-        var resources = new RunEngineResources(new SingleProviderFactory(provider), models,
-            new StaticWorkerProvider([worker], worker.Id), new ToolRegistry(EngineFixture.ShippedTools()),
-            fx.Artifacts, fx.Workspace, new Planner(checksAuditEnabled: false), new PermissionEngine(), fx.Decisions,
-            PermissionPolicy.PermissiveDefault, new Services(), new ModelRouter(models),
-            new OrchestratorServices(success));
         var criteria = new[] { new SuccessCriterionDefinition("check", "must never execute") };
-        var options = RunEngineOptions.Capture(new AppSettings { ProposeChecks = false, SuccessRetries = 0, ReviewRetries = 0 });
-        var events = await fx.RunAsync(RunEngineComposition.Build(resources, options, successCriteria: criteria), "answer");
+        var resources = fx.Resources(new SingleProviderFactory(provider), worker, [worker]) with
+        {
+            Agents = new OrchestratorServices(success), SuccessCriteria = criteria
+        };
+        var options = EngineOptions.Default with { ProposeChecks = false, SuccessRetries = 0, ReviewRetries = 0 };
+        var events = await fx.RunAsync(new Orchestrator(resources, options), "answer");
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
         Assert.True(success.Calls > 0);
         Assert.Equal(criteria, success.Criteria);
@@ -59,14 +58,12 @@ public sealed class OrchestratorSeamsTests
         var provider = new FakeChatProvider(turns.ToArray());
         var handover = new SpyHandover();
         var worker = EngineFixture.WorkerWith("read_file");
-        var models = new ModelResolver();
-        var resources = new RunEngineResources(new SingleProviderFactory(provider), models,
-            new StaticWorkerProvider([worker], worker.Id), new ToolRegistry(EngineFixture.ShippedTools()),
-            fx.Artifacts, fx.Workspace, new Planner(checksAuditEnabled: false), new PermissionEngine(), fx.Decisions,
-            PermissionPolicy.PermissiveDefault, new Services(), new ModelRouter(models),
-            new OrchestratorServices(Handover: handover));
-        var options = RunEngineOptions.Capture(new AppSettings { ProposeChecks = false });
-        var events = await fx.RunAsync(RunEngineComposition.Build(resources, options), "Inspect the files");
+        var resources = fx.Resources(new SingleProviderFactory(provider), worker, [worker]) with
+        {
+            Agents = new OrchestratorServices(Handover: handover)
+        };
+        var options = EngineOptions.Default with { ProposeChecks = false };
+        var events = await fx.RunAsync(new Orchestrator(resources, options), "Inspect the files");
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
         Assert.Equal(1, handover.Calls);
         Assert.Contains(provider.Requests.Last().Messages,
@@ -136,7 +133,57 @@ public sealed class OrchestratorSeamsTests
         Assert.StartsWith(said, result.Describe(), StringComparison.Ordinal);
     }
 
-    private sealed class Services : IServiceProvider { public object? GetService(Type type) => null; }
+    // ── what an orchestrator is built from ──────────────────────────────────
+
+    /// <summary>
+    /// An orchestrator is built from what its run is given and the engine's switches, and nothing else. It took
+    /// twenty-three parameters until 2026-10-08, six nullable ones in a row, and the one composition that builds it
+    /// for a host unpacked a record field by field into them. A new collaborator is a property of the resources.
+    /// </summary>
+    [Fact]
+    public void An_orchestrator_is_built_from_its_resources_and_the_engine_s_switches()
+    {
+        var constructor = Assert.Single(typeof(Orchestrator).GetConstructors());
+
+        Assert.Equal(new[] { typeof(RunEngineResources), typeof(EngineOptions) },
+            constructor.GetParameters().Select(p => p.ParameterType));
+    }
+
+    /// <summary>
+    /// The folders a workspace was given for good are read from the store the run is given - not the machine's
+    /// own - so a test, or a host with a store of its own, is not answered by another. Kept for this workspace,
+    /// a command writing there is not asked about again; the person here would have said no.
+    /// </summary>
+    [Fact]
+    public async Task A_folder_kept_in_the_store_the_run_was_given_is_not_asked_about()
+    {
+        using var fx = new EngineFixture();
+        fx.Decisions.Answer = "deny";
+        var outside = Path.Combine(Path.GetTempPath(), "enactive-tests", "kept-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        var roots = new WritableRoots(outside + "-roots.json");
+        Assert.Null(roots.Add(fx.Root, outside));
+        var target = Path.Combine(outside, "out.txt");
+        var provider = new FakeChatProvider(Turn.Says("""{"disposition":"quick_action","title":"write","steps":[]}"""),
+            Turn.Calls1("run_command", JsonSerializer.Serialize(new { command = $"echo hello> \"{target}\"" })), Turn.Says("done"));
+        var worker = EngineFixture.Role("developer");
+
+        try
+        {
+            await fx.RunAsync(new Orchestrator(fx.Resources(new SingleProviderFactory(provider), worker) with
+            {
+                WritableRoots = roots,
+                Policy = new PermissionPolicy(PermissionLevel.Execute, ["*"], [])
+            }, EngineOptions.Default with { ProposeChecks = false }), "write the file");
+
+            Assert.DoesNotContain(fx.Decisions.Requests, r => r.Topic.Contains("outside the workspace", StringComparison.Ordinal));
+            Assert.True(File.Exists(target));
+        }
+        finally
+        {
+            try { Directory.Delete(outside, recursive: true); File.Delete(outside + "-roots.json"); } catch { /* a temp folder */ }
+        }
+    }
 
     private sealed class SpySuccess : ISuccessEvaluator
     {

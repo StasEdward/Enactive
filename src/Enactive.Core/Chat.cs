@@ -143,6 +143,28 @@ public static class TokenCounts
 }
 
 /// <summary>
+/// What model calls cost: the four counts that always travel together - tokens in, tokens out, and the shares of the
+/// prompt a provider's cache served and wrote, null where it does not say (see <see cref="TokenCounts"/>).
+///
+/// <para>One value, because they were four of everything: four fields of every result that called a model, four
+/// arguments to every event that reports it, and a hand-written tuple wherever one was turned into the other.</para>
+/// </summary>
+public sealed record TokenUsage(int Prompt, int Completion, int? Cached = null, int? Created = null)
+{
+    public static readonly TokenUsage None = new(0, 0);
+
+    /// <summary>Whether anything was spent - a call was made and its provider counted.</summary>
+    public bool Any => Prompt + Completion > 0;
+
+    /// <summary>What one completion cost, as its provider reported it.</summary>
+    public static TokenUsage Of(ChatCompletion completion)
+        => new(completion.PromptTokens ?? 0, completion.CompletionTokens ?? 0, completion.CachedPromptTokens, completion.CacheCreationPromptTokens);
+
+    public static TokenUsage operator +(TokenUsage a, TokenUsage b)
+        => new(a.Prompt + b.Prompt, a.Completion + b.Completion, TokenCounts.Add(a.Cached, b.Cached), TokenCounts.Add(a.Created, b.Created));
+}
+
+/// <summary>
 /// A reasoning model's own deliberation, which some providers return in a field of its own rather
 /// than as content.
 ///

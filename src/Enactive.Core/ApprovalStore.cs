@@ -37,6 +37,13 @@ using Enactive.Core.Tools;
 /// <item><b>A legacy in-workspace file is ignored, never imported.</b> Importing it would import
 /// exactly the content an agent may have planted. Those approvals are one click each to grant
 /// again.</item>
+/// <item><b>A plain approval answers only where somebody is watching.</b> Runs nobody watches - in the
+/// background, on a schedule - use only an approval given for them too, on its own button ("Allow
+/// (workspace, unwatched runs too)"). Every approval given before 2026-10-08 was given on a card in the
+/// window, where it held only while somebody was there; for a while after, every one of them also let
+/// background and scheduled runs use the tool, a widening nobody had agreed to. The approvals for
+/// unwatched runs are filed under a key of their own (<see cref="UnwatchedKeyFor"/>), which an older
+/// build reads as a workspace it has never seen - honouring nothing, and keeping it when it saves.</item>
 /// </list>
 ///
 /// <para><see cref="WorkspaceGuard"/> separately refuses to let tools write under
@@ -68,14 +75,15 @@ public sealed class ApprovalStore
             "Enactive", "permissions.json");
 
     /// <summary>
-    /// Whether this workspace has a standing approval for the tool.
+    /// Whether this workspace has a standing approval for the tool - for a run somebody is watching, any; for one nobody
+    /// is (<paramref name="unwatched"/>), only one given for unwatched runs too (rule 4).
     /// </summary>
     /// <param name="workspaceRoot">
     /// The FOLDER, not an id. Rule 1 lives in that choice: handed an id, this method would honour
     /// whichever id the caller worked out, and the id a workspace carries is read from a file
     /// inside it. Handed a path, there is nothing to get wrong.
     /// </param>
-    public bool Approves(string workspaceRoot, string tool)
+    public bool Approves(string workspaceRoot, string tool, bool unwatched = false)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot) || string.IsNullOrEmpty(tool) || ShellTools.IsShell(tool))
             return false;
@@ -83,12 +91,14 @@ public sealed class ApprovalStore
         // NOTHING reads the workspace's own .enactive/permissions.json - see rule 3 in the summary.
         // The absence of that code IS the rule, which is why the test for it plants the file and
         // asserts it grants nothing rather than asserting on any code path here.
-        return Load().TryGetValue(KeyFor(workspaceRoot), out var tools)
-            && tools.Contains(tool, StringComparer.OrdinalIgnoreCase);
+        var all = Load();
+        bool Under(string key) => all.TryGetValue(key, out var tools) && tools.Contains(tool, StringComparer.OrdinalIgnoreCase);
+        return Under(UnwatchedKeyFor(workspaceRoot)) || (!unwatched && Under(KeyFor(workspaceRoot)));
     }
 
     /// <summary>Records an approval. Only ever called from a click on the decision card.</summary>
-    public void Approve(string workspaceRoot, string tool)
+    /// <param name="unwatched">Given for runs nobody is watching too - the card's own button for it (rule 4).</param>
+    public void Approve(string workspaceRoot, string tool, bool unwatched = false)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot) || string.IsNullOrEmpty(tool) || ShellTools.IsShell(tool))
             return;
@@ -96,7 +106,7 @@ public sealed class ApprovalStore
         lock (_gate)
         {
             var all = Load();
-            var key = KeyFor(workspaceRoot);
+            var key = unwatched ? UnwatchedKeyFor(workspaceRoot) : KeyFor(workspaceRoot);
             if (!all.TryGetValue(key, out var tools))
                 all[key] = tools = new List<string>();
 
@@ -121,6 +131,9 @@ public sealed class ApprovalStore
     /// </summary>
     private static string KeyFor(string workspaceRoot)
         => WorkspaceInfo.IdFor(workspaceRoot).ToString("N");
+
+    /// <summary>The key the approvals for unwatched runs are filed under - see rule 4.</summary>
+    private static string UnwatchedKeyFor(string workspaceRoot) => KeyFor(workspaceRoot) + "+unwatched";
 
     private Dictionary<string, List<string>> Load()
     {

@@ -100,11 +100,11 @@ public sealed class RepairConsultationTests
     {
         Assert.False(new RepairConsultation().Enabled);
         Assert.False(new RepairConsultation(new("cloud", "strong")).Enabled);
-        var settings = new Enactive.Settings.AppSettings { RepairConsultation = new(new("cloud", "strong"), 3, 700) };
+        var settings = new Enactive.Settings.AppSettings { Engine = new() { RepairConsultation = new(new("cloud", "strong"), 3, 700) } };
         var copy = System.Text.Json.JsonSerializer.Deserialize<Enactive.Settings.AppSettings>(System.Text.Json.JsonSerializer.Serialize(settings))!;
-        Assert.True(copy.RepairConsultation.Enabled);
-        Assert.Equal(settings.RepairConsultation, copy.RepairConsultation);
-        Assert.Equal(settings.RepairConsultation, settings.Clone().RepairConsultation);
+        Assert.True(copy.Engine.RepairConsultation.Enabled);
+        Assert.Equal(settings.Engine.RepairConsultation, copy.Engine.RepairConsultation);
+        Assert.Equal(settings.Engine.RepairConsultation, settings.Clone().Engine.RepairConsultation);
     }
 
     private sealed class Factory(IChatProvider worker, IChatProvider adviser) : IChatProviderFactory

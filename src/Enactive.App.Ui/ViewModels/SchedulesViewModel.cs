@@ -1,7 +1,6 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
-using Avalonia.Media;
 using Enactive.Agents;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Context;
@@ -21,18 +20,17 @@ internal sealed class ScheduleListItem
         When = ScheduleWords.When(schedule.Timing);
         Next = ScheduleWords.NextRun(schedule, now);
 
-        // Amber for a schedule that is off, red for one that cannot be timed at all, green for one
-        // with a next run. The colour says the same thing the second line does, for the glance.
-        EdgeBrush = !schedule.Enabled ? Brand.TextMuted
-                  : ScheduleClock.Next(schedule, now) is null ? Brand.Danger
-                  : Brand.Success;
+        // The colour says the same thing the second line does, for the glance (Palette.Schedule).
+        State = !schedule.Enabled ? ScheduleState.Off
+              : ScheduleClock.Next(schedule, now) is null ? ScheduleState.Untimed
+              : ScheduleState.Scheduled;
     }
 
     public Schedule Schedule { get; }
     public string Name => Schedule.Name;
     public string When { get; }
     public string Next { get; }
-    public IBrush EdgeBrush { get; }
+    public ScheduleState State { get; }
 }
 
 /// <summary>One of this schedule's past outcomes, as the Inbox recorded it.</summary>
@@ -42,18 +40,14 @@ internal sealed class ScheduleOutcomeLine
     {
         When = item.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
         Summary = item.Summary;
-        Brush = item.Kind.ToLowerInvariant() switch
-        {
-            "result" => Brand.Success,
-            "decision" => Brand.Amber,
-            "error" => Brand.Danger,
-            _ => Brand.TextMuted
-        };
+        Kind = item.Kind;
     }
 
     public string When { get; }
     public string Summary { get; }
-    public IBrush Brush { get; }
+
+    /// <summary>What the Inbox recorded it as - drawn as the Inbox draws it (Palette.InboxKind).</summary>
+    public string Kind { get; }
 }
 
 /// <summary>Something a schedule can be set to run: a template, or a past run to repeat.</summary>

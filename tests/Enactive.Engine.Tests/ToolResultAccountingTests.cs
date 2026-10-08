@@ -11,12 +11,13 @@ public sealed class ToolResultAccountingTests
     [Fact]
     public void Failure_evidence_keeps_output_and_success_closes_it_without_gating_the_current_batch()
     {
+        using var fx = new EngineFixture();
         var tools = new ToolRegistry(EngineFixture.ShippedTools());
-        var failures = new OpenFailures(tools.Definitions);
-        var progress = new StepProgress(tools.Definitions);
         var journal = new ExecutionJournal();
-        var accounting = new ToolResultAccounting(tools, progress, failures, new(), journal, new(), true, 2,
-            ToolCallOrigin.Native);
+        var frame = new StepFrame(Guid.NewGuid(), Guid.NewGuid(), 2, fx.Workspace, tools.Definitions, [], journal, new(), fx.Artifacts.BeginStep());
+        var failures = frame.Open;
+        var progress = frame.Progress;
+        var accounting = new ToolResultAccounting(frame, tools, new(), true, ToolCallOrigin.Native);
         var call = new ToolCall("id", "run_command", """{"command":"build"}""");
         progress.BeginTurn();
         var failure = accounting.Record(call, new(ToolResults.Fail("exit 1", "compiler diagnostic"), 3, 3));
@@ -41,8 +42,8 @@ public sealed class ToolResultAccountingTests
         var tools = new ToolRegistry(EngineFixture.ShippedTools());
         var reads = new ReadLedger();
         var journal = new ExecutionJournal();
-        var accounting = new ToolResultAccounting(tools, new(tools.Definitions), new(tools.Definitions),
-            reads, journal, new(), false, null, ToolCallOrigin.Native);
+        var frame = new StepFrame(Guid.NewGuid(), Guid.NewGuid(), null, fx.Workspace, tools.Definitions, [], journal, reads, fx.Artifacts.BeginStep());
+        var accounting = new ToolResultAccounting(frame, tools, new(), false, ToolCallOrigin.Native);
         var call = new ToolCall("read", "read_file", """{"path":"a.txt","offset":1,"limit":1}""");
         var result = await fx.Invoke(new ReadFileTool(), call.ArgumentsJson);
         Assert.True(result.Success, result.Error);
@@ -50,5 +51,27 @@ public sealed class ToolResultAccountingTests
         Assert.NotNull(reads.Refuse(new("write", "write_file", """{"path":"a.txt","content":"one"}"""),
             "a.txt", tools.DefinitionOf("write_file"), true));
         Assert.Equal(result.Output, Assert.Single(journal.Actions).Output);
+    }
+
+    /// <summary>
+    /// A file a call created inside a step's boundary is the step's from then on - told to the boundary by the accounting of
+    /// the call's result, where the tool loop used to do it itself beside the accounting.
+    /// </summary>
+    [Fact]
+    public async Task A_file_a_call_created_is_the_step_s_once_its_result_is_recorded()
+    {
+        using var fx = new EngineFixture();
+        var tools = new ToolRegistry(EngineFixture.ShippedTools());
+        var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var boundary = new WriteBoundary(fx.Root, [], ["wiki/a.md"], () => owned, p => owned.Add(p));
+        var frame = new StepFrame(Guid.NewGuid(), Guid.NewGuid(), 1, fx.Workspace, tools.Definitions, [], new(), new(),
+            fx.Artifacts.BeginStep(), boundary: boundary);
+        var create = new ToolCall("n1", "write_file", """{"path":"notes/a.md","content":"x"}""");
+        Assert.Null(boundary.Refuse(create, tools.DefinitionOf("write_file"), _ => false));
+
+        new ToolResultAccounting(frame, tools, new(), false, ToolCallOrigin.Native)
+            .Record(create, new(await fx.Invoke(new WriteFileTool(), create.ArgumentsJson), 1, 1));
+
+        Assert.Contains("notes/a.md", owned);
     }
 }

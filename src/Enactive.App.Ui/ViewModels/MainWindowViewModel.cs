@@ -2,7 +2,7 @@ namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
-using Avalonia.Media;
+using Enactive.Agents;
 using Enactive.Core.History;
 using Enactive.Workspace;
 using Enactive.App.Ui.Mvvm;
@@ -85,19 +85,19 @@ internal sealed class ArtifactItemViewModel : ObservableObject
     public RelayCommand UndoCommand { get; }
 }
 
-/// <summary>One line of a unified diff, coloured by what it does to the file.</summary>
+/// <summary>One line of a unified diff, drawn by what it does to the file (Palette.DiffLine).</summary>
 internal sealed class DiffLineViewModel
 {
     public DiffLineViewModel(string text)
     {
         Text = text;
-        Brush = text.StartsWith('+') ? Brand.Success
-              : text.StartsWith('-') ? Brand.Danger
-              : Brand.TextMuted;
+        Kind = text.StartsWith('+') ? DiffLineKind.Added
+             : text.StartsWith('-') ? DiffLineKind.Removed
+             : DiffLineKind.Context;
     }
 
     public string Text { get; }
-    public IBrush Brush { get; }
+    public DiffLineKind Kind { get; }
 }
 
 /// <summary>
@@ -107,7 +107,7 @@ internal sealed class DiffLineViewModel
 internal sealed class StagedChangeViewModel : ObservableObject
 {
     private string _status = "staged";
-    private IBrush _statusBrush = Brand.Amber;
+    private ChangeState _state = ChangeState.Staged;
     private bool _isDiffVisible;
     private bool _canAct = true;
 
@@ -133,7 +133,7 @@ internal sealed class StagedChangeViewModel : ObservableObject
     public ObservableCollection<DiffLineViewModel> Diff { get; } = new();
 
     public string Status { get => _status; set => Set(ref _status, value); }
-    public IBrush StatusBrush { get => _statusBrush; set => Set(ref _statusBrush, value); }
+    public ChangeState State { get => _state; set => Set(ref _state, value); }
     public bool IsDiffVisible { get => _isDiffVisible; set => Set(ref _isDiffVisible, value); }
 
     public bool CanAct
@@ -169,12 +169,9 @@ internal sealed class MainWindowViewModel : ObservableObject
     private string _environmentSummary = string.Empty;
     private double _autonomyLevel = 2;
     private string _autonomyLabel = string.Empty;
-    private IBrush _autonomyBrush = Brand.AutonomyExecute;
     private bool _stageChanges;
     private int _selectedWorkerIndex;
     private string _statusPhase = "Idle";
-    private IBrush _statusPillBrush = Brand.PillIdleFill;
-    private IBrush _statusPillTextBrush = Brand.TextMuted;
     private string _taskTitle = string.Empty;
     private string _taskIntent = string.Empty;
     private bool _hasTask;
@@ -189,7 +186,7 @@ internal sealed class MainWindowViewModel : ObservableObject
     private string _statusElapsed = "—";
     private string _currentAction = string.Empty;
     private string _agentBadge = string.Empty;
-    private IBrush _agentBrush = Brand.Line;
+    private AgentKind _agent = AgentKind.None;
     private bool _isAgentVisible;
     private bool _isDecisionVisible;
     private string _decisionText = string.Empty;
@@ -333,19 +330,9 @@ internal sealed class MainWindowViewModel : ObservableObject
         get => _workspaceMissing;
         set
         {
-            if (Set(ref _workspaceMissing, value))
-            {
-                OnPropertyChanged(nameof(WorkspaceNameBrush));
-                OnPropertyChanged(nameof(WorkspaceEdgeBrush));
-            }
+            Set(ref _workspaceMissing, value);
         }
     }
-
-    public IBrush WorkspaceNameBrush => _workspaceMissing ? Brand.Danger : Brand.Text;
-
-    /// <summary>The card wears the same edge as its row in the switcher, so the two read as one
-    /// object seen closed and open.</summary>
-    public IBrush WorkspaceEdgeBrush => _workspaceMissing ? Brand.Danger : Brand.Current;
 
     /// <summary>Every workspace the app knows about. Rebuilt by the window from the registry.</summary>
     public ObservableCollection<WorkspaceItemViewModel> Workspaces { get; } = new();
@@ -405,7 +392,9 @@ internal sealed class MainWindowViewModel : ObservableObject
     }
 
     public string AutonomyLabel { get => _autonomyLabel; set => Set(ref _autonomyLabel, value); }
-    public IBrush AutonomyBrush { get => _autonomyBrush; set => Set(ref _autonomyBrush, value); }
+
+    /// <summary>The slider's top position: as many as there are tiers (AutonomyTiers.Highest), not a literal 3.</summary>
+    public double HighestAutonomyLevel { get; } = AutonomyTiers.Highest;
 
     /// <summary>The autonomy slider as the engine wants it: 0 Observe … 3 Autonomous.</summary>
     public int AutonomyTier => (int)Math.Round(AutonomyLevel);
@@ -471,25 +460,10 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     // ── Right: status, decision, artifacts ────────────────────────────────────
     /// <summary>
-    /// The run's phase, and the colour of the pill that shows it. They move together: a phase set
-    /// anywhere in the engine wiring repaints the pill without that code knowing a pill exists.
+    /// The run's phase. The pill that shows it is coloured from the word itself (Palette.PhaseFill, PhaseText),
+    /// so a phase set anywhere in the engine wiring repaints the pill without that code knowing a pill exists.
     /// </summary>
-    public string StatusPhase
-    {
-        get => _statusPhase;
-        set
-        {
-            if (!Set(ref _statusPhase, value))
-                return;
-            StatusPillBrush = Brand.PhaseFill(value);
-            StatusPillTextBrush = Brand.PhaseText(value);
-        }
-    }
-
-    public IBrush StatusPillBrush { get => _statusPillBrush; set => Set(ref _statusPillBrush, value); }
-
-    /// <summary>The word carries the colour; the fill is only a tint behind it.</summary>
-    public IBrush StatusPillTextBrush { get => _statusPillTextBrush; set => Set(ref _statusPillTextBrush, value); }
+    public string StatusPhase { get => _statusPhase; set => Set(ref _statusPhase, value); }
 
     /// <summary>What the run is called - the plan's title once there is one, the request until then.</summary>
     public string TaskTitle { get => _taskTitle; set => Set(ref _taskTitle, value); }
@@ -608,7 +582,7 @@ internal sealed class MainWindowViewModel : ObservableObject
         : $"{Compact(PromptTokens)} in · {Compact(CompletionTokens)} out";
 
     public void AddUsage(int promptTokens, int completionTokens,
-        string? providerId = null, ModelWorkSplit.Reach where = ModelWorkSplit.Reach.Unknown)
+        string? providerId = null, ModelReach where = ModelReach.Unknown)
     {
         PromptTokens += promptTokens;
         CompletionTokens += completionTokens;
@@ -643,7 +617,7 @@ internal sealed class MainWindowViewModel : ObservableObject
     public string CurrentAction { get => _currentAction; set => Set(ref _currentAction, value); }
 
     public string AgentBadge { get => _agentBadge; set => Set(ref _agentBadge, value); }
-    public IBrush AgentBrush { get => _agentBrush; set => Set(ref _agentBrush, value); }
+    public AgentKind Agent { get => _agent; set => Set(ref _agent, value); }
     public bool IsAgentVisible { get => _isAgentVisible; set => Set(ref _isAgentVisible, value); }
 
     public bool IsDecisionVisible { get => _isDecisionVisible; set => Set(ref _isDecisionVisible, value); }
@@ -719,12 +693,12 @@ internal sealed class MainWindowViewModel : ObservableObject
             : "Run this here, and watch it.";
 
     /// <summary>Shows the agent pill, unless it already says exactly this.</summary>
-    public void SetAgent(string label, IBrush fill)
+    public void SetAgent(string label, AgentKind kind)
     {
         if (AgentBadge == label && IsAgentVisible)
             return;
         AgentBadge = label;
-        AgentBrush = fill;
+        Agent = kind;
         IsAgentVisible = true;
     }
 
@@ -738,16 +712,11 @@ internal sealed class MainWindowViewModel : ObservableObject
     {
         var level = AutonomyTier;
         AutonomyLabel = LevelName(level);
-        AutonomyBrush = Brand.Autonomy(level);
+        // The label's colour is the tier's (Palette.Autonomy), so the tier is said to have changed with it.
+        OnPropertyChanged(nameof(AutonomyTier));
     }
 
     /// <summary>The tier in words. Internal because the run record stores it too - a number alone
     /// means nothing to whoever reads that run in six months.</summary>
-    internal static string LevelName(int level) => level switch
-    {
-        0 => "Observe — read only, asks before changes",
-        1 => "Suggest — prepares changes, asks to apply",
-        2 => "Execute — edits freely, asks before run_command",
-        _ => "Autonomous — runs everything without asking"
-    };
+    internal static string LevelName(int level) => AutonomyTiers.Describe(level);
 }

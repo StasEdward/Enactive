@@ -63,6 +63,41 @@ public sealed class RejectedButRightWorkIsKeptTests
         Assert.Contains(events, e => e.Summary.StartsWith("Rejected work put back: other.txt", StringComparison.Ordinal));
     }
 
+    // ── what the revert says, as values ─────────────────────────────────────
+
+    private static IReadOnlyList<WorkEvent> Reverts(IReadOnlyList<WorkEvent> events)
+        => events.Where(e => e.Kind == EventKind.ArtifactReverted).ToArray();
+
+    /// <summary>
+    /// The files put back and the files left are carried as values: the window marks the put-back ones by them, and
+    /// rewording a line moves nothing from one list to the other.
+    /// </summary>
+    [Fact]
+    public async Task The_revert_says_which_files_went_back_and_which_stayed_as_values()
+    {
+        var (events, fx) = await Run("""{"verdict":"fail","reason":"other.txt was not to be changed","calls":[1],"files":["record.txt","other.txt"],"keep":["record.txt"]}""", twoFiles: true);
+        using var _ = fx;
+
+        Assert.Equal(new[] { "other.txt" }, Reverts(events).SelectMany(e => e.RevertedPaths()!));
+        Assert.Equal(new[] { "record.txt" }, Reverts(events).SelectMany(e => e.KeptPaths()!));
+    }
+
+    /// <summary>
+    /// The window read the put-back paths from the sentence, after "put back: " - and "NOT put back: record.txt,
+    /// other.txt - the review found it right ..." has that in it: record.txt was marked put back while both files stayed.
+    /// </summary>
+    [Fact]
+    public async Task Files_the_review_kept_are_not_said_to_be_put_back()
+    {
+        var (events, fx) = await Run("""{"verdict":"fail","reason":"the report says two records","calls":[1],"files":["record.txt","other.txt"],"keep":["record.txt","other.txt"]}""", twoFiles: true);
+        using var _ = fx;
+
+        var kept = Assert.Single(Reverts(events));
+        Assert.Contains("NOT put back: record.txt, other.txt", kept.Summary);
+        Assert.Empty(kept.RevertedPaths()!);
+        Assert.Equal(new[] { "record.txt", "other.txt" }, kept.KeptPaths());
+    }
+
     /// <summary>A short fail that keeps nothing is a fail of the work too, and it is put back, as it always was.</summary>
     [Theory]
     [InlineData("")]
@@ -82,9 +117,10 @@ public sealed class RejectedButRightWorkIsKeptTests
     {
         var input = new StepVerdictInput("write", "Write", 1, [], "Done.", null, [new ShownFile("record.txt", "one", true)],
             new Enactive.Core.Execution.ExecutionJournal().Describe());
-        Assert.Empty(StepVerdictReview.Read("""{"verdict":"pass","reason":"ok","calls":[],"files":["record.txt"],"keep":["record.txt"]}""", input).Result!.Keep);
-        Assert.Equal(["record.txt"], StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":["record.txt"]}""", input).Result!.Keep);
-        Assert.Empty(StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":"record.txt"}""", input).Result!.Keep);
+        // A pass keeps everything anyway: it names nothing to keep.
+        Assert.IsType<ReviewVerdict.Pass>(StepVerdictReview.Read("""{"verdict":"pass","reason":"ok","calls":[],"files":["record.txt"],"keep":["record.txt"]}""", input).Verdict);
+        Assert.Equal(["record.txt"], ((ReviewVerdict.Fail)StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":["record.txt"]}""", input).Verdict!).Keep);
+        Assert.Empty(((ReviewVerdict.Fail)StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":"record.txt"}""", input).Verdict!).Keep);
     }
 
     /// <summary>The review is told to name what it keeps, and that a change the request did not ask for is not kept.</summary>

@@ -108,8 +108,17 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly IChatProviderFactory _providers;
     private readonly IWorkerProvider _workers;
 
-    /// <summary>The runs already told which registered tools no role names - see ToolReach; once a run is enough.</summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _toldUnnamedTools = new();
+    /// <summary>
+    /// What each run has already said once, by the sentence: a warning about the team or a role is said once a run, not at
+    /// every step and attempt. Said again each time, the one about MCP servers no role may call stood seven times in run
+    /// 9c0ee4 (2026-10-08), and the one about tools no role names eleven times in fba4d6 (2026-09-29) - read, both
+    /// times, as that many problems. Kept for as long as the run is (see <see cref="_earlierRuns"/>).
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, System.Collections.Concurrent.ConcurrentDictionary<string, byte>> _saidThisRun = new();
+
+    /// <summary>Whether this is the first time this run says <paramref name="sentence"/>.</summary>
+    private bool FirstTimeSaid(Guid runId, string sentence)
+        => _saidThisRun.GetOrAdd(runId, _ => new(StringComparer.Ordinal)).TryAdd(sentence, 0);
     private readonly IToolRegistry _tools;
     private readonly IArtifactStore _artifacts;
     private readonly WorkspaceInfo _workspace;
@@ -123,53 +132,22 @@ public sealed partial class Orchestrator : IOrchestrator
     // Where a task's steps stopped at questions, and the once-only actions it has taken - see TaskProgress.
     private readonly TaskProgress _progress;
     private readonly PermissionPolicy _policy;
-    private readonly IServiceProvider _services;
     private readonly IModelRouter _router;
 
     /// <summary>Folders this workspace may write to outside itself, from earlier runs.</summary>
     private readonly WritableRoots _writableRoots;
 
-    /// <summary>
-    /// The answers offered when a command appears to write outside the workspace.
-    ///
-    /// <para>Three always, and a fourth — <i>keep for this workspace</i> — only when every place
-    /// named could actually be kept. The store refuses a drive root, a system folder and the folder
-    /// holding Enactive's own settings, and a button that is offered and then refuses is worse than
-    /// one that was never there: the person has already decided by the time they are told no. So the
-    /// store is asked first, with the same method it will judge by.</para>
-    ///
-    /// <para>A write whose place is a variable is not keepable either — there is no folder to name,
-    /// and this is the same reason <see cref="GrantedRoots.Grant"/> ignores one.</para>
-    /// </summary>
-    private static IReadOnlyList<DecisionOption> KeepOptions(IReadOnlyList<OutsideWrite> outside)
-    {
-        var options = new List<DecisionOption>(4)
-        {
-            new("once", "Allow once"),
-            new("run", "Allow for this run"),
-        };
-
-        var folders = outside
-            .Where(w => w.Known)
-            .Select(w => Directory.Exists(w.Path) ? w.Path : Path.GetDirectoryName(w.Path))
-            .Where(f => !string.IsNullOrWhiteSpace(f))
-            .ToList();
-
-        if (folders.Count > 0 && folders.TrueForAll(f => WritableRoots.Refuses(f!) is null))
-            options.Add(new DecisionOption("keep", "Keep for this workspace"));
-
-        // "Decline", said plainly. It was "Keep to the workspace", which sat beside "Keep for this
-        // workspace" - the same two words meaning the opposite, one refusing the write and one
-        // allowing it for good. Asked 2026-09-24: "why is there no Decline button?" There was;
-        // nobody could tell which one it was.
-        options.Add(new DecisionOption("deny", "Decline"));
-        return options;
-    }
     private readonly IModelResolver _modelResolver;
+
+    /// <summary>
+    /// The engine's switches, read where they are used. They were copied into a field each, a second list beside
+    /// EngineOptions that every new switch had to be added to again; what is kept apart below is only what this class
+    /// derives from one - a limit clamped, a budget given a floor.
+    /// </summary>
+    private readonly EngineOptions _options;
     private readonly int _reviewRetries;
     private readonly int _maxLoadedToolsPerStep;
     private readonly int _successRetries;
-    private readonly bool _proposeChecks;
     private readonly int _maxParallelSteps;
 
     /// <summary>
@@ -189,13 +167,8 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly int _evidenceBudget;
     /// <summary>One approval card at a time, however many steps are running.</summary>
     private readonly SemaphoreSlim _decisionGate = new(1, 1);
-    private readonly GenerationBudgets _generationBudgets;
-    private readonly RepairConsultation _repairConsultation;
-    private readonly int? _numCtx;
     private readonly bool? _think;
-    private readonly bool _allowImplicitToolCalls;
 
-    private readonly bool _revertRejectedSteps;
     private readonly IHandover _handover;
 
     /// <summary>
@@ -205,12 +178,6 @@ public sealed partial class Orchestrator : IOrchestrator
     /// </summary>
     private readonly IReadOnlyList<SuccessCriterionDefinition> _successCriteria;
     private readonly IReadOnlyList<IEcosystem> _ecosystems;
-    private readonly bool _stepOutputs;
-    private readonly bool _typedCriteria;
-    private readonly bool _dynamicSteps;
-    private readonly bool _validateWaves;
-    private readonly bool _reportBlocked;
-    private readonly bool _semanticCriteria;
 
     /// <summary>One per conversation, kept with the conversation itself: steps that share one, and a hand-over that
     /// refills it, are compared with the request before them (PrefixCacheWatch).</summary>
@@ -219,7 +186,6 @@ public sealed partial class Orchestrator : IOrchestrator
     /// <summary>Per run: when it began and what earlier runs had written - so a read of their files says whose they are.</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, EarlierRunsView> _earlierRuns = new();
     private readonly string _waveStore;
-    private readonly FanOutLimits _fanOut;
     private readonly ISuccessEvaluator _successEvaluator;
 
     /// <summary>
@@ -242,127 +208,55 @@ public sealed partial class Orchestrator : IOrchestrator
     /// </summary>
     private readonly RunSettings? _settings;
 
-    public Orchestrator(
-        IWorkspaceChangesFactory workspaceChanges,
-        IChatProviderFactory providers,
-        IModelResolver modelResolver,
-        IWorkerProvider workers,
-        IToolRegistry tools,
-        IArtifactStore artifacts,
-        WorkspaceInfo workspace,
-        Planner planner,
-        IPermissionEngine permissions,
-        IDecisionHandler decisions,
-        PermissionPolicy policy,
-        IServiceProvider services,
-        IModelRouter? router = null,
-        int reviewRetries = 1,
-        int successRetries = 1,
-        int maxLoadedToolsPerStep = ToolBudget.DefaultMaxLoaded,
-        bool proposeChecks = true,
-        int? numCtx = null,
-        bool disableThinking = false,
-        int maxParallelSteps = 1,
-        int evidenceBudget = ExecutionJournal.DefaultBudget,
-        bool allowImplicitToolCalls = false,
-        bool revertRejectedSteps = true,
-        IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
-        ExecutionLimits? limits = null,
-        IRunCheckpointStore? checkpoints = null,
-        RunSettings? settings = null,
-        WritableRoots? writableRoots = null,
-        GenerationBudgets? generationBudgets = null,
-        RepairConsultation? repairConsultation = null,
-        OrchestratorServices? agents = null,
-        // The kinds of project the engine can build and read, each behind IEcosystem. None by
-        // default: a workspace no ecosystem recognises gets no build check, and so does a test that
-        // says nothing about builds.
-        IReadOnlyList<IEcosystem>? ecosystems = null,
-        // Phase 2: whether the planner may declare what a step hands on as values, and steps must
-        // then hand it on with submit_step_output. Off by default - it changes the planner's prompt
-        // and what every such step must do to finish, and is to be switched on by evidence.
-        bool stepOutputs = false,
-        // Phase 3: whether the planner may state acceptance criteria as types the engine checks
-        // itself. Off by default: it changes the planner's prompt, and is to be switched on by evidence.
-        bool typedCriteria = false,
-        // Phase 5.3: whether a step may be declared "for each" item another step hands on, and the plan
-        // grow by one step per item. Off by default, like the phases before it; it needs step outputs.
-        bool dynamicSteps = false,
-        // Phase 5.4: how far a plan may grow without asking.
-        FanOutLimits? fanOut = null,
-        // Phase 6: whether a plan's waves are validated where nothing is running, and a regression
-        // attributed to the step that made it. Off by default: it runs builds the run did not run before.
-        bool validateWaves = false,
-        // Where a wave's files are kept for a resume - outside every workspace. A test points it somewhere temporary.
-        string? waveStore = null,
-        // Phase 7.2: the step may say it cannot go on (report_blocked). Advisory; the engine's own detection of
-        // blocks does not depend on it. Off by default, like the phases before it: it is one more tool offered.
-        bool reportBlocked = false,
-        // Phase 1.4: the planner may set a step semantic criteria, and a step that has them is judged against those only.
-        // Off by default: it changes what a step's review is.
-        bool semanticCriteria = false)
+    /// <summary>
+    /// An orchestrator for one run: what the run is given, and the engine's switches - two values, both said.
+    /// The switches used to default to EngineOptions.Default when left out, so a host could forget the
+    /// person's settings and nothing would notice.
+    /// </summary>
+    public Orchestrator(RunEngineResources resources, EngineOptions options)
     {
-        _semanticCriteria = semanticCriteria;
-        _validateWaves = validateWaves;
-        _reportBlocked = reportBlocked;
-        _waveStore = waveStore ?? WaveCapture.DefaultStore();
-        _stepOutputs = stepOutputs;
-        _typedCriteria = typedCriteria;
-        _dynamicSteps = dynamicSteps;
-        _fanOut = fanOut ?? FanOutLimits.Default;
-        _ecosystems = ecosystems ?? Array.Empty<IEcosystem>();
-        // The machine's own store unless a test points it somewhere temporary. Defaulted rather
-        // than required because a run that never writes outside the workspace never touches it, and
-        // making every caller name it would put a policy decision in the signature of every test.
-        _writableRoots = writableRoots ?? WritableRoots.Default;
-        _checkpoints = checkpoints;
-        _settings = settings;
-        _successCriteria = successCriteria ?? Array.Empty<SuccessCriterionDefinition>();
-        _limits = limits ?? ExecutionLimits.None;
-        _workspaceChanges = workspaceChanges;
-        _providers = providers;
-        _workers = workers;
-        _tools = tools;
-        _artifacts = artifacts;
-        _workspace = workspace;
-        _planner = planner;
-        _permissions = permissions;
-        _ledger = new DecisionLedger(workspace.RootPath);
-        _baselines = new BaselineStore(workspace.RootPath);
-        _progress = new TaskProgress(workspace.RootPath);
-        _ledgered = new LedgeredDecisions(decisions, _ledger);
+        _options = options;
+        _waveStore = resources.WaveStore;
+        _ecosystems = resources.Ecosystems;
+        _writableRoots = resources.WritableRoots;
+        _checkpoints = resources.Checkpoints;
+        _settings = resources.Settings;
+        _successCriteria = resources.SuccessCriteria;
+        _limits = resources.Limits;
+        _workspaceChanges = resources.WorkspaceChanges;
+        _providers = resources.Providers;
+        _workers = resources.Workers;
+        _tools = resources.Tools;
+        _artifacts = resources.Artifacts;
+        _workspace = resources.Workspace;
+        _planner = resources.Planner;
+        _permissions = resources.Permissions;
+        _ledger = new DecisionLedger(_workspace.RootPath);
+        _baselines = new BaselineStore(_workspace.RootPath);
+        _progress = new TaskProgress(_workspace.RootPath);
+        _ledgered = new LedgeredDecisions(resources.Decisions, _ledger);
         _decisions = _ledgered;
-        _policy = policy;
-        _services = services;
-        _router = router ?? new ModelRouter(modelResolver);
-        _modelResolver = modelResolver;
+        _policy = resources.Policy;
+        _router = resources.Router ?? new ModelRouter(resources.Models);
+        _modelResolver = resources.Models;
         // How many times a rejected step may be redone. Clamped rather than trusted: this multiplies
         // the cost of a run by the reviewer's price, and a stray large number would be paid for in
         // full before anyone noticed.
-        _reviewRetries = Math.Clamp(reviewRetries, 0, 5);
+        _reviewRetries = Math.Clamp(options.ReviewRetries, 0, 5);
         // How many tools of its catalog one step may load (ToolBudget). Each one is a definition sent with every
         // later turn of the step, so a stray large number brings back the cost the catalog exists to remove.
-        _maxLoadedToolsPerStep = Math.Clamp(maxLoadedToolsPerStep, 1, 32);
+        _maxLoadedToolsPerStep = Math.Clamp(options.MaxLoadedToolsPerStep, 1, 32);
         // How many times a run whose CHECKS failed may try to make them pass. Same clamp and the
         // same reason: each attempt is a whole tool loop, paid for before anybody notices a stray
         // number. 0 restores the behaviour this had until 2026-09-08 - check once, and stop.
-        _successRetries = Math.Clamp(successRetries, 0, 5);
-        _proposeChecks = proposeChecks;
+        _successRetries = Math.Clamp(options.SuccessRetries, 0, 5);
         // 1 = the original behaviour: one step at a time on one shared conversation.
-        _maxParallelSteps = Math.Max(1, maxParallelSteps);
-        _evidenceBudget = Math.Max(ExecutionJournal.MinimumBudget, evidenceBudget);
-        _successEvaluator = agents?.SuccessEvaluator ?? new SuccessEvaluator();
-        _handover = agents?.Handover ?? new Handover();
-        _generationBudgets = generationBudgets ?? new();
-        _repairConsultation = repairConsultation ?? new();
-        _numCtx = numCtx;
+        _maxParallelSteps = Math.Max(1, options.MaxParallelSteps);
+        _evidenceBudget = Math.Max(ExecutionJournal.MinimumBudget, options.EvidenceBudget);
+        _successEvaluator = resources.Agents?.SuccessEvaluator ?? new SuccessEvaluator(resources.Ecosystems);
+        _handover = resources.Agents?.Handover ?? new Handover();
         // Disable the local model's <think> phase by sending think:false; null leaves it to the model.
-        _think = disableThinking ? false : null;
-        // Off by default: executing JSON found in a reply is a way to talk the agent into acting.
-        _allowImplicitToolCalls = allowImplicitToolCalls;
-        // On by default: a gate that stops the report but leaves the rejected work on disk is the
-        // state a person is most likely to pick up and use.
-        _revertRejectedSteps = revertRejectedSteps;
+        _think = options.DisableThinking ? false : null;
     }
 
     public IAsyncEnumerable<WorkEvent> SubmitIntentAsync(Intent intent, CancellationToken ct)
@@ -461,6 +355,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // A run that ended before its end was recorded (planning refused, cancelled) leaves its entry; a day is long enough.
         foreach (var stale in _earlierRuns.Where(e => e.Value.StartedAt < DateTimeOffset.UtcNow.AddDays(-1)).Select(e => e.Key).ToArray())
             _earlierRuns.TryRemove(stale, out _);
+        // What a run said once goes with it: every run still going has an entry above.
+        foreach (var ended in _saidThisRun.Keys.Where(id => !_earlierRuns.ContainsKey(id)).ToArray())
+            _saidThisRun.TryRemove(ended, out _);
 
         // This scope covers only the code up to the first yield: an async iterator resumes on its
         // CONSUMER's execution context, so an AsyncLocal set here is gone from the next segment on.
@@ -564,11 +461,11 @@ public sealed partial class Orchestrator : IOrchestrator
                     // same request in five smaller steps cost 9.2M and finished.
                     () => _planner.PlanAsync(
                         intent.RawText, intent.Context, models.PlanProvider, models.Plan.Model, ct,
-                        _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0,
-                        turnCeiling: RunawayCeiling, outputBudget: _generationBudgets.For(GenerationPurpose.Planning),
-                        stepOutputs: _stepOutputs, typedCriteria: _typedCriteria,
-                        beforeRetry: budget.TurnExhaustedAfter, dynamicSteps: _dynamicSteps, validateWaves: _validateWaves,
-                        semanticCriteria: _semanticCriteria));
+                        _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0,
+                        turnCeiling: RunawayCeiling, outputBudget: _options.GenerationBudgets.For(GenerationPurpose.Planning),
+                        stepOutputs: _options.StepOutputs, typedCriteria: _options.TypedCriteria,
+                        exhaustedAfter: budget.TurnExhaustedAfter, dynamicSteps: _options.DynamicSteps, validateWaves: _options.ValidateWaves,
+                        semanticCriteria: _options.SemanticCriteria));
         }
         catch (RetryBudgetExceededException ex)
         {
@@ -587,10 +484,9 @@ public sealed partial class Orchestrator : IOrchestrator
             yield break;
         }
 
-        if (plan.PromptTokens + plan.CompletionTokens > 0)
+        if (plan.Usage.Any)
             yield return scope.Usage(
-                WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.PromptTokens, plan.CompletionTokens,
-                cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+                WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
 
         if (plan.IncompleteReason is { } incompletePlanning)
         {
@@ -606,19 +502,15 @@ public sealed partial class Orchestrator : IOrchestrator
             string? replanFailure = budget.TurnExhausted;
             if (replanFailure is null)
             {
-                try
-                {
-                    ct.ThrowIfCancellationRequested();
-                    plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
-                        intent.RawText, intent.Context, plan, defect, models.PlanProvider, models.Plan.Model, ct,
-                        _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                        _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { replanFailure = "Plan repair failed: " + ex.Message; }
-                if (replanFailure is null && plan.PromptTokens + plan.CompletionTokens > 0)
-                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
-                        plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+                ct.ThrowIfCancellationRequested();
+                // A provider's failure comes back in the result (Planner.ReplanAsync), not as an exception to catch.
+                plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
+                    intent.RawText, intent.Context, plan, defect, models.PlanProvider, models.Plan.Model, ct,
+                    _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
+                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
+                replanFailure = plan.IncompleteReason;
+                if (plan.Usage.Any)
+                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
             }
             replanFailure ??= budget.TurnExhausted;
             if (replanFailure is not null)
@@ -633,7 +525,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
         // A document made from a step's items has to be declared, so the engine can reserve and assemble it.
         // The planner is asked, once and neutrally, whether its plan makes one; the answer is its to give.
-        if (resume is null && _dynamicSteps && _stepOutputs && plan.Plan is { } undeclared
+        if (resume is null && _options.DynamicSteps && _options.StepOutputs && plan.Plan is { } undeclared
             && FanOut.MissingReport(undeclared, plan.PlannedCriteria) is { } missing)
         {
             yield return scope.Ev(EventKind.ContextAssembled, missing.Diagnostic + " Asking the planner to declare it.");
@@ -641,19 +533,15 @@ public sealed partial class Orchestrator : IOrchestrator
             string? unclear = budget.TurnExhausted;
             if (unclear is null)
             {
-                try
-                {
-                    ct.ThrowIfCancellationRequested();
-                    plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
-                        intent.RawText, intent.Context, plan, missing.Diagnostic, models.PlanProvider, models.Plan.Model, ct,
-                        _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                        _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { unclear = "the planner could not be asked: " + ex.Message; }
-                if (unclear is null && plan.PromptTokens + plan.CompletionTokens > 0)
-                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
-                        plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+                ct.ThrowIfCancellationRequested();
+                // A provider's failure comes back in the result (Planner.ReplanAsync), not as an exception to catch.
+                plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
+                    intent.RawText, intent.Context, plan, missing.Diagnostic, models.PlanProvider, models.Plan.Model, ct,
+                    _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
+                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
+                unclear = plan.IncompleteReason;
+                if (plan.Usage.Any)
+                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
             }
             // A correction that is not a readable plan, or no plan at all, does not replace the one that was.
             if (unclear is not null || plan.Readout == PlanReadout.Unreadable || plan.Plan is null || PlanValidation.Error(plan.Plan) is not null)
@@ -684,19 +572,15 @@ public sealed partial class Orchestrator : IOrchestrator
             string? unclear = budget.TurnExhausted;
             if (unclear is null)
             {
-                try
-                {
-                    ct.ThrowIfCancellationRequested();
-                    plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
-                        intent.RawText, intent.Context, plan, diagnostic, models.PlanProvider, models.Plan.Model, ct,
-                        _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                        _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { unclear = "the planner could not be asked: " + ex.Message; }
-                if (unclear is null && plan.PromptTokens + plan.CompletionTokens > 0)
-                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
-                        plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+                ct.ThrowIfCancellationRequested();
+                // A provider's failure comes back in the result (Planner.ReplanAsync), not as an exception to catch.
+                plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
+                    intent.RawText, intent.Context, plan, diagnostic, models.PlanProvider, models.Plan.Model, ct,
+                    _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
+                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
+                unclear = plan.IncompleteReason;
+                if (plan.Usage.Any)
+                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
             }
             if (unclear is not null || plan.Readout == PlanReadout.Unreadable || plan.Plan is null || PlanValidation.Error(plan.Plan) is not null)
                 plan = before;
@@ -721,11 +605,11 @@ public sealed partial class Orchestrator : IOrchestrator
 
         // Step outputs are a switch, not a suggestion the planner can take up on its own: with it off,
         // a declared output is dropped and the steps run as they always did.
-        if (!_stepOutputs && plan.Plan is { } declaring && declaring.Steps.Any(st => st.Output is not null))
+        if (!_options.StepOutputs && plan.Plan is { } declaring && declaring.Steps.Any(st => st.Output is not null))
             plan = plan with { Plan = declaring with { Steps = declaring.Steps.Select(st => st with { Output = null }).ToArray() } };
 
         // "For each" is a switch too, and needs step outputs: the items are one. Off, the step runs once.
-        if ((!_dynamicSteps || !_stepOutputs) && plan.Plan is { } eaching && eaching.Steps.Any(st => st.ForEach is not null && !st.Joins))
+        if ((!_options.DynamicSteps || !_options.StepOutputs) && plan.Plan is { } eaching && eaching.Steps.Any(st => st.ForEach is not null && !st.Joins))
             plan = plan with { Plan = eaching with { Steps = eaching.Steps.Select(st => st.Joins ? st : st with { ForEach = null }).ToArray() } };
         else if (resume is null && plan.Plan is { } growing && growing.Steps.Any(st => st.ForEach is not null))
         {
@@ -764,10 +648,10 @@ public sealed partial class Orchestrator : IOrchestrator
         // added to what the run already has - the system's own checks and the person's and template's
         // criteria stay, whatever the planner says (3.4) - and one the engine cannot check is dropped
         // with its reason, never a reason for the run to fail (3.2).
-        if (_typedCriteria && resume is null && plan.PlannedCriteria.Count > 0)
+        if (_options.TypedCriteria && resume is null && plan.PlannedCriteria.Count > 0)
         {
             var (accepted, dropped) = TypedCriteria.Validate(plan.PlannedCriteria, _workspace.RootPath, _ecosystems, plan.Plan,
-                semantic: _semanticCriteria);
+                semantic: _options.SemanticCriteria);
             foreach (var why in dropped)
                 yield return scope.Ev(EventKind.ErrorObserved, why);
             if (accepted.Count > 0)
@@ -783,11 +667,10 @@ public sealed partial class Orchestrator : IOrchestrator
             yield return scope.Ev(EventKind.ReviewRequested, "Planner is checking final criteria against the original request before execution…");
             plan = await InScopeAsync(runId, taskId, null, () => PlanCheckReview.RunAsync(plan with { Checks = CriteriaFor(plan) }, intent.RawText,
                 intent.Context, models.PlanProvider, models.Plan.Model, budget,
-                _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: resume is not null || _successCriteria.Count > 0 || !_proposeChecks,
+                _options.GenerationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: resume is not null || _successCriteria.Count > 0 || !_options.ProposeChecks,
                 tools: _tools.Definitions.Where(d => !DeniedToThisRun(d.Name)).ToArray(),
                 workspaceRoot: _workspace.RootPath, askWhenUnsettled: true));
-            yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
-                plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+            yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
 
             // The final checks could not be settled, and nothing is about a restriction: the person decides. With nobody to
             // ask the answer is no, and no work starts - as before; asked, the work can go on, with the checks as planned or
@@ -908,10 +791,9 @@ public sealed partial class Orchestrator : IOrchestrator
             if (failing.Count > 0 && _planner.ChecksAuditEnabled)
             {
                 var decision = await InScopeAsync(scope.RunId, scope.TaskId, null, () => FailingCheckReview.RunAsync(intent.RawText, failing,
-                    models.PlanProvider, models.Plan.Model, budget, _generationBudgets.For(GenerationPurpose.Planning), ct));
-                if (decision.PromptTokens + decision.CompletionTokens > 0)
-                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, decision.PromptTokens, decision.CompletionTokens,
-                        cached: decision.CachedPromptTokens, created: decision.CacheCreationPromptTokens);
+                    models.PlanProvider, models.Plan.Model, budget, _options.GenerationBudgets.For(GenerationPurpose.Planning), ct));
+                if (decision.Usage.Any)
+                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, decision.Usage);
                 if (decision.Problem is { } problem)
                     yield return scope.Ev(EventKind.ErrorObserved, $"Checks that already fail before the work were kept as planned: {problem}.");
                 foreach (var (check, reason) in decision.Dropped)
@@ -937,14 +819,17 @@ public sealed partial class Orchestrator : IOrchestrator
             var kept = resume?.Baseline ?? _baselines.Load(scope.TaskId);
             if (kept is { Count: > 0 })
             {
-                builds = kept.Select(b => BuildBaseline.From(b, _ecosystems)).OfType<BuildBaseline>().ToArray();
+                builds = kept.Select(b => BuildBaseline.From(b, _ecosystems)).OfType<BuildBaseline>()
+                    .Select(b => b with { FromAnEarlierAttempt = true }).ToArray();
                 foreach (var build in builds)
-                    yield return scope.Ev(EventKind.ContextAssembled, build.Describe() + " (kept from before the first attempt)");
+                    yield return scope.Ev(EventKind.ContextAssembled, $"{build.Describe()} ({BuildBaseline.EarlierAttemptNote(build.TakenAt)})");
             }
             else if (resume is null)
             {
-                builds = await InScopeAsync(scope.RunId, scope.TaskId, null,
-                    () => BuildBaselineAsync(scope.TaskId, scope.RunId, intent.Context, ct));
+                var takenAt = DateTimeOffset.UtcNow;
+                builds = (await InScopeAsync(scope.RunId, scope.TaskId, null,
+                    () => BuildBaselineAsync(scope.TaskId, scope.RunId, intent.Context, ct)))
+                    .Select(b => b with { TakenAt = takenAt }).ToArray();
                 if (builds.Count > 0) _baselines.Save(scope.TaskId, builds.Select(b => b.ToSnapshot()).ToArray());
                 foreach (var build in builds)
                     yield return scope.Ev(EventKind.ContextAssembled, build.Describe());
@@ -982,7 +867,7 @@ public sealed partial class Orchestrator : IOrchestrator
     {
         var scope = session.Scope;
         var messages = session.Messages;
-        yield return scope.Ev(EventKind.Routed, $"Quick action: {plan.Title}");
+        yield return scope.Event(EventKind.Routed, $"Quick action: {plan.Title}", WorkEventPayload.QuickActionPayload(plan.Title));
 
         // Drained through a channel for the same reason as the DAG path below: the work runs in a
         // task that owns the log scope, while this method only yields what the channel hands it.
@@ -1008,8 +893,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 await RunAttemptsAsync(session, attemptState, models, models.Provider, models.Model,
                     intent.Context, quickResult, plan.Title, intent.RawText, null, quickChanges, quickBefore,
                     PublishQuick, quickLifetime.Token);
-                await RevertRejectedAsync(quickResult, store, scope,
-                    line => PublishQuick(scope.Ev(EventKind.ArtifactReverted, line)), quickLifetime.Token);
+                await RevertRejectedAsync(quickResult, store, scope, null,
+                    (line, payload) => PublishQuick(scope.Event(EventKind.ArtifactReverted, line, payload)), quickLifetime.Token);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -1038,12 +923,16 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
-        var quickOutcome = RunOutcomeOf(new[] { quickResult.Kind });
-        var quickReason = quickResult.Reason;
-        if (quickOutcome == RunOutcomeKind.Blocked)
-            quickReason = $"Blocked - {quickResult.Reason}. Put that right and run it again.";
+        // A run of one unnumbered step, with no checkpoint to carry on from - decided by the same rule
+        // as a plan's (RunOutcomeDecision).
+        var quickWork = new RunWork(
+            [new SettledStep(null, plan.Title, quickResult.Kind, quickResult.Reason,
+                BlockedBecause: quickResult.Kind == StepOutcomeKind.Blocked ? quickResult.Reason : null)],
+            Resumable: false);
+        var quickDecision = RunOutcomeDecision.BeforeChecks(quickWork);
 
-        if (quickOutcome is RunOutcomeKind.Completed or RunOutcomeKind.Incomplete)
+        RunVerification? quickVerification = null;
+        if (quickDecision.Verify)
         {
             var verified = new VerifyResult();
             await foreach (var checkEvent in VerifyAsync(
@@ -1052,25 +941,15 @@ public sealed partial class Orchestrator : IOrchestrator
                 scope.Artifacts, scope.Budget, verified, scope.Criterion,
                 (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct, session, models.PlanProvider, models.Plan))
                 yield return checkEvent;
-
-            var adjusted = verified.Apply(quickOutcome);
-            // The same rule as a planned run's: checks may not promote past a missing verdict.
-            if (adjusted == RunOutcomeKind.Completed && quickResult.Kind == StepOutcomeKind.DoneUnverified)
-                adjusted = quickOutcome;
-            if (adjusted != quickOutcome)
-            {
-                quickReason = adjusted == RunOutcomeKind.Completed
-                    ? verified.Report.Overruling(quickReason)
-                    : verified.IncompleteReason ?? verified.Report.Explain();
-                quickOutcome = adjusted;
-            }
+            quickVerification = new RunVerification(verified.Report, verified.IncompleteReason);
         }
 
-        foreach (var check in ProducedFilesNow(scope, session))
+        IReadOnlyList<CriterionResult> quickChecks = [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session,
+                intent.Context, ct, session.Builds.Count > 0 ? await NetChangedAsync(quickChanges, quickBefore, ct) : null)];
+        foreach (var check in quickChecks)
             yield return scope.Criterion(check);
-        foreach (var check in await BuildRegressionNowAsync(scope, session, intent.Context, ct,
-                     session.Builds.Count > 0 ? await NetChangedAsync(quickChanges, quickBefore, ct) : null))
-            yield return scope.Criterion(check);
+
+        var (quickOutcome, quickReason) = RunOutcomeDecision.Settle(quickWork, quickDecision, quickVerification, quickChecks);
 
         var quickNet = quickOutcome == RunOutcomeKind.Completed
             ? await NetChangedAsync(quickChanges, quickBefore, ct)
@@ -1262,16 +1141,6 @@ public sealed partial class Orchestrator : IOrchestrator
         // end — not assumed to be success because the loop finished.
         var stepOutcomes = session.Outcomes;
 
-        // And WHY, for the ones that did not succeed, in the order they settled.
-        //
-        // Kept beside the outcomes rather than derived from them, because it cannot be: the reason
-        // is a sentence the step produced and the outcome is an enum. Without this the run's own
-        // explanation was assembled from the enums alone, so a run whose single failure carried a
-        // perfect diagnosis — "nothing is listening at http://localhost:11434/v1" — reported
-        // "1 step(s) failed" and threw the diagnosis away. A resumed step contributes nothing here:
-        // its reason belongs to the run that produced it.
-        var stepReasons = session.Reasons;
-
         // Every time a step was blocked, oldest first, across resumes (Phase 7.3): a resume loses no attempt, and
         // the step done again is told what stopped it before.
         var blockHistory = (resume?.Steps ?? [])
@@ -1340,7 +1209,7 @@ public sealed partial class Orchestrator : IOrchestrator
         var waveDir = WaveCapture.DirFor(_waveStore, _workspace.RootPath, scope.TaskId);
         var trialDir = WaveCapture.TrialDirFor(_waveStore, _workspace.RootPath, scope.TaskId);
         var baselineTaken = session.Builds.Where(b => b.Taken).ToArray();
-        var waves = !_validateWaves || baselineTaken.Length == 0 ? null
+        var waves = !_options.ValidateWaves || baselineTaken.Length == 0 ? null
             : resume?.Waves is { } savedWaves ? WaveLedger.Resume(savedWaves, baselineTaken, _ecosystems)
             : new WaveLedger(baselineTaken);
         session.Waves = waves;
@@ -1734,14 +1603,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 // failed without a reason contributes nothing rather than a blank the run would
                 // then have to decide how to render.
                 if (outcome != StepOutcomeKind.Succeeded && !string.IsNullOrWhiteSpace(outcomeReason))
-                {
-                    stepReasons.Add(outcomeReason!);
                     session.ReasonOf[step.Id] = outcomeReason!;
-                }
             }
 
-            await RevertRejectedAsync(stepResult, store, scope,
-                line => Emit(EventKind.ArtifactReverted, $"[{stepNumber}] {line}"), stepCt);
+            await RevertRejectedAsync(stepResult, store, scope, stepNumber,
+                (line, payload) => Publish(scope.Event(EventKind.ArtifactReverted, $"[{stepNumber}] {line}", payload)), stepCt);
 
             // What it changed, for the wave it ended in (Phase 6) - after a revert, which the files show.
             waves?.Finished(WaveStep.Of(step.Id, stepNumber, step.Title, store.TouchedPaths,
@@ -1769,7 +1635,7 @@ public sealed partial class Orchestrator : IOrchestrator
             // visible to whoever the unblocking releases.
             // DoneUnverified releases its dependents too: the work they build on exists, and each of
             // them is reviewed on its own. What it does NOT do is count as accepted - see
-            // RunOutcomeOf - and it says so on its card, with the reason the verdict was missing.
+            // RunOutcomeDecision - and it says so on its card, with the reason the verdict was missing.
             if (outcome is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified)
             {
                 // What it handed on, kept and recorded BEFORE its dependents are released, for the
@@ -1875,16 +1741,16 @@ public sealed partial class Orchestrator : IOrchestrator
             // Room without asking: this expansion's limit, the plan's, and the run's own step budget
             // less what is already waiting for it.
             var waiting = scheduler.Snapshot().Count(p => p.Value == StepStatus.Pending);
-            var room = Math.Min(_fanOut.MaxStepsPerExpansion, _fanOut.MaxTotalSteps - all.Count);
+            var room = Math.Min(_options.FanOut.MaxStepsPerExpansion, _options.FanOut.MaxTotalSteps - all.Count);
             if (scope.Budget.RemainingSteps != int.MaxValue)
                 room = Math.Min(room, scope.Budget.RemainingSteps - waiting);
             var depth = FanOut.Depth(all, forEach);
-            if (notExpanded is null && (items.Count > room || depth > _fanOut.MaxDepth))
+            if (notExpanded is null && (items.Count > room || depth > _options.FanOut.MaxDepth))
             {
-                var over = depth > _fanOut.MaxDepth
-                    ? $"that would be {depth} levels of steps for each item, and the limit is {_fanOut.MaxDepth}"
+                var over = depth > _options.FanOut.MaxDepth
+                    ? $"that would be {depth} levels of steps for each item, and the limit is {_options.FanOut.MaxDepth}"
                     : $"{items.Count} steps is more than the {Math.Max(0, room)} this run may add without asking";
-                var canBatch = depth <= _fanOut.MaxDepth && room >= 1;
+                var canBatch = depth <= _options.FanOut.MaxDepth && room >= 1;
                 var per = canBatch ? (int)Math.Ceiling(items.Count / (double)room) : 0;
                 var options = new List<DecisionOption> { new("allow", $"Create all {items.Count} steps") };
                 if (canBatch) options.Add(new("batch", $"Group them into {room} steps of about {per} items"));
@@ -2044,7 +1910,6 @@ public sealed partial class Orchestrator : IOrchestrator
             lock (stepOutcomes)
             {
                 stepOutcomes[join.Id] = outcome;
-                if (reason is not null && outcome != StepOutcomeKind.Succeeded) stepReasons.Add(reason);
             }
 
             if (outcome is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified)
@@ -2114,7 +1979,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 var no = stepNumbers.TryGetValue(step.Id, out var rn) ? rn : 0;
                 yield return scope.Event(
                     EventKind.StepCompleted,
-                    $"[{(no > 0 ? no : 0)}/{total}] {step.Title} — {Word(kind)} before this run",
+                    $"[{(no > 0 ? no : 0)}/{total}] {step.Title} — {RunOutcomeDecision.Word(kind)} before this run",
                     WorkEventPayload.StepPayload(no > 0 ? no : null, kind));
             }
         }
@@ -2346,14 +2211,6 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
-        StepOutcomeKind[] outcomes;
-        string[] reasons;
-        lock (stepOutcomes)
-        {
-            outcomes = stepOutcomes.Values.ToArray();
-            reasons = stepReasons.ToArray();
-        }
-
         // A run whose work was done item by item leads with what the items came to, from the engine's
         // records - not with the first reason one item happened to give (run 4f1d97 led with a reviewer's
         // remark about one page of twelve).
@@ -2364,87 +2221,39 @@ public sealed partial class Orchestrator : IOrchestrator
             var byStatus = itemSteps.GroupBy(s => ItemReport.Status(session.Records.GetValueOrDefault(s.Id)))
                 .Select(g => $"{g.Count()} {g.Key.ToLowerInvariant()}");
             itemsCameTo = $"{itemSteps.Length} item step(s): {string.Join(", ", byStatus)}";
-            reasons = [itemsCameTo, .. reasons];
         }
 
-        var runOutcome = RunOutcomeOf(outcomes);
-        if (cycle && runOutcome == RunOutcomeKind.Completed)
-            runOutcome = RunOutcomeKind.Incomplete;
+        Dictionary<Guid, StepOutcomeKind> settledOutcomes;
+        lock (stepOutcomes) settledOutcomes = new(stepOutcomes);
+        var work = new RunWork(
+            scheduler.Steps.Select(s => new SettledStep(
+                stepNumbers.TryGetValue(s.Id, out var n) ? n : null,
+                s.Title,
+                settledOutcomes.TryGetValue(s.Id, out var o) ? o : null,
+                // A step's own reason, or the engine's record of it - a step joining items has only the record.
+                session.ReasonOf.GetValueOrDefault(s.Id) ?? session.Records.GetValueOrDefault(s.Id)?.Reason,
+                s.ObligationIds,
+                BlocksOf(s.Id) is { Count: > 0 } b && b[^1].Cause != OutcomeCause.BlockedDependency ? b[^1].Reason : null)).ToArray(),
+            // A blocked run waits on its checkpoint (Phase 7) - where the engine was given a store to keep one in.
+            Resumable: _checkpoints is not null,
+            Cycle: cycle,
+            Limit: limitReason,
+            ItemsCameTo: itemsCameTo);
+        var decision = RunOutcomeDecision.BeforeChecks(work);
 
-        var runReason = ExplainOutcome(outcomes, reasons, cycle, limitReason);
-        // A blocked run leads with what blocks it - each step blocked for a cause of its own, not the ones only
-        // waiting behind them - and with what to do about it.
-        if (runOutcome == RunOutcomeKind.Blocked)
-        {
-            var causes = scheduler.Steps
-                .Where(s => BlocksOf(s.Id) is { Count: > 0 } b && b[^1].Cause != OutcomeCause.BlockedDependency
-                            && stepOutcomes.GetValueOrDefault(s.Id) == StepOutcomeKind.Blocked)
-                .Select(s => $"[{(stepNumbers.TryGetValue(s.Id, out var n) ? n : 0)}] {s.Title}: {BlocksOf(s.Id)![^1].Reason}")
-                .ToArray();
-            runReason = "Blocked - " + string.Join("; ", causes) + ". Put that right and resume this run: it carries on from the "
-                + "blocked step(s)" + (ExplainOutcome(outcomes, [], cycle, limitReason) is { } tally ? $" ({tally})." : ".");
-        }
-
-        // The last word, and the only one in the run that is not somebody's opinion.
-        //
-        // Also asked of an INCOMPLETE run, as of 2026-09-21. It used to be asked only of a run
-        // everything else had already called done, which sounded careful and was the opposite: the
-        // one guard that looks at the WORKSPACE ran last and could only tighten, so it was silent
-        // in exactly the cases where the guards that read the TRANSCRIPT are wrong. Measured that
-        // day - a run added the method, wrote the tests, and its own proposed check passed against
-        // the workspace it left behind, while the report said Incomplete over two shell calls that
-        // were never formally closed.
-        //
-        // Failed and Cancelled are still not asked. Those had their outcome decided by something
-        // that actually went wrong, or by the person, and a green build on top would bury it.
-        // Incomplete is the one that means "we could not establish that it finished", and that is
-        // a question, not a verdict. See SuccessReport.Apply.
-        // A step that never RAN is a different kind of Incomplete, and checks may not answer it.
-        //
-        // "Incomplete" was treated as one thing when the promotion shipped earlier today: an
-        // absence of evidence, which a command with an exit code is exactly the cure for. A
-        // SKIPPED step is not that. It is a known absence of work - the plan said three things
-        // were needed, one of them did not finish and two never started - and no check can make
-        // the missing two have happened.
-        //
-        // Measured 2026-09-21 20:57, a regression from that same promotion. Step 1 ended
-        // Incomplete, steps 2 and 3 were skipped behind it, and the run was reported Completed
-        // because "Docs/DRIFT_ollama.md exists and is not empty" passed - against the scaffold
-        // step 1 had written before it stopped. A third of the work, called done, on a check
-        // satisfied by a file's existence. The baseline could not catch it: the file was absent
-        // beforehand, so the check DID fail then and did count as proof. Proof of a write, which
-        // is all it ever claimed.
-        var nothingWasSkipped = !outcomes.Contains(StepOutcomeKind.Skipped);
-
-        VerifyResult? verification = null;
-        if (runOutcome == RunOutcomeKind.Completed
-            || (runOutcome == RunOutcomeKind.Incomplete && nothingWasSkipped))
+        // The last word, and the only one in the run that is not somebody's opinion - asked of a run
+        // done, or one that could not establish it was done (see RunOutcomeDecision.BeforeChecks).
+        RunVerification? verification = null;
+        if (decision.Verify)
         {
             var verified = new VerifyResult();
-            verification = verified;
             await foreach (var checkEvent in VerifyAsync(
                 CriteriaFor(plan),
                 intent, scope.TaskId, scope.RunId, models.Worker, models.Provider, models.Model.Model, models.Model.ProviderId,
                 scope.Artifacts, scope.Budget, verified, scope.Criterion,
                 (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct, session, models.PlanProvider, models.Plan))
                 yield return checkEvent;
-
-            var adjusted = verified.Apply(runOutcome);
-            // Checks may not promote a run past a MISSING verdict. They still ran, are still in the
-            // report, and can still fail the run - but a step whose work was never confirmed keeps it
-            // short of Completed. nothingWasSkipped above used to guarantee this, because such a step
-            // skipped everything after it; a DoneUnverified step releases its dependents, so nothing
-            // is skipped and that guard no longer fires. Without this, the promotion measured on
-            // 2026-09-21 - a run called done on "the file exists" - would come back by another road.
-            if (adjusted == RunOutcomeKind.Completed && outcomes.Contains(StepOutcomeKind.DoneUnverified))
-                adjusted = runOutcome;
-            if (adjusted != runOutcome)
-            {
-                runReason = adjusted == RunOutcomeKind.Completed
-                    ? verified.Report.Overruling(runReason)
-                    : verified.IncompleteReason ?? verified.Report.Explain();
-                runOutcome = adjusted;
-            }
+            verification = new RunVerification(verified.Report, verified.IncompleteReason);
         }
 
         // Last, so it describes the workspace as the run leaves it: after every step and every check
@@ -2453,6 +2262,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 session.Builds.Count > 0 ? await NetChangedAsync(workspaceChanges, beforeRun, ct) : null)];
         foreach (var check in finalChecks)
             yield return scope.Criterion(check);
+
+        var (runOutcome, runReason) = RunOutcomeDecision.Settle(work, decision, verification, finalChecks);
 
         // This run reached an end, whatever kind of end. Nothing here is resumable any more, and a
         // checkpoint left behind would offer to redo work that is finished. Except a BLOCKED run (Phase 7): it
@@ -2463,14 +2274,6 @@ public sealed partial class Orchestrator : IOrchestrator
         var runNet = runOutcome == RunOutcomeKind.Completed
             ? await NetChangedAsync(workspaceChanges, beforeRun, ct)
             : null;
-        // What is not complete, named - every step not confirmed, with the parts of the request it answers for, and
-        // every check that failed - instead of the first reason any step happened to give (the user's model: "no -
-        // list concretely what is not finished").
-        if (runOutcome is RunOutcomeKind.Failed or RunOutcomeKind.Incomplete
-            && NotComplete(scheduler, stepNumbers, stepOutcomes, session, verification, finalChecks) is { Length: > 0 } open)
-            // Led, as the other reasons are, by what the items came to (run 4f1d97).
-            runReason = "Not complete - " + string.Join("; ", itemsCameTo is null ? open : [itemsCameTo, .. open])
-                + (limitReason is null ? "" : $" ({limitReason})");
 
         RecordWhatThisRunWrote(scope, intent);
         yield return scope.Terminal(runOutcome, runReason,
@@ -2526,7 +2329,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // the direction that costs money.
         return new PlanResult(
             IntentDisposition.Task, checkpoint.Title, new Plan(Guid.NewGuid(), steps),
-            PromptTokens: 0, CompletionTokens: 0, Readout: PlanReadout.Understood)
+            Readout: PlanReadout.Understood)
             { Checks = checkpoint.Checks ?? Array.Empty<SuccessCriterionDefinition>(), RestoredChecks = checkpoint.Checks is not null, Restrictions = checkpoint.Restrictions, ActionPolicy = checkpoint.ActionPolicy };
     }
 
@@ -2686,32 +2489,6 @@ public sealed partial class Orchestrator : IOrchestrator
         catch (Exception) { return []; }   // an instrument; the run it observes matters more
     }
 
-    /// <summary>Each thing that keeps a run from Completed, as a line: a step not confirmed, a check that failed.</summary>
-    private static string[] NotComplete(DagScheduler scheduler, System.Collections.Concurrent.ConcurrentDictionary<Guid, int> stepNumbers,
-        Dictionary<Guid, StepOutcomeKind> stepOutcomes, RunSession session, VerifyResult? verification, IReadOnlyList<CriterionResult>? finalChecks)
-    {
-        static string Clip(string text, int max) => text.Length <= max ? text : text[..max] + "…";
-        Dictionary<Guid, StepOutcomeKind> outcomes;
-        lock (stepOutcomes) outcomes = new(stepOutcomes);
-        var lines = new List<string>();
-        foreach (var step in scheduler.Steps.OrderBy(s => stepNumbers.TryGetValue(s.Id, out var n) ? n : int.MaxValue))
-        {
-            if (outcomes.TryGetValue(step.Id, out var outcome) && outcome == StepOutcomeKind.Succeeded) continue;
-            var no = stepNumbers.TryGetValue(step.Id, out var number) ? number : 0;
-            var parts = step.ObligationIds is { Count: > 0 } ids ? $" ({string.Join(", ", ids)})" : "";
-            var said = outcomes.ContainsKey(step.Id) ? Word(outcome) : "not run";
-            // A step's own reason, or the engine's record of it - a step joining items has only the record.
-            var reason = session.ReasonOf.GetValueOrDefault(step.Id) ?? session.Records.GetValueOrDefault(step.Id)?.Reason;
-            var why = !string.IsNullOrWhiteSpace(reason) ? ": " + Clip(reason, 300) : "";
-            lines.Add($"[{no}] {step.Title}{parts} - {said}{why}");
-        }
-        if (verification?.IncompleteReason is { } unverified) lines.Add(Clip(unverified, 300));
-        foreach (var check in (verification?.Report.Blocking ?? []).Concat((finalChecks ?? []).Where(c => c.Outcome == CriterionOutcome.Failed)))
-            lines.Add($"check '{check.Name}' {check.Outcome.ToString().ToLowerInvariant()}"
-                      + (string.IsNullOrWhiteSpace(check.Detail) ? "" : ": " + Clip(check.Detail, 200)));
-        return lines.Distinct().ToArray();
-    }
-
     /// <summary>What this run wrote, recorded as it leaves it, for the runs after it - see EarlierRuns.</summary>
     private void RecordWhatThisRunWrote(RunScope scope, Intent intent)
     {
@@ -2719,6 +2496,7 @@ public sealed partial class Orchestrator : IOrchestrator
         lock (scope.Artifacts) produced = scope.Artifacts.ToArray();
         EarlierRuns.Record(_workspace.RootPath, scope.RunId, DateTimeOffset.UtcNow, intent.RawText, produced.Select(a => a.RelativePath));
         _earlierRuns.TryRemove(scope.RunId, out _);
+        _saidThisRun.TryRemove(scope.RunId, out _);
     }
 
     private IReadOnlyList<CriterionResult> ProducedFilesNow(RunScope scope, RunSession session)
@@ -2728,84 +2506,6 @@ public sealed partial class Orchestrator : IOrchestrator
         return ProducedFiles.Check(produced, _artifacts.PendingPaths, _workspace.RootPath,
             session.RunEvidence().Actions);
     }
-
-    /// <summary>
-    /// A block the engine can see in what the step left open (Phase 7.1): a permission it was refused and nothing
-    /// made good, or - its whole record - lookups that found nothing. Null when what is open is something else.
-    /// </summary>
-    private static (OutcomeCause Cause, string Reason)? EngineBlock(OpenFailures open)
-        => open.OpenRefusals is { Count: > 0 } refused
-            ? (OutcomeCause.BlockedPermission, "needs a permission it was refused: " + string.Join("; ", refused))
-            : open.NothingButMisses
-                ? (OutcomeCause.BlockedInput, "none of what the step looked for is there: " + open.Describe())
-                : null;
-
-    /// <summary>
-    /// The tools the run kept back that the step's report names, with why each was kept back - or null when it
-    /// names none. By whole word and whatever the case: "write_file" in a sentence, not "file" inside it.
-    /// </summary>
-    private static string? KeptBackAndNamed(ToolOffer offer, string report)
-    {
-        var named = offer.Withheld.Where(held => System.Text.RegularExpressions.Regex.IsMatch(report,
-            $@"(?<![A-Za-z0-9_]){System.Text.RegularExpressions.Regex.Escape(held.Name)}(?![A-Za-z0-9_])",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)).ToArray();
-        return named.Length == 0 ? null : new ToolOffer([], named).Because;
-    }
-
-    private static string Word(StepOutcomeKind kind) => kind switch
-    {
-        StepOutcomeKind.Succeeded => "done",
-        StepOutcomeKind.ReviewRejected => "review rejected",
-        StepOutcomeKind.Incomplete => "incomplete",
-        StepOutcomeKind.Skipped => "skipped",
-        StepOutcomeKind.DoneUnverified => "done, not verified",
-        StepOutcomeKind.Blocked => "blocked",
-        _ => "failed"
-    };
-
-    /// <summary>
-    /// The run's outcome from its steps'. Anything that went wrong outranks anything that went
-    /// right: a plan is not finished because most of it finished. Completed requires that every step
-    /// succeeded — which is exactly the guarantee the engine did not have.
-    /// </summary>
-    private static RunOutcomeKind RunOutcomeOf(IReadOnlyCollection<StepOutcomeKind> steps)
-    {
-        if (steps.Count == 0)
-            return RunOutcomeKind.Incomplete;
-
-        if (steps.Any(s => s is StepOutcomeKind.Failed or StepOutcomeKind.ReviewRejected))
-            return RunOutcomeKind.Failed;
-
-        // After a failure, before everything short of it: nothing is known to be wrong, and the run is not over -
-        // it waits for its cause to be put right, and then carries on (Phase 7).
-        if (steps.Contains(StepOutcomeKind.Blocked))
-            return RunOutcomeKind.Blocked;
-
-        // DoneUnverified with them: its work was done, but a run is Completed only on verdicts that
-        // were actually given. Left out of this line it would fall through to Completed - a run
-        // declaring itself finished on a step nobody confirmed.
-        if (steps.Any(s => s is StepOutcomeKind.Incomplete or StepOutcomeKind.Skipped or StepOutcomeKind.DoneUnverified))
-            return RunOutcomeKind.Incomplete;
-
-        return RunOutcomeKind.Completed;
-    }
-
-    /// <summary>
-    /// A short, honest summary of why a run did not simply complete.
-    ///
-    /// <para>The wording is <see cref="RunOutcomeWords.Explain"/>, in Core, so the sentence somebody
-    /// actually reads can be tested for what it says rather than only for the run reaching it. What
-    /// stays here is the gathering: which steps settled how, and what each of them gave as a reason.
-    /// That was the half that was missing — the counts were assembled from the OUTCOMES alone, so a
-    /// run whose only failure had a perfect diagnosis reported "1 step(s) failed" and dropped it.
-    /// </para>
-    /// </summary>
-    private static string? ExplainOutcome(
-        IReadOnlyCollection<StepOutcomeKind> steps,
-        IEnumerable<string?> reasons,
-        bool cycle,
-        string? limit = null)
-        => RunOutcomeWords.Explain(steps, reasons, cycle, limit);
 
     /// <summary>
     /// How a tool loop ended, filled in by <see cref="RunToolLoopAsync"/>. A class, not a return
@@ -2854,9 +2554,6 @@ public sealed partial class Orchestrator : IOrchestrator
         public string? IncompleteReason { get; set; }
         /// <summary>How many changes to the definition of done this verification has numbered (Phase 4.1).</summary>
         public int Revisions { get; set; }
-        public RunOutcomeKind Apply(RunOutcomeKind current) =>
-            IncompleteReason is not null && current is not (RunOutcomeKind.Failed or RunOutcomeKind.Cancelled)
-                ? RunOutcomeKind.Incomplete : Report.Apply(current);
     }
 
     /// <summary>
@@ -2924,10 +2621,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 if (plannerProvider is null || plannerModel is null) yield break;
                 var diagnosis = await InScopeAsync(runId, taskId, null, () => CheckDiagnosis.RunAsync(
                     intent.RawText, intent.Context, proposed, plannerProvider, plannerModel.Model, budget, ct));
-                if (diagnosis.Completion is { } usage && session is not null)
-                    yield return session.Scope.Usage(WorkEventPayload.WorkPurpose.Plan, plannerModel,
-                        usage.PromptTokens ?? 0, usage.CompletionTokens ?? 0,
-                        cached: usage.CachedPromptTokens, created: usage.CacheCreationPromptTokens);
+                if (diagnosis.Spent.Any && session is not null)
+                    yield return session.Scope.Usage(WorkEventPayload.WorkPurpose.Plan, plannerModel, diagnosis.Spent);
                 if (diagnosis.Decisions is not { } decisions)
                 {
                     result.IncompleteReason = diagnosis.Error ?? "Check diagnosis unavailable; no worker repair dispatched.";
@@ -3026,12 +2721,10 @@ public sealed partial class Orchestrator : IOrchestrator
                     var checkedRepair = await InScopeAsync(runId, taskId, null, () => PlanCheckReview.RunAsync(
                         new PlanResult(IntentDisposition.QuickAction, "Review repaired criteria", null) { Checks = revised, Restrictions = intent.Context.Restrictions, ActionPolicy = intent.Context.ActionPolicy },
                         intent.RawText, intent.Context, plannerProvider, plannerModel.Model, budget,
-                        _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: true, tools: _tools.Definitions,
+                        _options.GenerationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: true, tools: _tools.Definitions,
                         workspaceRoot: _workspace.RootPath));
                     if (session is not null)
-                        yield return session.Scope.Usage(WorkEventPayload.WorkPurpose.Plan, plannerModel,
-                            checkedRepair.PromptTokens, checkedRepair.CompletionTokens,
-                            cached: checkedRepair.CachedPromptTokens, created: checkedRepair.CacheCreationPromptTokens);
+                        yield return session.Scope.Usage(WorkEventPayload.WorkPurpose.Plan, plannerModel, checkedRepair.Usage);
                     if (checkedRepair.IncompleteReason is { } repairConflict)
                     {
                         result.IncompleteReason = repairConflict;
@@ -3185,8 +2878,7 @@ public sealed partial class Orchestrator : IOrchestrator
             Context: context,
             PermissionPolicy: _policy,
             WorkspaceRoot: _workspace.RootPath,
-            Artifacts: _artifacts,
-            Services: _services);
+            Artifacts: _artifacts);
 
         // A coverage criterion is about what THIS run's steps hand on; before any step there is nothing
         // it could already be true of, so there is nothing to learn by trying it now.
@@ -3301,8 +2993,7 @@ public sealed partial class Orchestrator : IOrchestrator
             Context: context,
             PermissionPolicy: _policy,
             WorkspaceRoot: _workspace.RootPath,
-            Artifacts: _artifacts,
-            Services: _services);
+            Artifacts: _artifacts);
 
         return await _successEvaluator.EvaluateAsync(
             criteria, _tools, _permissions, _policy, _decisions, toolContext, taskId, ct);
@@ -3406,13 +3097,6 @@ public sealed partial class Orchestrator : IOrchestrator
             => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
                    stepNo is { } n ? $"{{\"step\":{n}}}" : null);
 
-        // A resolved decision, with WHETHER THE CALL WENT THROUGH as a value beside the sentence.
-        // Every refusal path goes through here so none of them can be the one that forgets.
-        WorkEvent Decided(string tool, bool allowed, string summary)
-            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
-                   EventKind.DecisionResolved, summary,
-                   WorkEventPayload.DecisionPayload(stepNo, tool, allowed));
-
         WorkEvent Usage(int prompt, int completion, int? cached, int? created)
         {
             runBudget.TokensUsed(prompt, completion);
@@ -3427,16 +3111,9 @@ public sealed partial class Orchestrator : IOrchestrator
                                                      WorkEventPayload.WorkPurpose.Execute, cached, created));
         }
 
-        // A reply that describes a call instead of making one earns exactly ONE re-ask per step; without
-        // the cap a model that keeps explaining itself would burn every iteration on the same nudge.
-        var repairRequested = false;
-        // Set when the engine asks for a call to be re-sent properly; the calls that arrive on the
-        // NEXT turn are what that question bought, and are recorded as such.
-        var resendAsked = false;
         var repairAttempts = new RepairAttempts();
         var repairGoal = RepairAttempts.Clip(string.Join("\n", messages.Where(m => m.Role == ChatRole.User)
             .Select(m => m.Content)), 3000);
-        var openFailures = new OpenFailures(_tools.Definitions);
 
         // Replies stopped for running away (RunawayReply). The first is explained to the model and the
         // step goes on; a second means the explanation did not take, and the step stops.
@@ -3470,8 +3147,6 @@ public sealed partial class Orchestrator : IOrchestrator
         // Two gates, deliberately not merged: the role answers "may this WORKER do this", the offer
         // answers "may this RUN do this". A role is saved and belongs to the person; a run's policy
         // and its handler are chosen for the occasion.
-        var toolAccess = new ToolAccess(_tools, _permissions);
-        var preflight = new ToolPreflight(_tools, toolAccess, worker, reads, store, _workspace.RootPath, _workspace.Id);
         var offer = OfferFor(worker);
 
         // A tool that may change files without saying which cannot be held to a write boundary. The
@@ -3500,7 +3175,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // engine saw no block, the step could only say so in prose, and the review failed it for a claim no call
         // supported: two attempts and two reviews to "review rejected" (run 9384e2, 2026-10-03, a task started
         // from the web that needed a shell). The switch still decides for a run that kept nothing back.
-        var mayReportBlocked = _reportBlocked || offer.Withheld.Count > 0;
+        var mayReportBlocked = _options.ReportBlocked || offer.Withheld.Count > 0;
         if (mayReportBlocked) toolDefs = [.. toolDefs, AgentBlocked.Tool];
         // For the review, which is otherwise never told: what was kept back is the engine's fact, not the step's claim.
         loopResult.KeptBack = offer.Because;
@@ -3533,8 +3208,8 @@ public sealed partial class Orchestrator : IOrchestrator
         // And the servers the ROLE filtered out before any of that. ToolOffers never sees them -
         // its candidate list is already role-filtered - so without this they are not withheld, they
         // are absent, and a run starts a child process per server for tools nobody may call.
-        if (McpReach.Unreached(_tools.Definitions.Select(d => d.Name), name => Allows(worker, name))
-            is { } unreachedSentence)
+        if (McpReach.Unreached(_tools.Definitions.Select(d => d.Name), name => Allows(worker, name), worker.Role)
+            is { } unreachedSentence && FirstTimeSaid(runId, unreachedSentence))
             yield return Ev(EventKind.ErrorObserved, unreachedSentence);
 
         // And the same question of the REGISTRY, asked of the whole team rather than this worker.
@@ -3546,7 +3221,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // eleven identical warnings in one run (fba4d6, 2026-09-29) that read as eleven problems.
         if (ToolReach.Unnamed(_tools.Definitions.Select(d => d.Name),
                               _workers.All.Select(w => w.ToolAllowlist))
-            is { } unnamedSentence && _toldUnnamedTools.TryAdd(runId, 0))
+            is { } unnamedSentence && FirstTimeSaid(runId, unnamedSentence))
             yield return Ev(EventKind.ErrorObserved, unnamedSentence);
 
         // The tool schemas are sent with every request and are not part of the message list, so they
@@ -3554,8 +3229,10 @@ public sealed partial class Orchestrator : IOrchestrator
         // characters - exactly the margin that decides whether the last turn fits.
         var toolsOverhead = toolDefs.Sum(d => d.Name.Length + d.Description.Length + d.JsonSchema.Length + 16);
 
-        // Repetition, counted. Not turns - see StallLimit.
-        var progress = new StepProgress(_tools.Definitions);
+        // The step being worked, as the modules that decide about it read it - its record of repetition (counted, not
+        // turns - see StallLimit) included, which a handover starts over (StepFrame.StartOver).
+        var frame = new StepFrame(taskId, runId, stepNo, _workspace, _tools.Definitions, messages, journal, reads, store,
+            outputSchema, outputSlot, submitTool, boundary, changes, stepStart);
 
         // How many times this step has already started over with a handover, and how many turns
         // the CURRENT conversation has taken. The iteration counter keeps counting the whole step,
@@ -3569,15 +3246,6 @@ public sealed partial class Orchestrator : IOrchestrator
         // start left, and read on each time - the page it had already checked, a settings file eight
         // thousand characters at a time. One turn, then every tool is back.
         var handOnOnly = false;
-        // Whether this step has been told, once, that a criterion the plan attached to it fails.
-        var criteriaNudged = false;
-        // The step's own report that it cannot go on (Phase 7.2), once it has made one: the turn's other calls
-        // are answered, not run, and the step ends blocked when the turn does.
-        string? reportedBlocked = null;
-        // Amendment A: told once which calls are still open; what is still open after it, if a reviewer is to judge
-        // the step, goes to it marked - the text of it, so a call that fails afterwards is not waved through.
-        var openCallsNudged = false;
-        string? openCallsForReview = null;
         var handoverFailures = 0;
         var turnsHere = 0;
         ChatMessage? commandHistoryMessage = null;
@@ -3593,7 +3261,7 @@ public sealed partial class Orchestrator : IOrchestrator
         var trimmedInARow = 0;
 
         // The window, asked once: it is a property of the provider and the model, not of a turn.
-        var probe = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think);
+        var probe = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _options.NumCtx, Think: _think);
         var statedWindow = provider.ContextWindow(probe);
 
         // Handover by how full the window is - a per-provider SETTING, not an engine constant: the
@@ -3643,6 +3311,19 @@ public sealed partial class Orchestrator : IOrchestrator
             toolsOverhead = toolDefs.Sum(ToolBudget.Size);
             yield return Exposed();
         }
+
+        // What happens to each call before its tool runs, in order - see CallAdmission. It also keeps the step's
+        // own report that it cannot go on: the turn's other calls are answered, not run, and the step ends blocked
+        // when the turn does.
+        // Whether each turn ends the step, and how - in one order, with its once-only reminders (see StepEnding). It
+        // keeps the step's open calls, which the admission and the accounting of results write to and this loop does not.
+        var stepEnding = new StepEnding(frame,
+            async (path, token) => await store.TryReadPendingAsync(path, token) ?? await ReadOrNullAsync(path, token),
+            stepCriteria, reviewed);
+
+        var admission = new CallAdmission(frame, _tools, _permissions, worker, EffectivePolicyFor(worker), offer, _progress,
+            _decisions, _decisionGate, granted, _writableRoots, toolsOnRequest, mayReportBlocked,
+            path => OutputPathExists(path, store));
 
         // The transcript's size when lastPromptTokens was measured, so what has been added since
         // can be estimated on top of a real count rather than instead of one.
@@ -3696,11 +3377,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield break;
             }
 
-            if (_repairConsultation.Enabled && !repairAttempts.Consulted
-                && repairAttempts.FailedRepairs >= _repairConsultation.FailedRepairs)
+            if (_options.RepairConsultation.Enabled && !repairAttempts.Consulted
+                && repairAttempts.FailedRepairs >= _options.RepairConsultation.FailedRepairs)
             {
                 repairAttempts.Consulted = true;
-                var adviser = _repairConsultation.Model!;
+                var adviser = _options.RepairConsultation.Model!;
                 yield return Ev(EventKind.ContextAssembled,
                     $"Repair consultation: {repairAttempts.FailedRepairs} distinct failed repairs; asking {adviser.ProviderId}/{adviser.Model} for advice.");
                 ChatCompletion? advice = null;
@@ -3724,7 +3405,7 @@ public sealed partial class Orchestrator : IOrchestrator
                                 + "State missing evidence instead of guessing. You have no tools."),
                             ChatMessage.User("Goal:\n" + repairGoal + "\nCurrent workspace evidence:\n"
                                 + RepairAttempts.Clip(facts, 6000) + "\nFailing check:\n" + repairAttempts.Error)
-                        }, OutputTokenLimit: Math.Clamp(_repairConsultation.OutputTokens, 128, 2048));
+                        }, OutputTokenLimit: Math.Clamp(_options.RepairConsultation.OutputTokens, 128, 2048));
                         // Bound the small request by a declared context window as well.
                         var inputEstimate = Transcript.Size(adviceRequest.Messages);
                         if (adviserProvider.ContextWindow(adviceRequest) is int adviceWindow)
@@ -3826,8 +3507,8 @@ public sealed partial class Orchestrator : IOrchestrator
 
                 var engineEvidenceOnly = false;
                 Task<HandoverResult> AskForNote() => _handover.GenerateAsync(
-                    provider, new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think,
-                        OutputTokenLimit: (int)Math.Min(int.MaxValue, (long)_generationBudgets.For(GenerationPurpose.Handover) * (handoverFailures + 1)), Purpose: GenerationPurpose.Handover),
+                    provider, new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _options.NumCtx, Think: _think,
+                        OutputTokenLimit: (int)Math.Min(int.MaxValue, (long)_options.GenerationBudgets.For(GenerationPurpose.Handover) * (handoverFailures + 1)), Purpose: GenerationPurpose.Handover),
                     runBudget, ct,
                     // The size this loop MEASURED - the provider's last count plus what was added
                     // since, at the rate this conversation showed. Without it the note was fitted on a
@@ -3850,32 +3531,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 }
                 var carried = attempt.Note;
 
-                // A result handed on while the note was written: checked and kept like any other hand-over.
-                if (attempt.HandOn is { } handOnCall && outputSchema is not null && outputSlot is not null)
-                {
-                    yield return Invoked(handOnCall);
-                    var handOnVerdict = StepOutputContract.Check(outputSchema, handOnCall.ArgumentsJson,
-                        path => OutputPathExists(path, store), id => id >= 1 && id <= journal.Actions.Count,
-                        boundary is { ForItem: true } ? boundary.Items : null, offered: submitTool);
-                    if (handOnVerdict.Accepted)
-                    {
-                        outputSlot.Accept(handOnVerdict);
-                        outputSlot.LastRefused = null;
-                        openFailures.HandedOn();
-                        outputSlot.Items = EvidenceCoverage.Gather(outputSchema, handOnVerdict.Values!, reads, journal.Actions, _tools.Definitions,
-                            boundary is { ForItem: true } ? boundary.Items : null);
-                        var acceptedWhy = $"Accepted as this step's output (revision {outputSlot.Revision}), handed on with the handover note.";
-                        journal.Record(stepNo, handOnCall.Name, Compact(handOnCall.ArgumentsJson), ActionOutcome.Succeeded, acceptedWhy, WorkspaceEffect.None);
-                        yield return Ev(EventKind.ToolResult, $"{handOnCall.Name} -> ok: {acceptedWhy}");
-                    }
-                    else
-                    {
-                        var refusedWhy = string.Join(" ", handOnVerdict.Errors) + " Nothing was stored.";
-                        outputSlot.LastRefused = TaskProgress.Canonical(handOnCall.ArgumentsJson);
-                        journal.Record(stepNo, handOnCall.Name, Compact(handOnCall.ArgumentsJson), ActionOutcome.Refused, refusedWhy, WorkspaceEffect.None);
-                        yield return Ev(EventKind.ToolResult, $"{handOnCall.Name} -> failed: {refusedWhy}");
-                    }
-                }
+                // A result handed on while the note was written: checked and kept by the one hand-over check, and not
+                // answered in the conversation the note replaces.
+                if (attempt.HandOn is { } handOnCall && admission.TakesHandOn)
+                    foreach (var ev in admission.HandOn(handOnCall, answered: false))
+                        yield return ev;
 
                 // Why there is no note, said with what was measured. Six different faults used to
                 // come back as one null - a provider error, a note cut at the limit, reasoning that
@@ -3923,8 +3583,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     // not stop calling tools - it calls the SAME one, with the same arguments,
                     // until something else stops it". After a handover there is no same
                     // conversation to go round in.
-                    progress = new StepProgress(_tools.Definitions);
-                    reads.ForgetDiscardedReads();
+                    frame.StartOver();
                     trimmedInARow = 0;
 
                     if (restartFrom is not null)
@@ -4063,8 +3722,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 // re-reads of the conversation, in and out. RequireToolCall asks for a call; anything but the hand-over
                 // is answered, not run (below).
                 toolDefs,
-                Temperature: 0.2, NumCtx: _numCtx, Think: _think,
-                OutputTokenLimit: _generationBudgets.For(purpose), Purpose: purpose, RequireToolCall: forcedThisTurn);
+                Temperature: 0.2, NumCtx: _options.NumCtx, Think: _think,
+                OutputTokenLimit: _options.GenerationBudgets.For(purpose), Purpose: purpose, RequireToolCall: forcedThisTurn);
             if (forcedThisTurn)
                 yield return Ev(EventKind.ContextAssembled,
                     $"This turn offers only {StepOutputContract.ToolName}: the step has handed nothing on, and is to now.");
@@ -4267,7 +3926,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
             var toolCalls = turn.BuildCalls();
             var lengthLimited = finishReason is "max_tokens" or "length";
-            var invalidCalls = toolCalls?.Any(call => !ToolPreflight.CompleteArguments(call.ArgumentsJson) || string.IsNullOrWhiteSpace(call.Name)) == true;
+            var invalidCalls = toolCalls?.Any(call => !CompleteArguments(call.ArgumentsJson) || string.IsNullOrWhiteSpace(call.Name)) == true;
             if (lengthLimited || invalidCalls)
             {
                 // These are raw fragments, explicitly recorded as NOT executed. Do not replay an
@@ -4278,12 +3937,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     + JsonSerializer.Serialize(new { Text = contentBuilder.ToString(), ToolCalls = toolCalls })));
                 var reason = lengthLimited ? $"model output reached its token limit (finish={finishReason})"
                     : "model returned an incomplete or invalid tool call";
-                foreach (var call in toolCalls ?? [])
-                {
-                    openFailures.Failed(call, reason + "; nothing executed", didNotRun: true);
-                    journal.Record(stepNo, call.Name, call.ArgumentsJson, ActionOutcome.Refused,
-                        reason + "; nothing executed", WorkspaceEffect.None);
-                }
+                admission.NotRun(toolCalls ?? [], reason);
                 var hardWindow = provider.ContextWindow(request);
                 var squeezed = hardWindow is { } w && lastPromptTokens is { } used && used > w * 4 / 5;
                 if (squeezed || outputRecoveries++ >= 2)
@@ -4301,7 +3955,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 messages.Add(ChatMessage.User(reason + ". Continue with a NEW complete response, not a JSON suffix. "
                     + "No tool call from the incomplete turn ran. Send smaller independent write_file (append:true) "
                     + "or edit_file actions for large files; each must have complete JSON arguments. "
-                    + "Keep reasoning and the final answer concise. Next output ceiling: " + _generationBudgets.For(purpose) + " tokens."));
+                    + "Keep reasoning and the final answer concise. Next output ceiling: " + _options.GenerationBudgets.For(purpose) + " tokens."));
                 continue;
             }
 
@@ -4323,7 +3977,7 @@ public sealed partial class Orchestrator : IOrchestrator
             var described = toolCalls is null && replyText is not null
                 ? TryRecoverImplicitToolCall(replyText, toolsOnRequest is null ? toolDefs : [.. toolDefs, .. toolsOnRequest.Waiting])
                 : null;
-            if (described is not null && _allowImplicitToolCalls)
+            if (described is not null && _options.AllowImplicitToolCalls)
             {
                 toolCalls = new List<ToolCall> { described };
                 recovered = true;
@@ -4348,231 +4002,33 @@ public sealed partial class Orchestrator : IOrchestrator
             messages.Add(new ChatMessage(ChatRole.Assistant, replyText, toolCalls)
                 { Reasoning = reasoningBuilder.Length > 0 ? reasoningBuilder.ToString() : null });
 
-            // A step that has said it is done and repeats a call it has already made, with nothing changed since, is
-            // done - not stuck. Run fba4d6, 2026-09-29: "S3 done - all 133 tests passed", and the same test run
-            // attached, four turns running; its reasoning said "I need to stop repeating", and the step was stopped as
-            // stuck, the report step after it skipped. The repeat is not run - it would say what it said - and the step
-            // ends on its message by the ordinary road: the same end-of-step checks, and the review.
-            if (!forcedThisTurn && !string.IsNullOrWhiteSpace(replyText) && toolCalls is { Count: > 0 } && progress.OnlyRepeats(toolCalls))
+            // Whether this turn ends the step - and what the step is told when it does not (StepEnding).
+            var ending = new StepEnding.Verdict();
+            await foreach (var ev in stepEnding.EndAsync(new StepEnding.Turn(replyText, toolCalls, forcedThisTurn, described,
+                               actionsTaken, reasoningBuilder.Length, lastCompletionTokens, lastPromptTokens,
+                               () => provider.ContextWindow(request)), ending, ct))
+                yield return ev;
+            if (ending.Next == StepEnding.Next.End)
             {
-                foreach (var call in toolCalls)
-                    messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: this exact call already ran in this step, and nothing has "
-                        + "changed since - its result is above. The step ends with your message."));
-                yield return Ev(EventKind.ContextAssembled, "The step said it was done and repeated "
-                    + string.Join("; ", toolCalls.Select(c => $"{c.Name} {Compact(c.ArgumentsJson)}"))
-                    + ", which it had already made with nothing changed since: not run, and the step ends on its message.");
-                toolCalls = null;
+                loopResult.Set(ending.Kind, ending.Reason, ending.Cause);
+                yield break;
             }
-
-            if (toolCalls is null && forcedThisTurn)
-            {
-                messages.Add(ChatMessage.User($"Nothing was handed on. Carry on with the step, and hand its result on with "
-                    + $"{StepOutputContract.ToolName} when you have it."));
-                yield return Ev(EventKind.ContextAssembled, $"The turn for {StepOutputContract.ToolName} was answered with text; the step carries on.");
+            if (ending.Next == StepEnding.Next.Continue || toolCalls is null)
                 continue;
-            }
-
-            if (toolCalls is null)
-            {
-                if (described is not null && !repairRequested)
-                {
-                    repairRequested = true;
-                    resendAsked = true;
-                    messages.Add(ChatMessage.User(
-                        $"Your reply described a '{described.Name}' call in plain text instead of invoking it. "
-                        + "Nothing was executed. If you meant to act, send it again as a real tool call. "
-                        + "If that JSON was only an example or an explanation, reply with your final answer."));
-                    yield return Ev(EventKind.ErrorObserved,
-                        $"The model described a '{described.Name}' call in plain text instead of invoking it — "
-                        + "nothing was executed; asked it to re-send the call properly.");
-                    continue;
-                }
-
-                // NOTHING came back. Not an answer, not a call - and this used to fall through to
-                // "genuine final answer" below and mark the step SUCCEEDED. The reviewer then failed
-                // it for the only thing it could see ("no tools were run and no files were
-                // changed"), the retry produced the same silence, and the run died with a message
-                // about the reviewer while the cause - the model's output never arrived - appeared
-                // nowhere. An absence is not an answer, which is the same rule as everywhere else
-                // here; this was the last place still breaking it.
-                if (replyText is null && actionsTaken == 0)
-                {
-                    var thought = reasoningBuilder.Length;
-                    var spent = lastCompletionTokens is { } t and > 0 ? $" while reporting {t} output token(s)" : "";
-
-                    // Only when the prompt is actually near the window. Suggesting num_ctx to somebody
-                    // whose prompt used 1786 of 131072 tokens sends them to tune a setting that has
-                    // nothing to do with it, which is how a diagnosis becomes a list of everything it
-                    // might be.
-                    var declaredWindow = provider.ContextWindow(request);
-                    var tight = declaredWindow is { } w && lastPromptTokens is { } used && used > w * 4 / 5
-                        ? $" The prompt also used {used} of this model's {w} tokens, so raising num_ctx may help."
-                        : "";
-
-                    var why = thought > 0
-                        ? $"The model spent the whole turn reasoning ({thought:N0} characters of it) and "
-                          + "produced no answer and no tool call. Turn Thinking off in Settings, or use a "
-                          + "model that answers as well as reasons." + tight
-                        // What was OBSERVED first, then the causes - and reasoning is named as ruled
-                        // out rather than led with, because the provider reported none and saying
-                        // "a reasoning model does this" over evidence to the contrary is the habit
-                        // the rest of this engine exists to break.
-                        : $"The model returned nothing{spent} — no text, no tool call, and no reasoning "
-                          + "either — so its output never reached the engine. The usual cause is a model "
-                          + "that cannot emit tool calls in the format the provider expects: a small "
-                          + "local model often answers with something the provider then drops. Tick "
-                          + "\"Capture raw wire (Trace)\" in the log window and run it again to see "
-                          + "exactly what came back, or use a model known to call tools." + tight;
-
-                    yield return Ev(EventKind.ErrorObserved, why);
-                    loopResult.Set(StepOutcomeKind.Failed, why);
-                    yield break;
-                }
-
-                // An edit that did not apply is settled by its file holding what it wanted - read now, as
-                // the run sees the file - and by nothing less: not by another write to the file, not by
-                // the same stale old_string sent again (run 4f1d97, 2026-09-28).
-                if (openFailures.EditPaths is { Count: > 0 } edited)
-                {
-                    var contents = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var path in edited)
-                        contents[path] = await store.TryReadPendingAsync(path, ct) ?? await ReadOrNullAsync(path, ct);
-                    foreach (var path in openFailures.Settle(p => contents.GetValueOrDefault(p)))
-                        yield return Ev(EventKind.ContextAssembled,
-                            $"An edit of {path} that did not apply is settled: the file holds the text it was to put there.");
-                }
-
-                // A criterion the plan attached to THIS step, decided by the engine as the step ends - not after the
-                // run, when nothing can be done about it. Run 68f92f: the last step was to write the coverage report
-                // the plan named, found the previous run's report under another name, said nothing needed doing, and
-                // the run failed on the missing file five seconds later. Once, as an ordinary turn; nothing is taken
-                // from prose, and what still fails after it is shown to the reviewer as the engine's own finding.
-                if (!criteriaNudged && stepCriteria is { Count: > 0 } && stepNo is { } planNo
-                    && TypedCriteria.OfStep(stepCriteria, planNo - 1, _workspace.RootPath)
-                        .Where(r => r.Outcome == CriterionOutcome.Failed).ToArray() is { Length: > 0 } failing)
-                {
-                    criteriaNudged = true;
-                    messages.Add(ChatMessage.User("Before this step ends: the plan checks this step's work, and the engine finds "
-                        + (failing.Length == 1 ? "this fails" : "these fail") + ":\n"
-                        + string.Join("\n", failing.Select(r => $"- {r.Name}: {r.Detail}"))
-                        + "\nMake the work meet " + (failing.Length == 1 ? "it" : "them") + " - the path and the text are the plan's, "
-                        + "not a suggestion - or say plainly why that cannot be done."));
-                    yield return Ev(EventKind.ContextAssembled, $"The plan's criteria for this step fail as it ends: "
-                        + string.Join("; ", failing.Select(r => $"{r.Name} ({r.Detail})")) + ". The step is told, once.");
-                    continue;
-                }
-
-                // A step that was to hand its result on and has not is reminded ONCE, before any verdict -
-                // including the one on calls still open, which used to end the step first: in run 4f1d97
-                // three steps that had written their findings never heard the reminder. It is an ordinary
-                // turn: limits, budget and cancellation apply to it as to any other, and it makes nothing
-                // that did not finish into something that did.
-                if (outputSchema is not null && outputSlot is { Values: null, Nudged: false })
-                {
-                    outputSlot.Nudged = true;
-                    messages.Add(ChatMessage.User(
-                        $"This step is not finished until it hands its result on with {StepOutputContract.ToolName}. "
-                        + "Call it now with the step's result: "
-                        + string.Join(", ", outputSchema.Fields.Where(f => f.Required).Select(f => f.Name)) + "."
-                        + (openFailures.Count > 0
-                            ? " These calls are still open and keep the step unfinished: " + openFailures.Describe()
-                            : "")));
-                    continue;
-                }
-
-                // A final answer only settles the step if the actions behind it actually worked. The
-                // model saying "Done" over a failed read is the exact shape the follow-up review
-                // caught reporting green.
-                if (openFailures.Count > 0 && openFailures.Describe() != openCallsForReview)
-                {
-                    var unresolved = openFailures.Describe();
-
-                    // Blocked, not unfinished (Phase 7.1), where the engine can see why: a permission it was refused
-                    // and nothing made good, or nothing it looked for there at all. Both are for a person to put
-                    // right, and the run carries on from here once they have.
-                    if (EngineBlock(openFailures) is { } block)
-                    {
-                        yield return Ev(EventKind.ErrorObserved, "Blocked: " + block.Reason);
-                        loopResult.Set(StepOutcomeKind.Blocked, block.Reason, block.Cause);
-                        yield break;
-                    }
-
-                    // Told once, before any verdict (amendment A). Run 0cf51c, 2026-09-29: a command written for bash
-                    // failed under cmd.exe, the step ran it again rightly spelled two seconds later and it passed, and
-                    // the step - never told the first was still open - ended INCOMPLETE on it, two steps skipped.
-                    if (!openCallsNudged)
-                    {
-                        openCallsNudged = true;
-                        messages.Add(ChatMessage.User("Before this step ends: "
-                            + (openFailures.Count == 1 ? "this call" : $"these {openFailures.Count} calls")
-                            + " did not go through, and nothing since has made "
-                            + (openFailures.Count == 1 ? "it" : "them") + " good:\n" + unresolved
-                            + "\nMake each good - run it again, corrected - or, if this step's result does not depend on it, "
-                            + "say so and why in your closing message."));
-                        yield return Ev(EventKind.ContextAssembled, $"The step is told, once, of {openFailures.Count} call(s) still open: {unresolved}");
-                        continue;
-                    }
-
-                    // Still open, and a reviewer is to judge the step: it goes to the review with them named, as the
-                    // engine's own finding - the reviewer decides whether the result stands without them. Without a
-                    // reviewer, nothing can, and the step is unfinished as before.
-                    if (reviewed)
-                    {
-                        openCallsForReview = unresolved;
-                        journal.Record(stepNo, "engine_open_calls", "{}", ActionOutcome.Succeeded,
-                            "Checked by the engine as this step ended: calls that did not go through and that nothing made good, "
-                            + "after the step was told of them once:\n" + unresolved
-                            + "\nJudge whether the step's result stands without them. A result that depends on one of them is not "
-                            + "shown to be done; one that does not - a mistyped command made good by a different one - may stand.",
-                            WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
-                        yield return Ev(EventKind.ErrorObserved, $"Finished with {openFailures.Count} call(s) not made good, after being "
-                            + "told once: " + unresolved + " - the review decides whether the result stands without them.");
-                    }
-                    else
-                    {
-                        // Two different things end a step here, and saying which one is the difference
-                        // between a person fixing a broken command and a person checking a path.
-                        yield return Ev(EventKind.ErrorObserved, openFailures.NothingButMisses
-                            ? $"Finished with nothing done: all {openFailures.Count} lookup(s) this step "
-                              + "made found nothing, and nothing else was tried: " + unresolved
-                            : $"Finished without resolving {openFailures.Count} tool call(s) that did not "
-                              + "go through: " + unresolved);
-
-                        loopResult.Set(StepOutcomeKind.Incomplete, openFailures.NothingButMisses
-                            ? "nothing found and nothing done: " + unresolved
-                            : "unresolved tool call: " + unresolved);
-                        yield break;
-                    }
-                }
-
-                // A step that was to hand its result on as values and has not: told once, with the
-                // fields, and then not called finished - the steps after it would have nothing.
-                if (outputSchema is not null && outputSlot is { Values: null })
-                {
-                    loopResult.Set(StepOutcomeKind.Incomplete,
-                        $"the step finished without handing on its declared output ({StepOutputContract.ToolName}), "
-                        + "so the steps after it would have nothing to work from");
-                    yield return Ev(EventKind.ErrorObserved, "The step finished without submitting its declared output.");
-                    yield break;
-                }
-
-                loopResult.Set(StepOutcomeKind.Succeeded, null);
-                yield break; // genuine final answer - no tool calls
-            }
 
             // Freeze prior successes, not repeat decisions: a write in this batch can change the
             // generation before a later command reaches its gate.
-            progress.BeginTurn();
+            frame.Progress.BeginTurn();
 
             // Did this turn do anything the step had not already done? A stuck model does not stop
             // calling tools - it calls the SAME one, with the same arguments, until something else
             // stops it. That is the shape worth detecting, and unlike a turn count it does not grow
             // with the size of the job: seven new files are seven turns of progress, while one file
             // read three times is three turns of nothing however big the project is.
-            var advanced = progress.Advanced(toolCalls);
-            if (!advanced && progress.Stalled >= StallLimit)
+            var advanced = frame.Progress.Advanced(toolCalls);
+            if (!advanced && frame.Progress.Stalled >= StallLimit)
             {
-                var repeated = progress.Describe();
+                var repeated = frame.Progress.Describe();
                 loopResult.Set(StepOutcomeKind.Incomplete,
                     $"stopped after {StallLimit} turns that only repeated earlier tool calls: {repeated}");
                 yield return Ev(EventKind.ErrorObserved,
@@ -4590,23 +4046,22 @@ public sealed partial class Orchestrator : IOrchestrator
 
             // Healing beats being asked, being asked beats the attempt default: each names the
             // cheapest thing that explains how this turn produced a call at all.
+            // Taken every turn that makes calls, whichever origin wins: a request to re-send is answered by THIS turn.
+            var resent = stepEnding.TakeResendAsked();
             var turnOrigin = recovered ? ToolCallOrigin.Healed
-                : resendAsked ? ToolCallOrigin.Nudged
+                : resent ? ToolCallOrigin.Nudged
                 : attemptOrigin;
-            resendAsked = false;
-            var accounting = new ToolResultAccounting(_tools, progress, openFailures, reads, journal,
-                repairAttempts, _repairConsultation.Enabled, stepNo, turnOrigin);
+            var accounting = new ToolResultAccounting(frame, _tools, repairAttempts, _options.RepairConsultation.Enabled, turnOrigin);
             var readResults = new Dictionary<int, ToolInvocation.Result>();
-            // The reads made in this turn, by tool and arguments: the same read twice in one turn is
-            // run once. Measured 2026-09-28 13:28, run 80c951: one turn asked for four missing files,
-            // each twice; every duplicate is a second copy of the same answer in a full window.
-            var readsThisTurn = new HashSet<string>(StringComparer.Ordinal);
+            // Calls admitted ahead of the batch of reads they run in, with what each left kept until its turn comes - the
+            // feed, the journal and the conversation keep the calls' order (CallAdmission.Held).
+            var admittedAhead = new Dictionary<int, CallAdmission.Held>();
+            admission.BeginTurn(onlyHandOn: forcedThisTurn);
             ToolContext CallContext() => new(taskId, runId, _workspace.Id, context,
-                EffectivePolicyFor(worker), _workspace.RootPath, store, _services);
+                EffectivePolicyFor(worker), _workspace.RootPath, store);
             WorkEvent Invoked(ToolCall item) => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
                 EventKind.ToolInvoked, $"{item.Name} {Compact(item.ArgumentsJson)}",
-                WorkEventPayload.ToolPayload(item.Name, stepNo));
-            bool CanRunRead(ToolCall item) => toolAccess.CanRunRead(item, worker, EffectivePolicyFor(worker), offer);
+                WorkEventPayload.ToolPayload(item, stepNo));
 
             for (var callIndex = 0; callIndex < toolCalls.Count; callIndex++)
             {
@@ -4617,406 +4072,53 @@ public sealed partial class Orchestrator : IOrchestrator
                 void ParkHere() => _progress.Park(taskId, new ParkedPosition(stepNo, messages.ToArray(),
                     journal.Actions.Skip(loopMark).ToArray(), toolCalls.Skip(callIndex).ToArray()));
 
-                // A turn that offered only the hand-over: anything else is answered, not run.
-                if (forcedThisTurn && call.Name != StepOutputContract.ToolName)
+                // Answered, refused, asked about or let through - in one order, in one place (CallAdmission).
+                var admitted = new CallAdmission.Verdict();
+                if (admittedAhead.Remove(callIndex, out var ahead))
                 {
-                    yield return Invoked(call);
-                    var onlyHandOn = $"this turn is for {StepOutputContract.ToolName} only. Hand on what you have "
-                        + "established first; every tool is back on the next turn.";
-                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, onlyHandOn, WorkspaceEffect.None);
-                    openFailures.RefusedByRule(call);
-                    messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + onlyHandOn));
-                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {onlyHandOn}");
-                    continue;
+                    admitted = ahead.Verdict;
+                    foreach (var ev in admission.Release(ahead))
+                        yield return ev;
                 }
-
-                // A step that has said it cannot go on does nothing more in this turn.
-                if (reportedBlocked is not null)
-                {
-                    yield return Invoked(call);
-                    const string afterReport = "the step has reported it is blocked; nothing after that report is carried out.";
-                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, afterReport, WorkspaceEffect.None);
-                    openFailures.RefusedByRule(call);
-                    messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + afterReport));
-                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {afterReport}");
-                    continue;
-                }
-
-                // The step's word that it cannot go on (Phase 7.2): recorded as its word. The step ends when the turn does.
-                if (mayReportBlocked && call.Name == AgentBlocked.ToolName)
-                {
-                    yield return Invoked(call);
-                    var (blockReason, blockNeeds, notAReport) = AgentBlocked.Read(call.ArgumentsJson);
-                    string recorded;
-                    if (notAReport is not null)
-                    {
-                        recorded = "Not recorded: " + notAReport;
-                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, recorded, WorkspaceEffect.None);
-                        yield return Ev(EventKind.ToolResult, $"{call.Name} -> failed: {recorded}");
-                    }
-                    else
-                    {
-                        reportedBlocked = AgentBlocked.Line(blockReason!, blockNeeds);
-                        recorded = "Recorded: this step ends here as BLOCKED - not done - and the run stops for a person to remove "
-                            + "the cause; then this step is done again.";
-                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, recorded, WorkspaceEffect.None);
-                        yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {reportedBlocked}");
-                    }
-                    messages.Add(ChatMessage.Tool(call.Id, recorded));
-                    continue;
-                }
-
+                else
+                    await foreach (var ev in admission.AdmitAsync(call, admitted, ParkHere, ct))
+                        yield return ev;
                 // The step's catalog: a tool loaded by name, or found by a search, is listed from the next turn -
                 // at the END of the list, so nothing a provider has cached before it moves.
-                if (toolsOnRequest is not null && call.Name is ToolBudget.LoadToolName or ToolBudget.FindToolName)
+                if (admitted.Loaded.Count > 0)
                 {
-                    yield return Invoked(call);
-                    var (found, said) = call.Name == ToolBudget.LoadToolName
-                        ? toolsOnRequest.Load(call.ArgumentsJson)
-                        : toolsOnRequest.Find(call.ArgumentsJson);
-                    if (found.Count > 0)
-                    {
-                        toolDefs = [.. toolDefs, .. found];
-                        toolsOverhead += found.Sum(ToolBudget.Size);
-                        loadedTools?.AddRange(found.Select(d => d.Name));
-                    }
-                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, said, WorkspaceEffect.None);
-                    messages.Add(ChatMessage.Tool(call.Id, said));
-                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {said}");
-                    if (found.Count > 0) yield return Exposed();
-                    continue;
+                    toolDefs = [.. toolDefs, .. admitted.Loaded];
+                    toolsOverhead += admitted.Loaded.Sum(ToolBudget.Size);
+                    loadedTools?.AddRange(admitted.Loaded.Select(d => d.Name));
+                    yield return Exposed();
                 }
+                if (!admitted.Run)
+                    continue;
 
-                // A tool still waiting in the catalog was never shown to the model: not its description, not its
-                // arguments. The gate below asks only whether a tool exists and whether the role may use it, so
-                // such a call ran - on arguments the model had made up from the name. It is answered instead, and
-                // counts as a call that failed: the step is told how to get the tool, and may not end as if it had.
-                if (toolsOnRequest?.IsWaiting(call.Name) == true)
+                // Reads that need nobody's leave run together, up to ParallelToolReads.Limit at a time - and only reads
+                // the admission has let through: each one after this is admitted now, before any of them runs, and one
+                // it does not let through does not run. Before 2026-10-08 the batch ran first and the admission saw its
+                // reads afterwards, so one it then refused had already been made and its result was thrown away - the
+                // same read twice in a turn, which the admission says is made once, was made twice.
+                if (readResults.Count == 0 && admission.RunsFreely(call))
                 {
-                    yield return Invoked(call);
-                    var notLoaded = $"'{call.Name}' is not loaded, so it did not run. Call {ToolBudget.LoadToolName} with its name first; "
-                        + "it is callable from the turn after, with its full description.";
-                    openFailures.Failed(call, notLoaded, true, null);
-                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notLoaded);
-                    messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + notLoaded));
-                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {notLoaded}");
-                    continue;
-                }
-
-                // The step's hand-over: checked here, against the one contract, and nowhere else.
-                if (outputSchema is not null && outputSlot is not null && call.Name == StepOutputContract.ToolName)
-                {
-                    yield return Invoked(call);
-                    var sameAgain = outputSlot.LastRefused == TaskProgress.Canonical(call.ArgumentsJson);
-                    var verdict = StepOutputContract.Check(outputSchema, call.ArgumentsJson,
-                        path => OutputPathExists(path, store), id => id >= 1 && id <= journal.Actions.Count,
-                        boundary is { ForItem: true } ? boundary.Items : null, offered: submitTool);
-                    string handed;
-                    if (verdict.Accepted)
+                    var group = new List<(int Index, ToolCall Call)> { (callIndex, call) };
+                    for (var next = callIndex + 1;
+                         next < toolCalls.Count && group.Count < ParallelToolReads.Limit && admission.RunsFreely(toolCalls[next]);
+                         next++)
                     {
-                        outputSlot.Accept(verdict);
-                        outputSlot.LastRefused = null;
-                        openFailures.HandedOn();
-                        // What the step had shown for each item it hands a result on for, recorded now
-                        // and by the engine (Phase 5.1): later, only this counts as coverage.
-                        outputSlot.Items = EvidenceCoverage.Gather(outputSchema, verdict.Values!, reads, journal.Actions, _tools.Definitions,
-                            boundary is { ForItem: true } ? boundary.Items : null);
-                        var unbacked = EvidenceCoverage.Unbacked(outputSlot.Items);
-                        handed = $"Accepted as this step's output (revision {outputSlot.Revision}); the steps after it receive "
-                            + "these values." + (verdict.Notes.Count > 0 ? " " + string.Join(" ", verdict.Notes) : "")
-                            + (unbacked is null ? "" : " " + unbacked)
-                            + " Finish the step with a short closing message.";
-                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, handed, WorkspaceEffect.None);
-                        yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {handed}");
+                        var held = admittedAhead[next] = await admission.AdmitAheadAsync(toolCalls[next], ct);
+                        if (held.Verdict.Run) group.Add((next, toolCalls[next]));
                     }
-                    else
+                    if (group.Count > 1)
                     {
-                        // A submission sent again unchanged is said to be one (C.5): a refusal that
-                        // does not say so changes nothing about what the model does next.
-                        handed = (sameAgain ? "This is the same submission as the last one, unchanged - the problems below still stand. " : "")
-                            + string.Join(" ", verdict.Errors) + " Nothing was stored; send the corrected submission.";
-                        outputSlot.LastRefused = TaskProgress.Canonical(call.ArgumentsJson);
-                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, handed, WorkspaceEffect.None);
-                        yield return Ev(EventKind.ToolResult, $"{call.Name} -> failed: {handed}");
-                    }
-                    messages.Add(ChatMessage.Tool(call.Id, handed));
-                    continue;
-                }
-                // The run offers the hand-over to every step; one with nothing to hand on is told so, and nothing is stored.
-                if (outputSchema is null && submitTool is not null && call.Name == StepOutputContract.ToolName)
-                {
-                    yield return Invoked(call);
-                    const string nothing = "Nothing was stored: this step hands nothing on as values. Finish it now with a short "
-                        + "closing message - no further tool calls.";
-                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, nothing, WorkspaceEffect.None);
-                    messages.Add(ChatMessage.Tool(call.Id, nothing));
-                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {nothing}");
-                    continue;
-                }
-                // A document the engine assembles, looked at by a step for one item: answered by the engine,
-                // not run. It may not exist yet, and whether it does is not the item's business - run
-                // d91b6a45: a page step read it, got "File not found", and ended INCOMPLETE on that.
-                if (boundary?.AssembledByTheEngine(call, _tools.DefinitionOf(call.Name)) is { } assembled)
-                {
-                    yield return Invoked(call);
-                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, assembled, WorkspaceEffect.None);
-                    openFailures.RefusedByRule(call);
-                    messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + assembled));
-                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {assembled}");
-                    continue;
-                }
-
-                // Outside what this step may change: refused before it runs, and said why. Not an open
-                // failure - it is the engine's rule, not a call that went wrong - and the way on is named.
-                // What a read-only step made itself, it may delete (WriteBoundary.Refuse): measured here, against the
-                // workspace as the step found it, and only when the call is one that deletes.
-                IReadOnlySet<string>? madeByThisStep = null;
-                if (boundary?.AsksWhatTheStepMade(_tools.DefinitionOf(call.Name)) == true && changes is not null && stepStart is not null
-                    && await changes.TakeAsync(ct) is { } nowThere && await changes.CompareAsync(stepStart, nowThere, ct) is { } sinceStart)
-                    madeByThisStep = sinceStart.Where(c => c.Kind == FileChangeKind.Added)
-                        .Select(c => ShellLookup.Normal(c.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                if (boundary?.Refuse(call, _tools.DefinitionOf(call.Name),
-                        path => store.PendingPaths.Any(p => string.Equals(ShellLookup.Normal(p), path, StringComparison.OrdinalIgnoreCase)),
-                        madeByThisStep)
-                    is { } notItsToChange)
-                {
-                    yield return Invoked(call);
-                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notItsToChange, WorkspaceEffect.None);
-                    openFailures.RefusedByRule(call);
-                    messages.Add(ChatMessage.Tool(call.Id, "REFUSED: " + notItsToChange));
-                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> refused: {notItsToChange}");
-                    continue;
-                }
-                if (CanRunRead(call) && !readsThisTurn.Add(call.Name + "\0" + TaskProgress.Canonical(call.ArgumentsJson)))
-                {
-                    readResults.Remove(callIndex, out _);
-                    yield return Invoked(call);
-                    const string same = "Not run: this is the same call, with the same arguments, as one made earlier in this "
-                        + "turn, and its result above stands.";
-                    messages.Add(ChatMessage.Tool(call.Id, same));
-                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> {same}");
-                    continue;
-                }
-                if (readResults.Count == 0 && CanRunRead(call))
-                {
-                    var group = toolCalls.Skip(callIndex).Take(ParallelToolReads.Limit)
-                        .TakeWhile(CanRunRead).ToArray();
-                    if (group.Length > 1)
-                    {
-                        foreach (var item in group) yield return Invoked(item);
-                        var completed = await ParallelToolReads.ExecuteAsync(group, _tools, CallContext(), ct);
-                        actionsTaken += group.Length;
-                        for (var i = 0; i < completed.Length; i++) readResults.Add(callIndex + i, completed[i]);
+                        foreach (var item in group) yield return Invoked(item.Call);
+                        var completed = await ParallelToolReads.ExecuteAsync(group.Select(g => g.Call).ToArray(), _tools, CallContext(), ct);
+                        actionsTaken += group.Count;
+                        for (var i = 0; i < completed.Length; i++) readResults.Add(group[i].Index, completed[i]);
                     }
                 }
                 readResults.Remove(callIndex, out var readResult);
-                if (readResult is null)
-                {
-                if (await preflight.CheckAsync(call, progress, ct) is { } admissionRefusal)
-                {
-                    if (admissionRefusal.Answered) openFailures.FoundNothing(call, admissionRefusal.Reason);
-                    else openFailures.Failed(call, admissionRefusal.Reason, admissionRefusal.DidNotRun, admissionRefusal.AsTool);
-                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, admissionRefusal.Reason);
-                    yield return Decided(call.Name, allowed: false, admissionRefusal.Summary);
-                    messages.Add(ChatMessage.Tool(call.Id, admissionRefusal.Reply));
-                    continue;
-                }
-
-                // An action that cannot be taken back, which this task has already taken with exactly
-                // these arguments - in an attempt that stopped, or a process that died - is not taken
-                // again, and not asked about again. The model is given what it answered the first time.
-                if (_tools.DefinitionOf(call.Name)?.OnceOnly == true && _progress.DoneBefore(taskId, call) is { } already)
-                {
-                    const string notAgain = "already done earlier in this task, with the same arguments; not repeated";
-                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notAgain);
-                    yield return Decided(call.Name, allowed: false, $"{call.Name}: {notAgain}");
-                    messages.Add(ChatMessage.Tool(call.Id,
-                        $"ALREADY DONE: this exact {call.Name} was carried out earlier in this task, at "
-                        + $"{already.At.ToLocalTime():yyyy-MM-dd HH:mm}, and cannot be taken back - it was NOT done again. "
-                        + $"What it answered then: {already.Output ?? "(nothing)"}"));
-                    continue;
-                }
-
-                // ── Permission gate: allow / ask / deny ──────────────────────
-                var gate = toolAccess.Evaluate(EffectivePolicyFor(worker), call.Name, offer);
-
-                if (gate != PermissionDecision.Allow)
-                {
-                    var approved = false;
-                    if (gate == PermissionDecision.Ask)
-                    {
-                        yield return Ev(EventKind.DecisionRequested,
-                            $"Approve tool '{call.Name}'? {Compact(call.ArgumentsJson)}");
-
-                        var decisionRequest = toolAccess.Approval(call, taskId, runId, _workspace.RootPath);
-                        DecisionOutcome outcome;
-                        try { outcome = await ToolAccess.AskAsync(_decisions, _decisionGate, decisionRequest, ct); }
-                        catch (DecisionPendingException) { ParkHere(); throw; }
-                        approved = string.Equals(outcome.OptionId, "allow", StringComparison.OrdinalIgnoreCase);
-                        // Says WHO answered. A standing approval and a person clicking Allow used to
-                        // produce the same line, separated only by how long it took.
-                        var by = string.IsNullOrEmpty(outcome.Because) ? "" : $" ({outcome.Because})";
-                        yield return Decided(call.Name, approved,
-                                        $"{call.Name}: {(approved ? "allowed" : "denied")}{by}");
-                    }
-                    else
-                    {
-                        // The REASON, when there is a specific one. "Blocked by policy" was true of
-                        // a withheld tool and told the reader nothing they could act on; a run whose
-                        // shell was kept back because nobody was awake to approve it should say so.
-                        yield return Decided(call.Name, allowed: false,
-                            $"{call.Name}: {offer.Reason(call.Name) ?? "blocked by policy"}");
-                    }
-
-                    if (!approved)
-                    {
-                        // Same reason as the role gate above: a denial that only appears in the
-                        // transcript lets the step finish green over an action that never happened.
-                        var why = gate == PermissionDecision.Ask
-                            ? "the user did not permit this action"
-                            : offer.Reason(call.Name) ?? "blocked by the permission policy";
-                        // A refusal is a call that NEVER HAPPENED: nobody typed it wrong and
-                        // nothing broke - it was asked about and answered. The person's "no" IS
-                        // the resolution, and the policy's "no" is a door that will not open, which
-                        // the model is told below to walk around. Either way there is no residue,
-                        // so it stops counting once the step has changed something. See Forgiven.
-                        openFailures.Refused(call, why);
-                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
-                                       ActionOutcome.Refused, why);
-
-                        // The model is told WHICH refusal this was. Both used to arrive as "the user
-                        // did not permit this action" - the distinction was computed, recorded in the
-                        // journal, and then thrown away on the one path where it changes behaviour.
-                        // A model told a person refused it stops and apologises, which is right; a
-                        // model told a tool is off for this run should stop asking for that tool and
-                        // do the job another way, and it could not tell the two apart.
-                        messages.Add(ChatMessage.Tool(call.Id, gate == PermissionDecision.Ask
-                            ? "ERROR: the user did not permit this action."
-                            : $"ERROR: the tool '{call.Name}' is not permitted for this run and will "
-                              + "not become permitted. Do not call it again. If another permitted tool "
-                              + "can do the same job, use that instead; if none can, say what you "
-                              + "could not do and why."));
-                        continue;
-                    }
-                }
-
-                // ── Geography gate: does this command write somewhere else? ──
-                //
-                // AFTER the permission gate, because "may this run use a shell at all" is a bigger
-                // question than "may this one write land there", and asking the second of somebody
-                // who is about to refuse the first is a question wasted.
-                //
-                // A guess, and it says so: see ShellGeography. It never refuses on its own - the
-                // whole reason it may exist at all is that its answer becomes a QUESTION. A check
-                // this rough deciding by itself would be the guard the sandbox plan warns about, and
-                // the first false positive would stop work the model was right to do.
-                var outside = ShellGeography.WritesOutsideFor(
-                    call.Name, call.ArgumentsJson, _workspace.RootPath, granted.Roots);
-
-                if (outside.Count > 0)
-                {
-                    var where = string.Join(", ", outside.Select(w => w.Known ? w.Path : w.Token));
-
-                    // The same rule as the tool offer above, at the other place this engine puts a
-                    // question to a handler: one that cannot say yes is not asked.
-                    //
-                    // This is the case the tool offer does NOT cover, and it is reachable in the
-                    // configuration §9an recommends for schedules. At Execute the shells sit in
-                    // AskBefore and are withheld, so nothing gets this far; at Autonomous the shell
-                    // is allowed outright and rightly offered - and then every write it aims outside
-                    // the workspace becomes a question nobody is awake to answer. The answer is not
-                    // in doubt, so it is given here instead of fetched.
-                    //
-                    // Only the REQUEST is skipped. Everything below - the decision line, the
-                    // journal entry, the failure, the sentence the model is told - runs exactly as
-                    // it does when a person says no, because the outcome genuinely is the same.
-                    DecisionOutcome geography;
-
-                    if (!_decisions.CanApprove)
-                    {
-                        // The place, on the line that survives, since no request is emitted to
-                        // carry it. A refusal that does not say WHERE sends the reader looking.
-                        yield return Decided(call.Name, allowed: false,
-                            $"{call.Name}: kept to the workspace — {where}, and nobody is there to "
-                            + "allow it");
-
-                        var unattendedWhy = ShellGeography.Explain(outside, _workspace.RootPath);
-                        openFailures.Failed(call, "this run may not write outside the workspace");
-                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
-                                       ActionOutcome.Refused, "writes outside the workspace");
-                        messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + unattendedWhy));
-                        continue;
-                    }
-
-                    yield return Ev(EventKind.DecisionRequested,
-                        $"{call.Name} appears to write outside the workspace: {where}");
-
-                    var geographyRequest = new DecisionRequest(
-                        taskId,
-                        "Let this command write outside the workspace?",
-                        $"Writes to {where}",
-                        KeepOptions(outside),
-                        // Nothing is recommended. Every other approval in this engine can lean on
-                        // "this is the tool you configured"; this one is a guess about a path, and
-                        // a highlighted button is an answer given on the reader's behalf.
-                        RecommendedOptionId: null,
-                        Subject: null,
-                        FullDetail: ShellGeography.Explain(outside, _workspace.RootPath)
-                                  + "\n\nThe command in full:\n" + DescribeCall(call),
-                        // Still true, and it is about the TOOL: no "Allow run_command in this
-                        // workspace" button appears here or anywhere, whatever is answered below.
-                        // The "keep" option remembers a PLACE, which the boundary is made of, and
-                        // leaves every question about the shell itself exactly where it was.
-                        SessionOnly: true,
-                        Action: new BoundAction(
-                            runId, call.Id, call.Name, call.ArgumentsJson, _workspace.RootPath));
-
-                    try { geography = await ToolAccess.AskAsync(_decisions, _decisionGate, geographyRequest, ct); }
-                    catch (DecisionPendingException) { ParkHere(); throw; }
-
-                    var keepOut = string.Equals(geography.OptionId, "deny", StringComparison.OrdinalIgnoreCase);
-                    var forRun = string.Equals(geography.OptionId, "run", StringComparison.OrdinalIgnoreCase);
-                    var keepIt = string.Equals(geography.OptionId, "keep", StringComparison.OrdinalIgnoreCase);
-
-                    // Kept to the workspace IS a refusal: this command does not run. The other three
-                    // answers let it run, and the difference between them is how long the permission
-                    // lasts, not whether the call happened.
-                    yield return Decided(call.Name, allowed: !keepOut,
-                        $"{call.Name}: {(keepOut ? "kept to the workspace"
-                                       : keepIt ? "allowed outside, kept for this workspace"
-                                       : forRun ? "allowed outside, for this run"
-                                       : "allowed outside, once")}");
-
-                    if (keepOut)
-                    {
-                        // Refused like any other refusal - counted, journalled, and told to the
-                        // model in words it can act on. A step that quietly skipped the call would
-                        // report success over work that never happened.
-                        var why = ShellGeography.Explain(outside, _workspace.RootPath);
-                        openFailures.Failed(call, "the user kept this command inside the workspace");
-                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
-                                       ActionOutcome.Refused, "writes outside the workspace");
-                        messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + why));
-                        continue;
-                    }
-
-                    if (forRun || keepIt)
-                        foreach (var write in outside)
-                            granted.Grant(write);
-
-                    // Kept: the same folders, written down where they outlive the process. Through
-                    // the store's own rules, so a refusal there (a drive root, a system folder,
-                    // Enactive's own settings) leaves the run-scoped grant standing and nothing on
-                    // the disk - the command still runs, and the person is simply asked again next
-                    // time rather than silently given something the store would not grant.
-                    if (keepIt)
-                        foreach (var root in granted.Roots)
-                            if (_writableRoots.Add(_workspace.RootPath, root) is { } refused)
-                                yield return Ev(EventKind.DecisionResolved,
-                                    $"Not kept for this workspace: {refused}");
-                }
-
-                }
 
                 if (readResult is null) actionsTaken++;
 
@@ -5040,7 +4142,6 @@ public sealed partial class Orchestrator : IOrchestrator
                 }
                 var result = invocation.Value;
                 var failure = accounting.Record(call, invocation);
-                if (result.Success) boundary?.Succeeded(call);
                 // Written the moment it is done, not at a boundary: a process that dies next must
                 // still know this was sent.
                 if (result.Success && !result.DidNotRun && _tools.DefinitionOf(call.Name)?.OnceOnly == true)
@@ -5104,32 +4205,25 @@ public sealed partial class Orchestrator : IOrchestrator
                 // each result identical to the last and nothing saying so. Whether a nudge would
                 // have moved it is not knowable; that it was owed one is.
                 if (!advanced)
-                    reply += progress.Stalled >= StallLimit - 1
+                    reply += frame.Progress.Stalled >= StallLimit - 1
                         ? "\n\n[This is a call you have already made in this step, and it is being "
-                          + "counted as no progress. One more turn that only repeats earlier calls "
+                          + "counted as no frame.Progress. One more turn that only repeats earlier calls "
                           + "and this step will be stopped as stuck. Change something, or say what "
                           + "you are stuck on and stop.]"
                         : "\n\n[This is a call you have already made in this step, and it is being "
-                          + "counted as no progress. If you know what to change, change it now; if "
+                          + "counted as no frame.Progress. If you know what to change, change it now; if "
                           + "you are finished, say so.]";
 
                 messages.Add(ChatMessage.Tool(call.Id, reply));
             }
 
-            // Advisory: what the engine finds itself is recorded as the cause, with the step's word beside it;
-            // only where the engine sees nothing is the step's word the cause - and recorded as its word.
-            if (reportedBlocked is not null)
+            // A step that said it cannot go on ends blocked now that its turn's calls are answered (StepEnding).
+            if (admission.ReportedBlocked is { } reportedBlocked)
             {
-                // A tool the engine kept back, named by the step, is the engine's finding too: it is the engine
-                // that kept it back, and why is its own fact. Only the tools the report names - a step in a run
-                // without git that waits on a person's answer is not blocked by git.
-                var (blockCause, blockWhy) = EngineBlock(openFailures) is { } found
-                    ? (found.Cause, found.Reason + "; " + reportedBlocked)
-                    : KeptBackAndNamed(offer, reportedBlocked) is { } keptBack
-                        ? (OutcomeCause.BlockedPermission, $"needs a tool this run does not offer: {keptBack}; {reportedBlocked}")
-                        : (OutcomeCause.BlockedReported, reportedBlocked);
-                yield return Ev(EventKind.ErrorObserved, "Blocked: " + blockWhy);
-                loopResult.Set(StepOutcomeKind.Blocked, blockWhy, blockCause);
+                var blocked = new StepEnding.Verdict();
+                foreach (var ev in stepEnding.ReportedBlocked(reportedBlocked, offer, blocked))
+                    yield return ev;
+                loopResult.Set(blocked.Kind, blocked.Reason, blocked.Cause);
                 yield break;
             }
         }
@@ -5438,7 +4532,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     ? PermissionDecision.Ask
                     : decision;
             },
-            _decisions.CanApprove);
+            // Per tool: a run nobody watches is still offered a tool somebody allowed for good (RememberedApprovals).
+            _decisions.CanApproveTool);
     }
 
     /// <summary>
@@ -5540,20 +4635,23 @@ public sealed partial class Orchestrator : IOrchestrator
         return report;
     }
 
-    /// <summary>One line per thing worth telling the user about a revert; nothing when nothing happened.</summary>
-    private static IEnumerable<string> DescribeRevert(RevertReport report)
+    /// <summary>
+    /// One line per thing worth telling the user about a revert, with the paths it is about as values - what was put
+    /// back, what was left; nothing when nothing happened.
+    /// </summary>
+    private static IEnumerable<(string Line, IReadOnlyList<string> Reverted, IReadOnlyList<string> Kept)> DescribeRevert(RevertReport report)
     {
         if (report.Reverted.Count > 0)
-            yield return "Rejected work put back: " + string.Join(", ", report.Reverted);
+            yield return ("Rejected work put back: " + string.Join(", ", report.Reverted), report.Reverted, []);
 
         // The reason per path, not one sentence over all of them. "It changed after the step wrote
         // it" was the only reason there used to be; a path can also be kept because another step
         // wrote it afterwards, or because nothing this step did to it is on record - and telling
         // someone the wrong reason for work left in place is worse than telling them none.
         if (report.Kept.Count > 0)
-            yield return "Left as it is: "
-                       + string.Join(", ", report.Kept.Select(
-                           path => report.WhyKept(path) is { } why ? $"{path} ({why})" : path));
+            yield return ("Left as it is: "
+                          + string.Join(", ", report.Kept.Select(
+                              path => report.WhyKept(path) is { } why ? $"{path} ({why})" : path)), [], report.Kept);
     }
 
 

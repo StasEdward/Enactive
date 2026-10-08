@@ -5,6 +5,7 @@ using System.Text.Json;
 using Enactive.Core.Tools;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Execution;
+using Enactive.Core.Tasks;
 using static Enactive.Agents.ToolCallParsing;
 
 /// <summary>
@@ -110,6 +111,18 @@ internal sealed class OpenFailures
     /// <summary>True when the step's whole record is lookups that found nothing.</summary>
     public bool NothingButMisses
         => !_anythingWorked && _byCall.Count == 0 && _foundNothing.Count > 0;
+
+    /// <summary>
+    /// A block the engine can see in what the step left open (Phase 7.1): a permission it was refused and nothing
+    /// made good, or - its whole record - lookups that found nothing. Null when what is open is something else.
+    /// Here, beside what it reads: it was Orchestrator.EngineBlock, a static that read nothing but this.
+    /// </summary>
+    public (OutcomeCause Cause, string Reason)? Block
+        => OpenRefusals is { Count: > 0 } refused
+            ? (OutcomeCause.BlockedPermission, "needs a permission it was refused: " + string.Join("; ", refused))
+            : NothingButMisses
+                ? (OutcomeCause.BlockedInput, "none of what the step looked for is there: " + Describe())
+                : null;
 
     /// <param name="didNotRun">
     /// The call was never attempted. Two things set it, and they are the same thing seen from

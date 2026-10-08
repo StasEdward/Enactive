@@ -119,6 +119,16 @@ public static class ToolOffers
         IEnumerable<string> candidates,
         Func<string, PermissionDecision> gate,
         bool approvalIsPossible)
+        => For(candidates, gate, _ => approvalIsPossible);
+
+    /// <param name="approvalIsPossible">
+    /// Per tool: whether the run's decision handler could ever answer "allow" for that tool - see
+    /// <see cref="IDecisionHandler.CanApproveTool"/>.
+    /// </param>
+    public static ToolOffer For(
+        IEnumerable<string> candidates,
+        Func<string, PermissionDecision> gate,
+        Func<string, bool> approvalIsPossible)
     {
         var offered = new List<string>();
         var withheld = new List<WithheldTool>();
@@ -134,7 +144,7 @@ public static class ToolOffers
                 // An Ask is a real question wherever somebody can answer it, and this is the line
                 // the whole change balances on: withholding an ask-before tool from a watched run
                 // would take away the approval prompt that IS the feature.
-                case PermissionDecision.Ask when !approvalIsPossible:
+                case PermissionDecision.Ask when !approvalIsPossible(tool):
                     withheld.Add(new WithheldTool(tool, Unanswerable));
                     break;
 

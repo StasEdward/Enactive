@@ -35,6 +35,10 @@ jobs:
       - name: Test
         run: dotnet test tests/Enactive.Engine.Tests/Enactive.Engine.Tests.csproj --no-build --configuration Release --verbosity normal --logger "trx;LogFileName=engine.trx" --results-directory TestResults
 
+      # The window's own tests: what needs Avalonia to be asked (the palette's tables), kept out of the engine's tests.
+      - name: Test the window
+        run: dotnet test tests/Enactive.App.Ui.Tests/Enactive.App.Ui.Tests.csproj --no-build --configuration Release --verbosity normal --logger "trx;LogFileName=ui.trx" --results-directory TestResults
+
       - name: Test with external artifacts
         shell: pwsh
         run: dotnet test tests/Enactive.Engine.Tests/Enactive.Engine.Tests.csproj --configuration Release --artifacts-path "$env:RUNNER_TEMP/enactive-artifacts" --logger "trx;LogFileName=engine-external.trx" --results-directory TestResults

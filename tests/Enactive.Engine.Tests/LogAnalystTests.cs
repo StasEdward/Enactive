@@ -1,6 +1,8 @@
 namespace Enactive.Engine.Tests;
 
 using Enactive.Agents;
+using Enactive.Core.Chat;
+using Enactive.Core.Providers;
 using Xunit;
 
 /// <summary>
@@ -105,11 +107,10 @@ public sealed class LogAnalystTests
     [Fact]
     public async Task An_excerpt_says_so_in_the_prompt()
     {
-        var provider = new FakeChatProvider(Turn.Says("Nothing went wrong."));
+        var provider = new FakeChatProvider(Turn.Says("Nothing went wrong.")) { Window = 4_000 };
 
         var result = await new LogAnalyst().AnalyseAsync(
-            string.Join("\n", Log(20_000)), provider, "a-model", contextWindowTokens: 4_000,
-            CancellationToken.None);
+            string.Join("\n", Log(20_000)), provider, "a-model", numCtx: null, CancellationToken.None);
 
         var prompt = provider.Requests.Single().Messages.Last().Content ?? "";
 
@@ -123,11 +124,10 @@ public sealed class LogAnalystTests
     [Fact]
     public async Task A_whole_log_is_not_announced_as_an_excerpt()
     {
-        var provider = new FakeChatProvider(Turn.Says("All fine."));
+        var provider = new FakeChatProvider(Turn.Says("All fine.")) { Window = 100_000 };
 
         var result = await new LogAnalyst().AnalyseAsync(
-            string.Join("\n", Log(10)), provider, "a-model", contextWindowTokens: 100_000,
-            CancellationToken.None);
+            string.Join("\n", Log(10)), provider, "a-model", numCtx: null, CancellationToken.None);
 
         var prompt = provider.Requests.Single().Messages.Last().Content ?? "";
 
@@ -160,7 +160,7 @@ public sealed class LogAnalystTests
     public async Task A_model_that_answered_nothing_has_not_said_the_log_is_clean()
     {
         var result = await new LogAnalyst().AnalyseAsync(
-            "one line", new FakeChatProvider(Turn.Says("")), "a-model", 100_000, CancellationToken.None);
+            "one line", new FakeChatProvider(Turn.Says("")), "a-model", numCtx: null, CancellationToken.None);
 
         Assert.Contains("failed request", result.Answer);
         Assert.DoesNotContain("no problems", result.Answer, StringComparison.OrdinalIgnoreCase);
@@ -171,7 +171,7 @@ public sealed class LogAnalystTests
     {
         var result = await new LogAnalyst().AnalyseAsync(
             "one line", new FakeChatProvider(Turn.Says("Fine.").Reporting(prompt: 900, completion: 120)),
-            "a-model", 100_000, CancellationToken.None);
+            "a-model", numCtx: null, CancellationToken.None);
 
         Assert.Equal(900, result.PromptTokens);
         Assert.Equal(120, result.CompletionTokens);
@@ -194,4 +194,73 @@ public sealed class LogAnalystTests
     [Fact]
     public void A_bigger_window_reads_more_of_the_log()
         => Assert.True(LogAnalyst.BudgetChars(131_072) > LogAnalyst.BudgetChars(8_192));
+
+    // ── the window is the provider's ────────────────────────────────────────
+
+    /// <summary>States its window as the Ollama adapter does: the num_ctx the request carries, else what was declared.</summary>
+    private sealed class OllamaLike(int? declared) : IChatProvider
+    {
+        public List<ChatRequest> Requests { get; } = [];
+
+        public int? ContextWindow(ChatRequest request) => request.NumCtx ?? declared;
+
+        public Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
+        {
+            Requests.Add(request);
+            return Task.FromResult(new ChatCompletion(new ChatMessage(ChatRole.Assistant, "Fine.", null), "stop", 10, 2, null));
+        }
+
+        public IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(ChatRequest request, CancellationToken ct)
+            => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// An Ollama model with num_ctx set and no window declared is sent a log cut to num_ctx - in a request that CARRIES
+    /// num_ctx, as a step's does. The request did not carry it: Ollama loaded the model at its own small default and
+    /// cut a prompt sized for num_ctx without a word, and the analysis was about whatever part of the log survived.
+    /// </summary>
+    [Fact]
+    public async Task An_ollama_model_is_sent_the_num_ctx_its_log_was_cut_to()
+    {
+        var provider = new OllamaLike(declared: null);
+
+        var result = await new LogAnalyst().AnalyseAsync(
+            string.Join("\n", Log(20_000)), provider, "a-model", numCtx: 4_096, CancellationToken.None);
+
+        Assert.Equal(4_096, Assert.Single(provider.Requests).NumCtx);
+        Assert.True(result.WasExcerpt);
+    }
+
+    /// <summary>
+    /// A cloud model that states no window is not cut to num_ctx - an Ollama setting, which the window applied to
+    /// whatever provider read the log. With no window stated the analyst keeps its own assumption.
+    /// </summary>
+    [Fact]
+    public async Task A_model_that_states_no_window_is_not_cut_to_num_ctx()
+    {
+        var log = string.Join("\n", Log(500));
+        Assert.True(log.Length > LogAnalyst.BudgetChars(4_096) && log.Length <= LogAnalyst.BudgetChars(null),
+            "the log has to fit the assumed window and not num_ctx's");
+        var provider = new FakeChatProvider(Turn.Says("All fine."));
+
+        var result = await new LogAnalyst().AnalyseAsync(log, provider, "a-model", numCtx: 4_096, CancellationToken.None);
+
+        Assert.False(result.WasExcerpt);
+    }
+
+    /// <summary>
+    /// The window hands the analyst only the engine's num_ctx; how much of the log fits is the provider's answer. It
+    /// looked the provider's declared window up in its own settings - another snapshot than the engine that made the
+    /// provider - and kept a second rule for it there.
+    /// </summary>
+    [Fact]
+    public void The_window_asks_nothing_of_its_own_settings_for_an_analysis()
+    {
+        var window = File.ReadAllText(Path.Combine(TestRepository.Root, "src", "Enactive.App.Ui", "MainWindow.axaml.cs"));
+        var start = window.IndexOf("Task<LogAnalysisResult>>? LogAnalysis()", StringComparison.Ordinal);
+        var end = window.IndexOf("private void ShowLogWindow()", start, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start, "LogAnalysis() was not found where it was");
+
+        Assert.DoesNotContain("_settings", window[start..end]);
+    }
 }

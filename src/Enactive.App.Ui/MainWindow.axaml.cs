@@ -40,14 +40,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 {
     // ── Reusable singletons ──────────────────────────────────────────────────
     private readonly HttpClient _http = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
-    private string _model = "qwen2.5-coder";
     private string _globalInstructions = string.Empty;
-    private ChatProviderFactory _providerFactory = null!;
-    /// <summary>
-    /// Rebuilt on Save, not only at startup — see <see cref="BuildToolRegistry"/>. Every use reads
-    /// the field at call time, so replacing it is all that is needed.
-    /// </summary>
-    private IToolRegistry _toolRegistry;
     // Global, app-wide log hub. Default Debug (readable); the log window can drop it to Trace for raw wire.
     // Held separately from the hub so settings can reach it: this is built before any settings are
     // read, and retention is a setting.
@@ -56,11 +49,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private LogWindow? _logWindow;
     private InboxWindow? _inboxWindow;
     private readonly EnvironmentProbe _envProbe = new();
-    private readonly Planner _planner = new();
-    private readonly ModelResolver _modelResolver = new();
-    // The interface, not the concrete provider: what composes the team is EngineComposition now, and
-    // this window only reads it.
-    private IWorkerProvider _workerProvider = null!;
+
+    /// <summary>
+    /// The engine every run started here is composed on - built by EngineComposition from the current
+    /// settings and rebuilt when they are saved; null while <see cref="_engineProblem"/> says why there is
+    /// none. This window assembles none of it: it used to, and its copy had drifted from the console's.
+    /// </summary>
+    private ComposedEngine? _engine;
 
     /// <summary>
     /// Why there is no engine, or null when there is one.
@@ -71,7 +66,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// one say this instead of running.</para>
     /// </summary>
     private string? _engineProblem;
-    private readonly PermissionEngine _permissionEngine = new();
     private AppSettings _settings = new();
 
     // What the close button says when it hides the window to the tray, and the note saying it, while it is up.
@@ -89,17 +83,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private DecisionCompletion? _pendingDecision;
     private readonly SessionApprovals _sessionApprovals = new();
     private readonly DecisionQueue _decisionQueue = new();
-    private readonly List<StepCardViewModel> _cards = new();
-    private readonly List<StepCardViewModel> _running = new();
-    private StepCardViewModel? _currentCard;
-    private int _stepIndex;
-
-    // How many cards came before the plan's first one: a card made for events that arrived before the
-    // plan did (a planner criterion dropped, the planner checking its criteria). Step numbers count from
-    // the plan's first card, not from the top of the list - otherwise every step shows one card early.
-    private int _planOffset;
-    private int _doneSteps;
-    private int _totalSteps;
+    // The live run's step cards, title, phase and step count - the same fold a run reopened from the history
+    // is drawn from (RunFeed) - and the card views drawn from it.
+    private RunFeed _feed = new();
+    private readonly List<StepCardViewModel> _cardViews = new();
+    private string? _shownPhase;
+    private (int Done, int Total) _shownProgress;
     private readonly Stopwatch _runStopwatch = new();
     private DispatcherTimer? _elapsedTimer;
 
@@ -164,7 +153,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         _log = new LogHub(minLevel: LogLevel.Debug, downstream: new ILogSink[] { _logFile });
         _settings = AppSettings.Load();
-        _toolRegistry = BuildToolRegistry();
 
         // A settings file the app cannot build from must not make the app unlaunchable. Saving is
         // validated now, but a file edited by hand — or written by an older build — can still be
@@ -342,14 +330,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             // the settings. With no id it has none, and says so rather than connecting with nothing
             // to seal or open with.
             keys: null,
-            // On the UI thread, because it reads the worker list and the app settings. Governed by
-            // the workspace THE TASK NAMED, not by the slider: the slider is about the folder open
-            // on this screen, and a phone naming a different project must get the level saved for
-            // that project. Read when the task arrives rather than now, so editing a workspace's
-            // autonomy takes effect without restarting.
-            entry => Dispatcher.UIThread.InvokeAsync(
-                () => SnapshotEnvironment(
-                    Math.Clamp(entry.Autonomy, 0, 3), entry.WorkerId, entry.StageChanges)).GetTask(),
+            // The engine as it is when the task arrives, read on the UI thread where it is replaced. What
+            // governs the task - the level and worker saved for the folder it names - the service reads
+            // from the workspace list itself (RunRequest.FromPhone).
+            () => Dispatcher.UIThread.InvokeAsync(CurrentEngine).GetTask(),
             () => _registry.Entries,
             // The desktop's own handler. RemoteRunner wraps it rather than replacing it, so a
             // permission question from a remote run shows here as well as on the phone.
@@ -666,7 +650,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 var window = new SettingsWindow(_settings, workspaceRoot: WorkspaceRootOrNull(),
                     // With the web tools always among them: a role can be given them before reading the web is
                     // turned on, and the Team list would otherwise only show them after a save and a reopen.
-                    toolNames: _toolRegistry.Definitions.Select(d => d.Name)
+                    toolNames: EngineComposition.Tools(_settings).Definitions.Select(d => d.Name)
                         .Union([Enactive.Tools.Web.FetchUrlTool.Name, Enactive.Tools.Web.WebSearchTool.Name]).ToArray(),
                     remoteCheck: CheckRemoteAsync,
                     remoteConnect: ConnectRemoteAsync,
@@ -821,7 +805,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // Background: fire the run headless (results land in the Inbox) and keep the UI free.
         if (background)
         {
-            StartBackground(text, Path.GetFullPath(workspacePath));
+            // The template goes with it: a saved task run in the background is still that task, with its
+            // permissions, checks, limits and role - not its goal typed as a request.
+            StartBackground(text, Path.GetFullPath(workspacePath), spec: spec);
             return;
         }
 
@@ -845,6 +831,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _vm.InputText = string.Empty;
             Live(() => _vm.TaskIntent = text);
             SetLiveTitle(Summarise(text));
+            _feed = new RunFeed(_liveTitle);
             Live(() => _vm.HasTask = true);
             Live(() => _vm.StatusPhase = "Running");
 
@@ -870,11 +857,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
 
 
-                // What this run is allowed to do. A resumed run keeps what the interrupted one recorded, so
-                // the history of the second half says what actually governed it.
-                var runSettings = resume?.Settings ?? CurrentRunSettings();
-                var engineOptions = RunEngineOptions.Capture(_settings);
-
                 var fullPath = Path.GetFullPath(workspacePath);
                 _currentWorkspaceRoot = fullPath;
                 NoteLegacyApprovalsIfAny(fullPath);
@@ -886,76 +868,24 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 // workspace with history keeps it and can be renamed from here on without losing it.
                 var workspace = WorkspaceInfo.Adopt(fullPath);
 
-                // A template's permissions are already the INTERSECTION of its own ceiling and the
-                // workspace's tier - TemplateResolution.Narrow did that when the specification was resolved,
-                // and a ceiling has no way to widen anything. So this is never more than the slider allows.
-                // A resumed run continues under the autonomy it was started with. The slider will have moved
-                // by now - it is a control, not a record - and a run that finishes its remaining steps under
-                // permissions nobody granted it is not the run somebody asked to resume.
-                var policy = spec?.Permissions
-                    ?? (resume?.Settings is { } was ? PolicyFor(was.Autonomy) : PolicyFor(_vm.AutonomyTier));
+                // The same composition every host uses (RunComposer): what governs a resumed run, what a
+                // template brings, whether the changes are staged - this window decides none of it. What it
+                // keeps is its own: the approval card (this), the timeline it renders, its cancellation.
+                await using var composed = await RunComposer.ComposeAsync(
+                    CurrentEngine(),
+                    new RunRequest(workspace, text, IntentSource.CommandBar, taskId, resume, spec, Stage: _vm.StageChanges)
+                        { Defaults = DefaultsOnScreen() },
+                    this, runCancellation.Token);
 
-                IArtifactStore artifactStore;
-                // A resumed run never stages, whatever the toggle says. Its earlier steps wrote straight to
-                // disk - that is the only kind of run that is ever checkpointed - so staging the rest would
-                // put half of one piece of work behind a review gate and leave the other half applied.
-                if (_vm.StageChanges && resume is null)
-                {
-                    var staging = new StagingArtifactStore(fullPath);
-                    _staging = staging;
-                    _disk = null;
-                    artifactStore = staging;
-                }
-                else
-                {
-                    _staging = null;
-                    var disk = new DiskArtifactStore(workspace);
-                    _disk = disk;
-                    artifactStore = disk;
-                }
+                _staging = composed.Artifacts as StagingArtifactStore;
+                _disk = composed.Artifacts as DiskArtifactStore;
                 _stagedShown = 0;
 
-                await using var mcp = await McpRunTools.ConnectAsync(_toolRegistry, _settings.McpServers, fullPath, runCancellation.Token);
-
-                // Said once per run, whether or not anything calls them: starting a server is a cost
-                // the run has already paid, and the log had no record of it at all.
-                _log.Info(LogSource.Tool, mcp.Summary());
-                IToolRegistry runTools = new LoggingToolRegistry(mcp, _log);
-                var runStore = RunStoreFactory.Create(workspace);
-                // The same store the recorder folds into, so a run reads back what earlier ones
-                // concluded.
-                var memoryStore = MemoryStoreFactory.Create(workspace);
-                var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), memoryStore);
-                var orchestrator = RunEngineComposition.Build(
-                    new RunEngineResources(_providerFactory, _modelResolver, _workerProvider, runTools,
-                        artifactStore, workspace, _planner, _permissionEngine, this, policy,
-                        new EmptyProvider(), BuildRouter()), engineOptions,
-                    checkpoints: new JsonCheckpointStore(workspace), settings: runSettings,
-                    successCriteria: spec?.SuccessCriteria, limits: spec?.Limits);
-                // The specification is recorded WITH the run, so reading it back later shows the template
-                // as it was rather than as it has since been edited.
-                var recorder = new RunRecorder(
-                    runStore, memoryStore, workspace.Id, runSettings, spec?.Snapshot());
-
-                var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), runCancellation.Token);
-                // The template names the role it needs; the picker decides only when it does not.
-                var workerId = spec?.WorkerId
-                    ?? (_workerProvider.All.Count > 0
-                        && _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _workerProvider.All.Count
-                        ? _workerProvider.All[_vm.SelectedWorkerIndex].Id : null);
-                // The intent's id IS the task id - the orchestrator takes it as one - so continuing a
-                // task is a matter of handing back the id it had.
-                var intent = new Intent(
-                    taskId ?? Guid.NewGuid(), text, IntentSource.CommandBar, context, DateTimeOffset.UtcNow, workerId);
-                var envLine = context.Environment?.OneLine();
+                var envLine = composed.Intent.Context.Environment?.OneLine();
                 await Dispatcher.UIThread.InvokeAsync(() => _vm.EnvironmentSummary = envLine ?? "(no environment data)");
 
-                var stream = resume is null
-                    ? orchestrator.SubmitIntentAsync(intent, runCancellation.Token)
-                    : orchestrator.ResumeRunAsync(resume, context, runCancellation.Token);
-
                 await RunEventPump.RunAsync(
-                    recorder.RecordAsync(stream.TeeToLog(_log, runCancellation.Token), runCancellation.Token),
+                    composed.Events(runCancellation.Token),
                     async batch => await Dispatcher.UIThread.InvokeAsync(() =>
                     {
                         foreach (var ev in batch) RenderEvent(ev);
@@ -963,14 +893,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             }
             catch (OperationCanceledException)
             {
-                await Dispatcher.UIThread.InvokeAsync(() => { Live(() => _vm.StatusPhase = "Cancelled"); _currentCard?.SetFailed(); });
+                await Dispatcher.UIThread.InvokeAsync(() => { Live(() => _vm.StatusPhase = "Cancelled"); _feed.Stopped(); SyncFeed(); });
             }
             catch (Exception ex)
             {
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     Live(() => { _vm.StatusPhase = "Error"; _vm.CurrentAction = ex.Message; });
-                    _currentCard?.SetFailed();
+                    // Every card still short of an end never reached one - not only the one that happened to be current.
+                    _feed.Stopped();
+                    SyncFeed();
                 });
             }
             finally
@@ -1019,179 +951,47 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     UpdateLive(_liveRow, r => r.RunId == ev.RunId ? r : r with { RunId = ev.RunId });
                 }
 
+                // The cards, the title, the phase and the step count: folded by RunFeed, exactly as a run reopened
+                // from the history is, so the two cannot disagree. New cards are shown where the feed put them.
+                foreach (var (card, at) in _feed.Apply(ev))
+                {
+                    var view = new StepCardViewModel(card);
+                    _cardViews.Add(view);
+                    Live(() => _vm.Steps.Insert(Math.Min(at, _vm.Steps.Count), view));
+                }
+                SyncFeed();
+
+                // What only the window shows: the routing panel, the agent pill, the line saying what is
+                // happening now, the counters, tokens and artifacts.
                 switch (ev.Kind)
                 {
-                    case EventKind.IntentReceived:
-                        Live(() => _vm.StatusPhase = "Understanding");
-                        break;
                     case EventKind.Routed:
                         Live(() => _vm.Routing.Apply(ev.Summary, ev.PayloadJson));
-                        if (ev.Summary.Contains("-> model"))
-                            Live(() => _vm.StatusPhase = "Planning");
-                        if (ev.Summary.StartsWith("Quick action: ", StringComparison.Ordinal))
-                            SetLiveTitle(ev.Summary["Quick action: ".Length..]);
-                        if (ev.Summary.StartsWith("Reasoner", StringComparison.Ordinal))
-                            SetLiveAgent("Reasoner · planning", Brand.PillReasoner);
-                        break;
-                    case EventKind.PlanCreated:
-                        Live(() => _vm.StatusPhase = "Executing");
-                        // The planner's title is a better header than the raw request, which is often a
-                        // paragraph. From the payload; the sentence is read only for a run produced by a
-                        // build that predates it, where a title containing " — " lost its tail.
-                        if (ev.PlanTitle() is { Length: > 0 } plannedTitle)
-                            SetLiveTitle(plannedTitle);
-                        else
-                        {
-                            var dash = ev.Summary.IndexOf(" — ", StringComparison.Ordinal);
-                            if (dash > 0)
-                                SetLiveTitle(ev.Summary[..dash]);
-                        }
-                        CreateStepCards(ev);
-                        break;
-                    case EventKind.PlanExpanded:
-                        // Steps the plan grew while it ran: numbered after every step it had, SHOWN under the
-                        // step they were made from - a step after the items ran last and read first otherwise.
-                        var grownFrom = CardFor(ev);
-                        var grown = ev.PlanSteps()?.ToArray() ?? [];
-                        AddStepCards(grown, grownFrom);
-                        grownFrom?.SetActivity(grown.Length == 0
-                            ? "No steps for its items"
-                            : $"{grown.Length} item step(s); joins their results when they have all ended");
                         break;
                     case EventKind.StepStarted:
-                        SetLiveAgent("Coder", Brand.PillCoder);
-                        BeginStep(ev);
-                        (CardFor(ev) ?? EnsureCurrentCard()).SetActivity("Thinking…");
+                        SetLiveAgent("Coder", AgentKind.Coder);
+                        Live(() => _vm.CurrentAction = ev.Summary);
                         break;
-                    case EventKind.StepCompleted:
-                        var doneCard = CardFor(ev) ?? _currentCard;
-                        // A failed step and a dependency-skipped step arrive as StepCompleted too, so the
-                        // card must not go green for either of them. The step's outcome is now a value in
-                        // the payload; the old string search is the fallback for a run recorded by an
-                        // earlier build, and is exactly the fragility it replaces — rewording a summary
-                        // used to turn a red card green.
-                        var stepOutcome = ev.StepOutcome();
-                        var wasSkipped = stepOutcome == StepOutcomeKind.Skipped
-                            || (stepOutcome is null && ev.Summary.Contains("skipped (dependency", StringComparison.Ordinal));
-                        var wasFailed = wasSkipped
-                            || (stepOutcome is not null && stepOutcome != StepOutcomeKind.Succeeded)
-                            || (stepOutcome is null && ev.Summary.Contains("FAILED:", StringComparison.Ordinal));
-                        // The line under the title is the step's own REASON when it recorded one, and
-                        // the outcome word alone otherwise. It used to be three literals here, which is
-                        // how a run stopped by "nothing is listening at http://localhost:11434/v1"
-                        // showed a card that said "Failed" and nothing else, with the diagnosis sitting
-                        // unread in the payload this very method is holding. The wording is in Core
-                        // (RunOutcomeWords) because this file is in a WinExe no test can reach - which
-                        // is exactly where a literal like that gets written and never questioned.
-                        var stepSays = RunOutcomeWords.StepActivity(
-                            wasSkipped ? StepOutcomeKind.Skipped : stepOutcome,
-                            ev.OutcomeReason());
-
-                        if (wasSkipped)
-                        {
-                            // Skipped is not failed: nothing went wrong in THIS step, and painting it red
-                            // sends you looking for a fault that is in another card.
-                            doneCard?.SetSkipped();
-                            doneCard?.SetActivity(stepSays);
-                        }
-                        else if (stepOutcome == StepOutcomeKind.Blocked)
-                        {
-                            // Before wasFailed too: a blocked step has not failed; it waits for its cause.
-                            doneCard?.SetBlocked();
-                            doneCard?.SetActivity(stepSays);
-                        }
-                        else if (stepOutcome == StepOutcomeKind.DoneUnverified)
-                        {
-                            // Checked before wasFailed, which counts anything short of Succeeded as a
-                            // failure and would paint work that is on disk red.
-                            doneCard?.SetUnverified();
-                            doneCard?.SetActivity(stepSays);
-                        }
-                        else if (wasFailed)
-                        {
-                            doneCard?.SetFailed();
-                            doneCard?.SetActivity(stepSays);
-                        }
-                        else
-                        {
-                            doneCard?.SetDone();
-                            doneCard?.SetActivity("Done");
-                        }
-                        EndStep(doneCard);
-                        _doneSteps++;
-                        UpdateProgress();
-                        break;
-                    // A long generation still arriving - shown on the activity line, replaced in place,
-                    // so minutes of writing a big tool call do not look like a hang.
-                    case EventKind.GenerationProgress:
-                        (CardFor(ev) ?? EnsureCurrentCard()).SetActivity(ev.Summary);
-                        break;
-
                     case EventKind.AssistantDelta:
-                        SetLiveAgent("Coder", Brand.PillCoder);
-                        var streamCard = CardFor(ev) ?? EnsureCurrentCard();
-                        // Buffered, not shown live - the raw streamed reply isn't interesting on its own;
-                        // it gets folded into one short note the next time a tool runs or the step ends.
-                        streamCard.AppendAssistantText(ev.Summary);
-                        streamCard.SetActivity("Thinking…");
+                        SetLiveAgent("Coder", AgentKind.Coder);
                         break;
                     case EventKind.ToolInvoked:
-                        SetLiveAgent("Coder", Brand.PillCoder);
+                        SetLiveAgent("Coder", AgentKind.Coder);
                         Live(() =>
                         {
                             _vm.ToolCalls++;
                             _vm.CurrentAction = ev.Summary;
                         });
-                        var toolCard = CardFor(ev) ?? EnsureCurrentCard();
-                        StepCardWriter.LogInvocation(toolCard, ev.Summary);
-                        toolCard.SetActivity(StepCardWriter.DescribeActivity(ev.Summary));
-                        break;
-                    case EventKind.ToolResult:
-                        (CardFor(ev) ?? EnsureCurrentCard()).AppendEntryDetail(ev.Summary);
-                        break;
-                    case EventKind.ErrorObserved:
-                        // Surface the warning in the activity line without changing disclosure state.
-                        var warnCard = CardFor(ev) ?? EnsureCurrentCard();
-                        warnCard.AddNote("⚠ " + ev.Summary);
-                        warnCard.SetActivity("⚠ " + ev.Summary);
-
                         break;
                     case EventKind.ReviewRequested:
                     case EventKind.ReviewPassed:
                     case EventKind.ReviewFailed:
-                        SetLiveAgent("Reasoner · review", Brand.PillReasoner);
-                        Live(() =>
-                        {
-                            _vm.CurrentAction = ev.Summary;
-                        });
-                        var reviewCard = CardFor(ev) ?? EnsureCurrentCard();
-                        reviewCard.AddNote(ev.Summary);
-                        reviewCard.SetActivity(
-                            ev.Kind == EventKind.ReviewRequested ? "Reviewing…" :
-                            ev.Kind == EventKind.ReviewPassed ? "Review passed" : "Review flagged an issue…");
+                        SetLiveAgent("Reasoner · review", AgentKind.Reasoner);
+                        Live(() => _vm.CurrentAction = ev.Summary);
                         break;
                     case EventKind.DecisionRequested:
                     case EventKind.DecisionResolved:
                         Live(() => _vm.CurrentAction = ev.Summary);
-                        var decisionCard = CardFor(ev) ?? EnsureCurrentCard();
-                        // A refused call gets its own word in the summary rather than being folded in
-                        // with the remarks - by the event's VALUE, exactly as the replay reads it, so
-                        // the live card and the same run reopened later cannot disagree.
-                        if (ev.WasRefused() == true)
-                            decisionCard.AddRefusal(ev.Summary);
-                        else
-                            decisionCard.AddNote(ev.Summary);
-                        if (ev.Kind == EventKind.DecisionRequested)
-                        {
-                            decisionCard.SetActivity("Waiting for your approval…");
-                            decisionCard.SetWaitingForYou();
-                        }
-                        else
-                        {
-                            // Answered: the step is moving again, and the card should stop saying it is
-                            // not. The step's own ending overwrites this either way.
-                            decisionCard.SetRunning();
-                        }
                         break;
                     case EventKind.UsageReported:
                         if (ev.Usage() is { } used)
@@ -1201,189 +1001,57 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                         }
                         break;
                     case EventKind.ArtifactProduced:
-                        (CardFor(ev) ?? EnsureCurrentCard()).AddNote("Artifact: " + ev.Summary);
                         if (_staging is not null)
                             AddStagedArtifact();
                         else
                             AddArtifact(ev);
                         break;
-
-                    // The conversation was pruned to fit the model's window, or is being handed over to a
-                    // fresh one - announced before the note is written, because writing it is one long
-                    // silent turn. Shown on the step card, not buried in the log: from here on the model
-                    // is working with less than it was given, and that explains behaviour a person would
-                    // otherwise blame on the model - or on a hang.
-                    case EventKind.ContextTrimmed:
-                        (CardFor(ev) ?? EnsureCurrentCard()).AddNote(ev.Summary);
-                        break;
-
                     // The step's work was put back after the reviewer rejected it. Its cards must stop
                     // offering to open or undo a file that is no longer the file they describe.
                     case EventKind.ArtifactReverted:
-                        (CardFor(ev) ?? EnsureCurrentCard()).AddNote(ev.Summary);
-                        MarkRevertedArtifacts(ev.Summary);
+                        MarkRevertedArtifacts(ev.RevertedPaths() ?? []);
                         break;
-                    // The pill says what the engine DECIDED, read from the event's typed outcome rather
-                    // than from which of the two terminal kinds arrived. "Incomplete" is its own answer:
-                    // nothing failed, but the work is not done, and calling that Completed is what let a
-                    // truncated or half-run task look finished.
                     case EventKind.TaskCompleted:
                     case EventKind.TaskFailed:
                         var outcome = ev.Outcome()
-                            ?? (ev.Kind == EventKind.TaskCompleted
-                                ? RunOutcomeKind.Completed
-                                : RunOutcomeKind.Failed);
-
+                            ?? (ev.Kind == EventKind.TaskCompleted ? RunOutcomeKind.Completed : RunOutcomeKind.Failed);
                         Live(() =>
                         {
-                            _vm.StatusPhase = outcome.ToString();
                             _vm.IsAgentVisible = false;
-                            // Why it stopped belongs on screen, not only in the log.
+                            // Why it stopped belongs on screen, not only in the log. A completed run has a
+                            // reason only when something must be added to "done" - a check the engine ran
+                            // on the workspace and saw fail (RunOutcomeDecision.Settle) - and that is shown too.
                             _vm.CurrentAction = outcome == RunOutcomeKind.Completed
-                                ? string.Empty
+                                ? ev.OutcomeReason() ?? string.Empty
                                 : ev.OutcomeReason() ?? ev.Summary;
                         });
-
-                        if (outcome == RunOutcomeKind.Completed)
-                        {
-                            _currentCard?.SetDone();
-                            _currentCard?.SetActivity("Done");
-                        }
-                        else if (outcome == RunOutcomeKind.Blocked)
-                        {
-                            _currentCard?.SetBlocked();
-                            _currentCard?.SetActivity(outcome.ToString());
-                        }
-                        else
-                        {
-                            _currentCard?.SetFailed();
-                            _currentCard?.SetActivity(outcome.ToString());
-                        }
                         break;
                 }
         }
 
-        private void CreateStepCards(WorkEvent ev)
+        /// <summary>
+        /// Draws what the feed has become: every card view brought up to its card, and the phase, the title and
+        /// the step count wherever they changed.
+        /// </summary>
+        private void SyncFeed()
         {
-            // Values first. Splitting the sentence on " | " turned a step whose own title contains one
-            // into two cards, and every event afterwards was attributed to the wrong card. The sentence
-            // is read only for a run produced by a build that predates the payload.
-            var titles = ev.PlanSteps()?.ToArray() ?? FromSummary(ev.Summary);
-            if (titles.Length == 0)
-                return;
+            foreach (var view in _cardViews)
+                view.Sync();
 
-            // A card made before the plan arrived is the planning's, not step 1's: it is closed, and the
-            // plan's cards are numbered after it.
-            foreach (var early in _cards)
+            if (_feed.Phase is { } phase && phase != _shownPhase)
             {
-                early.SetDone();
-                early.SetActivity("Planned");
+                _shownPhase = phase;
+                Live(() => _vm.StatusPhase = phase);
             }
-            _planOffset = _cards.Count;
-            _currentCard = null;
-            _running.Clear();
-            _totalSteps = 0;   // the plan's own count, as before; steps it grows are added to it
-            AddStepCards(titles);
 
-            static string[] FromSummary(string summary)
+            if (_feed.Title.Length > 0 && _feed.Title != _liveTitle)
+                SetLiveTitle(_feed.Title);
+
+            if ((_feed.StepsDone, _feed.StepsTotal) != _shownProgress)
             {
-                const string marker = " steps: ";
-                var index = summary.IndexOf(marker, StringComparison.Ordinal);
-                return index < 0
-                    ? Array.Empty<string>()
-                    : summary[(index + marker.Length)..].Split(" | ", StringSplitOptions.RemoveEmptyEntries);
+                _shownProgress = (_feed.StepsDone, _feed.StepsTotal);
+                UpdateProgress();
             }
-        }
-
-        /// <param name="under">A card the new ones are shown under (the step they were made from), or null for the end.</param>
-        private void AddStepCards(IReadOnlyList<string> titles, StepCardViewModel? under = null)
-        {
-            if (titles.Count == 0)
-                return;
-            _totalSteps += titles.Count;
-            foreach (var title in titles)
-            {
-                var card = new StepCardViewModel(title.Trim());
-                _cards.Add(card);                                   // numbering: after every step the plan had
-                if (under is null)
-                    Live(() => _vm.Steps.Add(card));
-                else
-                {
-                    var parent = under;
-                    var below = _shownUnder.TryGetValue(parent, out var n) ? n : 0;
-                    _shownUnder[parent] = below + 1;
-                    Live(() =>
-                    {
-                        var at = _vm.Steps.IndexOf(parent);
-                        if (at < 0) _vm.Steps.Add(card);
-                        else _vm.Steps.Insert(Math.Min(at + 1 + below, _vm.Steps.Count), card);
-                    });
-                }
-            }
-            UpdateProgress();
-        }
-
-        // How many cards are shown under each step done for each item - where the next one goes.
-        private readonly Dictionary<StepCardViewModel, int> _shownUnder = new();
-
-        private void BeginStep(WorkEvent ev)
-        {
-            // Prefer the step number the orchestrator stamped on the event; steps can start out of order
-            // (and several at once) once MaxParallelSteps > 1, so a running counter is not enough.
-            var index = ev.StepNo() ?? ++_stepIndex;
-            _stepIndex = Math.Max(_stepIndex, index);
-
-            StepCardViewModel card;
-            if (_planOffset + index - 1 < _cards.Count)
-            {
-                card = _cards[_planOffset + index - 1];
-            }
-            else
-            {
-                var fresh = new StepCardViewModel(ev.Summary);
-                card = fresh;
-                _cards.Add(fresh);
-                Live(() => _vm.Steps.Add(fresh));
-                _totalSteps = _cards.Count;
-            }
-            card.SetRunning();
-            _running.Add(card);
-            // With one step in flight this is that step; with several, events without a step number have
-            // no single owner, so nothing claims to be "current".
-            _currentCard = _running.Count == 1 ? card : null;
-            Live(() => _vm.CurrentAction = ev.Summary);
-        }
-
-        private void EndStep(StepCardViewModel? card)
-        {
-            if (card is not null)
-                _running.Remove(card);
-            _currentCard = _running.Count == 1 ? _running[0] : null;
-        }
-
-        /// <summary>The card this event belongs to, or null when it carries no step number.</summary>
-        private StepCardViewModel? CardFor(WorkEvent ev)
-        {
-            var n = ev.StepNo();
-            return n is { } i && i >= 1 && _planOffset + i - 1 < _cards.Count ? _cards[_planOffset + i - 1] : null;
-        }
-
-        private StepCardViewModel EnsureCurrentCard()
-        {
-            if (_currentCard is null)
-            {
-                // The quick action's own title when the planner has given one - the same name replay
-                // puts on this card, so a run reads identically live and from the history.
-                var card = new StepCardViewModel(
-                    string.IsNullOrWhiteSpace(_liveTitle) ? "Working" : _liveTitle);
-                card.SetRunning();
-                _cards.Add(card);
-                Live(() => _vm.Steps.Add(card));
-                _currentCard = card;
-                if (_totalSteps == 0)
-                    _totalSteps = 1;
-            }
-            return _currentCard;
         }
 
         /// <summary>
@@ -1403,7 +1071,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         private void UpdateProgress()
         {
-            var progress = _totalSteps > 0 ? $"{_doneSteps} / {_totalSteps} steps" : "—";
+            var progress = _feed.StepsTotal > 0 ? $"{_feed.StepsDone} / {_feed.StepsTotal} steps" : "—";
             Live(() => _vm.StatusProgress = progress);
 
             // The one place step counts change, so the one place the live row has to be told. The row
@@ -1412,8 +1080,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 UpdateLive(_liveRow, r => r with
                 {
                     Title = _liveTitle,
-                    StepsDone = _doneSteps,
-                    StepsTotal = _totalSteps
+                    StepsDone = _feed.StepsDone,
+                    StepsTotal = _feed.StepsTotal
                 });
         }
 
@@ -1474,21 +1142,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         private readonly List<ArtifactItemViewModel> _liveArtifacts = new();
 
         /// <summary>
-        /// Marks the cards for files a rejected step wrote and the engine put back. The paths come from
-        /// the event's own summary ("Rejected work put back: a.md, b.md"), which is not ideal — but the
-        /// alternative is a payload schema for one line of text, and the card is cosmetic: the file on
-        /// disk has already been restored whatever the card says.
+        /// Marks the cards for files a rejected step wrote and the engine put back - the paths the event carries as
+        /// values (WorkEventPayload.RevertPayload). They were read out of its sentence, after "put back: ", and the line
+        /// about files the review found right reads "NOT put back: a.md, b.md - ...": a.md was marked put back while it
+        /// stayed. Only the live run's cards are marked; a run reopened from the history shows the line as a note.
         /// </summary>
-        private void MarkRevertedArtifacts(string summary)
+        private void MarkRevertedArtifacts(IReadOnlyList<string> paths)
         {
-            const string marker = "put back: ";
-            var index = summary.IndexOf(marker, StringComparison.Ordinal);
-            if (index < 0)
-                return;
-
-            var paths = summary[(index + marker.Length)..]
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
             foreach (var item in _liveArtifacts)
             {
                 if (!paths.Contains(item.RelativePath, StringComparer.OrdinalIgnoreCase))
@@ -1528,12 +1188,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     if (!result.Applied)
                     {
                         item.Status = result.Conflict ?? "could not apply";
-                        item.StatusBrush = Brand.Amber;
+                        item.State = ChangeState.Refused;
                         return;
                     }
 
                     item.Status = "applied";
-                    item.StatusBrush = Brand.Success;
+                    item.State = ChangeState.Applied;
                     item.CanAct = false;
                 },
                 item =>
@@ -1542,11 +1202,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     if (!result.Rejected)
                     {
                         item.Status = result.Conflict ?? "could not reject";
-                        item.StatusBrush = Brand.Amber;
+                        item.State = ChangeState.Refused;
                         return;
                     }
                     item.Status = "rejected";
-                    item.StatusBrush = Brand.Danger;
+                    item.State = ChangeState.Rejected;
                     item.CanAct = false;
                 });
 
@@ -1680,14 +1340,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             // panels while the run carries on filling these.
             _shownArtifacts.Clear();
             _liveArtifacts.Clear();
-            _cards.Clear();
-            _shownUnder.Clear();
-            _currentCard = null;
-            _running.Clear();
-            _stepIndex = 0;
-            _planOffset = 0;
-            _doneSteps = 0;
-            _totalSteps = 0;
+            _feed = new RunFeed();
+            _cardViews.Clear();
+            _shownPhase = null;
+            _shownProgress = default;
             _liveTitle = string.Empty;
             _liveJournal.Clear();
             _liveAgent = null;
@@ -1718,12 +1374,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _vm.CurrentAction = string.Empty;
         }
 
-        private void SetLiveAgent(string name, IBrush color)
+        private void SetLiveAgent(string name, AgentKind kind)
         {
             // Keep only badge transitions, including while another workspace is visible.
             if (_liveAgent == name) return;
             _liveAgent = name;
-            Live(() => _vm.SetAgent(name, color));
+            Live(() => _vm.SetAgent(name, kind));
         }
 
         /// <summary>
@@ -1908,7 +1564,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             if (path.Length == 0)
                 return;
 
-            _registry.SaveSettings(path, _vm.AutonomyTier, CurrentWorkerRole(), _vm.StageChanges);
+            _registry.SaveSettings(path, _vm.AutonomyTier, CurrentWorkerId(), _vm.StageChanges);
         }
 
         /// <summary>
@@ -1934,12 +1590,15 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _vm.IsLoadingWorkspaceDefaults = true;
             try
             {
-                _vm.AutonomyLevel = Math.Clamp(entry.Autonomy, 0, 3);
+                _vm.AutonomyLevel = AutonomyTiers.Clamp(entry.Autonomy);
                 _vm.StageChanges = entry.StageChanges;
 
-                // By role name, not by position: the list changes when the roles are edited, and an
-                // index would then quietly select a different worker.
-                var index = entry.WorkerId is null ? -1 : _vm.WorkerRoles.IndexOf(entry.WorkerId);
+                // By id - or by role name, as this window saved it until 2026-10-08 - and not by position:
+                // the list changes when the roles are edited, and an index would then quietly select a
+                // different worker. The role box lists the workers in order, so a worker's position is its row.
+                var index = _engine?.WorkerIdFor(entry.WorkerId) is { } id
+                    ? _engine.Workers.All.ToList().FindIndex(w => w.Id == id)
+                    : -1;
                 if (index >= 0)
                     _vm.SelectedWorkerIndex = index;
             }
@@ -1988,32 +1647,27 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             // No engine, no analysis - and the button already says so when this returns null, which is
             // the behaviour a build with no Review binding has always had.
-            if (_engineProblem is not null)
+            if (_engine is not { } engine)
                 return null;
 
-            var worker = _workerProvider.Get(CurrentWorkerRole());
-            var reference = BuildRouter().Resolve(ModelPurpose.Review, worker) ?? worker?.ModelPolicy.Preferred;
+            // By id: this looked the worker box's ROLE NAME up as an id, and so read every log with the
+            // default worker's model unless a role happened to be named as its id.
+            var worker = engine.Workers.Get(CurrentWorkerId());
+            var reference = engine.Router.Resolve(ModelPurpose.Review, worker) ?? worker?.ModelPolicy.Preferred;
             if (reference is null)
                 return null;
 
-            // How much of the log can be sent, from the provider that is actually going to read it.
-            // It used to be _settings.NumCtx unconditionally — an OLLAMA setting, applied to whatever
-            // model the Review binding points at. With Review on a cloud model and num_ctx left blank
-            // the analyst assumed 16,000 tokens and sent about a seventh of what a 200,000-token
-            // window would have taken; with num_ctx set for a local model it sent that model's window
-            // to Claude. Neither is a fact about the provider doing the work, and nothing can ask it —
-            // so it is declared per provider, and num_ctx is the fallback only because for Ollama it
-            // IS the window.
-            var declared = _settings.Providers
-                .FirstOrDefault(p => string.Equals(p.Id, reference.ProviderId, StringComparison.Ordinal))
-                ?.ContextWindowTokens;
-
+            // How much of the log can be sent is the provider's answer, as it is for a step (LogAnalyst.AnalyseAsync);
+            // the window hands on only the engine's num_ctx - from the engine that makes the provider, not from the
+            // settings as they stand now. It looked the provider's declared window up in the live settings itself and fell
+            // back to num_ctx for any provider: a second rule, read from another snapshot, that sent Ollama a log
+            // cut to a num_ctx its request did not carry.
             // promptBodies: false — this prompt CARRIES the log, and the provider decorator would write
             // it straight back into it. One analysis of a 10,429-line run added 4,785 lines; the second
             // then read a log that was half its own previous prompt. See LoggingChatProvider.
             return async (text, ct) => await new LogAnalyst().AnalyseAsync(
-                text, _providerFactory.Create(reference.ProviderId, promptBodies: false),
-                reference.Model, declared ?? _settings.NumCtx, ct);
+                text, engine.Providers.Create(reference.ProviderId, promptBodies: false),
+                reference.Model, engine.EngineOptions.NumCtx, ct);
         }
 
         private void ShowLogWindow()
@@ -2058,74 +1712,26 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             }
         }
 
-        // The phase->model router, from the shared composition. A scheduled run built its own and was
-        // never given any bindings at all, so planning bound here to Anthropic ran on the local model
-        // and nothing said so.
-        private IModelRouter BuildRouter() => EngineComposition.Router(_settings, _modelResolver);
-
         /// <summary>
-        /// The run's setup as it is RIGHT NOW, for the record. Read once at the start, because by the
-        /// time anyone opens the run to ask what it was allowed to do, the slider will have moved.
-        /// </summary>
-        private RunSettings CurrentRunSettings()
-            => new(_vm.AutonomyTier, MainWindowViewModel.LevelName(_vm.AutonomyTier), CurrentWorkerRole(), _vm.StageChanges);
-
-        /// <summary>
-        /// Everything an unattended run needs from this window, read while we are still on the UI
-        /// thread and then handed over as a frozen thing.
+        /// The engine a run is composed on, or the reason there is none, as a refusal.
         ///
-        /// <para>Read here rather than inside the run for the same reason
-        /// <see cref="CurrentRunSettings"/> is: a run started now and finishing in ten minutes must be
-        /// governed by the autonomy level it was started under, not by wherever the slider has since
-        /// been dragged. The MCP configurations are cloned for the same reason - the settings dialog
-        /// edits the live ones.</para>
+        /// <para>Thrown rather than returned as null: the callers that reach this without an earlier gate - a
+        /// task from a phone - would otherwise reach a null provider. A named refusal is what the panel can
+        /// report; a NullReferenceException is not.</para>
         /// </summary>
-        /// <param name="autonomy">
-        /// WHOSE autonomy, which is the whole reason this is a parameter. The slider on screen is about
-        /// the folder on screen; a task from a phone names a folder of its own and must be governed by
-        /// the level saved against THAT one. Reading the slider for both meant a remote task running at
-        /// whatever permission an unrelated project happened to be sitting at.
-        /// </param>
-        /// <exception cref="InvalidOperationException">
-        /// When no model is configured, so there is no engine to snapshot. The two callers are the
-        /// background run — stopped earlier, by RunAsync — and a task started from a phone, which has
-        /// no earlier gate and would otherwise reach a null provider. A named refusal is what the panel
-        /// can report; a NullReferenceException is not.
-        /// </exception>
-        private RunEnvironment SnapshotEnvironment(int autonomy, string? workerRole, bool stageChanges)
-            => _engineProblem is { Length: > 0 } problem
-                ? throw new InvalidOperationException(problem)
-                : new(
-                _providerFactory, _modelResolver, _workerProvider, _toolRegistry,
-                _settings.McpServers.Select(c => c.Clone()).ToArray(),
-                _planner, _permissionEngine, BuildRouter(), _log, _settings,
-                PolicyFor(autonomy),
-                new RunSettings(
-                    autonomy, MainWindowViewModel.LevelName(autonomy), workerRole, stageChanges),
-                WorkerIdForRole(workerRole));
+        private ComposedEngine CurrentEngine()
+            => _engine ?? throw new InvalidOperationException(_engineProblem ?? "There is no engine to run on.");
+
+        /// <summary>The slider and the worker box: the defaults of the folder on screen, which a run against it is in.</summary>
+        private WorkspaceDefaults DefaultsOnScreen() => new(_vm.AutonomyTier, CurrentWorkerId());
 
         /// <summary>
-        /// The worker a saved ROLE NAME refers to, or null for the default.
-        ///
-        /// <para>The registry stores the role, not the id - by name on purpose, because the worker list
-        /// is editable and an index would quietly select somebody else the first time a role was
-        /// added. The two lists are built together, so the position of a role is the position of its
-        /// worker.</para>
+        /// The worker the worker box is on, by id - null when there are none to pick from. The box lists the
+        /// engine's workers in order, so the selected row is the worker at that position.
         /// </summary>
-        private string? WorkerIdForRole(string? role)
-        {
-            if (role is null)
-                return null;
-
-            var index = _vm.WorkerRoles.IndexOf(role);
-
-            return index >= 0 && index < _workerProvider.All.Count ? _workerProvider.All[index].Id : null;
-        }
-
-        /// <summary>The role the worker box is on, by name - null when there are no roles to pick from.</summary>
-        private string? CurrentWorkerRole()
-            => _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _vm.WorkerRoles.Count
-                ? _vm.WorkerRoles[_vm.SelectedWorkerIndex]
+        private string? CurrentWorkerId()
+            => _engine is { } engine && _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < engine.Workers.All.Count
+                ? engine.Workers.All[_vm.SelectedWorkerIndex].Id
                 : null;
 
         /// <summary>
@@ -2137,28 +1743,27 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         /// <param name="taskId">The task this carries on, when it is one that stopped at a question - see <see cref="ContinueParkedAsync"/>.</param>
         /// <param name="resume">Its step boundary, when it has one; null starts the request again under <paramref name="taskId"/>.</param>
-        private void StartBackground(string text, string fullPath, Guid? taskId = null, RunCheckpoint? resume = null)
+        /// <param name="spec">The saved task this is, when it is one.</param>
+        private void StartBackground(string text, string fullPath, Guid? taskId = null, RunCheckpoint? resume = null,
+            ResolvedTaskSpec? spec = null)
         {
             var continuing = taskId is not null || resume is not null;
             if (_shuttingDown) return;
-            // Background runs always wrote straight to disk while the run settings — and the history —
-            // said "staged". Rather than lie about it, refuse the combination: staging that survives a
-            // background run needs a store that persists its proposals, which does not exist yet.
-            if (_vm.StageChanges)
-            {
-                _vm.StatusPhase = "Not started";
-                _vm.CurrentAction =
-                    "Stage changes is on, and a background run cannot stage: it would write to your files "
-                    + "directly while the history claimed the changes were staged. Turn Stage changes off "
-                    + "to run in the background, or run this in the foreground.";
-                return;
-            }
 
             // Adopt: a background run is a run, and the folder is being taken up as a workspace here
             // exactly as it is in the foreground.
             var workspace = WorkspaceInfo.Adopt(fullPath);
-            // The slider on screen, and rightly: this run is against the folder on screen.
-            var environment = SnapshotEnvironment(_vm.AutonomyTier, CurrentWorkerRole(), _vm.StageChanges);
+            // The slider and the worker box on screen, and rightly: this run is against the folder on screen.
+            var request = new RunRequest(workspace, text, IntentSource.Inbox, resume?.TaskId ?? taskId, resume, spec,
+                Stage: _vm.StageChanges) { Defaults = DefaultsOnScreen() };
+            // Refused here, where the request was made, and in the composer's own words - see RunComposer.Refusal.
+            if (RunComposer.Refusal(request) is { } refused)
+            {
+                _vm.StatusPhase = "Not started";
+                _vm.CurrentAction = refused;
+                return;
+            }
+            var engine = CurrentEngine();
             var inbox = InboxStoreFactory.Create(workspace);
             _registry.Touch(fullPath);
             RefreshWorkspaces();
@@ -2191,18 +1796,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     // inbox shows it where it can be answered, and answering carries the run on
                     // (ContinueParkedAsync). It used to be answered "no" on the spot, and the only
                     // way to get "yes" in was to start the whole task again, in the foreground.
-                    var composed = await UnattendedRun.ComposeAsync(
-                        environment, workspace, text, IntentSource.Inbox,
-                        new ParkingDecisionHandler(), ct, resume?.TaskId ?? taskId);
-
-                    await using (composed.Resources)
-                    {
-                        await BackgroundRunner.RunAsync(
-                            resume is null
-                                ? composed.Engine.SubmitIntentAsync(composed.Intent, ct)
-                                : composed.Engine.ResumeRunAsync(resume, composed.Intent.Context, ct),
-                            inbox, workspace, text, ct);
-                    }
+                    await using var composed = await RunComposer.ComposeAsync(
+                        engine, request, new ParkingDecisionHandler(), ct);
+                    await BackgroundRunner.RunAsync(composed.Events(ct), inbox, workspace, text, ct);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -2756,17 +2352,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private async Task<DecisionOutcome> ShowDecisionAsync(DecisionRequest request, CancellationToken ct)
     {
         var root = request.Action?.WorkingDirectory;
-        // Already approved for this session or this workspace? Allow silently — no click needed.
-        if (!request.RequiresExplicitAnswer && !string.IsNullOrEmpty(request.Subject))
-        {
-            // Which one answered is carried back, so the timeline can say so. The two used to be
-            // one line and one millisecond apart.
-            if (_sessionApprovals.Approves(request))
-                return new DecisionOutcome(AllowOptionId(request), "remembered for this session and workspace");
-
-            if (request.MayBeRemembered && root is not null && ApprovalStore.Default.Approves(root, request.Subject))
-                return new DecisionOutcome(AllowOptionId(request), "remembered for this workspace");
-        }
+        // What was already approved for this session or this workspace never reaches this card: every run
+        // is composed behind RememberedApprovals, which answers it for watched and unwatched runs alike.
 
         var tcs = new DecisionCompletion();
 
@@ -2794,18 +2381,28 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 }
 
                 // Remember-this-approval shortcuts, so the user is not clicking Allow for every command.
-                if (!request.RequiresExplicitAnswer && !string.IsNullOrEmpty(request.Subject) && root is not null)
+                // Only for a request an approval can answer: one that names its tool and has an "allow" to give.
+                if (!request.RequiresExplicitAnswer && !string.IsNullOrEmpty(request.Subject) && root is not null
+                    && request.Options.Any(o => o.Id == RememberedApprovals.AllowOptionId))
                 {
                     var subject = request.Subject;
-                    var allowId = AllowOptionId(request);
+                    const string allowId = RememberedApprovals.AllowOptionId;
                     options.Add(new DecisionOptionViewModel(
                         "Allow (session)", () => ResolveDecision(tcs, allowId, () => _sessionApprovals.Remember(request))));
 
                     // Not offered for a shell: that approval would outlive the process, and what it
                     // grants is arbitrary command execution rather than one named action.
+                    // Two, because they grant two different things: the first holds while somebody is at the
+                    // screen, the second lets runs in the background and on a schedule use the tool too - said on
+                    // its button, so nobody gives it by clicking the first (ApprovalStore, rule 4).
                     if (request.MayBeRemembered)
+                    {
                         options.Add(new DecisionOptionViewModel(
                             "Allow (workspace)", () => ResolveDecision(tcs, allowId, () => ApprovalStore.Default.Approve(root, subject))));
+                        options.Add(new DecisionOptionViewModel(
+                            "Allow (workspace, unwatched runs too)",
+                            () => ResolveDecision(tcs, allowId, () => ApprovalStore.Default.Approve(root, subject, unwatched: true))));
+                    }
                 }
 
                 {
@@ -2853,12 +2450,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             }
         }
 
-        private static string AllowOptionId(DecisionRequest request)
-            => request.RecommendedOptionId
-            ?? request.Options.FirstOrDefault(o => o.Id.Contains("allow", StringComparison.OrdinalIgnoreCase))?.Id
-            ?? request.Options.FirstOrDefault()?.Id
-            ?? "allow";
-
         // Workspace-scoped approvals live OUTSIDE the workspace — see ApprovalStore in Core, which is
         // where the rules are and where they are tested. This window passes the FOLDER and decides
         // nothing: which key an approval is filed under, whether a shell may ever be remembered, and
@@ -2874,20 +2465,20 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         /// provider is a gap in what we know, and filing it under "cloud" would put made-up numbers next
         /// to real ones. Same rule as the token tile's em dash.
         /// </summary>
-        private ModelWorkSplit.Reach ReachOf(string? providerId)
+        private ModelReach ReachOf(string? providerId)
         {
             if (string.IsNullOrWhiteSpace(providerId))
-                return ModelWorkSplit.Reach.Unknown;
+                return ModelReach.Unknown;
 
             var provider = _settings.Providers.FirstOrDefault(
                 p => string.Equals(p.Id, providerId, StringComparison.OrdinalIgnoreCase));
 
             if (provider is null)
-                return ModelWorkSplit.Reach.Unknown;
+                return ModelReach.Unknown;
 
             return Enactive.Settings.ProviderReach.Local(provider.BaseUrl)
-                ? ModelWorkSplit.Reach.Local
-                : ModelWorkSplit.Reach.Cloud;
+                ? ModelReach.Local
+                : ModelReach.Cloud;
         }
 
         /// <summary>
@@ -2965,29 +2556,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             }
         }
 
-        /// <summary>
-        /// The tools this host offers, built from the CURRENT settings.
-        ///
-        /// <para>It used to be a list inline in the constructor, which made every setting a tool reads
-        /// a restart-only setting. Reported 2026-09-22: an SMTP account filled in and saved, and
-        /// <c>send_email</c> still telling the agent it was unavailable, because the account it holds
-        /// was read once when the window opened. Nothing about that is particular to mail - any tool
-        /// taking configuration would have behaved the same way - so the registry is rebuilt wherever
-        /// the settings are applied, and the pane no longer has to tell anybody to restart.</para>
-        ///
-        /// <para>Safe to swap while the application is running: <c>_toolRegistry</c> is read at the
-        /// point of use, and a run already in flight holds the registry it started with.</para>
-        /// </summary>
-        private IToolRegistry BuildToolRegistry()
-            => new ToolRegistry(BuiltInTools.Create(EngineComposition.Mail(_settings), EngineComposition.Web(_settings)));
-
         private void ApplySettings()
         {
             _globalInstructions = _settings.GlobalInstructions;
-
-            // Before the early return below: a tool's configuration is not the engine's, and an SMTP
-            // account saved on a machine with no model chosen should still reach the tool.
-            _toolRegistry = BuildToolRegistry();
 
             // Nothing to build an engine out of is a STATE, not an error. A machine where nobody has
             // chosen a model now says so — where it used to be silently configured for a model name
@@ -2999,18 +2570,18 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
             if (_engineProblem is not null)
             {
-
+                _engine = null;
                 _vm.WorkerRoles.Clear();
                 return;
             }
 
-            // The engine itself — providers, team, router — from the composition every host shares.
+            // The engine itself — providers, team, router, tools — from the composition every host shares.
             // It was built inline here, which is why nothing could check it and why the console's own
             // version had drifted onto a different provider kind and a model nobody had installed.
-            var engine = EngineComposition.Build(_settings, _http, _log);
-            _providerFactory = engine.Providers;
-            _providerFactory.MetricsReported = metrics => Dispatcher.UIThread.Post(() => _vm.Performance.Add(metrics));
-            _workerProvider = engine.Workers;
+            // "Allow (session)" answers for every run this process starts, watched or not, and outlives
+            // this engine: the next save builds another.
+            _engine = EngineComposition.Build(_settings, _http, _log, _sessionApprovals,
+                metrics => Dispatcher.UIThread.Post(() => _vm.Performance.Add(metrics)));
 
             // Applied here rather than at construction because the sink predates the settings. The
             // setter prunes, so lowering it takes effect on Save instead of at the next midnight.
@@ -3024,7 +2595,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             {
                 var keep = _vm.SelectedWorkerIndex;
                 _vm.WorkerRoles.Clear();
-                foreach (var worker in _workerProvider.All)
+                foreach (var worker in _engine.Workers.All)
                     _vm.WorkerRoles.Add(worker.Role);
                 _vm.SelectedWorkerIndex = keep >= 0 && keep < _vm.WorkerRoles.Count ? keep : 0;
         }
@@ -3032,9 +2603,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             _vm.IsLoadingWorkspaceDefaults = false;
         }
-
-        _model = _workerProvider.Default.ModelPolicy.Preferred.Model;
-
     }
 
     /// <summary>
@@ -3047,9 +2615,4 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// <see cref="EngineComposition"/>, where a test can reach them.</para>
     /// </summary>
     private PermissionPolicy PolicyFor(int level) => EngineComposition.PolicyFor(_settings, level);
-
-    private sealed class EmptyProvider : IServiceProvider
-    {
-        public object? GetService(Type serviceType) => null;
-    }
 }

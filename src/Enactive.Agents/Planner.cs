@@ -16,20 +16,14 @@ using Enactive.Core.Templates;
 /// </summary>
 public sealed record PlanResult(
     IntentDisposition Disposition, string Title, Plan? Plan,
-    int PromptTokens = 0, int CompletionTokens = 0,
     PlanReadout Readout = PlanReadout.Understood)
 {
     /// <summary>
-    /// How much of <see cref="PromptTokens"/> the provider served from its prompt cache. Null where
-    /// it does not report one - see <c>ChatCompletion.CachedPromptTokens</c>.
-    ///
-    /// <para>An init property so the six-argument construction above and every <c>with</c> of it
-    /// keep working. Carried for the same reason the token counts themselves are: the planning call
-    /// happens outside the tool loop, so anything it does not hand back is spent and never
-    /// counted.</para>
+    /// What planning cost - every call, its prompt cache included. Carried because the planning call happens outside the
+    /// tool loop, so anything it does not hand back is spent and never counted. One value: it was four counts beside the
+    /// TokenUsage they came from, so every result was built with 0, 0 and then had the usage laid out into them.
     /// </summary>
-    public int? CachedPromptTokens { get; init; }
-    public int? CacheCreationPromptTokens { get; init; }
+    public TokenUsage Usage { get; init; } = TokenUsage.None;
 
     /// <summary>A bounded planning attempt could not complete; execution must not start.</summary>
     public string? IncompleteReason { get; init; }
@@ -122,7 +116,7 @@ public sealed class Planner
         string request, WorkContext context, IChatProvider provider, string model,
         CancellationToken ct, int? maxSteps = null, bool proposeChecks = false,
         int? turnCeiling = null, int outputBudget = 4096,
-        Func<int, int, string?>? beforeRetry = null, bool stepOutputs = false, bool typedCriteria = false,
+        Func<int, int, string?>? exhaustedAfter = null, bool stepOutputs = false, bool typedCriteria = false,
         bool dynamicSteps = false, bool validateWaves = false, bool semanticCriteria = false)
     {
         var messages = new List<ChatMessage>
@@ -134,73 +128,35 @@ public sealed class Planner
         // No ResponseSchema, deliberately - see StructuredOutputTests.The_planner_is_not_given_a_schema
         // This was changed on 2026-09-23 and changed straight
         // back when that test caught it.
-        var completion = await provider.CompleteAsync(GenerationAllowance.Fit(new ChatRequest(model, messages, Temperature: 0.0,
-            Purpose: GenerationPurpose.Planning, OutputTokenLimit: Math.Max(1, outputBudget)), provider), ct);
-        var answer = completion.Message.Content ?? "";
+        //
+        // Asked through the round every structured answer is (StructuredAnswer): when nothing readable comes back, the
+        // model is shown what arrived and exactly what shape was wanted, once - a model that wandered off format
+        // usually returns to it when told precisely what to produce, and what that buys is a real plan instead of a
+        // multi-step request silently becoming one unplanned action. The round was written here by hand.
+        var round = await StructuredAnswer.AskAsync<PlanResult>(provider, messages,
+            current => new ChatRequest(model, current, Temperature: 0.0, Purpose: GenerationPurpose.Planning,
+                OutputTokenLimit: Math.Max(1, outputBudget)),
+            (answer, _) => Parse(answer, request) is { } plan ? (plan, []) : (null, ["no plan in the reply"]),
+            _ => RepairPrompt, exhaustedAfter, requireComplete: true, ct);
 
-        var prompt = completion.PromptTokens ?? 0;
-        var output = completion.CompletionTokens ?? 0;
+        if (round is { Kind: AnswerKind.Answered, Value: { } read })
+            return read with { Usage = round.Usage };
 
-        // Summed the same way as the tokens, and kept NULL until something reports one: adding a
-        // retry's cache reads to a first call that never mentioned any would turn "nobody counted"
-        // into a number, which is the one thing this field exists not to do.
-        var cached = completion.CachedPromptTokens;
-        var created = completion.CacheCreationPromptTokens;
-
-        if (ReadComplete(completion, request) is { } plan)
-            return plan with
-            {
-                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached, CacheCreationPromptTokens = created
-            };
-
-        // Nothing readable came back. Ask once more, showing what arrived and exactly what shape was
-        // wanted - the same recovery the reviewer does, and for the same reason: a model that
-        // wandered off format usually returns to it when told precisely what to produce. The cost is
-        // one round trip on a path that should be rare, and what it buys is a real plan instead of a
-        // multi-step request silently becoming one unplanned action.
-        messages.Add(new ChatMessage(ChatRole.Assistant, answer, null));
-        messages.Add(ChatMessage.User(RepairPrompt));
-
-        if (beforeRetry?.Invoke(prompt, output) is { } spent)
-            return new(IntentDisposition.QuickAction, Truncate(request, 80), null, prompt, output, PlanReadout.Unreadable)
-            { CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = spent };
-
-        ChatCompletion retry;
-        try
+        // Nothing readable. The request is still acted on when the model simply wandered off format twice - refusing
+        // it would be worse than doing the obvious thing with it - but this is a FALLBACK and the difference travels
+        // with the result instead of disappearing into a title. When the model could not be asked, or ran out of room,
+        // nothing is started: a plan that did not fit is not a request for one unplanned action.
+        var fallback = new PlanResult(IntentDisposition.QuickAction, Truncate(request, 80), null, PlanReadout.Unreadable)
+            { Usage = round.Usage };
+        return fallback with
         {
-            retry = await provider.CompleteAsync(GenerationAllowance.Fit(new ChatRequest(model, messages, Temperature: 0.0,
-                Purpose: GenerationPurpose.Planning, OutputTokenLimit: Math.Max(1, outputBudget)), provider), ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            return new(IntentDisposition.QuickAction, Truncate(request, 80), null, prompt, output, PlanReadout.Unreadable)
-            { CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = "Planner clarification failed: " + ex.Message };
-        }
-
-        prompt += retry.PromptTokens ?? 0;
-        output += retry.CompletionTokens ?? 0;
-        cached = TokenCounts.Add(cached, retry.CachedPromptTokens);
-        created = TokenCounts.Add(created, retry.CacheCreationPromptTokens);
-
-        if (ReadComplete(retry, request) is { } retried)
-            return retried with
-            {
-                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached, CacheCreationPromptTokens = created
-            };
-
-        // Twice with nothing readable. The request is still acted on - refusing it would be worse
-        // than doing the obvious thing with it - but this is a FALLBACK and the difference travels
-        // with the result instead of disappearing into a title.
-        return new PlanResult(
-            IntentDisposition.QuickAction, Truncate(request, 80), null,
-            prompt, output, PlanReadout.Unreadable) { CachedPromptTokens = cached, CacheCreationPromptTokens = created,
-                IncompleteReason = completion.FinishReason is "length" or "max_tokens" || retry.FinishReason is "length" or "max_tokens"
-                    ? "Planner reached its output limit after one clarification; no work was started." : null };
+            // An answer that wandered off format twice is no shortfall: the fallback runs, and says it is one. The first
+            // call failing used to throw, and the run ended "Planning failed: ..." - said here now.
+            IncompleteReason = round is { Kind: AnswerKind.Unusable, CutOff: false } ? null
+                : round.Shortfall(round.Asked <= 1 ? "Planning" : "Planner clarification")
+                  + (round.CutOff ? "; no work was started." : "")
+        };
     }
-
-    private static PlanResult? ReadComplete(ChatCompletion completion, string request)
-        => completion.FinishReason is "length" or "max_tokens" || completion.Message.ToolCalls is { Count: > 0 }
-            ? null : Parse(completion.Message.Content ?? "", request);
 
     /// <summary>One structural repair attempt. Never falls back to execution of an unplanned action.</summary>
     internal async Task<PlanResult> ReplanAsync(string request, WorkContext context, PlanResult invalid,
@@ -237,17 +193,24 @@ public sealed class Planner
                 + "Use valid 0-based dependency indices, no self-dependencies or cycles, and preserve necessary prerequisites. "
                 + "Do not call tools or switch to quick_action. This is the only structural repair attempt.")
         ];
-        var completion = await provider.CompleteAsync(GenerationAllowance.Fit(new(model, messages, Temperature: 0,
-            Purpose: GenerationPurpose.Planning, OutputTokenLimit: Math.Max(1, outputBudget)), provider), ct);
-        var repaired = completion.FinishReason is "length" or "max_tokens" || completion.Message.ToolCalls is { Count: > 0 }
-            ? null : Parse(completion.Message.Content ?? "", request);
-        if (repaired is not { Disposition: IntentDisposition.Task, Plan.Steps.Count: > 0 })
-            repaired = invalid with { Readout = PlanReadout.Unreadable };
-        return repaired with
+        // The round every structured answer is asked through (StructuredAnswer), with one attempt: this message IS the
+        // correction, and it is the only one. A provider's failure is said in the result (IncompleteReason), as a failed
+        // planning call is, rather than thrown for each caller to catch.
+        var round = await StructuredAnswer.AskAsync<PlanResult>(provider, [.. messages],
+            current => new ChatRequest(model, current, Temperature: 0, Purpose: GenerationPurpose.Planning,
+                OutputTokenLimit: Math.Max(1, outputBudget)),
+            (answer, _) => Parse(answer, request) is { Disposition: IntentDisposition.Task, Plan.Steps.Count: > 0 } plan
+                ? (plan, [])
+                : (null, ["no corrected task DAG in the reply"]),
+            correction: null, exhaustedAfter: null, requireComplete: true, ct, attempts: 1);
+
+        var repaired = round.Value ?? invalid with
         {
-            PromptTokens = completion.PromptTokens ?? 0, CompletionTokens = completion.CompletionTokens ?? 0,
-            CachedPromptTokens = completion.CachedPromptTokens, CacheCreationPromptTokens = completion.CacheCreationPromptTokens
+            Readout = PlanReadout.Unreadable,
+            // Only a provider's failure is said: an unreadable repair leaves the plan it was asked to correct, refused as before.
+            IncompleteReason = round.Kind == AnswerKind.Failed ? round.Shortfall("Plan repair") : null
         };
+        return repaired with { Usage = round.Usage };
     }
 
     /// <summary>

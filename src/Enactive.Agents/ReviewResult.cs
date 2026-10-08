@@ -1,61 +1,91 @@
 namespace Enactive.Agents;
 
+using Enactive.Core.Chat;
+using Enactive.Core.Events;
+using Enactive.Core.Tasks;
+
 /// <summary>
-/// Reviewer verdict for a step, plus what asking cost.
+/// What a reviewer said of a step - one of five things, each with what goes with it.
 ///
-/// <para>The review call sits outside the tool loop, so its tokens were never counted; on a run that
-/// reviews content, the reviewer reads whole documents on the most expensive model bound, which made
-/// the uncounted share the LARGEST part of some runs. The counts cover the re-ask too, when there
-/// was one - two calls were made, and two calls were paid for.</para>
+/// <para><b>Why one value.</b> The verdict used to be five overlapping fields - Pass, IncompleteReason,
+/// VerdictUnavailable, Undecided, BudgetExhausted, and a second BudgetExhausted beside the result - and what became of
+/// the step was decided by reading them in the right order. One combination (a reason without an unavailable verdict,
+/// "a prohibition the work broke") had no producer left after the old reviews went (ed6fe7c), and was still handled.</para>
 /// </summary>
-public sealed record ReviewResult(
-    bool Pass, string Notes, int PromptTokens = 0, int CompletionTokens = 0)
+public abstract record ReviewVerdict(string Notes)
 {
-    public string? BudgetExhausted { get; init; }
-    public string? IncompleteReason { get; init; }
+    /// <summary>The step is done, on what the reviewer was shown.</summary>
+    public sealed record Pass(string Notes) : ReviewVerdict(Notes);
 
     /// <summary>
-    /// The reviewer could not return a usable verdict: an error, a response refused after
-    /// clarification, no verdict at all, or its own statement that it could not tell. Set only where
-    /// that is what happened, and false by default, so any path not marked keeps its old outcome.
+    /// The step is not done, and why - with what to do about it.
+    /// </summary>
+    /// <param name="Keep">
+    /// The files of the step the reviewer found right as they are, on a fail that is somewhere else: the report, the
+    /// process, another file. A step rejected on such a review keeps these and has the rest put back.
     ///
-    /// <para>A step whose verdict is missing becomes <see cref="Enactive.Core.Events.StepOutcomeKind.DoneUnverified"/>
-    /// and releases its dependents; a step with a damning verdict does not.</para>
-    /// </summary>
-    public bool VerdictUnavailable { get; init; }
+    /// <para><b>Measured 2026-09-28, run 3fe4f8.</b> The final review of step 1 said of the seven tests it wrote
+    /// "implementation: pass ... 7/7 pass", and failed the step for how it had run its commands and what its report left
+    /// out. The step was rejected, and the engine put the test file back: the only thing the review had found right was
+    /// the thing that was thrown away. A list, not "the work stands", since 2026-10-01: one flag for the whole step kept
+    /// a forbidden change beside a right one (benchmark build-error, 12 of 12).</para>
+    /// </param>
+    public sealed record Fail(string Notes, string RepairAdvice, IReadOnlyList<string> Keep) : ReviewVerdict(Notes);
+
+    /// <summary>The reviewer answered, and its answer was that it could not tell.</summary>
+    public sealed record Undecided(string Notes) : ReviewVerdict(Notes);
+
+    /// <summary>No usable verdict came back: the provider failed, or no answer could be used even after correction.</summary>
+    public sealed record Unavailable(string Notes) : ReviewVerdict(Notes);
+
+    /// <summary>The run's budget was spent before the reviewer could be asked (again).</summary>
+    public sealed record OutOfBudget(string Notes) : ReviewVerdict(Notes);
 
     /// <summary>
-    /// The reviewer answered, and its answer was that it could not tell - as opposed to an answer that
-    /// could not be used at all. Both leave the verdict missing; they are different reasons.
-    /// </summary>
-    public bool Undecided { get; init; }
-
-    /// <summary>Concrete semantic defects, distinct from malformed review or unavailable evidence.</summary>
-    public string? RepairAdvice { get; init; }
-
-    /// <summary>
-    /// The files of the step the reviewer found right as they are - asked for, nothing wrong in them - on a fail that is
-    /// somewhere else: the report, the process, another file. A step rejected on such a review keeps these and has the
-    /// rest of what it changed put back. Empty by default, so every review that names none keeps the revert it always had.
+    /// What a step comes to when this verdict leaves it without one - or null for a pass or a fail, which the attempt
+    /// loop acts on itself (the step stands, or is tried again and then rejected).
     ///
-    /// <para><b>Measured 2026-09-28, run 3fe4f8.</b> The final review of step 1 said of the seven
-    /// tests it wrote "implementation: pass ... 7/7 pass", and failed the step for how it had run its
-    /// commands and what its report left out. The step was rejected, and the engine put the test file
-    /// back: the only thing the review had found right was the thing that was thrown away.</para>
-    ///
-    /// <para><b>A list, not "the work stands", since 2026-10-01.</b> One flag for the whole step was the wrong shape:
-    /// benchmark build-error added Median rightly and changed another file the request said to leave alone, and the
-    /// review said the work stood in 12 of 12 answers, because Median was right - so the forbidden change would have been
-    /// kept. Asked to name the files, it named Stats.cs alone, 12 of 12.</para>
+    /// <para>A review ran at all only because the worker finished, so a verdict that is MISSING leaves the work done
+    /// and only unconfirmed: DoneUnverified, and its dependents run. The cause says why it is missing - a reviewer
+    /// that said it could not tell is not a review that failed to be processed.</para>
     /// </summary>
-    public IReadOnlyList<string> Keep { get; init; } = [];
+    public (StepOutcomeKind Kind, OutcomeCause Cause)? Missing => this switch
+    {
+        Undecided => (StepOutcomeKind.DoneUnverified, OutcomeCause.ReviewUndecided),
+        Unavailable or OutOfBudget => (StepOutcomeKind.DoneUnverified, OutcomeCause.ReviewUnprocessable),
+        _ => null
+    };
+}
+
+/// <summary>
+/// A reviewer's verdict for a step, plus what asking cost.
+///
+/// <para>The review call sits outside the tool loop, so its tokens were never counted; on a run that reviews content,
+/// the reviewer reads whole documents on the most expensive model bound, which made the uncounted share the LARGEST
+/// part of some runs. The counts cover the re-ask too, when there was one - two calls were made, and two calls were
+/// paid for.</para>
+/// </summary>
+public sealed record ReviewResult(ReviewVerdict Verdict)
+{
     /// <summary>
-    /// The cached share of <see cref="PromptTokens"/>, or null where nobody counted. This is the
-    /// phase most likely to have one on a real machine: review is bound to a cloud model, and a
-    /// re-ask re-sends the same prefix it just sent.
+    /// What the review cost - its cached share most likely of any phase on a real machine: review is bound to a cloud
+    /// model, and a re-ask re-sends the same prefix it just sent.
     /// </summary>
-    public int? CachedPromptTokens { get; init; }
-    public int? CacheCreationPromptTokens { get; init; }
+    public TokenUsage Usage { get; init; } = TokenUsage.None;
+
+    /// <summary>
+    /// What a reviewer's round came to, as a verdict, with what it cost: the verdict it answered, or why there is none.
+    /// The step review and the criteria review each wrote this switch; only the words for an answer that could not be
+    /// used are their own. The plan's contract review answers with a contract, not a verdict, and reads its round itself.
+    /// </summary>
+    internal static ReviewResult From(AnswerRound<ReviewVerdict> round, string unusable)
+        => new(round.Kind switch
+        {
+            AnswerKind.Answered => round.Value!,
+            AnswerKind.OutOfBudget => new ReviewVerdict.OutOfBudget(round.Problem!),
+            AnswerKind.Failed => new ReviewVerdict.Unavailable("review error: " + round.Problem),
+            _ => new ReviewVerdict.Unavailable(unusable)
+        }) { Usage = round.Usage };
 }
 
 /// <summary>Which review judged a step - named in its events ("PASS (Step review)").</summary>

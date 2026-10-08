@@ -89,7 +89,7 @@
                     <ListBox x:Name="McpList" Classes="cards" ItemsSource="{Binding McpServers}" SelectedItem="{Binding SelectedMcp}">
                         <ListBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:McpServerRow">
-                                <Border Classes="card" BorderBrush="{Binding EdgeBrush}">
+                                <Border Classes="card" BorderBrush="{Binding IsLocal, Converter={x:Static local:Palette.Local}}">
                                     <Grid ColumnDefinitions="*,Auto,Auto">
                                         <StackPanel Margin="0,0,10,0">
                                             <TextBlock Classes="cardTitle" Text="{Binding Name}" />
@@ -134,7 +134,7 @@
                     <ListBox x:Name="TemplateList" Classes="cards" ItemsSource="{Binding Templates}" SelectedItem="{Binding SelectedTemplate}">
                         <ListBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:TemplateRow">
-                                <Border Classes="card" BorderBrush="{Binding EdgeBrush}">
+                                <Border Classes="card" BorderBrush="{Binding Edge, Converter={x:Static local:Palette.Template}}">
                                     <Grid ColumnDefinitions="*,Auto">
                                         <StackPanel Margin="0,0,10,0">
                                             <TextBlock Classes="cardTitle" Text="{Binding Name}" />
@@ -575,7 +575,7 @@
                                  SelectedItem="{Binding SelectedProvider}">
                             <ListBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:ProviderRow">
-                                    <Border Classes="card" BorderBrush="{Binding EdgeBrush}">
+                                    <Border Classes="card" BorderBrush="{Binding IsLocal, Converter={x:Static local:Palette.Local}}">
                                         <Grid ColumnDefinitions="*,Auto,Auto">
                                             <StackPanel Grid.Column="0" Orientation="Horizontal"
                                                         Margin="0,0,10,0" Spacing="9">
@@ -584,7 +584,7 @@
                                                      the TIME: a dot on its own says how things were
                                                      at a moment it does not name. -->
                                                 <Ellipse Width="9" Height="9" VerticalAlignment="Center"
-                                                         Fill="{Binding HealthBrush}"
+                                                         Fill="{Binding Health.Health, Converter={x:Static local:Palette.Health}}"
                                                          ToolTip.Tip="{Binding HealthTip}" />
                                                 <StackPanel>
                                                     <TextBlock Classes="cardTitle" Text="{Binding Name}" />
@@ -633,7 +633,7 @@
                                  SelectedItem="{Binding SelectedWorker}">
                             <ListBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:WorkerRow">
-                                    <Border Classes="card" BorderBrush="{Binding EdgeBrush}">
+                                    <Border Classes="card" BorderBrush="{Binding Autonomy, Converter={x:Static local:Palette.Autonomy}}">
                                         <Grid ColumnDefinitions="*,Auto">
                                             <StackPanel Grid.Column="0" Margin="0,0,10,0">
                                                 <TextBlock Classes="cardTitle" Text="{Binding Name}" />
