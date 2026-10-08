@@ -66,7 +66,7 @@ internal sealed class ChangeLimitGuard(
     public async Task<Decision> CheckAsync(int? stepNo, string? stepTitle, string? saidByStep, ToolCall call,
         ToolDefinition? definition, IArtifactScope store, string workspaceRoot, CancellationToken ct)
     {
-        if (definition?.ChangedPathArguments is not { Count: > 0 } arguments) return Decision.GoAhead;
+        if (definition?.ChangedPathArguments is not { Count: > 0 } arguments || definition.RestoresRunStart) return Decision.GoAhead;
 
         var asked = new List<(string Path, string? Now)>();
         foreach (var path in WriteBoundary.PathsOf(call, arguments))
@@ -121,7 +121,8 @@ internal sealed class ChangeLimitGuard(
         return verdict.Allow
             ? new(null, round.Usage)
             : new($"'{string.Join("', '", asked.Select(a => a.Path))}' was not changed: the request limits what may be changed "
-                  + $"({Quoted()}), and this change goes against it - {verdict.Reason}", round.Usage);
+                  + $"({Quoted()}), and this change goes against it - {verdict.Reason}. A file this run changed on purpose "
+                  + "is put back as it was with restore_file.", round.Usage);
     }
 
     /// <summary>What asking cost, as the run counts it: against the run's budget, as a review.</summary>

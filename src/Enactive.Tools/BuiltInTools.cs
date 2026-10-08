@@ -15,6 +15,7 @@ public static class BuiltInTools
         new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new ReadFilesTool(),
         new SearchFilesTool(), new CountMatchesTool(), new FileStatsTool(), new CompareFilesTool(),
         new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
+        new RestoreFileTool(),
         new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool(),
         // Roles name this even without an account; the description explains its availability.
         new SendEmailTool(mail),

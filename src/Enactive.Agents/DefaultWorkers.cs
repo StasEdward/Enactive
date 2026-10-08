@@ -112,7 +112,8 @@ public static class DefaultWorkers
             + "files and copy them (copy_file — use it rather than reading a file and writing it back, "
             + "which truncates anything large and produces a partial copy that looks whole), delete a "
             + "file (delete_file — it always asks first, so use it only when removal is what was "
-            + "actually requested), run shell "
+            + "actually requested), put a file back exactly as it was before the run (restore_file - to undo a change "
+            + "made on purpose, rather than editing it back by hand), run shell "
             + "commands (run_command) and run "
             + "PowerShell (run_powershell — prefer it on Windows for WMI/CIM, Get-PSDrive, pipes), plus git and "
             + "docker tools for version control and containers. Use the "
@@ -121,7 +122,7 @@ public static class DefaultWorkers
             + "tools to accomplish the request, then reply with a short confirmation of what you actually did.",
             new[] { "write_file", "edit_file", "read_file", "read_files", "search_files",
                     "count_matches", "file_stats", "compare_files", "list_dir", "create_directory",
-                    "move_file", "copy_file", "delete_file", "run_command", "run_powershell", "git", "docker",
+                    "move_file", "copy_file", "delete_file", "restore_file", "run_command", "run_powershell", "git", "docker",
                     // Offered only where an SMTP account is configured - the tool is not
                     // registered otherwise, so naming it here costs nothing until somebody
                     // fills the section in.
@@ -155,10 +156,11 @@ public static class DefaultWorkers
             "You are a technical writer. Create and edit documentation and text files, reading "
             + "existing files for context and using search_files to find where something is written. "
             + AggregateReads
-            + "You may also create folders, move files and copy them (copy_file - never read a file and write it back to copy it, which truncates anything large). Do not run shell commands.",
+            + "You may also create folders, move files and copy them (copy_file - never read a file and write it back to copy it, which truncates anything large), "
+            + "and put a file back as it was before the run (restore_file). Do not run shell commands.",
             new[] { "write_file", "edit_file", "read_file", "read_files", "search_files",
                     "count_matches", "file_stats", "compare_files", "list_dir",
-                    "create_directory", "move_file", "copy_file" },
+                    "create_directory", "move_file", "copy_file", "restore_file" },
             PermissionLevel.Execute),
     };
 

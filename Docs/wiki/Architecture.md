@@ -90,6 +90,7 @@ The model receives the tools allowed for its worker and performs a streaming con
 | Inspect files | `read_file`, `search_files`, `list_dir` | Read windows of a file, find content, and inspect directory entries |
 | Modify files | `write_file`, `edit_file`, `create_directory`, `move_file`, `copy_file` | Create/replace content, make focused edits, and organize files |
 | Remove a file | `delete_file` | Delete one file. Always asks first, at every autonomy tier |
+| Put a file back | `restore_file` | Return a file to exactly how it was before the run first changed it, from the copy the engine kept |
 | Shell | `run_command`, `run_powershell` | Execute commands; PowerShell has its own script transport |
 | Development operations | `git`, `docker` | Invoke version-control and container operations |
 | Web | `fetch_url`, `web_search` | Read a public page as text; search through a SearXNG server. Only when turned on in Settings → Web and given to a role — see [Operations → Web](Operations.md#web-tools-and-searxng) |
@@ -100,6 +101,8 @@ Use `edit_file` for a small change to an existing file. Asking a small model to 
 Use `copy_file` rather than reading a file and writing it back. `read_file` returns a window of at most 8000 characters, so a read-then-write copy of a larger file silently produces a shortened one that can still look complete. `copy_file` streams bytes and never decodes them.
 
 `delete_file` asks for approval at every tier, including Autonomous, and no policy setting turns that off. Every other file tool leaves something a person can look at and judge; this one leaves an absence.
+
+Use `restore_file` to undo a change made on purpose — a temporary break to check that a test catches it, an experiment — instead of editing the file back by hand. It writes the bytes the engine kept from before the run, through the store like any write. It does not remove a file the run created (there was nothing before it), and it cannot undo a change made by a shell command, which is not journalled.
 
 Every file tool writes through the artifact store, so a step a reviewer rejects can be undone — including a deletion, which is restored with its contents. Shell effects are not journalled and cannot be undone.
 
@@ -116,6 +119,8 @@ Nothing in the area survives a week. The first write that goes there in a run re
 Each step has an execution journal recording tool calls, arguments, results, and outcomes as they occur. The review evidence is separate from the conversational transcript, so trimming the prompt does not remove the underlying journal.
 
 The engine distinguishes real tool failure from an informative absence, such as a lookup that finds no matching file. Unrecovered failures prevent a step from claiming completion. Repeating already performed calls without progress triggers a stall guard; successful writes advance the progress generation so a legitimate edit/build repair loop can proceed.
+
+When the request limits what may be changed — "leave this file alone", "do not change the source to make a test pass" — the review of the final checks records each such sentence verbatim as a change limit. With a limit in place, the first change a step makes to a file that existed before the run is put to the planning model before it runs: the request, the limit, the step, what the step said it was doing, and the change. A change that goes against the limit is refused with the reason, and the step carries on. A file the run created, the engine's own folder, and `restore_file` are never asked about; once a file is allowed it is not asked about again in that step; three refusals of one file in one step and the limit stands without asking; if no usable answer comes back, the change goes ahead and the run says so. A request with no such limit asks nothing.
 
 Commands may declare `expectedExitCodes` before execution when a nonzero exit is a meaningful result. This is evidence about expected behavior, not permission to relabel any failed operation after the fact.
 

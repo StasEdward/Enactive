@@ -114,11 +114,16 @@ public sealed class WriteFileTool : ITool
             // best-effort by design, and this sentence is what the reviewer is handed as ground
             // truth — a promise made every time is a promise the reviewer cannot check.
             var restorable = replacing && ctx.Artifacts.CanRestore(path);
+            // restore_file puts back how the file was before the RUN - not the version this write displaced. Named only
+            // for a file the run found: for one an earlier step made, it has nothing to put back, and offering it there
+            // sends the model to a tool that refuses, as git did in run a19a2c.
+            var foundByRun = restorable && (await ctx.Artifacts.BeforeRunAsync(path, ct)).State == BeforeRunState.Kept;
 
             return ToolResults.Ok(
                 output: replacing
                     ? (restorable
-                        ? $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version was kept and can be restored by the user from the run - there is no tool for it, and git has only what was committed."
+                        ? $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version was kept and can be restored by the user from the run"
+                          + (foundByRun ? "; restore_file puts the file back as it was before the run." : " - there is no tool for it, and git has only what was committed.")
                         : $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version could NOT be backed up and is gone.")
                       + (endingsAdjusted
                           ? " Written with the line endings the file already used, so only the lines "
