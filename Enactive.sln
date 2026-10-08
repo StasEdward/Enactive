@@ -43,6 +43,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Enactive.Bench", "tools\Ena
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RemoteHostHarness", "tests\RemoteHostHarness\RemoteHostHarness.csproj", "{5A4AF818-8712-4162-B8CE-7616814EE9BF}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Enactive.App.Ui.Tests", "tests\Enactive.App.Ui.Tests\Enactive.App.Ui.Tests.csproj", "{EA5EED8B-5F36-403B-B8EF-BA402E09FC61}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -257,6 +259,18 @@ Global
 		{5A4AF818-8712-4162-B8CE-7616814EE9BF}.Release|x64.Build.0 = Release|Any CPU
 		{5A4AF818-8712-4162-B8CE-7616814EE9BF}.Release|x86.ActiveCfg = Release|Any CPU
 		{5A4AF818-8712-4162-B8CE-7616814EE9BF}.Release|x86.Build.0 = Release|Any CPU
+		{EA5EED8B-5F36-403B-B8EF-BA402E09FC61}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EA5EED8B-5F36-403B-B8EF-BA402E09FC61}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EA5EED8B-5F36-403B-B8EF-BA402E09FC61}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{EA5EED8B-5F36-403B-B8EF-BA402E09FC61}.Debug|x64.Build.0 = Debug|Any CPU
+		{EA5EED8B-5F36-403B-B8EF-BA402E09FC61}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{EA5EED8B-5F36-403B-B8EF-BA402E09FC61}.Debug|x86.Build.0 = Debug|Any CPU
+		{EA5EED8B-5F36-403B-B8EF-BA402E09FC61}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EA5EED8B-5F36-403B-B8EF-BA402E09FC61}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EA5EED8B-5F36-403B-B8EF-BA402E09FC61}.Release|x64.ActiveCfg = Release|Any CPU
+		{EA5EED8B-5F36-403B-B8EF-BA402E09FC61}.Release|x64.Build.0 = Release|Any CPU
+		{EA5EED8B-5F36-403B-B8EF-BA402E09FC61}.Release|x86.ActiveCfg = Release|Any CPU
+		{EA5EED8B-5F36-403B-B8EF-BA402E09FC61}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -272,5 +286,6 @@ Global
 		{332B0963-BF3D-4E48-B4EF-825040E1C62E} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{CF75FAA1-031B-4740-B9B9-8E78D45144C7} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 		{5A4AF818-8712-4162-B8CE-7616814EE9BF} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{EA5EED8B-5F36-403B-B8EF-BA402E09FC61} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Tests of the desktop window's own code - what needs Avalonia to be asked: the palette's tables (the view
+    picks colours, Palette.cs) and whatever else of the window comes to be tested. Separate from
+    Enactive.Engine.Tests on purpose: the engine's tests build the window's Avalonia-free files only, and
+    keeping Avalonia out of them was part of why the view models stopped holding brushes. Here the window
+    is referenced whole (InternalsVisibleTo in Enactive.App.Ui), not file by file.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="10.0.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Enactive.App.Ui\Enactive.App.Ui.csproj" />
+  </ItemGroup>
+
+</Project>

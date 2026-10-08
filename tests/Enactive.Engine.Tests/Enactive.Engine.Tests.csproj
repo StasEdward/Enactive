@@ -16,9 +16,6 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <!-- For the palette and the step cards (Palette.cs, StepCardViewModel.cs below): the view picks colours,
-         and the tables it picks them from are asked here. The same version as Enactive.App.Ui. -->
-    <PackageReference Include="Avalonia" Version="12.1.2" />
     <PackageReference Include="MailKit" Version="4.18.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -50,8 +47,6 @@
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/WorkerEditViewModel.cs" Link="Ui/WorkerEditViewModel.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/StepCardViewModel.cs" Link="Ui/StepCardViewModel.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/Looks.cs" Link="Ui/Looks.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/Brand.cs" Link="Ui/Brand.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/Palette.cs" Link="Ui/Palette.cs" />
     <Using Include="Xunit" />
   </ItemGroup>
 

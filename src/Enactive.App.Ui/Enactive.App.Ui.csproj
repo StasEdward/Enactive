@@ -59,4 +59,8 @@
          way to prepare a run and reads back what the Host says is connected. -->
     <ProjectReference Include="..\Enactive.Remote.Host\Enactive.Remote.Host.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The window's own tests (tests/Enactive.App.Ui.Tests): its view models and palette are internal to it. -->
+    <InternalsVisibleTo Include="Enactive.App.Ui.Tests" />
+  </ItemGroup>
 </Project>

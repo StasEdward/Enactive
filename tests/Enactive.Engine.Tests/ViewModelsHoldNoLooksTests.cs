@@ -1,10 +1,6 @@
 namespace Enactive.Engine.Tests;
 
-using System.Globalization;
 using System.Text.RegularExpressions;
-using Avalonia.Data.Converters;
-using Avalonia.Media;
-using Enactive.App.Ui;
 using Enactive.App.Ui.ViewModels;
 using Enactive.Core.Events;
 using Enactive.Core.History;
@@ -16,8 +12,8 @@ using Xunit;
 /// <para>Until 2026-10-08 fourteen view models held brushes, a font weight and a margin, and the same table - a
 /// run's status to a colour, an Inbox item's kind to a colour - was written two and three times in them. Holding
 /// Avalonia's types also kept them out of this project, which builds the window's Avalonia-free files only: the
-/// step cards had no test. These keep the rule one rule, ask the step cards what moved into them, and ask the
-/// tables what a rule in a view model could not be asked - whether every state has a colour.</para>
+/// step cards had no test. These keep the rule one rule and ask the step cards what moved into them; the palette's
+/// tables, which need Avalonia, are asked in the window's own tests (Enactive.App.Ui.Tests).</para>
 /// </summary>
 public sealed class ViewModelsHoldNoLooksTests
 {
@@ -42,51 +38,17 @@ public sealed class ViewModelsHoldNoLooksTests
         Assert.True(looks.Length == 0, "Looks in view models:\n" + string.Join("\n", looks));
     }
 
-    // ── the tables ──────────────────────────────────────────────────────────
-
-    private static object? Pick(IValueConverter table, object? value)
-        => table.Convert(value, typeof(object), null, CultureInfo.InvariantCulture);
-
-    public static TheoryData<string, Type> Tables => new()
-    {
-        { nameof(Palette.CardTone), typeof(CardTone) },
-        { nameof(Palette.EntryIcon), typeof(FeedEntryKind) },
-        { nameof(Palette.Agent), typeof(AgentKind) },
-        { nameof(Palette.Change), typeof(ChangeState) },
-        { nameof(Palette.DiffLine), typeof(DiffLineKind) },
-        { nameof(Palette.WorkspaceEdge), typeof(WorkspacePlace) },
-        { nameof(Palette.Reach), typeof(ModelReach) },
-        { nameof(Palette.Health), typeof(Enactive.Providers.ProviderHealth) },
-        { nameof(Palette.Template), typeof(TemplateEdge) },
-        { nameof(Palette.Schedule), typeof(ScheduleState) },
-        { nameof(Palette.LogLevel), typeof(Enactive.Core.Diagnostics.LogLevel) },
-    };
-
     /// <summary>
-    /// Every value of every state a colour is chosen for has one. The tables name each value and throw on one they do
-    /// not know, so a state added later is a failure here rather than a card quietly drawn in a fallback colour.
+    /// The engine's tests build without Avalonia: what needs it is asked in the window's own tests. The palette's tables
+    /// pulled the package in here once, which is how the next test with a brush in it would quietly do it again.
     /// </summary>
-    [Theory]
-    [MemberData(nameof(Tables))]
-    public void Every_state_has_a_colour(string table, Type states)
-    {
-        var converter = (IValueConverter)typeof(Palette).GetField(table)!.GetValue(null)!;
-
-        Assert.All(Enum.GetValues(states).Cast<object>(), state => Assert.IsAssignableFrom<IBrush>(Pick(converter, state)));
-    }
-
-    /// <summary>A card waiting for a person, or blocked, is amber: nothing went wrong in it.</summary>
     [Fact]
-    public void A_card_that_needs_you_is_amber()
-        => Assert.Same(Brand.Warning, Pick(Palette.CardTone, CardTone.NeedsYou));
+    public void The_engine_tests_build_without_avalonia()
+    {
+        var project = File.ReadAllText(Path.Combine(TestRepository.Root, "tests", "Enactive.Engine.Tests", "Enactive.Engine.Tests.csproj"));
 
-    /// <summary>A run's status is coloured by the kind of ending Core says it is - the same table wherever it is shown.</summary>
-    [Theory]
-    [InlineData("Completed", "Success")]
-    [InlineData("Failed", "Danger")]
-    [InlineData("NeedsUser", "Amber")]
-    public void A_run_s_edge_is_the_colour_of_its_ending(string status, string brand)
-        => Assert.Same(typeof(Brand).GetField(brand)!.GetValue(null), Pick(Palette.RunEdge, status));
+        Assert.DoesNotMatch(@"PackageReference\s+Include=""Avalonia", project);
+    }
 
     // ── what moved into the step cards ──────────────────────────────────────
 
