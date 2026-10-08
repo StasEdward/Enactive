@@ -88,8 +88,16 @@ public sealed class RolePromptTests
         Assert.DoesNotContain("STRONGLY prefer", planner);
         // 360, from 350: "readOnly" (2026-09-29) is one line a planner cannot do without - an analysis step
         // that is not told it may not write spent sixteen minutes fixing tests nobody asked it to fix.
-        Assert.True(Words(planner) < 360, $"Planner grew to {Words(planner)} words.");
+        // 375, from 360: a temporary change and its undoing are one step (2026-10-09) - planned as two, the second read
+        // "restore" as "fix" and rewrote the source the request said to leave.
+        Assert.True(Words(planner) < 375, $"Planner grew to {Words(planner)} words.");
     }
+
+    /// <summary>A break made to check something and putting it back are planned as one step (run bb77e810).</summary>
+    [Fact]
+    public void The_planner_keeps_a_temporary_change_and_its_undoing_in_one_step()
+        => Assert.Contains("A temporary change made to check something, and putting it back, are ONE step",
+            Planner.SystemPromptFor(null), StringComparison.Ordinal);
 
     private static int Words(string text) => text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 }
