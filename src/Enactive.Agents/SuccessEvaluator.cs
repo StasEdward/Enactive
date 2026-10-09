@@ -174,8 +174,10 @@ public sealed class SuccessEvaluator(IReadOnlyList<Enactive.Core.Builds.IEcosyst
 
         var passed = criterion.PassesOn(exitCode);
         if (passed && RanNoTests(ecosystems, criterion.Command, result.Output ?? "") is { } runner)
-            return Unknown($"'{criterion.Command}' runs {runner}'s tests and exited {exitCode}, but nothing it printed is a test it "
-                + "ran - a test command that runs no tests has verified nothing. " + Trim(result.Output ?? result.Error));
+            return Unknown($"'{criterion.Command}' runs {runner.Name}'s tests and exited {exitCode}, but nothing it printed is a test it "
+                + "ran - a test command that runs no tests has verified nothing. "
+                + (runner.WhyNoTests(criterion.Command, context.WorkspaceRoot) is { } why ? why + " " : "")
+                + Trim(result.Output ?? result.Error));
         return new CriterionResult(
             criterion.Name, criterion.Command, criterion.Required,
             passed ? CriterionOutcome.Passed : CriterionOutcome.Failed,
@@ -192,12 +194,12 @@ public sealed class SuccessEvaluator(IReadOnlyList<Enactive.Core.Builds.IEcosyst
     /// was a PASS - the very case the request had said was not one. Which command runs tests, and how its output reads,
     /// is the ecosystem's to say.
     /// </summary>
-    private static string? RanNoTests(IReadOnlyList<Enactive.Core.Builds.IEcosystem> ecosystems, string command, string output)
+    private static Enactive.Core.Builds.IEcosystem? RanNoTests(IReadOnlyList<Enactive.Core.Builds.IEcosystem> ecosystems, string command, string output)
     {
         if (ecosystems.FirstOrDefault(e => e.RunsTests(command)) is not { } runner)
             return null;
         var report = runner.ParseTests(output);
-        return report is { Cases.Count: > 0 } or { Summary.Total: > 0 } ? null : runner.Name;
+        return report is { Cases.Count: > 0 } or { Summary.Total: > 0 } ? null : runner;
     }
 
     private static bool TryExitCode(ToolResult result, out int exitCode)

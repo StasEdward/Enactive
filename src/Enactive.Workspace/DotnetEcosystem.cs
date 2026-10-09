@@ -78,6 +78,38 @@ public sealed class DotnetEcosystem : IEcosystem
             && words[1].Equals("test", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// A bare `dotnet test` at the root runs the solution there, and a test project the solution does not list is not
+    /// run at all. Run 1549ce and run 955111, 2026-10-09: a run made TicTacToe.Tests with `dotnet new`, never added it
+    /// to TicTacToe.sln, and every `dotnet test` after it printed only that the projects were up to date - "ran no tests",
+    /// with nothing said about why. Only for a command that names no project or solution of its own.
+    /// </summary>
+    public string? WhyNoTests(string command, string workspaceRoot)
+    {
+        if (!RunsTests(command)) return null;
+        var words = command.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (words.Skip(2).Any(w => !w.StartsWith('-'))) return null;   // a target, or an option's value: not the bare form
+        try
+        {
+            var solutions = Directory.EnumerateFiles(workspaceRoot)
+                .Where(f => f.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (solutions.Length != 1) return null;
+            var listed = File.ReadAllText(solutions[0]).Replace('\\', '/');
+            var outside = ProjectFiles(workspaceRoot).Where(IsTestProject)
+                .Select(f => Relative(workspaceRoot, f).Replace('\\', '/'))
+                .Where(p => !listed.Contains(p, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .ToArray();
+            if (outside.Length == 0) return null;
+            var solution = Path.GetFileName(solutions[0]);
+            return $"{string.Join(", ", outside)} {(outside.Length == 1 ? "is a test project" : "are test projects")} the solution "
+                   + $"{solution} does not list, so 'dotnet test' at the root does not run {(outside.Length == 1 ? "it" : "them")}: "
+                   + $"add {(outside.Length == 1 ? "it" : "them")} with 'dotnet sln {solution} add <project>', or name the project in the command.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
+
     // `  Passed Probe.Sums.Is_positive(n: 2) [< 1 ms]` - two spaces, the verdict, the name (which may
     // hold spaces and brackets of its own), and the duration in square brackets at the end.
     private static readonly Regex TestLine = new(

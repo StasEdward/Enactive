@@ -37,6 +37,12 @@ public interface IEcosystem
     /// </summary>
     bool RunsTests(string command) => false;
 
+    /// <summary>
+    /// When a test command ran no test, what in the workspace explains it, in this ecosystem's terms - or null when it
+    /// cannot say. Said beside "ran no tests", so a person is told what to change, not only that nothing ran.
+    /// </summary>
+    string? WhyNoTests(string command, string workspaceRoot) => null;
+
     /// <summary>What the build printed, as diagnostics with workspace-relative paths.</summary>
     IReadOnlyList<BuildDiagnostic> ParseDiagnostics(string output, string workspaceRoot);
 
