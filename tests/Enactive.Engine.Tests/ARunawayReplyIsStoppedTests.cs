@@ -164,6 +164,30 @@ public sealed class ARunawayReplyIsStoppedTests
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
     }
 
+    /// <summary>
+    /// A runaway after the model has acted on the explanation is a new one: explained again, and the step goes on. Run
+    /// e9fedc, 2026-10-09: stopped once, the model ran a program and worked on for five minutes; a short loop later ended
+    /// the step as if the first explanation had not taken.
+    /// </summary>
+    [Fact]
+    public async Task A_runaway_after_the_model_acted_is_explained_again_not_the_end()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("page.md", "the claim");
+        var provider = new FakeChatProvider(
+            Turn.Says(QuickAction),
+            Turn.Thinks(Looping(50)),
+            Turn.Calls1("read_file", """{"path":"page.md"}""", "r1"),
+            Turn.Thinks(Looping(50)),
+            Turn.Says("Checked page.md: the claim is there."));
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "check the claims");
+
+        Assert.Equal(2, events.Count(e => e.Kind == EventKind.ErrorObserved
+                                          && e.Summary.StartsWith("The model's reasoning was stopped", StringComparison.Ordinal)));
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+    }
+
     [Fact]
     public async Task A_second_runaway_in_the_same_step_stops_the_step()
     {

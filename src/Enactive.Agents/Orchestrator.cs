@@ -3149,7 +3149,8 @@ public sealed partial class Orchestrator : IOrchestrator
             .Select(m => m.Content)), 3000);
 
         // Replies stopped for running away (RunawayReply). The first is explained to the model and the
-        // step goes on; a second means the explanation did not take, and the step stops.
+        // step goes on; a second before any call means the explanation did not take, and the step stops.
+        // A call in between resets it (see below).
         var runawayStops = 0;
         var outputRecoveries = 0;
         var purpose = GenerationPurpose.Action;
@@ -4005,6 +4006,10 @@ public sealed partial class Orchestrator : IOrchestrator
 
             purpose = toolCalls?.Any(call => toolDefs.Any(d => d.Name == call.Name && d.ChangedPathArguments is { Count: > 0 })) == true
                 ? GenerationPurpose.FileWrite : GenerationPurpose.Action;
+            // A whole call after a runaway was explained: the explanation took, and a later runaway is a new one - explained
+            // again, not the end of the step. Run e9fedc, 2026-10-09: stopped once, the model ran a program in the scratch and
+            // worked on for five minutes of calls; a short loop much later ended the step as if it had not.
+            if (toolCalls is { Count: > 0 }) runawayStops = 0;
             var replyText = contentBuilder.Length > 0 ? contentBuilder.ToString() : null;
             var recovered = false;
 
