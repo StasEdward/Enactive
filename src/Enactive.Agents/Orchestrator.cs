@@ -3997,10 +3997,20 @@ public sealed partial class Orchestrator : IOrchestrator
                 purpose = toolCalls?.Any(call => toolDefs.Any(d => d.Name == call.Name && d.ChangedPathArguments is { Count: > 0 })) == true
                     ? GenerationPurpose.FileWrite : toolCalls is { Count: > 0 } || reasoningBuilder.Length > 0
                         ? GenerationPurpose.Action : GenerationPurpose.FinalAnswer;
-                messages.Add(ChatMessage.User(reason + ". Continue with a NEW complete response, not a JSON suffix. "
-                    + "No tool call from the incomplete turn ran. Send smaller independent write_file (append:true) "
-                    + "or edit_file actions for large files; each must have complete JSON arguments. "
-                    + "Keep reasoning and the final answer concise. Next output ceiling: " + _options.GenerationBudgets.For(purpose) + " tokens."));
+                // A turn that was nothing but reasoning when it was cut: told what to do instead of planning it all first.
+                // Run 7ef3e6a6, 2026-10-09: asked to write tests, a model spent the whole turn - 42 thousand characters -
+                // laying out every test's board and checking each line by hand ("let me re-verify"), and was cut before it
+                // wrote one; told only to keep reasoning concise, it began the same plan again.
+                var onlyThought = lengthLimited && contentBuilder.Length == 0 && toolCalls is not { Count: > 0 } && reasoningBuilder.Length > 0;
+                messages.Add(ChatMessage.User(onlyThought
+                    ? reason + ". Your reasoning used the whole allowance and produced no action - nothing was written or run. "
+                      + "Do not work everything out first: do one small part now - write one test, one case, one change - and "
+                      + "run it; the run tells you whether a value or a setup is right, faster than working it out. Then the next "
+                      + "part. Next output ceiling: " + _options.GenerationBudgets.For(purpose) + " tokens."
+                    : reason + ". Continue with a NEW complete response, not a JSON suffix. "
+                      + "No tool call from the incomplete turn ran. Send smaller independent write_file (append:true) "
+                      + "or edit_file actions for large files; each must have complete JSON arguments. "
+                      + "Keep reasoning and the final answer concise. Next output ceiling: " + _options.GenerationBudgets.For(purpose) + " tokens."));
                 continue;
             }
 
