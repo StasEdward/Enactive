@@ -10,13 +10,16 @@ public static class BuiltInTools
 {
     public static ITool[] Create(MailAccount mail) => Create(mail, WebAccess.None);
 
-    public static ITool[] Create(MailAccount mail, WebAccess web, HttpClient? fetch = null, HttpClient? search = null) =>
+    /// <param name="ecosystems">The kinds of project the engine knows (KnownEcosystems): with any, run_tests is registered.</param>
+    public static ITool[] Create(MailAccount mail, WebAccess web, HttpClient? fetch = null, HttpClient? search = null,
+        IReadOnlyList<Enactive.Core.Builds.IEcosystem>? ecosystems = null) =>
     [
         new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new ReadFilesTool(),
         new SearchFilesTool(), new CountMatchesTool(), new FileStatsTool(), new CompareFilesTool(),
         new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
         new RestoreFileTool(),
         new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool(),
+        .. (ecosystems is { Count: > 0 } ? [new RunTestsTool(ecosystems)] : Array.Empty<ITool>()),
         // Roles name this even without an account; the description explains its availability.
         new SendEmailTool(mail),
         // Registered only as far as a person turned them on, and named by no role until a person gives them to one.

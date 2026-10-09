@@ -1,6 +1,7 @@
 namespace Enactive.Agents;
 
 using Enactive.Core.Permissions;
+using Enactive.Core.Tools;
 
 /// <summary>
 /// The autonomy slider, as a permission policy.
@@ -49,9 +50,11 @@ public static class AutonomyTiers
         1 => new PermissionPolicy(PermissionLevel.Suggest, ["*"], []),
 
         // Execute edits files freely and stops at a command line. This is the tier the product is
-        // meant to be lived in, and the only one whose AskBefore list is not empty.
+        // meant to be lived in, and the only one whose AskBefore list is not empty. Every tool that runs something on this
+        // machine (ShellTools.All): run_tests runs the workspace's own code, and asking before run_command alone left it a
+        // way to run that code without asking (2026-10-09).
         2 => new PermissionPolicy(
-                 PermissionLevel.Execute, ["*"], ["run_command", "run_powershell", "git", "docker"]),
+                 PermissionLevel.Execute, ["*"], [.. ShellTools.All]),
 
         _ => new PermissionPolicy(PermissionLevel.Autonomous, ["*"], [])
     };

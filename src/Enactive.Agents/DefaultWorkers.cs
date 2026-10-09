@@ -122,7 +122,7 @@ public static class DefaultWorkers
             + "tools to accomplish the request, then reply with a short confirmation of what you actually did.",
             new[] { "write_file", "edit_file", "read_file", "read_files", "search_files",
                     "count_matches", "file_stats", "compare_files", "list_dir", "create_directory",
-                    "move_file", "copy_file", "delete_file", "restore_file", "run_command", "run_powershell", "git", "docker",
+                    "move_file", "copy_file", "delete_file", "restore_file", "run_command", "run_powershell", "run_tests", "git", "docker",
                     // Offered only where an SMTP account is configured - the tool is not
                     // registered otherwise, so naming it here costs nothing until somebody
                     // fills the section in.
@@ -148,7 +148,7 @@ public static class DefaultWorkers
             + "writing source files THROUGH a shell is not a way around that - if a request needs "
             + "source changed, say so rather than doing it with Set-Content.",
             new[] { "read_file", "read_files", "search_files", "count_matches", "file_stats", "compare_files",
-                    "list_dir", "run_command", "run_powershell", "git", "docker",
+                    "list_dir", "run_command", "run_powershell", "run_tests", "git", "docker",
                     "send_email" },
             PermissionLevel.Execute),
 
@@ -184,6 +184,10 @@ public static class DefaultWorkers
         if (Has("read_file")) full += BatchReads;
         if (writes || commands) full += ScratchRules;
         if (commands) full += CommandRules;
+        // Run 97de74b1, 2026-10-09: tests run through the shell came back as 30,000 characters of build log.
+        if (Has("run_tests"))
+            full += "\n- Run the workspace's tests with run_tests: it knows the test projects and the flags, and answers with "
+                    + "each failure. Use run_command for tests only where run_tests says it does not know them.";
         if (Has("run_powershell"))
             full += "\n- On Windows, prefer run_powershell for WMI/CIM, objects and pipelines.";
         if (Has("run_command"))

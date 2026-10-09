@@ -92,6 +92,7 @@ The model receives the tools allowed for its worker and performs a streaming con
 | Remove a file | `delete_file` | Delete one file. Always asks first, at every autonomy tier |
 | Put a file back | `restore_file` | Return a file to exactly how it was before the run first changed it, from the copy the engine kept |
 | Shell | `run_command`, `run_powershell` | Execute commands; PowerShell has its own script transport |
+| Tests | `run_tests` | Run the workspace's tests the way its ecosystem runs them, and answer with the totals and each failed test - its message and where it failed |
 | Development operations | `git`, `docker` | Invoke version-control and container operations |
 | Web | `fetch_url`, `web_search` | Read a public page as text; search through a SearXNG server. Only when turned on in Settings → Web and given to a role — see [Operations → Web](Operations.md#web-tools-and-searxng) |
 | External tools | `mcp__...` | Tools discovered from configured MCP servers in the desktop host |
@@ -113,6 +114,8 @@ Two consequences follow from its being unstaged. `delete_file` works there even 
 Nothing in the area survives a week. The first write that goes there in a run removes entries nothing has touched for seven days, taking a folder's age from the newest file anywhere inside it rather than from the folder itself. It is swept by age rather than emptied per run because a background run and a foreground one can share a workspace, and the second to start would otherwise delete the first's scripts while they were in use.
 
 `run_command` uses `cmd.exe` on Windows and a shell on Unix. `run_powershell` avoids embedding PowerShell syntax into a cmd command string. Starting a shell in the workspace is not OS-level containment of everything that shell can do.
+
+`run_tests` is offered wherever the engine knows a kind of project (for now .NET). It finds the test projects, builds the command - one project with `target`, only the tests whose name contains `filter` - and reads what the run printed: the answer is the totals and each failed test with its message and its file and line, and the whole output is kept in the scratch. Failing tests are its finding, not its failure; a build that failed is a failure, and names the errors that stopped it. Where no test project is known it says so, and `run_command` is the way. Tests run through `run_command` or `run_powershell` whose output was too long to show are answered the same way - to the model only: the final checks and the reviewer read everything the command printed. For permissions `run_tests` counts as a shell: it runs the workspace's own code, so it asks where the shells ask and is denied where they are.
 
 ### 7. Keep evidence and apply execution guards
 

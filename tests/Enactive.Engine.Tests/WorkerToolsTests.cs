@@ -28,6 +28,7 @@ public sealed class WorkerToolsTests
     [InlineData("write_file", "move_file")]
     [InlineData("read_file", "search_files")]
     [InlineData("write_file", "restore_file")]
+    [InlineData("run_command", "run_tests")]
     public void A_capability_the_worker_already_has_is_named(string has, string implied)
         => Assert.Contains(implied, WorkerTools.WithImplied([has]), StringComparer.OrdinalIgnoreCase);
 

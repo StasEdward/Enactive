@@ -116,6 +116,17 @@ public sealed class SettingsLoadTests : IDisposable
         Assert.Equal(AppSettings.CurrentSchemaVersion, settings.SchemaVersion);
     }
 
+    /// <summary>A team saved before run_tests existed gets it where run_command is (schema 8): a role named by no saved team is never offered.</summary>
+    [Fact]
+    public void A_saved_team_gets_run_tests_where_it_may_run_commands()
+    {
+        var settings = AppSettings.Load(Write(AsShipped.Replace("\"SchemaVersion\": 5", "\"SchemaVersion\": 7")
+            .Replace("\"Tools\": [ \"*\" ]", "\"Tools\": [ \"run_command\", \"read_file\" ]")));
+
+        Assert.Contains("run_tests", settings.Workers.Single().Tools);
+        Assert.Equal(8, settings.SchemaVersion);
+    }
+
     [Fact]
     public void A_saved_role_that_cannot_write_does_not_get_restore_file()
     {

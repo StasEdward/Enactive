@@ -2526,6 +2526,37 @@ public sealed partial class Orchestrator : IOrchestrator
         _saidThisRun.TryRemove(scope.RunId, out _);
     }
 
+    /// <summary>
+    /// The reply a test run through a shell gets when what it printed was too long to show: what the tests came to, read
+    /// by the ecosystem that runs them - or null, and the reply is the command's own result.
+    ///
+    /// <para>Run 97de74b1, 2026-10-09: a model ran its tests with run_command and was handed 30,000 characters of build
+    /// and test log in three pieces - a third of its prompt - to find seven failures, which sat in the middle the
+    /// shortening drops. run_tests answers with the failures; a model that runs the same tests through the shell gets the
+    /// same answer. Only when the output was cut: one shown whole is already all there is to read. And only the model's
+    /// reply: the result itself, which the run's final checks and the reviewer read, keeps everything it printed.</para>
+    /// </summary>
+    private string? TestRunDescribed(ToolCall call, ToolResult result)
+    {
+        if (result.DidNotRun || call.Name is not ("run_command" or "run_powershell") || CommandOutput.KeptPath(result) is not { } kept)
+            return null;
+        string? command = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(call.ArgumentsJson);
+            foreach (var name in new[] { ToolArguments.Command, ToolArguments.Script })
+                if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty(name, out var v)
+                    && v.ValueKind == JsonValueKind.String)
+                    command ??= v.GetString();
+        }
+        catch (JsonException) { return null; }
+        if (command is null || _ecosystems.FirstOrDefault(e => e.RunsTests(command)) is not { } ecosystem
+            || CommandOutput.Whole(result, _workspace.RootPath) is not { } whole || ecosystem.DescribeTests(whole) is not { } described)
+            return null;
+        var status = result.Success ? (result.Output ?? "").Split('\n')[0] : $"ERROR: {result.Error}";
+        return $"{status}\n{described}\nThe whole output is kept in {kept}.";
+    }
+
     private async Task<IReadOnlyList<CriterionResult>> ProducedFilesNowAsync(RunScope scope, RunSession session, CancellationToken ct)
     {
         ArtifactRef[] produced;
@@ -4242,9 +4273,9 @@ public sealed partial class Orchestrator : IOrchestrator
                 // which could work, and ended with a review of a diff the model never saw. The same
                 // class as every other defect this month: the record somebody works from is
                 // shortened, and nothing says so.
-                var reply = result.Success
+                var reply = TestRunDescribed(call, result) ?? (result.Success
                     ? (result.Output ?? "OK")
-                    : $"ERROR: {failure}";
+                    : $"ERROR: {failure}");
 
                 // A shell lookup that exited non-zero: not forgiven - its exit cannot tell "not there"
                 // from "went wrong" - but pointed at the tools that answer the question as a result,

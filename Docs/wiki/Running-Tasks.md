@@ -43,7 +43,7 @@ A test command written in a manual prompt instructs the worker. It does not crea
 | --- | --- |
 | Observe | Tools requiring Observe can run; higher-level actions ask if the role permits them |
 | Suggest | Tools up to Suggest can run; higher-level actions ask |
-| Execute | File operations within the level can run; `run_command`, `run_powershell`, `git`, and `docker` explicitly ask |
+| Execute | File operations within the level can run; `run_command`, `run_powershell`, `git`, `docker`, and `run_tests` explicitly ask |
 | Autonomous | No default AskBefore list; eligible tools within the effective level run automatically |
 
 The effective level is narrowed by the worker's level and any template ceiling. A worker's tool allowlist is a separate gate. Increasing autonomy cannot make an unlisted tool available to that worker.

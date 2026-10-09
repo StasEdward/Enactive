@@ -359,13 +359,17 @@ public sealed class TaskTemplateTests : IDisposable
                 + "Real tools: " + string.Join(", ", real.OrderBy(n => n)));
     }
 
-    /// <summary>Every ITool this build ships, by the name the permission engine matches on.</summary>
+    /// <summary>
+    /// Every ITool this build ships, by the name the permission engine matches on. A tool built from what the host knows
+    /// (run_tests, from the ecosystems) has no constructor to call bare, so the host's own list adds it.
+    /// </summary>
     private static HashSet<string> ShippedToolNames()
         => typeof(WriteFileTool).Assembly
             .GetTypes()
             .Where(t => typeof(ITool).IsAssignableFrom(t) && t is { IsAbstract: false, IsInterface: false })
             .Where(t => t.GetConstructor(Type.EmptyTypes) is not null)
             .Select(t => ((ITool)Activator.CreateInstance(t)!).Definition.Name)
+            .Concat(EngineFixture.ShippedTools().Select(t => t.Definition.Name))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>

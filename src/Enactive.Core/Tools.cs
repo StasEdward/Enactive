@@ -160,7 +160,9 @@ public static class ShellTools
     /// line to the machine. Adding a third shell tool would have had to be remembered in all three,
     /// and the one that was forgotten would have been the one that refuses.</para>
     /// </summary>
-    public static readonly IReadOnlyList<string> All = ["run_command", "run_powershell", "git", "docker"];
+    // run_tests too: the tests it runs are the workspace's own code, run on this machine - a policy that keeps the shells
+    // from a run keeps that from it as well (2026-10-09).
+    public static readonly IReadOnlyList<string> All = ["run_command", "run_powershell", "git", "docker", "run_tests"];
 
     private static readonly HashSet<string> Names = new(All, StringComparer.OrdinalIgnoreCase);
 
