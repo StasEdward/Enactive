@@ -40,6 +40,15 @@ internal sealed class RepoBarViewModel : ObservableObject
         }
     }
 
+    // The parts of the line above, each in its own colour (2026-10-09): what was added green, what was removed red, as git
+    // and GitHub show them; new files and "no changes" plain. Empty when the part has nothing to say.
+    public string Added => _repo is { } r && (r.Added > 0 || r.Removed > 0) ? $"+{Count(r.Added)}" : "";
+    public string Removed => _repo is { } r && (r.Added > 0 || r.Removed > 0) ? $"−{Count(r.Removed)}" : "";
+    public string NewFiles => _repo is { Untracked: > 0 } r ? (r.Added > 0 || r.Removed > 0 ? "· " : "") + $"{Count(r.Untracked)} new" : "";
+    public string NoChanges => _repo is { Added: 0, Removed: 0, Untracked: 0 } ? "no changes" : "";
+    public string PullRequestAdded => _pullRequest is { } pr ? $"+{Count(pr.Additions)}" : "";
+    public string PullRequestRemoved => _pullRequest is { } pr ? $"−{Count(pr.Deletions)}" : "";
+
     public bool HasPullRequest => _pullRequest is not null;
     public string PullRequest => _pullRequest is { } pr ? $"#{pr.Number}" : "";
     public string PullRequestChanges => _pullRequest is { } pr ? $"+{Count(pr.Additions)} −{Count(pr.Deletions)}" : "";
@@ -78,7 +87,8 @@ internal sealed class RepoBarViewModel : ObservableObject
     private void Changed()
     {
         foreach (var name in new[] { nameof(IsVisible), nameof(Name), nameof(Branch), nameof(Sync), nameof(Changes), nameof(HasPullRequest),
-                     nameof(PullRequest), nameof(PullRequestChanges), nameof(PullRequestUrl), nameof(Ci), nameof(CiText), nameof(HasCi) })
+                     nameof(PullRequest), nameof(PullRequestChanges), nameof(PullRequestUrl), nameof(Ci), nameof(CiText), nameof(HasCi),
+                     nameof(Added), nameof(Removed), nameof(NewFiles), nameof(NoChanges), nameof(PullRequestAdded), nameof(PullRequestRemoved) })
             OnPropertyChanged(name);
     }
 

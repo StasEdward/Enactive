@@ -236,7 +236,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // "I looked over and it was right".
         RefreshInboxButton();
         _repoPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
-        _repoPoll.Tick += (_, _) => { if (!_vm.IsBusy && IsActive) _ = RefreshRepoAsync(); };
+        // While a run is going too (2026-10-09): what a step changes is what a person watches for, and a strip that waited
+        // for the run to end showed the state before it the whole time. Reading git is five short commands, each bounded.
+        _repoPoll.Tick += (_, _) => { if (IsActive) _ = RefreshRepoAsync(); };
         _repoPoll.Start();
         if (this.FindControl<Border>("RepoBar") is { } repoBar)
             repoBar.PointerPressed += (_, _) => _ = RefreshRepoAsync(forcePullRequest: true);
@@ -996,6 +998,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 _vm.RunLog?.SetRun(ev.RunId);
                 // The panel of model figures is this run's, and starts again with the next (ModelPerformance).
                 _vm.Performance.ShowRun(ev.RunId);
+                // A step that ended has changed what it changes: the repository strip is read again then, not only when
+                // the run is over (2026-10-09).
+                if (ev.Kind == EventKind.StepCompleted)
+                    _ = RefreshRepoAsync();
                 if (_liveRow != Guid.Empty && _renderedRunId != ev.RunId)
                 {
                     _renderedRunId = ev.RunId;

@@ -153,4 +153,55 @@ public sealed class TheRepositoryStripTests : IDisposable
         Assert.Equal(rows.Count - 1, int.Parse((string?)strip.Attribute("Grid.Row") ?? "0"));
         Assert.Equal("Auto", (string?)rows[^1].Attribute("Height"));
     }
+
+    private static XElement Strip()
+    {
+        var window = XDocument.Load(Path.Combine(TestRepository.Root, "src", "Enactive.App.Ui", "MainWindow.axaml"));
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        return window.Descendants().Single(e => (string?)e.Attribute(x + "Name") == "RepoBar");
+    }
+
+    /// <summary>
+    /// One font and one size for every word on the strip, each centred: the branch in a monospace face sat on another
+    /// baseline and the line looked uneven (2026-10-09).
+    /// </summary>
+    [Fact]
+    public void Every_word_on_the_strip_is_one_font_one_size_on_one_line()
+    {
+        var texts = Strip().Descendants().Where(e => e.Name.LocalName == "TextBlock").ToArray();
+
+        Assert.NotEmpty(texts);
+        Assert.All(texts, t => Assert.Null(t.Attribute("FontFamily")));
+        Assert.All(texts.Where(t => t.Attribute("FontSize") is not null), t => Assert.Equal("12", (string?)t.Attribute("FontSize")));
+        Assert.All(texts.Where(t => t.Parent?.Name.LocalName == "StackPanel" && t.Parent.Parent?.Name.LocalName != "Button"),
+            t => Assert.Equal("Center", (string?)t.Attribute("VerticalAlignment")));
+    }
+
+    /// <summary>What was added is green and what was removed red, as git and GitHub show them - the work's and the pull request's.</summary>
+    [Fact]
+    public void Added_is_green_and_removed_red()
+    {
+        var strip = Strip();
+        string? ColourOf(string binding) => (string?)strip.Descendants()
+            .Single(e => (string?)e.Attribute("Text") == "{Binding " + binding + "}").Attribute("Foreground");
+
+        Assert.Equal("{DynamicResource Brand.Success}", ColourOf("Repo.Added"));
+        Assert.Equal("{DynamicResource Brand.Danger}", ColourOf("Repo.Removed"));
+        Assert.Equal("{DynamicResource Brand.Success}", ColourOf("Repo.PullRequestAdded"));
+        Assert.Equal("{DynamicResource Brand.Danger}", ColourOf("Repo.PullRequestRemoved"));
+    }
+
+    /// <summary>
+    /// Read again after each step of the run the window shows, and on the half-minute while a run is going too: a strip
+    /// that waited for the run to end showed the state before it the whole time (2026-10-09).
+    /// </summary>
+    [Fact]
+    public void The_strip_is_read_again_between_steps_and_while_a_run_goes()
+    {
+        var window = File.ReadAllText(Path.Combine(TestRepository.Root, "src", "Enactive.App.Ui", "MainWindow.axaml.cs"));
+        var render = window[window.IndexOf("private void RenderEvent(WorkEvent ev)", StringComparison.Ordinal)..];
+
+        Assert.Matches(@"if \(ev\.Kind == EventKind\.StepCompleted\)\s+_ = RefreshRepoAsync\(\);", render[..2000]);
+        Assert.Contains("_repoPoll.Tick += (_, _) => { if (IsActive) _ = RefreshRepoAsync(); };", window, StringComparison.Ordinal);
+    }
 }

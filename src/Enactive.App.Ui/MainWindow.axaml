@@ -1249,19 +1249,33 @@
                                 Content="{Binding Repo.PullRequest}" Padding="6,1" FontSize="12" FontWeight="SemiBold"
                                 Background="Transparent" BorderThickness="0"
                                 ToolTip.Tip="Open the pull request" />
+                        <!-- One font and size for every part, centred on one line: the branch in a monospace face sat on
+                             another baseline and the line looked uneven (2026-10-09). Added green, removed red, as git
+                             and GitHub show them. -->
                         <TextBlock Text="{Binding Repo.Name}" FontSize="12" VerticalAlignment="Center"
                                    Foreground="{DynamicResource Brand.TextBody}" />
                         <TextBlock Text="{Binding Repo.Branch}" FontSize="12" VerticalAlignment="Center"
-                                   FontFamily="Consolas, Menlo, monospace"
                                    Foreground="{DynamicResource Brand.TextMuted}" />
                         <TextBlock Text="{Binding Repo.Sync}" FontSize="12" VerticalAlignment="Center"
                                    Foreground="{DynamicResource Brand.TextMuted}" />
-                        <TextBlock Text="{Binding Repo.Changes}" FontSize="12" VerticalAlignment="Center"
-                                   Foreground="{DynamicResource Brand.TextMuted}"
-                                   ToolTip.Tip="Changed since the last commit, staged or not, and files git does not track" />
-                        <TextBlock Text="{Binding Repo.PullRequestChanges}" IsVisible="{Binding Repo.HasPullRequest}"
-                                   FontSize="12" VerticalAlignment="Center"
-                                   Foreground="{DynamicResource Brand.TextMuted}" ToolTip.Tip="The pull request's lines added and removed" />
+                        <StackPanel x:Name="RepoChanges" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
+                                    ToolTip.Tip="Changed since the last commit, staged or not, and files git does not track">
+                            <TextBlock Text="{Binding Repo.Added}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brand.Success}" />
+                            <TextBlock Text="{Binding Repo.Removed}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brand.Danger}" />
+                            <TextBlock Text="{Binding Repo.NewFiles}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brand.TextMuted}" />
+                            <TextBlock Text="{Binding Repo.NoChanges}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brand.TextMuted}" />
+                        </StackPanel>
+                        <StackPanel x:Name="RepoPullRequestChanges" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
+                                    IsVisible="{Binding Repo.HasPullRequest}" ToolTip.Tip="The pull request's lines added and removed">
+                            <TextBlock Text="{Binding Repo.PullRequestAdded}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brand.Success}" />
+                            <TextBlock Text="{Binding Repo.PullRequestRemoved}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brand.Danger}" />
+                        </StackPanel>
                         <Button x:Name="RepoChecks" IsVisible="{Binding Repo.HasCi}" Padding="6,1" FontSize="12"
                                 Background="Transparent" BorderThickness="0" ToolTip.Tip="Open the pull request's checks">
                             <StackPanel Orientation="Horizontal" Spacing="6">

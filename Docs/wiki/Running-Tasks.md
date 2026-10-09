@@ -109,7 +109,7 @@ With staging off, built-in writes go directly to the workspace. The artifact jou
 | Routing | See which model actually served the worker, phases, and routed steps |
 | AI status | Monitor usage, tool calls, elapsed time, and current activity |
 | History | Open prior runs and inspect their recorded attempts |
-| Repository strip | At the foot of the window, when the workspace is a git repository: its name, branch, how far from its upstream (↑ ahead, ↓ behind), and lines changed and files new since the last commit. With the GitHub CLI (`gh`) signed in and a github.com origin, also the branch's pull request, its size and its checks - click the number or the checks to open them, anywhere else to read the strip again. Git is run without the repository's own hooks or helpers. |
+| Repository strip | At the foot of the window, when the workspace is a git repository: its name, branch, how far from its upstream (↑ ahead, ↓ behind), and lines changed (added in green, removed in red) and files new since the last commit. It is read again after every step of the run on screen, and every half minute while the window is in front. With the GitHub CLI (`gh`) signed in and a github.com origin, also the branch's pull request, its size and its checks - click the number or the checks to open them, anywhere else to read the strip again. Git is run without the repository's own hooks or helpers. |
 
 The Routing panel is especially useful when a local worker seems unexpectedly expensive: complex steps may have been sent to Execute heavy.
 

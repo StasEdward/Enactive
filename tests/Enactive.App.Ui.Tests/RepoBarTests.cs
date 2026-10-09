@@ -61,6 +61,24 @@ public sealed class RepoBarTests
         Assert.Equal(("#52", "+10,625 −4,540", "CI failing", true), (bar.PullRequest, bar.PullRequestChanges, bar.CiText, bar.HasCi));
     }
 
+    /// <summary>Each part on its own, for its own colour: added, removed, new files - or "no changes".</summary>
+    [Fact]
+    public void The_changes_come_in_parts()
+    {
+        var bar = new RepoBarViewModel();
+        bar.Show(Repo(added: 46, removed: 45, untracked: 4));
+        Assert.Equal(("+46", "−45", "· 4 new", ""), (bar.Added, bar.Removed, bar.NewFiles, bar.NoChanges));
+
+        bar.Show(Repo(added: 0, removed: 0, untracked: 2));
+        Assert.Equal(("", "", "2 new", ""), (bar.Added, bar.Removed, bar.NewFiles, bar.NoChanges));
+
+        bar.Show(Repo(added: 0, removed: 0, untracked: 0));
+        Assert.Equal(("", "", "", "no changes"), (bar.Added, bar.Removed, bar.NewFiles, bar.NoChanges));
+
+        bar.ShowPullRequest(new PullRequestStatus(52, "https://github.com/x/y/pull/52", 10625, 4540, CiState.Passing));
+        Assert.Equal(("+10,625", "−4,540"), (bar.PullRequestAdded, bar.PullRequestRemoved));
+    }
+
     /// <summary>Another branch is another pull request: the old one is not shown beside it while the new is asked.</summary>
     [Fact]
     public void A_different_branch_forgets_the_pull_request()
