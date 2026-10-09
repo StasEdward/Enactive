@@ -85,8 +85,10 @@ public sealed class TheTestsAreFoundWhenTheyAreCheckedTests
         var (events, shell) = await Run(fx, Plan(), Writes("game.tests", "PASS wins\nPASS draws\n"));
 
         Assert.DoesNotContain(events, e => e.Summary.Contains("Planner criterion dropped", StringComparison.Ordinal));
-        Assert.Contains(events, e => e.Kind == EventKind.ContextAssembled
-            && e.Summary == "Tests pass: no test project yet - the test projects are found when the final checks run.");
+        Assert.Contains(events, e => e.Kind == EventKind.ContextAssembled && e.Summary == "Tests pass: no test project yet, so it is not "
+            + "tried before the work - the test projects the work makes are found when the final checks run.");
+        // Not tried before the work, and not a warning that it could not be (run 40babe05, 2026-10-10).
+        Assert.DoesNotContain(events, e => e.Summary.Contains("could not be tried before the work", StringComparison.Ordinal));
         Assert.StartsWith("PASS", TestsCheck(events).Summary, StringComparison.Ordinal);
         Assert.Contains("run game.tests", shell.Ran);
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());

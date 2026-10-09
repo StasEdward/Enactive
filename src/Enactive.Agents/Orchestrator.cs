@@ -669,7 +669,7 @@ public sealed partial class Orchestrator : IOrchestrator
             // Not a problem, and not said as one: the plan makes its tests, and they are looked for when the checks run.
             if (accepted.Any(c => c.Typed?.Kind == TypedCriterionKind.TestsPass) && TypedCriteria.TestTargets(_ecosystems, _workspace.RootPath).Count == 0)
                 yield return scope.Ev(EventKind.ContextAssembled,
-                    "Tests pass: no test project yet - the test projects are found when the final checks run.");
+                    "Tests pass: no test project yet, so it is not tried before the work - the test projects the work makes are found when the final checks run.");
             if (accepted.Count > 0)
             {
                 plan = plan with { Checks = [.. plan.Checks, .. accepted] };
@@ -2957,6 +2957,11 @@ public sealed partial class Orchestrator : IOrchestrator
         // A coverage criterion is about what THIS run's steps hand on; before any step there is nothing
         // it could already be true of, so there is nothing to learn by trying it now.
         var fromRun = proposed.Where(c => c.Typed is { FromRun: true }).ToArray();
+        // "The tests pass" with no test project yet is the same: the work makes the tests, and there is nothing to try
+        // first. Tried, it came back "could not be tried" as a warning about a run that was going as planned (run 40babe05,
+        // 2026-10-10); the plan's own line says the tests are looked for when the final checks run.
+        if (proposed.Any(c => c.Typed?.Kind == TypedCriterionKind.TestsPass) && TypedCriteria.TestTargets(_ecosystems, _workspace.RootPath).Count == 0)
+            fromRun = [.. fromRun, .. proposed.Where(c => c.Typed?.Kind == TypedCriterionKind.TestsPass && !fromRun.Contains(c))];
         if (fromRun.Length > 0)
         {
             var (keptNow, notesNow, failingNow) = await BaselineAsync(proposed.Except(fromRun).ToArray(), taskId, runId, context, ct);
