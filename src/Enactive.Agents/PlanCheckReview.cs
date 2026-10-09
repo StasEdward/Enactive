@@ -78,7 +78,11 @@ internal static class PlanCheckReview
                 + "Each reason explains why this check is appropriate as a final check and permitted by the entire request. "
                 + "Do not replace a required command with your preferred command, silently waive a requirement, or truncate required checks to fit the limit. "
                 + "If constraints conflict or a final check cannot safely be specified, set unresolved to an explanation; no execution will start. "
-                + "A document/explanation may correctly have checks=[]; do not invent shell checks merely to have one."),
+                + "A document/explanation may correctly have checks=[]; do not invent shell checks merely to have one. "
+                // Benchmark wiki-drift, 2026-10-09: a review explained in unresolved why checks was empty, and the run
+                // ended before its first step - an empty list read as a refusal to start.
+                + "unresolved is ONLY for such a conflict, and never explains an empty checks list: checks=[] needs no "
+                + "explanation beyond the sources' assessments, and unresolved=null lets the work start."),
             ChatMessage.User(Planner.Where(context) + RequestObligations.ExecutionPrompt(request)
                 + "\nPlan and draft final criteria:\n" + JsonSerializer.Serialize(new {
                     plan.Title, steps = plan.Plan?.Steps.Select((s, i) => new { index = i, s.Title, s.ObligationIds }),
