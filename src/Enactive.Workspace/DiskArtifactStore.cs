@@ -43,6 +43,11 @@ public sealed record FileWriteRecord(
 /// <summary>What a run's record of its writes holds on disk: whose it is, the run it carried on, and every write.</summary>
 public sealed record UndoJournalFile(Guid RunId, Guid? Continues, IReadOnlyList<FileWriteRecord> Writes);
 
+/// <summary>How the workspace was when a run began (RunStart), as kept beside its record: a git tree, or every file's size, time and hash.</summary>
+public sealed record RunStartFile(string? Tree, Dictionary<string, RunStartEntry>? Files);
+
+public sealed record RunStartEntry(long Size, long Ticks, string? Hash);
+
 /// <summary>A file an earlier run changed, as its record says, and whether it is still as that run left it.</summary>
 public sealed record EarlierChange(string Path, bool ExistedBefore, bool AsLeft);
 
@@ -75,6 +80,9 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     private Guid? _continues;
     // What the runs this one carries on wrote, oldest first - read, never written to.
     private IReadOnlyList<FileWriteRecord> _prior = [];
+    // How the workspace was when the run began (MeasuredFrom), and when the run this one carries on began.
+    private RunStart? _runStart;
+    private WorkspaceSnapshot? _priorStart;
     private readonly Dictionary<int, Guid> _stepOfOwner = new();
     private readonly ConcurrentDictionary<Guid, string> _paths = new();
 
@@ -196,6 +204,13 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
         var first = KeyOrNull(relativePath) is { } key && _prior.FirstOrDefault(w => SameFile(w.Key, key)) is { } earlier
             ? earlier
             : FirstWrite(relativePath);
+        var stored = await StoredBeforeRunAsync(relativePath, first, ct);
+        return _runStart is { } start ? await start.CorrectAsync(relativePath, stored, ct) : stored;
+    }
+
+    /// <summary>What this store's own record says - the files its writes displaced, and nothing of what a command did.</summary>
+    private async Task<BeforeRun> StoredBeforeRunAsync(string relativePath, FileWriteRecord? first, CancellationToken ct)
+    {
         if (first is null) return BeforeRun.Untouched;
         if (!first.ExistedBefore) return BeforeRun.Absent;
         try
@@ -270,14 +285,63 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     public void BeginRun(Guid runId, Guid? continues)
     {
         var prior = continues is { } earlier ? ReadChain(_root, earlier) : [];
+        // The earliest start kept along the chain: "before the run" is before the task's first attempt began.
+        var priorStart = continues is { } carried
+            ? ReadJournals(_root, carried).Select(j => ReadStart(_root, j.RunId)).FirstOrDefault(s => s is not null)
+            : null;
         lock (_journalGate)
         {
             _runId = runId;
             _continues = continues;
             _backupRoot = Path.GetDirectoryName(JournalPath(_root, runId))!;
             _prior = prior;
+            _priorStart = priorStart;
+            _runStart = null;
             PersistLocked();
         }
+    }
+
+    /// <summary>
+    /// Kept in a file of its own, written once: the record beside it is written again after every write, and a scan of a
+    /// workspace outside git is every file's size, time and hash. Kept at all because a person's answer is matched to
+    /// its question word for word, and a resumed run that could no longer say whether a file was there before the run
+    /// asked again what had been answered.
+    /// </summary>
+    public void MeasuredFrom(RunStart start)
+    {
+        Guid? runId;
+        lock (_journalGate)
+        {
+            _runStart = start;
+            runId = _runId;
+        }
+        if (runId is not { } id || start.Snapshot is not { } snapshot) return;
+        try
+        {
+            var path = StartPath(_root, id);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new RunStartFile(snapshot.Tree,
+                snapshot.Files?.ToDictionary(f => f.Key, f => new RunStartEntry(f.Value.Size, f.Value.Ticks, f.Value.Hash))), JournalJson));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    public WorkspaceSnapshot? StartCarriedOn => _priorStart;
+
+    private static string StartPath(string root, Guid runId)
+        => Path.Combine(Path.GetDirectoryName(JournalPath(root, runId))!, "start.json");
+
+    private static WorkspaceSnapshot? ReadStart(string root, Guid runId)
+    {
+        try
+        {
+            var path = StartPath(Path.GetFullPath(root), runId);
+            if (!File.Exists(path) || System.Text.Json.JsonSerializer.Deserialize<RunStartFile>(File.ReadAllText(path), JournalJson) is not { } file)
+                return null;
+            return new WorkspaceSnapshot(file.Tree, file.Files?.ToDictionary(
+                f => f.Key, f => (f.Value.Size, f.Value.Ticks, f.Value.Hash), StringComparer.OrdinalIgnoreCase));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { return null; }
     }
 
     /// <summary>
@@ -311,6 +375,10 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     /// bound, unreadable). Followed at most a few runs back: a chain longer than that is not one a person resumed by hand.
     /// </summary>
     public static IReadOnlyList<FileWriteRecord> ReadChain(string root, Guid runId)
+        => ReadJournals(root, runId).SelectMany(j => j.Writes.OrderBy(w => w.Sequence)).ToArray();
+
+    /// <summary>A run's record and those of the runs it carried on, oldest first.</summary>
+    private static IReadOnlyList<UndoJournalFile> ReadJournals(string root, Guid runId)
     {
         var journals = new List<UndoJournalFile>();
         var seen = new HashSet<Guid>();
@@ -325,7 +393,7 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
             id = file.Continues;
         }
         journals.Reverse();
-        return journals.SelectMany(j => j.Writes.OrderBy(w => w.Sequence)).ToArray();
+        return journals;
     }
 
     /// <summary>The files an earlier run - and the runs it carried on - changed, and whether each is still as it left it.</summary>

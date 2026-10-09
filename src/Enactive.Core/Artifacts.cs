@@ -84,6 +84,15 @@ public interface IArtifactStore
     /// </summary>
     void BeginRun(Guid runId, Guid? continues) { }
 
+    /// <summary>
+    /// How the workspace was when the run began, measured: what <see cref="BeforeRunAsync"/> holds its own record against,
+    /// for the files a command made or changed and the store never saw (see <see cref="RunStart"/>).
+    /// </summary>
+    void MeasuredFrom(RunStart start) { }
+
+    /// <summary>How the workspace was when the run this one carries on began, as that run's record kept it - null when none was kept.</summary>
+    WorkspaceSnapshot? StartCarriedOn => null;
+
     /// <summary>A view for one step of the plan, whose writes are recorded as that step's - see <see cref="BeginStep()"/>.</summary>
     IArtifactScope BeginStep(Guid step) => BeginStep();
 

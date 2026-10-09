@@ -64,7 +64,10 @@ public sealed class RestoreFileTool : ITool
                 case BeforeRunState.Lost:
                     return ToolResults.Fail($"'{path}' was changed by this run, and how it was before could not be kept - it cannot be put back.");
                 case BeforeRunState.Unknown:
-                    return ToolResults.Fail($"This run keeps no record of how '{path}' was before it (its changes are staged), so it cannot be put back here.");
+                    // Not "its changes are staged" alone: a file a command changed where the workspace was not measured - a
+                    // folder git ignores - is not known either (run 89aa8d1b, 2026-10-09; see RunStart).
+                    return ToolResults.Fail($"This run has no record of how '{path}' was before it - a staged change, or a change made "
+                        + "by a command where the workspace is not measured, is not recorded - so it cannot be put back here.");
             }
 
             var original = before.Content!;

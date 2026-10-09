@@ -399,6 +399,14 @@ public sealed partial class Orchestrator : IOrchestrator
         // the run this one carries on - see IArtifactStore.BeginRun.
         _artifacts.BeginRun(runId, resume?.RunId);
 
+        // How the workspace was when the run began, for every answer to "was this file here before the run" - the store
+        // alone knows only what its file tools wrote (see RunStart). Taken for every run, quick or planned, one step at a
+        // time or several: which step changed a file does not matter to whether the run found it. A resumed run measures
+        // from where the run it carries on began, when that run kept it; otherwise what is not known stays not known.
+        using var startChanges = _workspaceChanges.Create(_workspace.RootPath);
+        var startSnapshot = resume is null ? await startChanges.TakeAsync(ct) : _artifacts.StartCarriedOn;
+        _artifacts.MeasuredFrom(startSnapshot is null ? RunStart.Unmeasured : new RunStart(startChanges, startSnapshot));
+
         // The working area is made before the worker is told it has one, and the engine's own
         // folder is kept out of the person's next commit. A prompt that promises a folder and a
         // folder that does not exist are a defect, however sensible the laziness was: an agent
