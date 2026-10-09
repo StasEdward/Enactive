@@ -109,6 +109,13 @@ public sealed partial class Orchestrator
 
             if (assessed is null) return;
             var verdict = assessed.Review.Verdict;
+            // What is left cannot be reached within the request: said, and not tried again - a retry could only go beyond
+            // the request (ReviewVerdict.Unreachable). The step's work stays as it is.
+            if (verdict is ReviewVerdict.Unreachable unreachable)
+            {
+                result.Set(StepOutcomeKind.Incomplete, "not reachable within the request: " + unreachable.Notes, OutcomeCause.ReviewUnreachable);
+                return;
+            }
             // A step that said it cannot go on, with nothing the engine found to stop it: the review found its own part done,
             // and it is - the report stays in the journal as its word, and the steps after it go on. Failed, it is an attempt
             // like any other, tried again with what the review said and told that nothing blocks it. It used to end BLOCKED:

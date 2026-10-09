@@ -35,6 +35,15 @@ public abstract record ReviewVerdict(string Notes)
     /// <summary>The reviewer answered, and its answer was that it could not tell.</summary>
     public sealed record Undecided(string Notes) : ReviewVerdict(Notes);
 
+    /// <summary>
+    /// The step did what can be done within the request, and what is left of its purpose cannot be reached here without
+    /// going beyond it - with what was reached, what was not, and why. Run 1549ce, 2026-10-09: asked for 50% coverage of a
+    /// project mostly made of window code, a step reached 31.5%, was failed and tried again - and the retry changed the
+    /// application's code to make it testable, the request's limits be what they may, until it went round in circles; 32
+    /// minutes. Not a fail: a fail is tried again, and a retry here can only go beyond the request.
+    /// </summary>
+    public sealed record Unreachable(string Notes) : ReviewVerdict(Notes);
+
     /// <summary>No usable verdict came back: the provider failed, or no answer could be used even after correction.</summary>
     public sealed record Unavailable(string Notes) : ReviewVerdict(Notes);
 
