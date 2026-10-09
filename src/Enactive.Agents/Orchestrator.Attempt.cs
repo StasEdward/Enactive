@@ -44,6 +44,10 @@ public sealed partial class Orchestrator
     /// a review: on 2026-10-08 a read-only step wrote its whole analysis, called report_blocked because "the next step
     /// requires writing tests", and the run ended BLOCKED with the analysis done - seven minutes and the run lost.
     /// </summary>
+    /// <summary>What a step that reported a block nothing stands behind is told when it is tried again.</summary>
+    internal const string NotABlock = "Nothing stops this step: report_blocked is for a cause only a person can remove - a "
+        + "refused permission, an input that is not there - and there is none. Do the step's own part, and finish it with what you found.";
+
     private static bool SaidBlockedOnly(ToolLoopResult result)
         => result.Kind == StepOutcomeKind.Blocked && result.Cause == OutcomeCause.BlockedReported;
 
@@ -105,9 +109,12 @@ public sealed partial class Orchestrator
 
             if (assessed is null) return;
             var verdict = assessed.Review.Verdict;
-            // A step that said it cannot go on: the review found its own part done, and it is - the report stays in the
-            // journal as its word, and the steps after it go on; anything else, and it ends blocked as it reported. Not
-            // tried again: the step has said it cannot, and a retry would ask it to.
+            // A step that said it cannot go on, with nothing the engine found to stop it: the review found its own part done,
+            // and it is - the report stays in the journal as its word, and the steps after it go on. Failed, it is an attempt
+            // like any other, tried again with what the review said and told that nothing blocks it. It used to end BLOCKED:
+            // on 2026-10-09 a read-only step took "this step changes no file" for a stop, put its findings in report_blocked,
+            // the review found one of them wrong - and the whole run ended Blocked in a minute and a half, with nothing for a
+            // person to remove. Without a verdict, the step's word stands, as before.
             if (SaidBlockedOnly(result))
             {
                 if (verdict is ReviewVerdict.Pass)
@@ -115,7 +122,19 @@ public sealed partial class Orchestrator
                     await publish(scope.Ev(EventKind.ContextAssembled, prefix + "The step said it cannot go on, and the review found "
                         + "its own part done: it stands as done, its report as a note - " + result.Reason, stepNumber));
                     result.Set(StepOutcomeKind.Succeeded, null);
+                    return;
                 }
+                if (verdict is not ReviewVerdict.Fail notDone)
+                    return;
+                await publish(scope.Ev(EventKind.ErrorObserved, prefix + "The step said it cannot go on, but nothing stops it and "
+                    + "the review found its part not done: it is an attempt like any other - " + notDone.Notes, stepNumber));
+                if (attempt < attempts)
+                {
+                    RetryAfterReview(step.Messages, notDone.RepairAdvice + " " + NotABlock, stepNumber is null ? "the work" : "this step");
+                    continue;
+                }
+                result.Set(StepOutcomeKind.ReviewRejected, "review not passed: " + notDone.Notes);
+                result.Keep = notDone.Keep;
                 return;
             }
             // No verdict to act on - the reviewer could not tell, no answer could be used, the budget was spent: the work

@@ -172,24 +172,49 @@ public sealed class ABlockedRunCarriesOnTests
             m => m.Content?.Contains("The step reported that it cannot go on", StringComparison.Ordinal) == true);
     }
 
-    /// <summary>Failed by the review, it ends blocked as it reported - and is not tried again: it has said it cannot.</summary>
+    /// <summary>
+    /// Failed by the review, it is an attempt like any other: tried again with what the review said, and told nothing
+    /// blocks it. It used to end BLOCKED, untried: on 2026-10-09 (run 4a5d74) a read-only step put its findings in
+    /// report_blocked, the review found one wrong, and the whole run ended Blocked with nothing for a person to remove.
+    /// </summary>
     [Fact]
-    public async Task A_step_that_says_it_is_blocked_and_is_not_done_ends_blocked_once()
+    public async Task A_step_that_says_it_is_blocked_and_is_not_done_is_tried_again()
     {
         using var fx = new EngineFixture { ReportBlocked = true };
         var worker = DoneThenSaysBlocked();
-        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Fail("the summary does not say what it adds up"));
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Fail("the summary does not say what it adds up"), Verdicts.Pass(), Verdicts.Pass());
 
         var events = await fx.RunAsync(fx.Build(worker, worker: EngineFixture.WorkerWith("write_file", "read_file"),
             router: Routers.WithReviewer(), reviewProvider: reviewer), "add up the invoices and write a summary");
 
-        Assert.Equal(RunOutcomeKind.Blocked, events.Last().Outcome());
-        var step = Assert.Single(StepsDone(events), e => e.Summary.Contains("Write the summary"));
-        Assert.Equal(StepOutcomeKind.Blocked, step.StepOutcome());
-        Assert.StartsWith("the step reports it cannot go on: the summary is written", step.OutcomeReason(), StringComparison.Ordinal);
-        Assert.Equal(2, worker.RequestsFor("Write the summary").Count);   // its two turns, and no retry
-        Assert.Empty(worker.RequestsFor("Say it is ready"));
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+        Assert.Equal(StepOutcomeKind.Succeeded, Assert.Single(StepsDone(events), e => e.Summary.Contains("Write the summary")).StepOutcome());
+        var retry = worker.RequestsFor("Write the summary");
+        Assert.Equal(3, retry.Count);                                     // its two turns, and the attempt after the review
+        Assert.Contains(retry[^1].Messages, m => m.Content?.Contains("Nothing stops this step", StringComparison.Ordinal) == true);
+        Assert.NotEmpty(worker.RequestsFor("Say it is ready"));
     }
+
+    /// <summary>Failed on every attempt, it is rejected by the review - not blocked: there is nothing for a person to remove.</summary>
+    [Fact]
+    public async Task A_step_that_says_it_is_blocked_and_is_never_done_is_rejected_not_blocked()
+    {
+        using var fx = new EngineFixture { ReportBlocked = true };
+        var worker = DoneThenSaysBlocked();
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Fail("the summary does not say what it adds up"),
+            Verdicts.Fail("still not said"));
+
+        var events = await fx.RunAsync(fx.Build(worker, worker: EngineFixture.WorkerWith("write_file", "read_file"),
+            router: Routers.WithReviewer(), reviewProvider: reviewer), "add up the invoices and write a summary");
+
+        Assert.NotEqual(RunOutcomeKind.Blocked, events.Last().Outcome());
+        Assert.Equal(StepOutcomeKind.ReviewRejected, Assert.Single(StepsDone(events), e => e.Summary.Contains("Write the summary")).StepOutcome());
+    }
+
+    /// <summary>The refusal of a change in a read-only step says it does not stop the step - it was taken for a stop.</summary>
+    [Fact]
+    public void A_read_only_refusal_says_it_is_not_a_block()
+        => Assert.Contains("This does not stop the step and is not a block", WriteBoundary.ReadOnlyRefusal, StringComparison.Ordinal);
 
     /// <summary>A block the engine found itself is not put to the review: it is a fact, not the step's word.</summary>
     [Fact]

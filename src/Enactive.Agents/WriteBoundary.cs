@@ -39,8 +39,11 @@ internal sealed class WriteBoundary(
     /// code and existing test coverage" made 53 edits to test files and one to the application's own markup,
     /// fixing tests that had failed before the run, and sixteen minutes later had not begun the analysis.
     /// </summary>
+    // "This does not stop the step": run 4a5d74, 2026-10-09 - a step read the refusal as a stop, said "the engine is blocking
+    // me", and put its findings in report_blocked instead of finishing with them.
     internal const string ReadOnlyRefusal = "this step was planned as read-only: it looks and reports, and changes no file. "
-        + "Hand on what you found; the steps after it make the changes. (.enactive/scratch is still yours for notes and logs.)";
+        + "This does not stop the step and is not a block: finish it with what you found; the steps after it make the changes. "
+        + "(.enactive/scratch is still yours for notes and logs.)";
 
     private readonly Dictionary<string, List<string>> _creating = new(StringComparer.Ordinal);
 
