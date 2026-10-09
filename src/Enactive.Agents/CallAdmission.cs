@@ -805,6 +805,14 @@ internal sealed class CallAdmission(
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
             var size = $"{bytes:N0} bytes, {lines:N0} lines";
+            // The scratch is the steps' own working space, and nothing written there is recorded - so whether a file in it
+            // was there before the run is not known, and saying "it existed before this run" of a file a step had just
+            // made (run f08f1e, 2026-10-09) told the person the wrong thing.
+            if (WorkspaceGuard.IsScratchRelative(frame.WorkspaceRoot, rel))
+            {
+                said.Add($"'{rel}' is in the scratch, the steps' own working space ({size}).");
+                continue;
+            }
             var before = await frame.Store.BeforeRunAsync(rel, ct);
             said.Add(before.State switch
             {

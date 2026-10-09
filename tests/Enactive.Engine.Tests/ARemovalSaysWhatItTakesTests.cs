@@ -73,6 +73,25 @@ public sealed class ARemovalSaysWhatItTakesTests
         Assert.Contains("this run has not changed it", fx.Decisions.Requests[0].FullText, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Nothing written in the scratch is recorded, so whether a file there was there before the run is not known: it is
+    /// said to be in the scratch, not to have "existed before this run" (run f08f1e, 2026-10-09).
+    /// </summary>
+    [Fact]
+    public async Task Deleting_a_file_in_the_scratch_says_where_it_is_and_nothing_it_cannot_know()
+    {
+        using var fx = new EngineFixture();
+        var worker = new FakeChatProvider(Turn.Says(QuickAction),
+            Turn.Calls1("write_file", """{"path":".enactive/scratch/probe.cs","content":"a\nb\n"}""", "w1"),
+            Turn.Calls1("delete_file", """{"path":".enactive/scratch/probe.cs"}""", "d1"), Turn.Says("Done."));
+
+        await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer")), "probe and tidy");
+
+        var asked = Assert.Single(fx.Decisions.Requests, r => r.Topic.Contains("delete_file", StringComparison.Ordinal));
+        Assert.Contains("'.enactive/scratch/probe.cs' is in the scratch, the steps' own working space (", asked.FullText, StringComparison.Ordinal);
+        Assert.DoesNotContain("existed before this run", asked.FullText, StringComparison.Ordinal);
+    }
+
     // ── which paths a call takes away ─────────────────────────────────────
 
     [Fact]
