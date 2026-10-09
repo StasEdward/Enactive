@@ -970,7 +970,7 @@ public sealed partial class Orchestrator : IOrchestrator
             quickVerification = new RunVerification(verified.Report, verified.IncompleteReason);
         }
 
-        IReadOnlyList<CriterionResult> quickChecks = [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session,
+        IReadOnlyList<CriterionResult> quickChecks = [.. await ProducedFilesNowAsync(scope, session, ct), .. await BuildRegressionNowAsync(scope, session,
                 intent.Context, ct, session.Builds.Count > 0 ? await NetChangedAsync(quickChanges, quickBefore, ct) : null)];
         foreach (var check in quickChecks)
             yield return scope.Criterion(check);
@@ -2285,7 +2285,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
         // Last, so it describes the workspace as the run leaves it: after every step and every check
         // have had their turn to change it.
-        IReadOnlyList<CriterionResult> finalChecks = [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct,
+        IReadOnlyList<CriterionResult> finalChecks = [.. await ProducedFilesNowAsync(scope, session, ct), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct,
                 session.Builds.Count > 0 ? await NetChangedAsync(workspaceChanges, beforeRun, ct) : null)];
         foreach (var check in finalChecks)
             yield return scope.Criterion(check);
@@ -2526,12 +2526,16 @@ public sealed partial class Orchestrator : IOrchestrator
         _saidThisRun.TryRemove(scope.RunId, out _);
     }
 
-    private IReadOnlyList<CriterionResult> ProducedFilesNow(RunScope scope, RunSession session)
+    private async Task<IReadOnlyList<CriterionResult>> ProducedFilesNowAsync(RunScope scope, RunSession session, CancellationToken ct)
     {
         ArtifactRef[] produced;
         lock (scope.Artifacts) produced = scope.Artifacts.ToArray();
+        var madeByRun = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in produced.Select(a => a.RelativePath).Distinct(StringComparer.OrdinalIgnoreCase))
+            if ((await _artifacts.BeforeRunAsync(path, ct)).State == BeforeRunState.Absent)
+                madeByRun.Add(ProducedFiles.Normalize(path));
         return ProducedFiles.Check(produced, _artifacts.PendingPaths, _workspace.RootPath,
-            session.RunEvidence().Actions);
+            session.RunEvidence().Actions, madeByRun);
     }
 
     /// <summary>

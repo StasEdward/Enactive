@@ -51,11 +51,13 @@ public sealed class WhatBecameOfTheFilesTests
     }
 
     /// <summary>
-    /// A file the run wrote and then removed is no longer "a file it changed" - it is gone, and the
-    /// check says which call removed it. It does not fail the run: removing a file can be the job.
+    /// A file the run wrote and the same step then removed is that step's draft: not listed among what the run produced,
+    /// and the run is not failed for it. It used to be listed as FAIL, "removed by delete_file" - on 2026-10-09 (run 1549ce)
+    /// two such drafts stood in the report beside the work that stood. A result another step removed is still said
+    /// (A_draft_one_step_made_and_took_away_is_not_listed_and_a_lost_result_still_is).
     /// </summary>
     [Fact]
-    public async Task A_file_written_and_then_deleted_is_reported_gone_and_the_run_is_not_failed_for_it()
+    public async Task A_file_written_and_then_deleted_by_the_same_step_is_not_listed_and_the_run_is_not_failed_for_it()
     {
         using var fx = new EngineFixture();
         fx.Decisions.Answer = "allow";   // delete_file always asks; refused, the file stays - and the check says PASS
@@ -63,14 +65,13 @@ public sealed class WhatBecameOfTheFilesTests
             Turn.Says(QuickAction),
             Turn.Calls1("write_file", """{"path":"draft.md","content":"a first draft"}""", "w1"),
             Turn.Calls1("delete_file", """{"path":"draft.md"}""", "d1"),
-            Turn.Says("Drafted, then tidied up."));
+            Turn.Calls1("write_file", """{"path":"notes.md","content":"done"}""", "w2"),
+            Turn.Says("Drafted, tidied up, wrote the notes."));
 
         var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer")), "draft and tidy");
 
         var check = Assert.Single(EngineChecks(events));
-        Assert.StartsWith("FAIL — Produced file: draft.md", check.Summary, StringComparison.Ordinal);
-        Assert.Contains("removed by delete_file", check.Summary, StringComparison.Ordinal);
-        Assert.Contains("a recorded deletion", check.Summary, StringComparison.Ordinal);
+        Assert.StartsWith("PASS — Produced file: notes.md", check.Summary, StringComparison.Ordinal);
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
     }
 
@@ -144,6 +145,39 @@ public sealed class WhatBecameOfTheFilesTests
             Assert.Equal(CriterionOutcome.Failed, gone.Outcome);
             Assert.Contains("the last call to change it was write_file in step 2, which is not a deletion",
                 gone.Detail!, StringComparison.Ordinal);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    /// <summary>
+    /// A file the run made and the same step took away is that step's draft - not listed. Run 1549ce, 2026-10-09: two
+    /// test files written and deleted in step 3 were in the report as FAIL beside the work that stood. One that another
+    /// step took away is still said, and so is one that was there before the run.
+    /// </summary>
+    [Fact]
+    public void A_draft_one_step_made_and_took_away_is_not_listed_and_a_lost_result_still_is()
+    {
+        var root = Directory.CreateTempSubdirectory("produced-files").FullName;
+        try
+        {
+            var at = DateTimeOffset.UtcNow;
+            ExecutedAction Write(int step, string path, int s) => new(at.AddSeconds(s), step, "write_file", "{}", ActionOutcome.Succeeded, "ok",
+                WorkspaceEffect.Changed, [path]);
+            ExecutedAction Delete(int step, string path, int s) => new(at.AddSeconds(s), step, "delete_file", "{}", ActionOutcome.Succeeded, "ok",
+                WorkspaceEffect.Changed, [path], FileDeletion: true);
+            ExecutedAction[] actions =
+            [
+                Write(3, "draft.cs", 1), Delete(3, "draft.cs", 2),           // a draft of one step
+                Write(1, "report.md", 3), Delete(3, "report.md", 4),         // a result another step took away
+                Write(3, "found.cs", 5), Delete(3, "found.cs", 6)            // a file that was there before the run
+            ];
+
+            var results = ProducedFiles.Check([Ref("draft.cs"), Ref("report.md"), Ref("found.cs")], [], root, actions,
+                madeByRun: new HashSet<string> { "draft.cs", "report.md" });
+
+            Assert.DoesNotContain(results, r => r.Command == "draft.cs");
+            Assert.Equal(CriterionOutcome.Failed, results.Single(r => r.Command == "report.md").Outcome);
+            Assert.Equal(CriterionOutcome.Failed, results.Single(r => r.Command == "found.cs").Outcome);
         }
         finally { Directory.Delete(root, true); }
     }
