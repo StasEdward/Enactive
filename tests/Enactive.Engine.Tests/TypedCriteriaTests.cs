@@ -42,32 +42,35 @@ public sealed class TypedCriteriaTests
                  "not even an object"]
                 """), root, []);
 
-            Assert.Equal(["file_exists report.md (not empty)", "file_contains report.md \"Total\""], accepted.Select(c => c.Command).ToArray());
+            Assert.Equal(["file_exists report.md (not empty)", "file_contains report.md \"Total\"",
+                "the workspace's tests - every test project found when the final checks run"], accepted.Select(c => c.Command).ToArray());
             Assert.All(accepted, c => Assert.Equal(CriterionOrigin.Proposed, c.Origin));   // 3.3: its origin is known
-            Assert.Equal(6, dropped.Count);
+            Assert.Equal(5, dropped.Count);
             Assert.Contains(dropped, d => d.Contains("not inside the workspace", StringComparison.Ordinal));
             Assert.Contains(dropped, d => d.Contains("names no text", StringComparison.Ordinal));
             Assert.Contains(dropped, d => d.Contains("reviewer's to judge", StringComparison.Ordinal));
-            Assert.Contains(dropped, d => d.Contains("no ecosystem recognised here has tests", StringComparison.Ordinal));
             Assert.Contains(dropped, d => d.Contains("'make_it_good' is not a kind", StringComparison.Ordinal));
         }
         finally { Directory.Delete(root, true); }
     }
 
-    /// <summary>"The tests pass" becomes the recognising ecosystem's test command - a command check, through the gate.</summary>
+    /// <summary>
+    /// "The tests pass" names no command when the plan is read, whatever tests there are then: the test projects are
+    /// found, and each run by its ecosystem's command, when the final checks run (TheTestsAreFoundWhenTheyAreCheckedTests).
+    /// </summary>
     [Fact]
-    public void Tests_pass_becomes_the_ecosystems_own_test_command()
+    public void Tests_pass_is_accepted_and_names_the_test_projects_found_when_it_is_checked()
     {
         var root = Directory.CreateTempSubdirectory("typed").FullName;
         try
         {
             File.WriteAllText(Path.Combine(root, "wiki.lint"), "rules");
             File.WriteAllText(Path.Combine(root, "links.txt"), "PASS a->b");
-            var (accepted, _) = TypedCriteria.Validate(Planned("""[{"kind":"tests_pass"}]"""), root, [new WikiLint()]);
+            var (accepted, _) = TypedCriteria.Validate(Planned("""[{"kind":"tests_pass"},{"kind":"tests_pass","target":"links"}]"""), root, [new WikiLint()]);
 
-            var tests = Assert.Single(accepted);
-            Assert.Equal("type links.txt", tests.Command);
-            Assert.False(tests.Typed!.InEngine);
+            Assert.Equal(["Tests pass", "Tests pass (links)"], accepted.Select(c => c.Name).ToArray());
+            Assert.Equal("the tests of links, as found when the final checks run", accepted[1].Command);
+            Assert.All(accepted, c => Assert.Equal(TypedCriterionKind.TestsPass, c.Typed!.Kind));
         }
         finally { Directory.Delete(root, true); }
     }

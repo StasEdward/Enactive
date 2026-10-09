@@ -666,6 +666,10 @@ public sealed partial class Orchestrator : IOrchestrator
                 semantic: _options.SemanticCriteria);
             foreach (var why in dropped)
                 yield return scope.Ev(EventKind.ErrorObserved, why);
+            // Not a problem, and not said as one: the plan makes its tests, and they are looked for when the checks run.
+            if (accepted.Any(c => c.Typed?.Kind == TypedCriterionKind.TestsPass) && TypedCriteria.TestTargets(_ecosystems, _workspace.RootPath).Count == 0)
+                yield return scope.Ev(EventKind.ContextAssembled,
+                    "Tests pass: no test project yet - the test projects are found when the final checks run.");
             if (accepted.Count > 0)
             {
                 plan = plan with { Checks = [.. plan.Checks, .. accepted] };

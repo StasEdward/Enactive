@@ -19,8 +19,12 @@ internal static class EngineCriteriaReview
     internal const string ChosenByPlan = "chosen by the plan";
     internal const int MaxShownThere = 8;
 
+    // A TestsPass criterion is shown with what it runs (run 89aa8d1b, 2026-10-09): a review that cannot see the plan
+    // already checks the tests adds a test command of its own, and the tests run twice at the end.
     internal const string Prompt =
-        " engineCriteria are file criteria the ENGINE decides from the workspace - they are not commands; never restate one as a check. "
+        " engineCriteria are criteria the ENGINE decides itself - files, from the workspace, and the workspace's tests (TestsPass: it runs "
+        + "every test project found when the final checks run, as 'checks' says) - they are not commands; never restate one as a check, "
+        + "and propose no other check that only runs the same tests. A test command the request itself names is still kept as requested. "
         + "provenance says where each file name came from. Return engine_criteria:[{id,decision,reason,path,path_from}] for any you change: "
         + "decision keep; drop (only one whose name the plan chose, with the reason); path (the corrected path, for a name the plan chose wrongly); "
         + "path_from {step,field} (the result's file is the one that step hands on in a path field of its output - for a result the request names no file for). "
@@ -76,6 +80,7 @@ internal static class EngineCriteriaReview
                 id = $"E{i + 1}", kind = t.Kind.ToString(), t.Path,
                 path_from = t.PathFromStep is { } s ? new { step = s, stepTitle = TitleAt(plan, s), field = t.PathFromField } : null,
                 t.Text, t.NonEmpty, step = c.Step, stepTitle = c.Step is { } own ? TitleAt(plan, own) : null,
+                checks = t.Kind == TypedCriterionKind.TestsPass ? c.Command : null,
                 provenance = Provenance(t, request, plan), onDiskNow = there
             };
         }).ToArray();
