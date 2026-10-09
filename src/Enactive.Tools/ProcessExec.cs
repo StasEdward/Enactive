@@ -216,7 +216,8 @@ internal static partial class ProcessExec
         // the rule stayed private to it; the model that ran the command still got head-only.
         var whole = combined;
         combined = Shortening.ToFit(combined, MaxOutputChars);
-        if (whole.Length > MaxOutputChars && workspaceRoot is not null && Kept(whole, combined, workspaceRoot) is { } kept)
+        string? keptPath = null;
+        if (whole.Length > MaxOutputChars && workspaceRoot is not null && Kept(whole, combined, workspaceRoot, out keptPath) is { } kept)
             combined += kept;
 
         if (outputCutShort)
@@ -224,8 +225,11 @@ internal static partial class ProcessExec
                       + "holding the output. Anything printed after this point is not here.)";
 
         // Label the result clearly so the model uses the OUTPUT (not the command text) when asked to save it.
-        var output = $"exit code {exitCode}\n----- command output (this is the result) -----\n{combined}";
+        var output = $"exit code {exitCode}\n{CommandOutput.Marker}{combined}";
         var metadata = new Dictionary<string, object?> { ["exitCode"] = exitCode };
+        // Where the whole output is, when it was too long to show: what reads the result whole - a test run described to
+        // the model by its ecosystem (IEcosystem.DescribeTests) - reads it there, not from the shortened text.
+        if (keptPath is not null) metadata[CommandOutput.KeptKey] = keptPath;
 
         var allowed = allowedExitCodes is { Count: > 0 } ? allowedExitCodes : DefaultAllowedExitCodes;
         if (allowed.Contains(exitCode))
@@ -567,8 +571,9 @@ internal static partial class ProcessExec
     /// lines were not shown and the read_file call that shows them (the idea from Unsloth Studio's tool-result
     /// spill; nothing of its code). Null where the file cannot be written: the cut stands as it was.</para>
     /// </summary>
-    private static string? Kept(string whole, string shown, string workspaceRoot)
+    private static string? Kept(string whole, string shown, string workspaceRoot, out string? keptPath)
     {
+        keptPath = null;
         var notices = NotShownNotice().Matches(shown);
         if (notices.Count == 0) return null;
         try
@@ -601,6 +606,7 @@ internal static partial class ProcessExec
             }
             var lines = whole.Count(c => c == '\n') + 1;
             var path = KeptOutputFolder + "/" + name;
+            keptPath = path;
             return $"\n… (the whole output, {lines} lines, is kept in {path}. "
                  + $"{(ranges.Count == 1 ? "Lines" : "The lines")} {string.Join(" and ", ranges.Select(r => $"{r.First}-{r.Last}"))} "
                  + $"{(ranges.Count == 1 ? "are the part" : "are the parts")} not shown here; read them with "

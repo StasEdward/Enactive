@@ -13,23 +13,26 @@ public sealed class MeteredChatProvider(IChatProvider inner, string providerId, 
     public int? WorkingContext(ChatRequest r) => inner.WorkingContext(r);
     public int ReasoningAllowance(ChatRequest request) => inner.ReasoningAllowance(request);
     private void Report(ChatRequest r, int? prompt, int? output, int? cached, double seconds,
-        double? first, ModelTimings? timings)
+        double? first, ModelTimings? timings, Guid? run)
     {
         // A display subscriber must never turn a successful request into a failed operation.
-        try { report(new(providerId, r.Model, prompt, output, cached, seconds, first, timings)); }
+        try { report(new(providerId, r.Model, prompt, output, cached, seconds, first, timings, run)); }
         catch { }
     }
     public async Task<ChatCompletion> CompleteAsync(ChatRequest r, CancellationToken ct)
     {
+        // The run the call is for, taken as it starts: the scope is the caller's (LogScope), and it is there when the call is.
+        var run = Enactive.Core.Diagnostics.LogScope.Current?.Run;
         var watch = Stopwatch.StartNew();
         var result = await inner.CompleteAsync(r, ct);
         Report(r, result.PromptTokens, result.CompletionTokens, result.CachedPromptTokens,
-            watch.Elapsed.TotalSeconds, null, result.Timings);
+            watch.Elapsed.TotalSeconds, null, result.Timings, run);
         return result;
     }
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(ChatRequest r,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        var run = Enactive.Core.Diagnostics.LogScope.Current?.Run;
         var watch = Stopwatch.StartNew();
         double? first = null;
         UsageDelta? usage = null;
@@ -42,6 +45,6 @@ public sealed class MeteredChatProvider(IChatProvider inner, string providerId, 
             yield return delta;
         }
         Report(r, usage?.PromptTokens, usage?.CompletionTokens, usage?.CachedPromptTokens,
-            watch.Elapsed.TotalSeconds, first, timings);
+            watch.Elapsed.TotalSeconds, first, timings, run);
     }
 }

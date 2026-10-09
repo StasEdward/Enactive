@@ -104,15 +104,33 @@ public sealed class AnEarlierStepsFileIsNotReplacedTests
         Assert.True(result.Success, result.Error);
     }
 
+    /// <summary>
+    /// A file an earlier step of the run made has no version from before the run: the model is not sent to restore it
+    /// itself - the git hunt and the retyping of run a19a2c.
+    /// </summary>
     [Fact]
     public async Task A_replacement_does_not_invite_the_model_to_restore_it_itself()
+    {
+        using var fx = new EngineFixture();
+        await fx.Invoke(new WriteFileTool(), Write("report.md", PagesOneToThree), fx.Artifacts.BeginStep());
+
+        var result = await fx.Invoke(new WriteFileTool(), Write("report.md", PagesFourToSix, allowShrink: true), fx.Artifacts.BeginStep());
+
+        Assert.Contains("there is no tool for it", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("restore_file", result.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>A file the run found has its version from before the run, and restore_file puts it back (run bb77e810).</summary>
+    [Fact]
+    public async Task A_replacement_of_a_file_the_run_found_names_the_tool_that_puts_it_back()
     {
         using var fx = new EngineFixture();
         fx.Write("report.md", PagesOneToThree);
 
         var result = await fx.Invoke(new WriteFileTool(), Write("report.md", PagesFourToSix, allowShrink: true));
 
-        Assert.Contains("there is no tool for it", result.Output, StringComparison.Ordinal);
+        Assert.Contains("restore_file puts the file back as it was before the run", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("there is no tool for it", result.Output, StringComparison.Ordinal);
     }
 
     // ── git ──────────────────────────────────────────────────────────────────

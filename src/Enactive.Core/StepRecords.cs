@@ -52,7 +52,13 @@ public enum OutcomeCause
     BlockedDependency,
 
     /// <summary>The step reported that it cannot go on, and why (report_blocked). Its word, recorded as its word.</summary>
-    BlockedReported
+    BlockedReported,
+
+    /// <summary>
+    /// The reviewer found the step had done what can be done within the request, and the rest of its purpose not reachable
+    /// here without going beyond it. Not tried again: a retry can only go beyond the request. Last, so no stored value moves.
+    /// </summary>
+    ReviewUnreachable
 }
 
 /// <summary>

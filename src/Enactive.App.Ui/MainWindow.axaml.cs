@@ -94,6 +94,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     /// <summary>See where it is started: the badge against work this process did not do.</summary>
     private DispatcherTimer? _inboxPoll;
+
+    // The strip at the foot of the window (RepoBarViewModel): local git every half minute while nothing runs, GitHub at
+    // most every two minutes - it is a network call, and a strip is not worth a rate limit.
+    private DispatcherTimer? _repoPoll;
+    private DateTimeOffset _pullRequestReadAt = DateTimeOffset.MinValue;
+    private int _repoReads;
+    private static readonly TimeSpan PullRequestEvery = TimeSpan.FromMinutes(2);
     private string _currentWorkspaceRoot = string.Empty;
     private readonly WorkspaceRegistry _registry = WorkspaceRegistry.Load(deferWrites: true);
 
@@ -197,6 +204,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.Runs.DeleteRequested += summary => _ = DeleteRunAsync(summary);
         _vm.Runs.DeleteShownRequested += shown => _ = DeleteRunsAsync(shown);
         _vm.Runs.ResumeRequested += checkpoint => _ = RunAsync(background: false, resume: checkpoint);
+        _vm.Runs.ForgetUnfinishedRequested += checkpoint => _ = ForgetUnfinishedAsync(checkpoint);
         // Pressing the running row is the way back to the live feed. The "← Back" in the past-run
         // header does the same thing and is where nobody looks.
         _vm.Runs.OpenLiveRequested += () => _vm.ShowLiveRun();
@@ -227,6 +235,18 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // not about anything this session has done yet — and then on a minute, which is well inside
         // "I looked over and it was right".
         RefreshInboxButton();
+        _repoPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        // While a run is going too (2026-10-09): what a step changes is what a person watches for, and a strip that waited
+        // for the run to end showed the state before it the whole time. Reading git is five short commands, each bounded.
+        _repoPoll.Tick += (_, _) => { if (IsActive) _ = RefreshRepoAsync(); };
+        _repoPoll.Start();
+        if (this.FindControl<Border>("RepoBar") is { } repoBar)
+            repoBar.PointerPressed += (_, _) => _ = RefreshRepoAsync(forcePullRequest: true);
+        if (this.FindControl<Button>("RepoPullRequest") is { } pullRequest)
+            pullRequest.Click += (_, _) => OpenRepoPage(_vm.Repo.PullRequestUrl);
+        if (this.FindControl<Button>("RepoChecks") is { } checks)
+            checks.Click += (_, _) => OpenRepoPage(_vm.Repo.PullRequestUrl is { } url ? url + "/checks" : null);
+
         _inboxPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         _inboxPoll.Tick += (_, _) => RefreshInboxButton();
         _inboxPoll.Start();
@@ -619,6 +639,35 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// stays here, where the providers, the tools and the artifact store already are.
     /// </summary>
     /// <summary>The open workspace as a full path, or null when the box is empty.</summary>
+    /// <summary>
+    /// Reads the workspace's repository into the strip - and its pull request, when two minutes have passed since it was
+    /// last asked or the person asked by clicking. A read started after this one wins: a slow answer about the folder
+    /// left behind must not overwrite the one now open.
+    /// </summary>
+    private async Task RefreshRepoAsync(bool forcePullRequest = false)
+    {
+        var read = ++_repoReads;
+        var root = WorkspaceRootOrNull();
+        var repo = root is null ? null : await RepoStatusReader.ReadAsync(root, CancellationToken.None);
+        if (read != _repoReads) return;
+        _vm.Repo.Show(repo);
+        if (repo?.GitHub is null || (!forcePullRequest && DateTimeOffset.UtcNow - _pullRequestReadAt < PullRequestEvery))
+            return;
+        _pullRequestReadAt = DateTimeOffset.UtcNow;
+        var pullRequest = await RepoStatusReader.ReadPullRequestAsync(repo, CancellationToken.None);
+        if (read == _repoReads)
+            _vm.Repo.ShowPullRequest(pullRequest);
+    }
+
+    /// <summary>Opens a pull request's page in the browser - only a github.com address, which is what the strip shows.</summary>
+    private void OpenRepoPage(string? url)
+    {
+        if (url is null || !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps
+            || !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+            return;
+        _ = TopLevel.GetTopLevel(this)?.Launcher.LaunchUriAsync(uri);
+    }
+
     private string? WorkspaceRootOrNull()
     {
         var root = _vm.WorkspacePath.Trim();
@@ -929,6 +978,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     if (IsLiveWorkspace)
                         _ = LoadRunsAsync();
                     RefreshColumnState();
+                    // A run changes the files, and perhaps the branch: the strip is read again now, not in half a minute.
+                    _ = RefreshRepoAsync();
                 });
                 }
                 finally
@@ -945,6 +996,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 // event rather than being told in advance. So does the live row, which needs it to be
                 // matched against the history when the run ends.
                 _vm.RunLog?.SetRun(ev.RunId);
+                // The panel of model figures is this run's, and starts again with the next (ModelPerformance).
+                _vm.Performance.ShowRun(ev.RunId);
+                // A step that ended has changed what it changes: the repository strip is read again then, not only when
+                // the run is over (2026-10-09).
+                if (ev.Kind == EventKind.StepCompleted)
+                    _ = RefreshRepoAsync();
                 if (_liveRow != Guid.Empty && _renderedRunId != ev.RunId)
                 {
                     _renderedRunId = ev.RunId;
@@ -1583,6 +1640,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _workspacePreparation = _workspacePreparation.ContinueWith(_ => WorkspaceSetup.Prepare(preparingRoot),
                 CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
 
+            // A different folder is a different repository, or none: read before anything else can return early.
+            _ = RefreshRepoAsync(forcePullRequest: true);
+
             var entry = _registry.Find(_vm.WorkspacePath.Trim());
             if (entry is null)
                 return;
@@ -2194,6 +2254,62 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         if (refused > 0)
             _vm.Runs.Fail($"{refused} of {runs.Count} could not be deleted; the rest are gone.");
+    }
+
+    /// <summary>
+    /// Forgets an interrupted run: its checkpoint goes, and with it the offer to resume. Nothing else - the files it
+    /// changed stay in the workspace, and a record it left in the history stays there with its own delete.
+    /// </summary>
+    private async Task ForgetUnfinishedAsync(RunCheckpoint checkpoint)
+    {
+        var path = _vm.WorkspacePath.Trim();
+        if (string.IsNullOrEmpty(path))
+            return;
+        var workspace = WorkspaceFrom(path);
+
+        // What it changed, from the record the store kept on disk (DiskArtifactStore.ChangesOf). The files are put back
+        // only when the person says so, and the question names them. A run interrupted before the record existed, or
+        // whose record was pruned, has nothing to name, and is asked as before.
+        var changes = DiskArtifactStore.ChangesOf(workspace, checkpoint.RunId);
+        var headline = $"Delete the unfinished run “{RunTitle.OneLine(checkpoint.Title)}”?";
+        var cannotResume = $"It can no longer be resumed: the {checkpoint.Remaining} step(s) left will not be run. "
+                           + "Its history, if it has any, stays in the list.";
+        var putBack = false;
+        if (changes.Count == 0)
+        {
+            if (!await ConfirmWindow.AskAsync(this, headline,
+                    cannotResume + " No record of the files it changed is kept, so they stay as they are.", "Delete", "Keep"))
+                return;
+        }
+        else
+        {
+            var choice = await ConfirmWindow.ChooseAsync(this, headline, cannotResume + "\n\n" + UnfinishedChanges.Describe(changes),
+                "Delete and put the files back", "Delete, keep the files", "Keep");
+            if (choice == ConfirmChoice.Cancel)
+                return;
+            putBack = choice == ConfirmChoice.Confirm;
+        }
+
+        if (putBack)
+        {
+            var report = await DiskArtifactStore.PutBackRunAsync(workspace, checkpoint.RunId, CancellationToken.None);
+            if (report.Kept.Count > 0)
+                _vm.Runs.Fail($"Put back {report.Reverted.Count} file(s); left {report.Kept.Count} as they are: "
+                              + string.Join("; ", report.Kept.Select(p => $"{p} ({report.Reasons?.GetValueOrDefault(p) ?? "kept"})")));
+        }
+
+        try
+        {
+            await new JsonCheckpointStore(workspace).DeleteAsync(checkpoint.RunId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // Said, and the row left: one that vanishes while its checkpoint is still on disk comes back on the next Refresh.
+            _vm.Runs.Fail("Could not delete that unfinished run: " + ex.Message);
+            return;
+        }
+
+        await LoadRunsAsync();
     }
 
     private async Task DeleteRunAsync(RunSummary record)

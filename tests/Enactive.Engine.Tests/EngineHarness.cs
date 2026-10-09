@@ -703,7 +703,7 @@ public sealed class EngineFixture : IDisposable
     public static ITool ToolNamed(string name)
         => ShippedTools().Single(t => t.Definition.Name == name);
 
-    public static ITool[] ShippedTools() => BuiltInTools.Create(MailAccount.None);
+    public static ITool[] ShippedTools() => BuiltInTools.Create(MailAccount.None, Enactive.Core.Web.WebAccess.None, ecosystems: Enactive.Workspace.KnownEcosystems.All);
 
     public void Dispose()
     {

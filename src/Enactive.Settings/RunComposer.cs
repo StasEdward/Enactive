@@ -224,7 +224,7 @@ public static class RunComposer
                 Policy = policy,
                 // The kinds of project the engine can build for its own "no new build errors" check.
                 // A new kind is a new IEcosystem here; nothing in the orchestrator changes.
-                Ecosystems = [new DotnetEcosystem()],
+                Ecosystems = KnownEcosystems.All,
                 SuccessCriteria = spec?.SuccessCriteria ?? [],
                 Limits = spec?.Limits ?? ExecutionLimits.None,
                 Checkpoints = new JsonCheckpointStore(workspace),

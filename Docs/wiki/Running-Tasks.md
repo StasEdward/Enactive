@@ -43,7 +43,7 @@ A test command written in a manual prompt instructs the worker. It does not crea
 | --- | --- |
 | Observe | Tools requiring Observe can run; higher-level actions ask if the role permits them |
 | Suggest | Tools up to Suggest can run; higher-level actions ask |
-| Execute | File operations within the level can run; `run_command`, `run_powershell`, `git`, and `docker` explicitly ask |
+| Execute | File operations within the level can run; `run_command`, `run_powershell`, `git`, `docker`, and `run_tests` explicitly ask |
 | Autonomous | No default AskBefore list; eligible tools within the effective level run automatically |
 
 The effective level is narrowed by the worker's level and any template ceiling. A worker's tool allowlist is a separate gate. Increasing autonomy cannot make an unlisted tool available to that worker.
@@ -109,6 +109,7 @@ With staging off, built-in writes go directly to the workspace. The artifact jou
 | Routing | See which model actually served the worker, phases, and routed steps |
 | AI status | Monitor usage, tool calls, elapsed time, and current activity |
 | History | Open prior runs and inspect their recorded attempts |
+| Repository strip | At the foot of the window, when the workspace is a git repository: its name, branch, how far from its upstream (↑ ahead, ↓ behind), and lines changed (added in green, removed in red) and files new since the last commit. It is read again after every step of the run on screen, and every half minute while the window is in front. With the GitHub CLI (`gh`) signed in and a github.com origin, also the branch's pull request, its size and its checks - click the number or the checks to open them, anywhere else to read the strip again. Git is run without the repository's own hooks or helpers. |
 
 The Routing panel is especially useful when a local worker seems unexpectedly expensive: complex steps may have been sent to Execute heavy.
 
@@ -141,11 +142,11 @@ If Run again encounters a new required parameter or a now-invalid value, it repo
 
 ## Resume an interrupted run
 
-A run whose process went away before it finished — the app was closed, the machine restarted, a build agent was reclaimed — appears under **UNFINISHED** above the run history, with the request, when it stopped, and how many of its steps were done. Pressing **Resume** runs the steps that are left. The console equivalent is `--resume [<run id>]`, which picks up the most recently interrupted run in the workspace when no id is given.
+A run whose process went away before it finished — the app was closed, the machine restarted, a build agent was reclaimed — appears under **UNFINISHED** above the run history, with the request, when it stopped, and how many of its steps were done. The play icon (**Resume**) runs the steps that are left; its hint says how many. The bin icon deletes an unfinished run you will not resume. The confirmation lists the files it changed — those that were there before it, those it made, and any changed since it stopped — and offers **Delete and put the files back** (files it found go back to how they were, files it made are taken away, files changed since are left), **Delete, keep the files**, or **Keep**. A record it left in the history stays in the list. The record of what a run changed is kept beside its copies under `.enactive/undo/<run id>/` for the last 20 runs; a run older than that, or interrupted before this record existed, has nothing to list. The console equivalent is `--resume [<run id>]`, which picks up the most recently interrupted run in the workspace when no id is given.
 
 What Resume is, precisely:
 
-- It carries on **from the last completed step**, not from where the run was in the middle of one. A step that was in progress when the process went away is **done again from its beginning**. The files that step had already written are still in the workspace, so it starts again in a folder it has already changed.
+- It carries on **from the last completed step**, not from where the run was in the middle of one. A step that was in progress when the process went away is **done again from its beginning**. What that step had already changed with the file tools is put back first, as it was before the step — a file changed since, or written after by a step that finished, is left as it is and the run says so. Changes made with commands are not recorded and stay. A step that stopped at a question is the exception: it carries on from where it stopped, and what it did stands.
 - It does **not** re-plan. The plan, the steps that finished, what they concluded and the files they produced all come back.
 - It runs under the **permissions and role the interrupted run started with**, not whatever the sliders are set to now.
 - It is recorded as a **new attempt under the same task**, so the history shows two rows for one piece of work.

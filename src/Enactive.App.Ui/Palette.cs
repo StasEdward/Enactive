@@ -158,6 +158,16 @@ internal static class Palette
     /// missing model: the provider answered and the credential was accepted, so nothing is broken; something is
     /// not installed or is misspelled, and that is a different repair.
     /// </summary>
+    /// <summary>A pull request's checks: passed, failed, still running - or none reported.</summary>
+    public static readonly IValueConverter Ci = Map<Enactive.Workspace.CiState>(state => state switch
+    {
+        Enactive.Workspace.CiState.Passing => Brand.Success,
+        Enactive.Workspace.CiState.Failing => Brand.Danger,
+        Enactive.Workspace.CiState.Pending => Brand.Warning,
+        Enactive.Workspace.CiState.None => Brand.TextFaint,
+        _ => throw Unknown(state)
+    });
+
     public static readonly IValueConverter Health = Map<ProviderHealth>(health => health switch
     {
         ProviderHealth.Ready => Brand.Success,

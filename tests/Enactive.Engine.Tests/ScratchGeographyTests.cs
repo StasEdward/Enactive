@@ -110,6 +110,64 @@ public sealed class ScratchGeographyTests
             Set-Content .enactive\scratch\out.txt 'x'
             """, Root));
 
+    /// <summary>
+    /// Run 7f3435, 2026-10-09, verbatim in its shape: a project made in the scratch, its paths joined from the scratch
+    /// root. The person was asked twice whether <c>$testCsproj</c> and <c>$progPath</c> wrote outside the workspace.
+    /// </summary>
+    [Fact]
+    public void A_path_joined_from_a_scratch_root_asks_nothing()
+        => Assert.Empty(ShellGeography.WritesOutside(
+            """
+            $testProjectPath = ".enactive/scratch/TestForkApp"
+            Remove-Item -Path $testProjectPath -Recurse -Force -ErrorAction SilentlyContinue
+            dotnet new console -n TestForkApp -o $testProjectPath -f net8.0
+            $testCsproj = Join-Path $testProjectPath "TestForkApp.csproj"
+            $content = Get-Content $testCsproj -Raw
+            $content | Set-Content $testCsproj -NoNewline
+            $progPath = Join-Path -Path $testProjectPath -ChildPath 'Program.cs'
+            Get-Content $progPath -Raw | Set-Content $progPath -NoNewline
+            """, Root));
+
+    /// <summary>Joined from parts that lead out, the path is known - and reported where it lands.</summary>
+    [Fact]
+    public void A_path_joined_to_a_place_outside_is_reported_as_known()
+    {
+        var write = Assert.Single(ShellGeography.WritesOutside(
+            "$drop = 'C:\\builds'; $out = Join-Path $drop 'a.txt'; Set-Content $out 'x'", Root));
+
+        Assert.True(write.Known);
+        Assert.Contains(@"builds\a.txt", write.Path, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>A double-quoted value of known variables is known.</summary>
+    [Fact]
+    public void A_string_of_known_variables_is_known()
+        => Assert.Empty(ShellGeography.WritesOutside(
+            "$root = '.enactive\\scratch'; $dir = \"$root\\probe\"; New-Item -ItemType Directory -Path $dir", Root));
+
+    /// <summary>
+    /// A name given two different values is not known: which one a write sees depends on where it stands. Taking the
+    /// last, as before, called this write inside.
+    /// </summary>
+    [Fact]
+    public void A_name_given_two_values_is_not_known()
+    {
+        var writes = ShellGeography.WritesOutside(
+            "$out = 'C:\\elsewhere'; Set-Content \"$out\\a.txt\" 'x'; $out = '.enactive\\scratch'", Root);
+
+        Assert.Contains(writes, w => !w.Known);
+    }
+
+    /// <summary>A variable whose name begins with a known one's is not the known one.</summary>
+    [Fact]
+    public void A_longer_name_is_not_taken_for_a_shorter_one()
+    {
+        var writes = ShellGeography.WritesOutside(
+            "$root = '.enactive\\scratch'; Set-Content \"$rootDir\\a.txt\" 'x'", Root);
+
+        Assert.Contains(writes, w => !w.Known);
+    }
+
     /// <summary>The assignment itself is not a write, and must not become one once substituted.</summary>
     [Fact]
     public void The_assignment_is_not_itself_reported()

@@ -101,7 +101,7 @@ evidence about the product only if the console and the window agree on what `exe
 | Tier | Asks before |
 | --- | --- |
 | `observe`, `suggest` | nothing; the level itself limits what may run |
-| `execute` | `run_command`, `run_powershell`, `git`, `docker` |
+| `execute` | `run_command`, `run_powershell`, `git`, `docker`, `run_tests` |
 | `autonomous` | nothing |
 
 A tool whose own definition requires approval still asks at every tier, including `autonomous`.

@@ -28,7 +28,11 @@ public sealed record ToolDefinition(string Name, string Description, string Json
     FileCoverageBehavior FileCoverage = FileCoverageBehavior.None,
     bool RunsSuccessChecks = false,
     CommandPolicySyntax CommandPolicy = CommandPolicySyntax.None,
-    bool OnceOnly = false);
+    bool OnceOnly = false,
+    // Puts a file back as it was before the run (restore_file): a change that undoes the run's own changes, so nothing
+    // the request limits is asked about it (ChangeLimitGuard) - bringing back what the run found cannot go against a
+    // limit on changing it.
+    bool RestoresRunStart = false);
 
 /// <summary>Trusted command-policy adapter. None refuses command tools under an allowlist.</summary>
 public enum CommandPolicySyntax { None, SimpleCommand, PowerShell }
@@ -156,7 +160,9 @@ public static class ShellTools
     /// line to the machine. Adding a third shell tool would have had to be remembered in all three,
     /// and the one that was forgotten would have been the one that refuses.</para>
     /// </summary>
-    public static readonly IReadOnlyList<string> All = ["run_command", "run_powershell", "git", "docker"];
+    // run_tests too: the tests it runs are the workspace's own code, run on this machine - a policy that keeps the shells
+    // from a run keeps that from it as well (2026-10-09).
+    public static readonly IReadOnlyList<string> All = ["run_command", "run_powershell", "git", "docker", "run_tests"];
 
     private static readonly HashSet<string> Names = new(All, StringComparer.OrdinalIgnoreCase);
 

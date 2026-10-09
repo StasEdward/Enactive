@@ -271,7 +271,7 @@ enforced rather than described.
 
 | Rule | Where it is enforced |
 | --- | --- |
-| No shell. `run_command` and `run_powershell` are denied for the whole run, at every autonomy tier including Autonomous | `RemotePolicy.ForRemoteRun` |
+| No shell. `run_command`, `run_powershell`, `git`, `docker` and `run_tests` are denied for the whole run, at every autonomy tier including Autonomous | `RemotePolicy.ForRemoteRun` |
 | A shell permission cannot be answered from the panel; it is published so the request is visible, then refused | `RemoteDecisionHandler`, and again in the gateway |
 | A workspace set to stage changes cannot be run from the web | `RemoteAccessService` |
 | Permissions and autonomy come from the workspace's own saved settings, not from whatever is selected on screen | `MainWindow.SnapshotEnvironment` |

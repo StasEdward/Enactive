@@ -82,6 +82,32 @@ public sealed class GenerationBudgetTests
         Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
     }
 
+    /// <summary>
+    /// A turn cut at the limit with nothing but reasoning is told to do one small part and run it, not only to keep its
+    /// reasoning short. Run 7ef3e6a6, 2026-10-09: a whole turn spent laying out every test by hand, cut before one was
+    /// written, and told to be concise it began the same plan again. A turn cut with text keeps the message it had.
+    /// </summary>
+    [Fact]
+    public async Task A_turn_that_was_only_reasoning_when_it_was_cut_is_told_to_do_one_part_and_run_it()
+    {
+        using var fx = new EngineFixture();
+        var provider = new FakeChatProvider(Turn.Says(Plan),
+            new Turn(Thinking: "Let me lay out every case first. Case one: the board is ...", FinishReason: "length"),
+            Turn.Says("Wrote the first test."));
+
+        await fx.RunAsync(fx.Build(provider), "write the tests");
+
+        var told = string.Join("\n", provider.Requests[^1].Messages.Select(m => m.Content));
+        Assert.Contains("Your reasoning used the whole allowance and produced no action", told, StringComparison.Ordinal);
+        Assert.Contains("do one small part now", told, StringComparison.Ordinal);
+
+        var withText = new FakeChatProvider(Turn.Says(Plan), new Turn("partial", FinishReason: "length"), Turn.Says("complete"));
+        await fx.RunAsync(fx.Build(withText), "summarize");
+        var toldText = string.Join("\n", withText.Requests[^1].Messages.Select(m => m.Content));
+        Assert.Contains("Continue with a NEW complete response", toldText, StringComparison.Ordinal);
+        Assert.DoesNotContain("Your reasoning used the whole allowance", toldText, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Turn_budget_ignores_started_steps_but_checks_elapsed_time()
     {

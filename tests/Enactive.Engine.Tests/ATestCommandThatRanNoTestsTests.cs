@@ -64,6 +64,60 @@ public sealed class ATestCommandThatRanNoTestsTests
     public async Task What_is_not_a_test_run_is_judged_by_its_exit_code(string command, bool knowsTests)
         => Assert.StartsWith("PASS", (await Checked(NothingRan, command, knowsTests)).Summary, StringComparison.Ordinal);
 
+    // ── why it ran none ───────────────────────────────────────────────────
+
+    private const string TestProject = """<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="xunit" Version="2.9.3" /></ItemGroup></Project>""";
+    private const string AppProject = """<Project Sdk="Microsoft.NET.Sdk"></Project>""";
+
+    private static void Workspace(EngineFixture fx, bool listsTheTests)
+    {
+        fx.Write("Game/Game.csproj", AppProject);
+        fx.Write("Game.Tests/Game.Tests.csproj", TestProject);
+        fx.Write("Game.sln", "Project(\"{FAE04EC0}\") = \"Game\", \"Game\\Game.csproj\", \"{1}\"\nEndProject\n"
+            + (listsTheTests ? "Project(\"{FAE04EC0}\") = \"Game.Tests\", \"Game.Tests\\Game.Tests.csproj\", \"{2}\"\nEndProject\n" : ""));
+    }
+
+    /// <summary>
+    /// Runs 1549ce and 955111, 2026-10-09: a test project made with `dotnet new` and never added to the solution, so
+    /// every `dotnet test` at the root ran nothing - and the check said only that. It now says why, and what to change.
+    /// </summary>
+    [Fact]
+    public async Task A_test_project_the_solution_does_not_list_is_named()
+    {
+        using var fx = new EngineFixture { EcosystemsOverride = [new DotnetEcosystem()] };
+        Workspace(fx, listsTheTests: false);
+        fx.ToolsOverride = EngineFixture.ShippedTools().Where(t => t.Definition.Name != "run_command").Append(new Shell(NothingRan)).ToArray();
+
+        var events = await fx.RunAsync(fx.Build(new FakeChatProvider(
+                Turn.Says("""{"disposition":"quick_action","title":"tests"}"""), Turn.Says("Done.")),
+            successCriteria: [new("tests", "dotnet test")]), "Add a test.");
+
+        var check = Assert.Single(events, e => e.Kind == EventKind.CriterionEvaluated && e.Summary.StartsWith("NOT CHECKED", StringComparison.Ordinal));
+        Assert.Contains("Game.Tests/Game.Tests.csproj is a test project the solution Game.sln does not list", check.Summary, StringComparison.Ordinal);
+        Assert.Contains("dotnet sln Game.sln add", check.Summary, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true, "dotnet test")]               // the solution lists it: nothing to say
+    [InlineData(false, "dotnet test Game.Tests")]   // the command names its own target
+    [InlineData(false, "dotnet build")]             // not a test run
+    public void Nothing_is_said_where_the_solution_is_not_why(bool listsTheTests, string command)
+    {
+        using var fx = new EngineFixture();
+        Workspace(fx, listsTheTests);
+
+        Assert.Null(new DotnetEcosystem().WhyNoTests(command, fx.Workspace.RootPath));
+    }
+
+    [Fact]
+    public void The_bare_form_with_options_is_still_the_bare_form()
+    {
+        using var fx = new EngineFixture();
+        Workspace(fx, listsTheTests: false);
+
+        Assert.NotNull(new DotnetEcosystem().WhyNoTests("dotnet test --nologo", fx.Workspace.RootPath));
+    }
+
     [Theory]
     [InlineData("dotnet test", true)]
     [InlineData("  DOTNET   test \"Game.Tests/Game.Tests.csproj\" -nologo", true)]

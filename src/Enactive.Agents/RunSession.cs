@@ -20,6 +20,9 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     /// <summary>What the workspace's build reported before any work. See BuildRegression.</summary>
     public IReadOnlyList<BuildBaseline> Builds { get; init; } = [];
 
+    /// <summary>What the request says may be changed, held against each step's first change to a file the run found. Null when it says nothing.</summary>
+    public ChangeLimitGuard? ChangeLimits { get; init; }
+
     /// <summary>The plan's waves and what they were last validated against (Phase 6), or null when not validated.</summary>
     public WaveLedger? Waves { get; set; }
 

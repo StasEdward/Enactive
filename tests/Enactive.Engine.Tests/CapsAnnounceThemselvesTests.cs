@@ -44,6 +44,9 @@ public sealed class CapsAnnounceThemselvesTests
     private static readonly Dictionary<string, string> Covered = new(StringComparer.Ordinal)
     {
         ["ModelTurn.ProgressEveryChars"] = "A_long_tool_call_says_it_is_still_being_written",
+        ["ChangeLimitGuard.ShownChars"] = "A_long_file_is_shown_in_part_and_says_so",
+        // A test run told to the model: so much of each failure's message.
+        ["DotnetEcosystem.FailureMessageChars"] = "A_long_failure_message_is_cut_and_says_so",
         // The web tools: what a page or a search brings back is bounded, and every bound says so where it bites.
         ["FetchUrlTool.MaxDownloadBytes"] = "A_download_past_its_size_is_read_only_that_far_and_says_so",
         ["FetchUrlTool.DefaultMaxChars"] = "Without_max_chars_a_long_page_is_cut_at_the_default_and_says_so",

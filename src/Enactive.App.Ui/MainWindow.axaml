@@ -355,16 +355,35 @@
                             <DataTemplate x:DataType="vm:ResumableRunViewModel">
                                 <Border Classes="card" BorderBrush="{DynamicResource Brand.Amber}"
                                         ToolTip.Tip="{Binding Tooltip}">
-                                    <Grid ColumnDefinitions="*,Auto">
+                                    <!-- Icons, as on the history rows below: a word button was twice their width
+                                         and took it from the title. What each does is on its hint. -->
+                                    <Grid ColumnDefinitions="*,Auto,Auto">
                                         <StackPanel>
                                             <TextBlock Classes="cardTitle" Text="{Binding Title}"
                                                        TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
                                             <TextBlock Classes="cardMeta" Text="{Binding Meta}"
                                                        TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
                                         </StackPanel>
-                                        <Button Grid.Column="1" Content="Resume" FontSize="11" Padding="8,1"
-                                                VerticalAlignment="Center" Margin="6,0,0,0"
-                                                Command="{Binding ResumeCommand}" />
+                                        <Button x:Name="ResumeUnfinished" Grid.Column="1" Classes="rowIcon"
+                                                VerticalAlignment="Top" Margin="6,0,0,0"
+                                                Command="{Binding ResumeCommand}"
+                                                ToolTip.Tip="{Binding ResumeTip}">
+                                            <Viewbox Width="15" Height="15">
+                                                <Canvas Width="24" Height="24">
+                                                    <Path Data="M 8,5 L 19,12 L 8,19 Z" />
+                                                </Canvas>
+                                            </Viewbox>
+                                        </Button>
+                                        <Button x:Name="ForgetUnfinished" Grid.Column="2" Classes="rowIcon destructive"
+                                                VerticalAlignment="Top" Margin="2,0,0,0"
+                                                Command="{Binding RemoveCommand}"
+                                                ToolTip.Tip="Delete: it can no longer be resumed">
+                                            <Viewbox Width="15" Height="15">
+                                                <Canvas Width="24" Height="24">
+                                                    <Path Data="M 5,7 L 19,7 M 10,7 L 10,5 L 14,5 L 14,7 M 7,7 L 8,20 L 16,20 L 17,7 M 10.5,10 L 10.5,17 M 13.5,10 L 13.5,17" />
+                                                </Canvas>
+                                            </Viewbox>
+                                        </Button>
                                     </Grid>
                                 </Border>
                             </DataTemplate>
@@ -529,6 +548,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*" />
                     <RowDefinition Height="{StaticResource CurrentActionPanelHeight}" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
             <DockPanel Grid.ColumnSpan="2" Grid.RowSpan="2" IsVisible="{Binding IsViewingLive}" LastChildFill="True">
@@ -844,7 +864,7 @@
                     <Border Grid.Row="1" Background="{DynamicResource Brand.CardFill}" CornerRadius="6" Padding="12">
                         <StackPanel Spacing="8">
                             <TextBlock Classes="panelHeader" Text="MODEL PERFORMANCE" Margin="0" />
-                            <TextBlock Classes="hint" Text="This session · completed requests" FontSize="11" />
+                            <TextBlock Classes="hint" Text="This run · completed requests" FontSize="11" />
                             <TextBlock Classes="hint" Text="Statistics appear after a model responds."
                                        TextWrapping="Wrap" IsVisible="{Binding !Performance.Rows.Count}" />
                             <ScrollViewer MaxHeight="420" HorizontalScrollBarVisibility="Disabled">
@@ -1213,6 +1233,58 @@
                                                  Foreground="{DynamicResource Brand.TextBody}" />
                         </ScrollViewer>
                     </Grid>
+                </Border>
+
+                <!-- The workspace's repository: its pull request and checks when GitHub can be asked, then the repository,
+                     the branch, how far from its upstream, and what is not committed. Only where there is a repository.
+                     The number and the checks open their pages; anywhere else on the strip reads it again. -->
+                <Border x:Name="RepoBar" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                        IsVisible="{Binding Repo.IsVisible}"
+                        Background="{DynamicResource Brand.Surface}"
+                        BorderBrush="{DynamicResource Brand.Line}" BorderThickness="0,1,0,0"
+                        Padding="12,4" Cursor="Hand"
+                        ToolTip.Tip="The workspace's repository - click to read it again">
+                    <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                        <Button x:Name="RepoPullRequest" IsVisible="{Binding Repo.HasPullRequest}"
+                                Content="{Binding Repo.PullRequest}" Padding="6,1" FontSize="12" FontWeight="SemiBold"
+                                Background="Transparent" BorderThickness="0"
+                                ToolTip.Tip="Open the pull request" />
+                        <!-- One font and size for every part, centred on one line: the branch in a monospace face sat on
+                             another baseline and the line looked uneven (2026-10-09). Added green, removed red, as git
+                             and GitHub show them. -->
+                        <TextBlock Text="{Binding Repo.Name}" FontSize="12" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource Brand.TextBody}" />
+                        <TextBlock Text="{Binding Repo.Branch}" FontSize="12" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource Brand.TextMuted}" />
+                        <TextBlock Text="{Binding Repo.Sync}" FontSize="12" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource Brand.TextMuted}" />
+                        <StackPanel x:Name="RepoChanges" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
+                                    ToolTip.Tip="Changed since the last commit, staged or not, and files git does not track">
+                            <TextBlock Text="{Binding Repo.Added}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brand.Success}" />
+                            <TextBlock Text="{Binding Repo.Removed}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brand.Danger}" />
+                            <TextBlock Text="{Binding Repo.NewFiles}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brand.TextMuted}" />
+                            <TextBlock Text="{Binding Repo.NoChanges}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brand.TextMuted}" />
+                        </StackPanel>
+                        <StackPanel x:Name="RepoPullRequestChanges" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
+                                    IsVisible="{Binding Repo.HasPullRequest}" ToolTip.Tip="The pull request's lines added and removed">
+                            <TextBlock Text="{Binding Repo.PullRequestAdded}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brand.Success}" />
+                            <TextBlock Text="{Binding Repo.PullRequestRemoved}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brand.Danger}" />
+                        </StackPanel>
+                        <Button x:Name="RepoChecks" IsVisible="{Binding Repo.HasCi}" Padding="6,1" FontSize="12"
+                                Background="Transparent" BorderThickness="0" ToolTip.Tip="Open the pull request's checks">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                                         Fill="{Binding Repo.Ci, Converter={x:Static local:Palette.Ci}}" />
+                                <TextBlock Text="{Binding Repo.CiText}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
                 </Border>
 
             </Grid>

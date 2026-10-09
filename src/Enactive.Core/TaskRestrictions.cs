@@ -1,7 +1,20 @@
 namespace Enactive.Core.Tools;
 
 /// <summary>Explicit task prohibition, independent of tool permissions and approval.</summary>
-public enum ForbiddenTaskEffect { FileDeletion }
+public enum ForbiddenTaskEffect
+{
+    FileDeletion,
+
+    /// <summary>
+    /// The request limits WHICH existing files may be changed, or what for - "leave X alone", "do not change a source
+    /// file to make a test pass". Not a ban on writing: the same request may ask for a file to be broken and put back.
+    /// What a change is for is a judgement, so the first change a step makes to a file that existed before the run is
+    /// put to the planning model against the quote (ChangeLimitGuard). Left to the step's review alone, a step that
+    /// opened with "I need to fix the actual bug" rewrote the source and then 21 older tests for 20 minutes before any
+    /// review saw it (run bb77e810, 2026-10-09).
+    /// </summary>
+    FileChange
+}
 public sealed record TaskRestriction(ForbiddenTaskEffect Effect, string SourceQuote);
 
 /// <summary>Invocation allowlist, not OS process/network isolation.</summary>

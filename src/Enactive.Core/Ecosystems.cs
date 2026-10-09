@@ -31,11 +31,30 @@ public interface IEcosystem
     string TestCommand(string target);
 
     /// <summary>
+    /// The command that runs only the tests of a target whose name contains <paramref name="filter"/> - or null when this
+    /// ecosystem cannot run part of a target's tests (run_tests then says so).
+    /// </summary>
+    string? TestCommand(string target, string filter) => null;
+
+    /// <summary>
     /// Whether a command runs this ecosystem's tests - the one a person gives as "the test command", in whatever form:
     /// its output is then read by <see cref="ParseTests"/>, and a run that names no test has verified nothing. Defaulted to
     /// no, so an ecosystem that cannot tell changes nothing.
     /// </summary>
     bool RunsTests(string command) => false;
+
+    /// <summary>
+    /// When a test command ran no test, what in the workspace explains it, in this ecosystem's terms - or null when it
+    /// cannot say. Said beside "ran no tests", so a person is told what to change, not only that nothing ran.
+    /// </summary>
+    string? WhyNoTests(string command, string workspaceRoot) => null;
+
+    /// <summary>
+    /// What a run of this ecosystem's tests came to, for the model that ran it: the totals, and each failed test with what
+    /// it said and where - or null when the output does not read as a test run. Given to the model in place of the
+    /// output itself; the whole output is kept, and every check of the engine still reads that, not this.
+    /// </summary>
+    string? DescribeTests(string output) => null;
 
     /// <summary>What the build printed, as diagnostics with workspace-relative paths.</summary>
     IReadOnlyList<BuildDiagnostic> ParseDiagnostics(string output, string workspaceRoot);

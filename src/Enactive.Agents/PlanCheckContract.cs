@@ -54,6 +54,16 @@ internal static class PlanCheckContract
         => a.PassingExitCodes.Order().SequenceEqual(b.PassingExitCodes.Order());
 
     /// <summary>
+    /// Whether a requested criterion, as the review returns it, still passes on every code the plan gave it. Widening is the
+    /// review's to do - the plan can say one code only, so a request naming exit 1 as a finding reaches the review as exit 0,
+    /// and the review's [0, 1] was refused as a change (2026-10-08, the run ended before its first step). Narrowing is not:
+    /// a code the plan passed on that stops passing is the requirement changed. Each added code is the request's own word,
+    /// checked where the answer is read.
+    /// </summary>
+    private static bool KeepsPassingCodes(SuccessCriterionDefinition kept, SuccessCriterionDefinition original)
+        => original.PassingExitCodes.All(kept.PassingExitCodes.Contains);
+
+    /// <summary>
     /// What a locked review is told when its answer breaks the lock - the whole rule, every time. Each refusal said one
     /// half: told it had dropped a supplied criterion, a review put it back and added the command the request names, was
     /// refused for adding, and had no attempt left (2026-10-08, the run ended before its first step).
@@ -112,6 +122,22 @@ internal static class PlanCheckContract
             }
             restrictions.Add(new(ForbiddenTaskEffect.FileDeletion, quote));
         }
+        // Optional, unlike the parts above: left out, the request sets no limit on what may be changed. Each quote is the
+        // request's own words, as a ban's is - the limit the engine holds a change to is what the request says, not the
+        // review's paraphrase of it.
+        if (root.TryGetProperty("change_limits", out var limits) && limits.ValueKind != JsonValueKind.Null)
+        {
+            if (limits.ValueKind != JsonValueKind.Array)
+                throw new JsonException("change_limits must be a list: [{source_quote}], or [] when the request sets none.");
+            foreach (var item in limits.EnumerateArray())
+            {
+                var quote = Required(item, "source_quote");
+                if (!request.Contains(quote, StringComparison.Ordinal))
+                    throw new JsonException("A change limit's source_quote is not in the request word for word.");
+                if (!restrictions.Any(r => r.Effect == ForbiddenTaskEffect.FileChange && r.SourceQuote == quote))
+                    restrictions.Add(new(ForbiddenTaskEffect.FileChange, quote));
+            }
+        }
         if (inputs.Restrictions.Any(r => !restrictions.Any(n => n.Effect == r.Effect)))
             throw new JsonException("Previously established task restrictions cannot be removed.");
         TaskActionPolicy? actionPolicy = null;
@@ -137,8 +163,11 @@ internal static class PlanCheckContract
         }
         if (inputs.ActionPolicy is not null && (actionPolicy is null || !inputs.ActionPolicy.SameAs(actionPolicy)))
             throw new JsonException("Previously established action policy cannot be removed or changed.");
-        var unresolved = Part(root, "unresolved", "The contract");
-        if (unresolved.ValueKind != JsonValueKind.Null)
+        // Left out, it is null: nothing declined is nothing to say. Refusing it spent the review's first answer on 2026-10-08
+        // over a contract otherwise in order. Every other part is still required - an action policy left out could be a
+        // restriction dropped, an unresolved left out is never more than a review that did not decline.
+        var unresolved = root.TryGetProperty("unresolved", out var declined) ? declined : default;
+        if (unresolved.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
             return new([], restrictions, actionPolicy, Required(root, "unresolved")) { Notes = notes };
         var checks = new List<SuccessCriterionDefinition>();
         var items = Part(root, "checks", "The contract");
@@ -199,8 +228,9 @@ internal static class PlanCheckContract
         }
         if (inputs.Checks.Where(c => c.Origin == CriterionOrigin.Requested).Any(original =>
             !checks.Any(c => c.Origin == CriterionOrigin.Requested && c.Command == original.Command
-                && SamePassingCodes(c, original))))
-            throw new JsonException("An existing requested criterion was omitted or changed. Preserve it, or report an unresolved conflict.");
+                && KeepsPassingCodes(c, original))))
+            throw new JsonException("An existing requested criterion was omitted or changed: keep its command, and every exit code it "
+                + "passes on - add only codes the request itself names. Preserve it, or report an unresolved conflict.");
         if (actionPolicy is not null && checks.Any(c => !actionPolicy.AllowedTools.Contains("run_command")
             || !actionPolicy.AllowsCommand(c.Command)))
             throw new JsonException("Final criterion conflicts with the task action policy; revise proposed checks or report unresolved.");

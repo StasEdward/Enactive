@@ -34,6 +34,13 @@ public sealed class AFinalCheckPassesOnTheCodesTheRequestNamesTests
         => PlanCheckContract.Validate(answer, complete: true,
             new PlanCheckInputs(Request, locked ?? [], [], null, null, locked is not null));
 
+    /// <summary>The plan's own draft of the check: what the review is checked against when the list is not locked.</summary>
+    private static PlanContract ReadAgainst(string answer, SuccessCriterionDefinition drafted)
+        => PlanCheckContract.Validate(answer, complete: true, new PlanCheckInputs(Request, [drafted], [], null, null, false));
+
+    private static SuccessCriterionDefinition Drafted(int exit)
+        => new("tests ran", "dotnet test", exit) { Origin = CriterionOrigin.Requested, RequestQuote = "Run the tests with dotnet test" };
+
     [Fact]
     public void A_requested_check_passes_on_the_codes_the_request_names()
     {
@@ -65,6 +72,42 @@ public sealed class AFinalCheckPassesOnTheCodesTheRequestNamesTests
 
         Assert.Single(Read(Answer("declared", null, new[] { 1, 0 }), locked).Checks);
         Assert.ThrowsAny<JsonException>(() => Read(Answer("declared", null, new[] { 0 }), locked));
+    }
+
+    /// <summary>
+    /// The plan can give a check one code only, so the request's [0, 1] reaches the review as exit 0 - and the review's
+    /// [0, 1] was refused as a change to a requested check (2026-10-08). Widening to codes the request names is kept.
+    /// </summary>
+    [Fact]
+    public void The_review_widens_the_plans_code_to_the_codes_the_request_names()
+    {
+        var check = Assert.Single(ReadAgainst(Answer("requested", "Run the tests with dotnet test", new[] { 0, 1 }), Drafted(0)).Checks);
+
+        Assert.Equal([0, 1], check.PassingExitCodes);
+    }
+
+    /// <summary>A code the plan passed on that stops passing is the requirement changed, not widened.</summary>
+    [Fact]
+    public void The_review_does_not_narrow_the_plans_codes()
+    {
+        var refused = Assert.ThrowsAny<JsonException>(() =>
+            ReadAgainst(Answer("requested", "Run the tests with dotnet test", new[] { 0 }), Drafted(1)));
+
+        Assert.Contains("every exit code it passes on", refused.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>An answer that leaves "unresolved" out declined nothing - it was refused for that, and the review's first answer spent.</summary>
+    [Fact]
+    public void An_answer_without_unresolved_declined_nothing()
+    {
+        using var doc = JsonDocument.Parse(Answer("requested", "Run the tests with dotnet test", new[] { 0, 1 }));
+        var withoutUnresolved = JsonSerializer.Serialize(doc.RootElement.EnumerateObject()
+            .Where(p => p.Name != "unresolved").ToDictionary(p => p.Name, p => p.Value));
+
+        var contract = Read(withoutUnresolved);
+
+        Assert.Null(contract.Unresolved);
+        Assert.Single(contract.Checks);
     }
 
     // ── a run ───────────────────────────────────────────────────────────────
@@ -103,6 +146,32 @@ public sealed class AFinalCheckPassesOnTheCodesTheRequestNamesTests
 
         Assert.Empty(fx.Decisions.Requests);
         Assert.Contains("dotnet test", shell.Seen);
+        Assert.Contains(events, e => e.Kind == EventKind.CriterionEvaluated && e.Summary.StartsWith("PASS (exit 1) — tests ran", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The run of 2026-10-08 as it went: the plan drafts the request's test command on exit 0, the review gives it the
+    /// request's [0, 1] and leaves "unresolved" out. It ended there, before its first step; now it runs, and the check
+    /// passes on exit 1.
+    /// </summary>
+    [Fact]
+    public async Task A_plan_drafting_exit_0_is_widened_by_the_review_and_the_run_goes_on()
+    {
+        using var fx = new EngineFixture { PlannerOverride = new Planner(), EcosystemsOverride = [new DotnetEcosystem()] };
+        var shell = new FailingTests();
+        fx.ToolsOverride = EngineFixture.ShippedTools().Where(t => t.Definition.Name != "run_command").Append(shell).ToArray();
+        using var doc = JsonDocument.Parse(Answer("requested", "Run the tests with dotnet test", new[] { 0, 1 }));
+        var review = JsonSerializer.Serialize(doc.RootElement.EnumerateObject()
+            .Where(p => p.Name != "unresolved").ToDictionary(p => p.Name, p => p.Value));
+        var planner = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"test","checks":[{"name":"tests ran","command":"dotnet test","request_quote":"Run the tests with dotnet test"}]}"""),
+            Turn.Says(review));
+        var worker = new FakeChatProvider(Turn.Says("Added."));
+
+        var events = await fx.RunAsync(fx.Build(new MapProviderFactory(worker, (Routers.PlannerProviderId, planner)),
+            router: Routers.WithPlannerOn()), Request);
+
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.ErrorObserved && e.Summary.Contains("verification contract", StringComparison.Ordinal));
         Assert.Contains(events, e => e.Kind == EventKind.CriterionEvaluated && e.Summary.StartsWith("PASS (exit 1) — tests ran", StringComparison.Ordinal));
     }
 }

@@ -587,6 +587,9 @@ public sealed class Planner
         + "boolean, path, path[], string[], results. The step hands the values on with a tool and its dependents receive them. "
         + "Limits are this task's (maxItems, maxLength). Declare nothing when prose is enough.";
 
+    // "A temporary change ... are ONE step": run bb77e810, 2026-10-09, planned "Break behaviour, confirm test fails" and
+    // "Restore behaviour, confirm test passes" as two steps. The second, with nothing of its own to restore from, read
+    // "restore" as "fix" - it rewrote the source the request said to leave and 21 older tests to suit it.
     private const string SystemPrompt =
         """
         Plan the request. Respond ONLY with JSON, without prose or fences:
@@ -594,6 +597,7 @@ public sealed class Planner
         Use "quick_action" with empty steps for one cohesive action, including running a command and saving its output.
         Use "task" for distinct stages that can succeed or fail on their own. Each step must succeed or fail on its own:
         it is a review, rollback and model-selection boundary. NEVER split one command into do/capture/save stages.
+        A temporary change made to check something, and putting it back, are ONE step: the step that makes it undoes it.
         Keep titles under 8 words. dependsOn lists 0-based indices of earlier prerequisites; [] means independent.
         Preserve real dependencies without forcing independent steps into a chain.
         Each step also has "obligations":["O001",...], using the supplied original-request IDs.

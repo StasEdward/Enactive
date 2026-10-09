@@ -37,7 +37,13 @@ public static class DefaultWorkers
     private const string CommandRules =
         "\n- Read command results before describing them. If output is truncated, capture the full log "
         + "in scratch and inspect the relevant parts; never present a truncated excerpt as a complete log. "
-        + "Report and resolve unexpected failures; an expected test failure is evidence, not a reason to hide it.";
+        + "Report and resolve unexpected failures; an expected test failure is evidence, not a reason to hide it."
+        // Run bb77e810, 2026-10-09: asked why tests failed, a worker traced the code by hand for two replies - 5,532 and
+        // 8,192 tokens of reasoning, seven of the step's thirteen minutes - laying out the same inputs again and again
+        // and reaching a different answer each time, without running one test. A run answers that in seconds.
+        + "\n- When you need to know what code or a command DOES with given inputs, run it - the existing test that "
+        + "covers it, the program itself, or a small script in scratch - rather than working it out in your head. "
+        + "A trace done by hand goes wrong easily and takes longer than the run.";
 
     private const string SaveOutputRules =
         "\n- To save requested command output, write_file the exact result only if it is complete. "
@@ -106,7 +112,8 @@ public static class DefaultWorkers
             + "files and copy them (copy_file — use it rather than reading a file and writing it back, "
             + "which truncates anything large and produces a partial copy that looks whole), delete a "
             + "file (delete_file — it always asks first, so use it only when removal is what was "
-            + "actually requested), run shell "
+            + "actually requested), put a file back exactly as it was before the run (restore_file - to undo a change "
+            + "made on purpose, rather than editing it back by hand), run shell "
             + "commands (run_command) and run "
             + "PowerShell (run_powershell — prefer it on Windows for WMI/CIM, Get-PSDrive, pipes), plus git and "
             + "docker tools for version control and containers. Use the "
@@ -115,7 +122,7 @@ public static class DefaultWorkers
             + "tools to accomplish the request, then reply with a short confirmation of what you actually did.",
             new[] { "write_file", "edit_file", "read_file", "read_files", "search_files",
                     "count_matches", "file_stats", "compare_files", "list_dir", "create_directory",
-                    "move_file", "copy_file", "delete_file", "run_command", "run_powershell", "git", "docker",
+                    "move_file", "copy_file", "delete_file", "restore_file", "run_command", "run_powershell", "run_tests", "git", "docker",
                     // Offered only where an SMTP account is configured - the tool is not
                     // registered otherwise, so naming it here costs nothing until somebody
                     // fills the section in.
@@ -141,7 +148,7 @@ public static class DefaultWorkers
             + "writing source files THROUGH a shell is not a way around that - if a request needs "
             + "source changed, say so rather than doing it with Set-Content.",
             new[] { "read_file", "read_files", "search_files", "count_matches", "file_stats", "compare_files",
-                    "list_dir", "run_command", "run_powershell", "git", "docker",
+                    "list_dir", "run_command", "run_powershell", "run_tests", "git", "docker",
                     "send_email" },
             PermissionLevel.Execute),
 
@@ -149,10 +156,11 @@ public static class DefaultWorkers
             "You are a technical writer. Create and edit documentation and text files, reading "
             + "existing files for context and using search_files to find where something is written. "
             + AggregateReads
-            + "You may also create folders, move files and copy them (copy_file - never read a file and write it back to copy it, which truncates anything large). Do not run shell commands.",
+            + "You may also create folders, move files and copy them (copy_file - never read a file and write it back to copy it, which truncates anything large), "
+            + "and put a file back as it was before the run (restore_file). Do not run shell commands.",
             new[] { "write_file", "edit_file", "read_file", "read_files", "search_files",
                     "count_matches", "file_stats", "compare_files", "list_dir",
-                    "create_directory", "move_file", "copy_file" },
+                    "create_directory", "move_file", "copy_file", "restore_file" },
             PermissionLevel.Execute),
     };
 
@@ -176,6 +184,10 @@ public static class DefaultWorkers
         if (Has("read_file")) full += BatchReads;
         if (writes || commands) full += ScratchRules;
         if (commands) full += CommandRules;
+        // Run 97de74b1, 2026-10-09: tests run through the shell came back as 30,000 characters of build log.
+        if (Has("run_tests"))
+            full += "\n- Run the workspace's tests with run_tests: it knows the test projects and the flags, and answers with "
+                    + "each failure. Use run_command for tests only where run_tests says it does not know them.";
         if (Has("run_powershell"))
             full += "\n- On Windows, prefer run_powershell for WMI/CIM, objects and pipelines.";
         if (Has("run_command"))

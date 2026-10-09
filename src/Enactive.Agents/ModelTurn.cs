@@ -12,6 +12,7 @@ internal sealed class ModelTurn
     private const int ProgressEveryChars = 2000;
     private readonly Dictionary<int, ToolCallBuilder> _tools = new();
     private readonly RunawayReply _runaway = new();
+    private readonly RunawayReply _reasoningLoop = new();
     private int _argumentChars, _saidAtArguments, _saidAtReasoning, _saidAtText;
     public StringBuilder Content { get; } = new();
     public StringBuilder Reasoning { get; } = new();
@@ -60,6 +61,8 @@ internal sealed class ModelTurn
                     progress = new(EventKind.GenerationProgress,
                         $"Reasoning: {Reasoning.Length:N0} characters so far…");
                 }
+                // A reasoning that goes round, word for word, is stopped as a reply that does (RunawayReply.LoopIn).
+                if (_tools.Count == 0 && Stopped is null) Stopped = _reasoningLoop.LoopIn(Reasoning);
                 break;
 
             case FinishDelta finish:

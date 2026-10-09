@@ -187,7 +187,7 @@ public static class EngineComposition
     /// window had read the account once when it opened.</para>
     /// </summary>
     public static IToolRegistry Tools(AppSettings settings)
-        => new ToolRegistry(BuiltInTools.Create(Mail(settings), Web(settings)));
+        => new ToolRegistry(BuiltInTools.Create(Mail(settings), Web(settings), ecosystems: KnownEcosystems.All));
 
     /// <summary>
     /// The mail account <c>send_email</c> uses, as the tool wants it — or

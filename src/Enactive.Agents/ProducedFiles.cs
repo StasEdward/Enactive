@@ -25,11 +25,13 @@ internal static class ProducedFiles
 {
     internal const string Name = "Produced file";
 
+    /// <param name="madeByRun">Files that were not in the workspace before the run - see <see cref="ADraftOfOneStep"/>.</param>
     internal static IReadOnlyList<CriterionResult> Check(
         IReadOnlyList<ArtifactRef> produced,
         IReadOnlyCollection<string> pending,
         string workspaceRoot,
-        IReadOnlyList<ExecutedAction> actions)
+        IReadOnlyList<ExecutedAction> actions,
+        IReadOnlySet<string>? madeByRun = null)
     {
         var staged = pending.Select(Normalize).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var results = new List<CriterionResult>();
@@ -62,9 +64,28 @@ internal static class ProducedFiles
                 continue;
             }
 
+            if (madeByRun?.Contains(key) == true && ADraftOfOneStep(key, actions))
+                continue;
             results.Add(Result(path, CriterionOutcome.Failed, WhyAbsent(key, actions)));
         }
         return results;
+    }
+
+    /// <summary>
+    /// A file the run made and the same step then took away: the step's own draft, not a result anybody lost. Run 1549ce,
+    /// 2026-10-09: a step wrote two test files, found they could not run, deleted them - and the run's report listed both
+    /// as FAIL, "removed by delete_file in step 3", beside the work that stood. A file one step made and ANOTHER step took
+    /// away is still said: that is the case this check is for - a result removed after it was made.
+    /// </summary>
+    private static bool ADraftOfOneStep(string key, IReadOnlyList<ExecutedAction> actions)
+    {
+        var changes = actions
+            .Where(a => a.Outcome == ActionOutcome.Succeeded
+                        && a.ChangedPaths?.Any(p => string.Equals(Normalize(p), key, StringComparison.OrdinalIgnoreCase)) == true)
+            .OrderBy(a => a.At)
+            .ToArray();
+        // A quick action has no step number: it is one step, and its calls all say so.
+        return changes.Length > 0 && changes[^1].FileDeletion && changes.All(a => a.Step == changes[0].Step);
     }
 
     /// <summary>The last successful call that changed this path, stated as what it was - not a verdict on it.</summary>
@@ -87,7 +108,7 @@ internal static class ProducedFiles
     private static CriterionResult Result(string path, CriterionOutcome outcome, string detail)
         => new(Name, path, Required: false, outcome, ExitCode: null, detail, CriterionOrigin.System);
 
-    private static string Normalize(string path)
+    internal static string Normalize(string path)
     {
         var slashed = path.Replace('\\', '/');
         return slashed.StartsWith("./", StringComparison.Ordinal) ? slashed[2..] : slashed;

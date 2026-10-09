@@ -39,8 +39,11 @@ internal sealed class WriteBoundary(
     /// code and existing test coverage" made 53 edits to test files and one to the application's own markup,
     /// fixing tests that had failed before the run, and sixteen minutes later had not begun the analysis.
     /// </summary>
+    // "This does not stop the step": run 4a5d74, 2026-10-09 - a step read the refusal as a stop, said "the engine is blocking
+    // me", and put its findings in report_blocked instead of finishing with them.
     internal const string ReadOnlyRefusal = "this step was planned as read-only: it looks and reports, and changes no file. "
-        + "Hand on what you found; the steps after it make the changes. (.enactive/scratch is still yours for notes and logs.)";
+        + "This does not stop the step and is not a block: finish it with what you found; the steps after it make the changes. "
+        + "(.enactive/scratch is still yours for notes and logs.)";
 
     private readonly Dictionary<string, List<string>> _creating = new(StringComparer.Ordinal);
 
@@ -83,7 +86,13 @@ internal sealed class WriteBoundary(
             // doing a later step's work here. Where the workspace could not be measured, nothing is taken as its own.
             var takesAwayItsOwn = readOnly && definition.FileCoverage == FileCoverageBehavior.Delete
                                   && madeByThisStep?.Contains(rel) == true;
-            if (readOnly && !takesAwayItsOwn && !rel.StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase))
+            // The scratch folder itself as well as what is in it. Only what was under it passed, so a read-only step that
+            // made the folder for a diagnostic was refused - with a refusal that says the folder is its own - and took it
+            // for "no files at all": it gave up the diagnostic and traced the code by hand for 8,192 tokens of reasoning
+            // (run bb77e810, 2026-10-09).
+            var inScratch = rel.Equals(WorkspaceGuard.ScratchPrefix, StringComparison.OrdinalIgnoreCase)
+                            || rel.StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase);
+            if (readOnly && !takesAwayItsOwn && !inScratch)
                 return $"'{rel}' was not changed: " + ReadOnlyRefusal;
             if (items is null) continue;
 
@@ -176,7 +185,7 @@ internal sealed class WriteBoundary(
         return false;
     }
 
-    private static IEnumerable<string> PathsOf(ToolCall call, IReadOnlyList<string> arguments)
+    internal static IEnumerable<string> PathsOf(ToolCall call, IReadOnlyList<string> arguments)
     {
         var found = new List<string>();
         try

@@ -1,6 +1,7 @@
 namespace Enactive.Core.Templates;
 
 using Enactive.Core.Permissions;
+using Enactive.Core.Tools;
 
 /// <summary>
 /// The templates the app ships with.
@@ -122,7 +123,7 @@ public static class BuiltinTemplates
             // somebody's deliberate decision rather than a documentation task's.
             Permissions: new PermissionCeiling(
                 MaxLevel: PermissionLevel.Execute,
-                Deny: new[] { "run_command", "run_powershell", "git", "docker" }),
+                Deny: [.. ShellTools.All]),
             Limits: new ExecutionLimits(MaxSteps: 8),
             ReviewRequired: true,
             Builtin: true),

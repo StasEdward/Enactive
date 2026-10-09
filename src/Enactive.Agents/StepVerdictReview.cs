@@ -45,15 +45,21 @@ internal sealed record StepVerdictInput(
 /// </summary>
 internal static class StepVerdictReview
 {
-    private const string Instruction = """
+    internal const string Instruction = """
         You check one step of a run: did the worker do what this step is for, and is what it reported true?
         Judge from the evidence shown - the tool calls the engine recorded, and the files as they are now. The worker's
         report is its claim: a claim counts only where a call or a file shows it.
         A call marked NOTHING THERE ran and answered - a file that is absent, a search that found nothing: it is no error, and
         can be exactly what shows a step done.
-        Return ONLY one JSON object: {"verdict":"pass"|"fail","reason":"...","calls":[n],"files":["path"]}
+        Return ONLY one JSON object: {"verdict":"pass"|"fail"|"unreachable","reason":"...","calls":[n],"files":["path"]}
         pass: the step's purpose is done, and what the report says about it is true; cite the calls [n] and files that
         show it. fail: say concretely what is not done, not true, or not shown - so the worker can put it right.
+        unreachable: the step did all that can be done within the request, and what is left of its purpose cannot be
+        reached here without going beyond the request - a change it limits or does not ask for - or beyond what this
+        workspace can do; say what was reached, what was not, and why. Never for work the step could still do: that fails.
+        A check the workspace cannot give without going beyond the request - a build that failed before the work, in code
+        the request says to leave - is not the step's to give: judge the step by what could be checked within the request,
+        and it passes when it says what could not be checked.
         A fail where a file the step made or changed is right as it is - asked for, and nothing wrong in it - names it in
         "keep":["path"]: if the step is rejected, the files named are kept and the rest of what it changed is put back. A file
         with something wrong in it, or a change the request did not ask for, is not kept.
@@ -144,6 +150,9 @@ internal static class StepVerdictReview
             if (rule.Effect == ForbiddenTaskEffect.FileDeletion)
                 sb.AppendLine($"The request forbids deleting files (\"{rule.SourceQuote}\"): a step that deleted a file of the "
                     + "workspace fails, whatever its reason - putting it back after does not undo that.");
+            else if (rule.Effect == ForbiddenTaskEffect.FileChange)
+                sb.AppendLine($"The request limits what may be changed (\"{rule.SourceQuote}\"): a step whose changes go against "
+                    + "it fails, whatever else it did.");
         if (input.Owns is { Count: > 0 } owns)
         {
             sb.AppendLine("Lines of the request the plan gives this step - it does or checks its part of each; the step is not done while a part of one that is its own is not:");
@@ -181,7 +190,7 @@ internal static class StepVerdictReview
         var errors = new List<string>();
         var verdict = Str("verdict");
         var reason = Str("reason")?.Trim() ?? "";
-        if (verdict is not ("pass" or "fail")) errors.Add("verdict must be pass or fail");
+        if (verdict is not ("pass" or "fail" or "unreachable")) errors.Add("verdict must be pass, fail or unreachable");
         if (reason.Length == 0) errors.Add("reason is empty");
         var shown = input.Files.Select(f => f.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var cited = 0;
@@ -217,9 +226,12 @@ internal static class StepVerdictReview
             ? Arr("keep").Where(x => x.ValueKind == JsonValueKind.String).Select(x => ShellLookup.Normal(x.GetString()!))
                 .Where(p => p.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
             : [];
-        return verdict == "pass"
-            ? (new ReviewVerdict.Pass(reason), [])
-            : (new ReviewVerdict.Fail(reason, reason, keep), []);
+        return verdict switch
+        {
+            "pass" => (new ReviewVerdict.Pass(reason), []),
+            "unreachable" => (new ReviewVerdict.Unreachable(reason), []),
+            _ => (new ReviewVerdict.Fail(reason, reason, keep), [])
+        };
     }
 
     /// <summary>

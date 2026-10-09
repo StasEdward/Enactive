@@ -48,7 +48,7 @@ internal static class PlanCheckReview
                 + "Commands always run in the current workspace root. Do not run tools. Do not invent filesystem facts. "
                 + "A final check must be safe to repeat AFTER all work. Intermediate mutation/failure/setup/destructive commands belong to worker steps, "
                 + "not final checks; record them in the source assessment without replaying them at the end. Examples and prohibitions are not instructions to run commands. "
-                + "Return ONLY JSON {sources:[{id,assessment}],checks:[{name,command,origin,request_quote,expectedExitCode,reason}],forbidden_effects:[{effect,source_quote}],action_policy:null,unresolved:null}. "
+                + "Return ONLY JSON {sources:[{id,assessment}],checks:[{name,command,origin,request_quote,expectedExitCode,reason}],forbidden_effects:[{effect,source_quote}],change_limits:[{source_quote}],action_policy:null,unresolved:null}. "
                 + "action_policy is null when there is no explicit tool/command allowlist. Otherwise return "
                 + "{allowed_tools:[exact tool names],command_prefixes:[executable and allowed subcommand],source_quote,reason}. "
                 + "allowed_tools that names only command tools restricts COMMANDS: the tools that read and change files in the workspace "
@@ -64,7 +64,11 @@ internal static class PlanCheckReview
                 + "Classify explicit unconditional bans on deleting files as effect=file-deletion with a verbatim source_quote. "
                 + "Include bans even when deletion would help restoration, cleanup or mutation testing. Tool approval cannot waive them. "
                 + "Do not classify examples, conditional restrictions or merely cautionary wording as unconditional bans. "
-                + "Only file-deletion is currently supported as a typed effect; assess other restrictions in sources. "
+                + "change_limits lists every sentence of the request that limits WHICH existing files may be changed, or what for "
+                + "(leave these alone; do not change one kind of file to make another pass; touch only that) - source_quote verbatim, "
+                + "[] when the request sets no such limit. It is not a ban on writing: a step's first change to a file that existed "
+                + "before the run is judged against these quotes as it is made. Keep existing change limits on resume. "
+                + "Only file-deletion and change_limits are typed; assess other restrictions in sources. "
                 + "Include every source ID exactly once, assessing required verification and restrictions in it, even when checks is empty. "
                 + "checks is the COMPLETE corrected list, at most 16. origin is requested or proposed. "
                 + "requested requires a verbatim request_quote containing the exact command. proposed requires request_quote=null and expectedExitCode=0. "
@@ -74,7 +78,11 @@ internal static class PlanCheckReview
                 + "Each reason explains why this check is appropriate as a final check and permitted by the entire request. "
                 + "Do not replace a required command with your preferred command, silently waive a requirement, or truncate required checks to fit the limit. "
                 + "If constraints conflict or a final check cannot safely be specified, set unresolved to an explanation; no execution will start. "
-                + "A document/explanation may correctly have checks=[]; do not invent shell checks merely to have one."),
+                + "A document/explanation may correctly have checks=[]; do not invent shell checks merely to have one. "
+                // Benchmark wiki-drift, 2026-10-09: a review explained in unresolved why checks was empty, and the run
+                // ended before its first step - an empty list read as a refusal to start.
+                + "unresolved is ONLY for such a conflict, and never explains an empty checks list: checks=[] needs no "
+                + "explanation beyond the sources' assessments, and unresolved=null lets the work start."),
             ChatMessage.User(Planner.Where(context) + RequestObligations.ExecutionPrompt(request)
                 + "\nPlan and draft final criteria:\n" + JsonSerializer.Serialize(new {
                     plan.Title, steps = plan.Plan?.Steps.Select((s, i) => new { index = i, s.Title, s.ObligationIds }),

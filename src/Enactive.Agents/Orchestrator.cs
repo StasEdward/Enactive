@@ -395,6 +395,18 @@ public sealed partial class Orchestrator : IOrchestrator
         var scope = new RunScope(
             runId, taskId, budget, artifacts, _writableRoots.For(_workspace.RootPath));
 
+        // The store keeps its record of what it displaced beside its copies, under this run's id, and reads the record of
+        // the run this one carries on - see IArtifactStore.BeginRun.
+        _artifacts.BeginRun(runId, resume?.RunId);
+
+        // How the workspace was when the run began, for every answer to "was this file here before the run" - the store
+        // alone knows only what its file tools wrote (see RunStart). Taken for every run, quick or planned, one step at a
+        // time or several: which step changed a file does not matter to whether the run found it. A resumed run measures
+        // from where the run it carries on began, when that run kept it; otherwise what is not known stays not known.
+        using var startChanges = _workspaceChanges.Create(_workspace.RootPath);
+        var startSnapshot = resume is null ? await startChanges.TakeAsync(ct) : _artifacts.StartCarriedOn;
+        _artifacts.MeasuredFrom(startSnapshot is null ? RunStart.Unmeasured : new RunStart(startChanges, startSnapshot));
+
         // The working area is made before the worker is told it has one, and the engine's own
         // folder is kept out of the person's next commit. A prompt that promises a folder and a
         // folder that does not exist are a defect, however sensible the laziness was: an agent
@@ -654,6 +666,10 @@ public sealed partial class Orchestrator : IOrchestrator
                 semantic: _options.SemanticCriteria);
             foreach (var why in dropped)
                 yield return scope.Ev(EventKind.ErrorObserved, why);
+            // Not a problem, and not said as one: the plan makes its tests, and they are looked for when the checks run.
+            if (accepted.Any(c => c.Typed?.Kind == TypedCriterionKind.TestsPass) && TypedCriteria.TestTargets(_ecosystems, _workspace.RootPath).Count == 0)
+                yield return scope.Ev(EventKind.ContextAssembled,
+                    "Tests pass: no test project yet, so it is not tried before the work - the test projects the work makes are found when the final checks run.");
             if (accepted.Count > 0)
             {
                 plan = plan with { Checks = [.. plan.Checks, .. accepted] };
@@ -836,7 +852,29 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
-        var session = new RunSession(scope, messages) { Builds = builds };
+        var session = new RunSession(scope, messages) { Builds = builds, ChangeLimits = ChangeLimitsFor(intent, models, scope) };
+
+        // A step the interrupted run was in the middle of is done again from its beginning - so what it had already changed
+        // is put back first, as it was before that step. Left in place, it was the ground the step began again on: on
+        // 2026-10-09 a step had broken a source file on purpose to check a test, the app was restarted, and the break stayed
+        // in the workspace for the next run to find. A file changed since, or by a finished step after, is left and said.
+        // Not a step that stopped at a question: it is carried on from where it stopped, and what it did stands
+        // (TaskProgress.Park) - putting its files back would take away work its conversation says is done. Numbered as
+        // the run numbers them, by place in the plan.
+        if (resume?.Steps.Select((s, i) => (Step: s, No: i + 1))
+                .Where(s => s.Step.Status is not ("Done" or "Failed" or "Skipped") && !_progress.HasParked(scope.TaskId, s.No))
+                .Select(s => s.Step.Id).ToArray() is { Length: > 0 } interrupted)
+        {
+            var putBack = await _artifacts.PutBackStepsAsync(interrupted, ct);
+            if (putBack.Reverted.Count > 0)
+                yield return scope.Ev(EventKind.ContextAssembled,
+                    $"Put back {putBack.Reverted.Count} file(s) the interrupted step(s) had changed, as they were before those steps: "
+                    + string.Join(", ", putBack.Reverted) + ". The step(s) are done again from their beginning.");
+            if (putBack.Kept.Count > 0)
+                yield return scope.Ev(EventKind.ErrorObserved,
+                    "Left as they are, though the interrupted step(s) had changed them: "
+                    + string.Join("; ", putBack.Kept.Select(p => $"{p} ({putBack.Reasons?.GetValueOrDefault(p) ?? "kept"})")) + ".");
+        }
         // What finished steps handed on comes back with them: their dependents, resumed, receive it.
         foreach (var finished in resume?.Steps ?? [])
         {
@@ -944,7 +982,7 @@ public sealed partial class Orchestrator : IOrchestrator
             quickVerification = new RunVerification(verified.Report, verified.IncompleteReason);
         }
 
-        IReadOnlyList<CriterionResult> quickChecks = [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session,
+        IReadOnlyList<CriterionResult> quickChecks = [.. await ProducedFilesNowAsync(scope, session, ct), .. await BuildRegressionNowAsync(scope, session,
                 intent.Context, ct, session.Builds.Count > 0 ? await NetChangedAsync(quickChanges, quickBefore, ct) : null)];
         foreach (var check in quickChecks)
             yield return scope.Criterion(check);
@@ -1507,8 +1545,9 @@ public sealed partial class Orchestrator : IOrchestrator
             string? outcomeReason = null;
 
             // This step owns its writes. Review retries keep the transcript and evidence;
-            // only terminal rejection may restore this owner's files.
-            var store = _artifacts.BeginStep();
+            // only terminal rejection may restore this owner's files. Recorded as this step's, by its id, so a run that
+            // carries this one on after an interruption knows which writes were a step it does again.
+            var store = _artifacts.BeginStep(step.Id);
 
             // The record of what has been done, over the same ground as `convo` above: shared with
             // the rest of the run when the conversation is, this step's own when it is not.
@@ -2258,7 +2297,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
         // Last, so it describes the workspace as the run leaves it: after every step and every check
         // have had their turn to change it.
-        IReadOnlyList<CriterionResult> finalChecks = [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct,
+        IReadOnlyList<CriterionResult> finalChecks = [.. await ProducedFilesNowAsync(scope, session, ct), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct,
                 session.Builds.Count > 0 ? await NetChangedAsync(workspaceChanges, beforeRun, ct) : null)];
         foreach (var check in finalChecks)
             yield return scope.Criterion(check);
@@ -2499,12 +2538,47 @@ public sealed partial class Orchestrator : IOrchestrator
         _saidThisRun.TryRemove(scope.RunId, out _);
     }
 
-    private IReadOnlyList<CriterionResult> ProducedFilesNow(RunScope scope, RunSession session)
+    /// <summary>
+    /// The reply a test run through a shell gets when what it printed was too long to show: what the tests came to, read
+    /// by the ecosystem that runs them - or null, and the reply is the command's own result.
+    ///
+    /// <para>Run 97de74b1, 2026-10-09: a model ran its tests with run_command and was handed 30,000 characters of build
+    /// and test log in three pieces - a third of its prompt - to find seven failures, which sat in the middle the
+    /// shortening drops. run_tests answers with the failures; a model that runs the same tests through the shell gets the
+    /// same answer. Only when the output was cut: one shown whole is already all there is to read. And only the model's
+    /// reply: the result itself, which the run's final checks and the reviewer read, keeps everything it printed.</para>
+    /// </summary>
+    private string? TestRunDescribed(ToolCall call, ToolResult result)
+    {
+        if (result.DidNotRun || call.Name is not ("run_command" or "run_powershell") || CommandOutput.KeptPath(result) is not { } kept)
+            return null;
+        string? command = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(call.ArgumentsJson);
+            foreach (var name in new[] { ToolArguments.Command, ToolArguments.Script })
+                if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty(name, out var v)
+                    && v.ValueKind == JsonValueKind.String)
+                    command ??= v.GetString();
+        }
+        catch (JsonException) { return null; }
+        if (command is null || _ecosystems.FirstOrDefault(e => e.RunsTests(command)) is not { } ecosystem
+            || CommandOutput.Whole(result, _workspace.RootPath) is not { } whole || ecosystem.DescribeTests(whole) is not { } described)
+            return null;
+        var status = result.Success ? (result.Output ?? "").Split('\n')[0] : $"ERROR: {result.Error}";
+        return $"{status}\n{described}\nThe whole output is kept in {kept}.";
+    }
+
+    private async Task<IReadOnlyList<CriterionResult>> ProducedFilesNowAsync(RunScope scope, RunSession session, CancellationToken ct)
     {
         ArtifactRef[] produced;
         lock (scope.Artifacts) produced = scope.Artifacts.ToArray();
+        var madeByRun = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in produced.Select(a => a.RelativePath).Distinct(StringComparer.OrdinalIgnoreCase))
+            if ((await _artifacts.BeforeRunAsync(path, ct)).State == BeforeRunState.Absent)
+                madeByRun.Add(ProducedFiles.Normalize(path));
         return ProducedFiles.Check(produced, _artifacts.PendingPaths, _workspace.RootPath,
-            session.RunEvidence().Actions);
+            session.RunEvidence().Actions, madeByRun);
     }
 
     /// <summary>
@@ -2771,7 +2845,7 @@ public sealed partial class Orchestrator : IOrchestrator
             await foreach (var repairEvent in RunToolLoopAsync(
                 taskId, runId, provider, model, worker, messages, artifacts,
                 intent.Context, store, journal, new ReadLedger(), null, loop, budget, granted, ct, providerId,
-                attemptOrigin: ToolCallOrigin.Retry))
+                attemptOrigin: ToolCallOrigin.Retry, changeLimits: session?.ChangeLimits, stepTitle: "Repair the failing final checks"))
                 yield return repairEvent;
 
             report = await InScopeAsync(runId, taskId, null,
@@ -2883,6 +2957,11 @@ public sealed partial class Orchestrator : IOrchestrator
         // A coverage criterion is about what THIS run's steps hand on; before any step there is nothing
         // it could already be true of, so there is nothing to learn by trying it now.
         var fromRun = proposed.Where(c => c.Typed is { FromRun: true }).ToArray();
+        // "The tests pass" with no test project yet is the same: the work makes the tests, and there is nothing to try
+        // first. Tried, it came back "could not be tried" as a warning about a run that was going as planned (run 40babe05,
+        // 2026-10-10); the plan's own line says the tests are looked for when the final checks run.
+        if (proposed.Any(c => c.Typed?.Kind == TypedCriterionKind.TestsPass) && TypedCriteria.TestTargets(_ecosystems, _workspace.RootPath).Count == 0)
+            fromRun = [.. fromRun, .. proposed.Where(c => c.Typed?.Kind == TypedCriterionKind.TestsPass && !fromRun.Contains(c))];
         if (fromRun.Length > 0)
         {
             var (keptNow, notesNow, failingNow) = await BaselineAsync(proposed.Except(fromRun).ToArray(), taskId, runId, context, ct);
@@ -3084,7 +3163,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // to it, marked, instead of ending the step unfinished (amendment A).
         bool reviewed = false,
         // What the step has loaded from its tool catalog so far - the step's, shared by its attempts (ToolBudget).
-        List<string>? loadedTools = null)
+        List<string>? loadedTools = null,
+        // What the request says may be changed, and the step's title for the question (ChangeLimitGuard).
+        ChangeLimitGuard? changeLimits = null, string? stepTitle = null)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -3116,7 +3197,8 @@ public sealed partial class Orchestrator : IOrchestrator
             .Select(m => m.Content)), 3000);
 
         // Replies stopped for running away (RunawayReply). The first is explained to the model and the
-        // step goes on; a second means the explanation did not take, and the step stops.
+        // step goes on; a second before any call means the explanation did not take, and the step stops.
+        // A call in between resets it (see below).
         var runawayStops = 0;
         var outputRecoveries = 0;
         var purpose = GenerationPurpose.Action;
@@ -3323,7 +3405,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
         var admission = new CallAdmission(frame, _tools, _permissions, worker, EffectivePolicyFor(worker), offer, _progress,
             _decisions, _decisionGate, granted, _writableRoots, toolsOnRequest, mayReportBlocked,
-            path => OutputPathExists(path, store));
+            path => OutputPathExists(path, store), changeLimits, stepTitle);
 
         // The transcript's size when lastPromptTokens was measured, so what has been added since
         // can be estimated on top of a real count rather than instead of one.
@@ -3901,17 +3983,28 @@ public sealed partial class Orchestrator : IOrchestrator
             {
                 runawayStops++;
                 var written = contentBuilder.Length;
-                var kept = contentBuilder.ToString(0, Math.Min(stopped.KeepChars, written));
+                // A reasoning that went round: what it said as its reply so far stands whole; the reasoning is not kept.
+                var kept = stopped.InReasoning ? contentBuilder.ToString() : contentBuilder.ToString(0, Math.Min(stopped.KeepChars, written));
                 messages.Add(new ChatMessage(ChatRole.Assistant, kept, null));
 
-                yield return Ev(EventKind.ErrorObserved,
-                    $"The model's reply was stopped at {written:N0} characters: {stopped.Reason}.");
+                yield return Ev(EventKind.ErrorObserved, stopped.InReasoning
+                    ? $"The model's reasoning was stopped at {reasoningBuilder.Length:N0} characters: {stopped.Reason}."
+                    : $"The model's reply was stopped at {written:N0} characters: {stopped.Reason}.");
 
                 if (runawayStops > 1)
                 {
                     loopResult.Set(StepOutcomeKind.Incomplete,
                         $"the model's reply ran away again after being told why the first was stopped: {stopped.Reason}");
                     yield break;
+                }
+
+                if (stopped.InReasoning)
+                {
+                    messages.Add(ChatMessage.User(
+                        $"Your reasoning was stopped after {reasoningBuilder.Length:N0} characters: {stopped.Reason}. Going over "
+                        + "the same ground again will not settle it. Decide from what you have and act: call a tool - run the "
+                        + "code or the tests to find out what you were working out - or finish the step with what you found."));
+                    continue;
                 }
 
                 messages.Add(ChatMessage.User(
@@ -3952,15 +4045,29 @@ public sealed partial class Orchestrator : IOrchestrator
                 purpose = toolCalls?.Any(call => toolDefs.Any(d => d.Name == call.Name && d.ChangedPathArguments is { Count: > 0 })) == true
                     ? GenerationPurpose.FileWrite : toolCalls is { Count: > 0 } || reasoningBuilder.Length > 0
                         ? GenerationPurpose.Action : GenerationPurpose.FinalAnswer;
-                messages.Add(ChatMessage.User(reason + ". Continue with a NEW complete response, not a JSON suffix. "
-                    + "No tool call from the incomplete turn ran. Send smaller independent write_file (append:true) "
-                    + "or edit_file actions for large files; each must have complete JSON arguments. "
-                    + "Keep reasoning and the final answer concise. Next output ceiling: " + _options.GenerationBudgets.For(purpose) + " tokens."));
+                // A turn that was nothing but reasoning when it was cut: told what to do instead of planning it all first.
+                // Run 7ef3e6a6, 2026-10-09: asked to write tests, a model spent the whole turn - 42 thousand characters -
+                // laying out every test's board and checking each line by hand ("let me re-verify"), and was cut before it
+                // wrote one; told only to keep reasoning concise, it began the same plan again.
+                var onlyThought = lengthLimited && contentBuilder.Length == 0 && toolCalls is not { Count: > 0 } && reasoningBuilder.Length > 0;
+                messages.Add(ChatMessage.User(onlyThought
+                    ? reason + ". Your reasoning used the whole allowance and produced no action - nothing was written or run. "
+                      + "Do not work everything out first: do one small part now - write one test, one case, one change - and "
+                      + "run it; the run tells you whether a value or a setup is right, faster than working it out. Then the next "
+                      + "part. Next output ceiling: " + _options.GenerationBudgets.For(purpose) + " tokens."
+                    : reason + ". Continue with a NEW complete response, not a JSON suffix. "
+                      + "No tool call from the incomplete turn ran. Send smaller independent write_file (append:true) "
+                      + "or edit_file actions for large files; each must have complete JSON arguments. "
+                      + "Keep reasoning and the final answer concise. Next output ceiling: " + _options.GenerationBudgets.For(purpose) + " tokens."));
                 continue;
             }
 
             purpose = toolCalls?.Any(call => toolDefs.Any(d => d.Name == call.Name && d.ChangedPathArguments is { Count: > 0 })) == true
                 ? GenerationPurpose.FileWrite : GenerationPurpose.Action;
+            // A whole call after a runaway was explained: the explanation took, and a later runaway is a new one - explained
+            // again, not the end of the step. Run e9fedc, 2026-10-09: stopped once, the model ran a program in the scratch and
+            // worked on for five minutes of calls; a short loop much later ended the step as if it had not.
+            if (toolCalls is { Count: > 0 }) runawayStops = 0;
             var replyText = contentBuilder.Length > 0 ? contentBuilder.ToString() : null;
             var recovered = false;
 
@@ -4183,9 +4290,9 @@ public sealed partial class Orchestrator : IOrchestrator
                 // which could work, and ended with a review of a diff the model never saw. The same
                 // class as every other defect this month: the record somebody works from is
                 // shortened, and nothing says so.
-                var reply = result.Success
+                var reply = TestRunDescribed(call, result) ?? (result.Success
                     ? (result.Output ?? "OK")
-                    : $"ERROR: {failure}";
+                    : $"ERROR: {failure}");
 
                 // A shell lookup that exited non-zero: not forgiven - its exit cannot tell "not there"
                 // from "went wrong" - but pointed at the tools that answer the question as a result,

@@ -210,11 +210,13 @@ public sealed class AWindowHeldInReserveTests
         var payload = new string('y', 3_000);
 
         var turns = new List<Turn> { Turn.Says(QuickAction) };
-        for (var i = 0; i < 24; i++)
+        // A window wide enough that half of it lies well above what the prompt cannot shed (the role, the tools): at
+        // 16,000 the two trims met at that floor once the role grew, and the test compared the floor with itself.
+        for (var i = 0; i < 40; i++)
             turns.Add(Turn.Calls1("write_file", $$"""{"path":"part{{i}}.txt","content":"{{payload}}"}""", $"w{i}"));
         turns.Add(Turn.Says("Done."));
 
-        var provider = new FakeChatProvider(turns.ToArray()) { Window = 16_000, Working = working };
+        var provider = new FakeChatProvider(turns.ToArray()) { Window = 24_000, Working = working };
         var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "write parts");
 
         var trim = events.First(e => e.Kind == EventKind.ContextTrimmed

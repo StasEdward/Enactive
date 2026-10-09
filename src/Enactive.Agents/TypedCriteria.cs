@@ -150,18 +150,14 @@ public static class TypedCriteria
                         Origin: CriterionOrigin.Proposed) { Typed = typed, Step = c.Step });
                     break;
 
+                // The test projects are found when the check runs, not now. Run 89aa8d1b, 2026-10-09: "write tests for the
+                // project" - the plan's step 2 made the test project, and its "tests pass" was dropped before step 1 began
+                // because there were no tests yet; the run was checked only because the contract review added a command of
+                // its own. Found at the end, a test project the run adds is run too.
                 case "tests_pass":
-                    var found = ecosystems.Select(e => (Ecosystem: e, Targets: Detect(e, workspaceRoot)))
-                        .Where(x => x.Targets is { Tests.Count: > 0 }).ToArray();
-                    if (found.Length == 0) { Drop(c, "no ecosystem recognised here has tests to run"); break; }
-                    var targets = found.SelectMany(x => x.Targets!.Tests.Select(t => (x.Ecosystem, Target: t)))
-                        .Where(x => c.Target is null || string.Equals(x.Target, c.Target, StringComparison.OrdinalIgnoreCase))
-                        .ToArray();
-                    if (targets.Length == 0) { Drop(c, $"'{c.Target}' is not a test target here"); break; }
-                    foreach (var (ecosystem, target) in targets)
-                        accepted.Add(new SuccessCriterionDefinition($"Tests pass ({target})", ecosystem.TestCommand(target), 0,
-                            Required: true, Origin: CriterionOrigin.Proposed)
-                            { Typed = new TypedCriterion(TypedCriterionKind.TestsPass, Target: target) });
+                    var tests = new TypedCriterion(TypedCriterionKind.TestsPass, Target: string.IsNullOrWhiteSpace(c.Target) ? null : c.Target.Trim());
+                    accepted.Add(new SuccessCriterionDefinition(Name(tests), Describe(tests), 0, Required: true, Origin: CriterionOrigin.Proposed)
+                        { Typed = tests });
                     break;
 
                 case "covers_all":
@@ -302,6 +298,8 @@ public static class TypedCriteria
     {
         if (typed.Kind == TypedCriterionKind.Semantic)
             return "judged: " + (typed.Text!.Length <= 80 ? typed.Text : typed.Text[..80] + "…");
+        if (typed.Kind == TypedCriterionKind.TestsPass)
+            return typed.Target is { } target ? $"Tests pass ({target})" : "Tests pass";
         var file = typed.PathFromStep is { } step ? $"the file step {step + 1} hands on as '{typed.PathFromField}'" : typed.Path;
         return typed.Kind == TypedCriterionKind.FileContains ? $"{file} says what it should" : $"{file} exists";
     }
@@ -314,11 +312,19 @@ public static class TypedCriteria
     {
         if (typed.Kind == TypedCriterionKind.Semantic)
             return $"semantic \"{typed.Text}\" (evidence: {KindsOf(typed)})";
+        if (typed.Kind == TypedCriterionKind.TestsPass)
+            return typed.Target is { } target
+                ? $"the tests of {target}, as found when the final checks run"
+                : "the workspace's tests - every test project found when the final checks run";
         var file = typed.PathFromStep is { } step ? $"<step {step + 1}'s {typed.PathFromField}>" : typed.Path;
         return typed.Kind == TypedCriterionKind.FileContains
             ? $"file_contains {file} \"{typed.Text}\""
             : $"file_exists {file}" + (typed.NonEmpty ? " (not empty)" : "");
     }
+
+    /// <summary>Every test project an ecosystem finds in the workspace now, with the ecosystem that runs it.</summary>
+    internal static IReadOnlyList<(IEcosystem Ecosystem, string Target)> TestTargets(IReadOnlyList<IEcosystem> ecosystems, string root)
+        => ecosystems.SelectMany(e => Detect(e, root)?.Tests.Select(t => (e, t)) ?? []).ToArray();
 
     private static EcosystemTargets? Detect(IEcosystem ecosystem, string root)
     {

@@ -69,6 +69,10 @@ public sealed class DotnetEcosystem : IEcosystem
     // question the baseline asks.
     public string TestCommand(string target) => $"dotnet test \"{target}\" -nologo --logger \"console;verbosity=normal\"";
 
+    /// <summary>The same run, of the tests whose full name contains the filter. A quote in it would end the argument, so it goes.</summary>
+    public string? TestCommand(string target, string filter)
+        => TestCommand(target) + $" --filter \"FullyQualifiedName~{filter.Replace("\"", "")}\"";
+
     /// <summary>`dotnet test`, with or without a target and options - the SDK's test runner, as people type it.</summary>
     public bool RunsTests(string command)
     {
@@ -76,6 +80,99 @@ public sealed class DotnetEcosystem : IEcosystem
         return words.Length >= 2
             && (words[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) || words[0].Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase))
             && words[1].Equals("test", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A bare `dotnet test` at the root runs the solution there, and a test project the solution does not list is not
+    /// run at all. Run 1549ce and run 955111, 2026-10-09: a run made TicTacToe.Tests with `dotnet new`, never added it
+    /// to TicTacToe.sln, and every `dotnet test` after it printed only that the projects were up to date - "ran no tests",
+    /// with nothing said about why. Only for a command that names no project or solution of its own.
+    /// </summary>
+    public string? WhyNoTests(string command, string workspaceRoot)
+    {
+        if (!RunsTests(command)) return null;
+        var words = command.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (words.Skip(2).Any(w => !w.StartsWith('-'))) return null;   // a target, or an option's value: not the bare form
+        try
+        {
+            var solutions = Directory.EnumerateFiles(workspaceRoot)
+                .Where(f => f.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (solutions.Length != 1) return null;
+            var listed = File.ReadAllText(solutions[0]).Replace('\\', '/');
+            var outside = ProjectFiles(workspaceRoot).Where(IsTestProject)
+                .Select(f => Relative(workspaceRoot, f).Replace('\\', '/'))
+                .Where(p => !listed.Contains(p, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .ToArray();
+            if (outside.Length == 0) return null;
+            var solution = Path.GetFileName(solutions[0]);
+            return $"{string.Join(", ", outside)} {(outside.Length == 1 ? "is a test project" : "are test projects")} the solution "
+                   + $"{solution} does not list, so 'dotnet test' at the root does not run {(outside.Length == 1 ? "it" : "them")}: "
+                   + $"add {(outside.Length == 1 ? "it" : "them")} with 'dotnet sln {solution} add <project>', or name the project in the command.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    /// <summary>How many failed tests the description names one by one; past it, how many more there are.</summary>
+    internal const int FailuresDescribed = 20;
+
+    /// <summary>How much of one failure's message the description carries.</summary>
+    internal const int FailureMessageChars = 400;
+
+    // `  Failed Probe.Sums.Is_positive(n: 2) [12 ms]` - the line the console logger opens a failure's block with. The name
+    // runs to the duration at the end: a theory's case has spaces in it, and read to the first space it was not read at all.
+    private static readonly Regex FailedBlock = new(@"^\s*Failed\s+(?<name>.+?)\s+\[[^\[\]]*\]\s*$", RegexOptions.Compiled);
+    // `   at Probe.Sums.Is_positive() in C:\src\SumsTests.cs:line 12`
+    private static readonly Regex Where = new(@"\sin\s+(?<file>.+?):line\s+(?<line>\d+)", RegexOptions.Compiled);
+
+    /// <summary>
+    /// The totals and each failed test - name, the message under "Error Message:", the file and line from its stack -
+    /// read from the same output <see cref="ParseTests"/> reads. Run 97de74b1, 2026-10-09: a model ran its tests at normal
+    /// verbosity and read the 30,000 characters of MSBuild and xUnit log in three pieces to find seven failures; this is
+    /// what it needed of them. Null when the output is not a test run, and then the model is given the output as before.
+    /// </summary>
+    public string? DescribeTests(string output)
+    {
+        if (ParseTests(output) is not { } report) return null;
+        var lines = output.Replace("\r", "").Split('\n');
+        var failures = new List<string>();
+        var named = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (FailedBlock.Match(lines[i]) is not { Success: true } failed || !named.Add(failed.Groups["name"].Value))
+                continue;
+            var message = new List<string>();
+            string? where = null;
+            var inMessage = false;
+            for (var j = i + 1; j < lines.Length && j < i + 40; j++)
+            {
+                var line = lines[j].Trim();
+                if (FailedBlock.IsMatch(lines[j]) || line.StartsWith("Passed ", StringComparison.Ordinal)) break;
+                if (line.StartsWith("Error Message:", StringComparison.Ordinal)) { inMessage = true; continue; }
+                if (line.StartsWith("Stack Trace:", StringComparison.Ordinal)) { inMessage = false; continue; }
+                if (inMessage && line.Length > 0) message.Add(line);
+                else if (where is null && Where.Match(lines[j]) is { Success: true } at)
+                {
+                    where = $"{Path.GetFileName(at.Groups["file"].Value.Trim())}:{at.Groups["line"].Value}";
+                    break;
+                }
+            }
+            var said = string.Join(" / ", message);
+            if (said.Length > FailureMessageChars) said = said[..FailureMessageChars] + " …(cut)";
+            failures.Add($"- {failed.Groups["name"].Value}{(said.Length > 0 ? ": " + said : "")}{(where is null ? "" : $" ({where})")}");
+        }
+
+        var cases = report.Cases.GroupBy(c => c.Name).Select(g => g.Any(c => c.Verdict == TestVerdict.Failed) ? TestVerdict.Failed : g.First().Verdict).ToArray();
+        var s = report.Summary ?? new TestRunSummary(cases.Count(v => v == TestVerdict.Passed), cases.Count(v => v == TestVerdict.Failed),
+            cases.Count(v => v == TestVerdict.Skipped), cases.Length);
+        var text = $"{s.Total} tests: {s.Passed} passed, {s.Failed} failed{(s.Skipped > 0 ? $", {s.Skipped} skipped" : "")}.";
+        if (failures.Count > 0)
+            text += "\nFailed:\n" + string.Join("\n", failures.Take(FailuresDescribed))
+                    + (failures.Count > FailuresDescribed ? $"\n... and {failures.Count - FailuresDescribed} more failed; the whole output names them." : "");
+        else if (s.Failed > 0)
+            text += "\nWhat the failed tests said is not in a form read here; the whole output has it.";
+        return text;
     }
 
     // `  Passed Probe.Sums.Is_positive(n: 2) [< 1 ms]` - two spaces, the verdict, the name (which may

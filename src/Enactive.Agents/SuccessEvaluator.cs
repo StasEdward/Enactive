@@ -48,6 +48,53 @@ public sealed class SuccessEvaluator(IReadOnlyList<Enactive.Core.Builds.IEcosyst
         return new SuccessReport(results);
     }
 
+    /// <summary>
+    /// "The tests pass", decided over the test projects there are NOW: each one's tests, run the way its ecosystem runs
+    /// them, through the same gate and the same reading as any test command - and one verdict for the criterion. A plan
+    /// that makes its test project in a later step is checked against it (run 89aa8d1b, 2026-10-09: the criterion was
+    /// dropped before the work because there were no tests yet). No test project at all is not a pass and not a failure:
+    /// nothing was checked. A project the plan named that is not there is a failure, and says which ones are.
+    /// </summary>
+    private static async Task<CriterionResult> TestsPassAsync(SuccessCriterionDefinition criterion, TypedCriterion tests,
+        IToolRegistry tools, IPermissionEngine permissions, PermissionPolicy policy, IDecisionHandler decisions,
+        ToolContext context, Guid taskId, IReadOnlyList<Enactive.Core.Builds.IEcosystem> ecosystems, CancellationToken ct)
+    {
+        CriterionResult Result(CriterionOutcome outcome, string detail, int? exitCode = null, string? output = null)
+            => new(criterion.Name, criterion.Command, criterion.Required, outcome, exitCode, detail, criterion.Origin, criterion.AlreadyPassing)
+               { Output = output };
+
+        var found = TypedCriteria.TestTargets(ecosystems, context.WorkspaceRoot);
+        if (found.Count == 0)
+            return Result(CriterionOutcome.Unknown, "no test project is in the workspace, so there were no tests to run.");
+        var runs = tests.Target is { } named
+            ? found.Where(f => SameTarget(f.Target, named)).ToArray()
+            : found.ToArray();
+        if (runs.Length == 0)
+            return Result(CriterionOutcome.Failed, $"'{tests.Target}' is not a test project here; the test projects are: "
+                + string.Join(", ", found.Select(f => f.Target)) + ".");
+
+        var results = new List<(string Target, CriterionResult Result)>();
+        foreach (var (ecosystem, target) in runs)
+        {
+            var one = criterion with { Command = ecosystem.TestCommand(target), Typed = null };
+            results.Add((target, await EvaluateOneAsync(one, tools, permissions, policy, decisions, context, taskId, ecosystems, ct)));
+        }
+
+        var outcome = results.Any(r => r.Result.Outcome == CriterionOutcome.Failed) ? CriterionOutcome.Failed
+            : results.All(r => r.Result.Outcome == CriterionOutcome.Passed) ? CriterionOutcome.Passed
+            : CriterionOutcome.Unknown;
+        var said = string.Join("\n", results.Select(r =>
+            $"{r.Target} ({r.Result.Command}): {r.Result.Outcome switch { CriterionOutcome.Passed => "passed", CriterionOutcome.Failed => "FAILED", _ => "not checked" }}"
+            + (string.IsNullOrWhiteSpace(r.Result.Detail) ? "" : " - " + r.Result.Detail!.Trim())));
+        var deciding = results.FirstOrDefault(r => r.Result.Outcome == CriterionOutcome.Failed).Result ?? results[^1].Result;
+        return Result(outcome, said, deciding.ExitCode,
+            string.Join("\n", results.Select(r => r.Result.Output).Where(o => !string.IsNullOrEmpty(o))));
+    }
+
+    private static bool SameTarget(string target, string named)
+        => string.Equals(target.Replace('\\', '/').Trim('/'), named.Replace('\\', '/').Trim('/'), StringComparison.OrdinalIgnoreCase)
+           || string.Equals(Path.GetFileNameWithoutExtension(target), named, StringComparison.OrdinalIgnoreCase);
+
     private static async Task<CriterionResult> EvaluateOneAsync(
         SuccessCriterionDefinition criterion,
         IToolRegistry tools,
@@ -64,6 +111,9 @@ public sealed class SuccessEvaluator(IReadOnlyList<Enactive.Core.Builds.IEcosyst
         // and goes the ordinary way below.
         if (criterion.Typed is { InEngine: true })
             return TypedCriteria.Evaluate(criterion, context.WorkspaceRoot);
+
+        if (criterion.Typed is { Kind: TypedCriterionKind.TestsPass } tests)
+            return await TestsPassAsync(criterion, tests, tools, permissions, policy, decisions, context, taskId, ecosystems, ct);
 
         // Decided from what the run's steps handed on, which only the run has (Phase 5.1).
         if (criterion.Typed is { FromRun: true })
@@ -174,8 +224,10 @@ public sealed class SuccessEvaluator(IReadOnlyList<Enactive.Core.Builds.IEcosyst
 
         var passed = criterion.PassesOn(exitCode);
         if (passed && RanNoTests(ecosystems, criterion.Command, result.Output ?? "") is { } runner)
-            return Unknown($"'{criterion.Command}' runs {runner}'s tests and exited {exitCode}, but nothing it printed is a test it "
-                + "ran - a test command that runs no tests has verified nothing. " + Trim(result.Output ?? result.Error));
+            return Unknown($"'{criterion.Command}' runs {runner.Name}'s tests and exited {exitCode}, but nothing it printed is a test it "
+                + "ran - a test command that runs no tests has verified nothing. "
+                + (runner.WhyNoTests(criterion.Command, context.WorkspaceRoot) is { } why ? why + " " : "")
+                + Trim(result.Output ?? result.Error));
         return new CriterionResult(
             criterion.Name, criterion.Command, criterion.Required,
             passed ? CriterionOutcome.Passed : CriterionOutcome.Failed,
@@ -192,12 +244,12 @@ public sealed class SuccessEvaluator(IReadOnlyList<Enactive.Core.Builds.IEcosyst
     /// was a PASS - the very case the request had said was not one. Which command runs tests, and how its output reads,
     /// is the ecosystem's to say.
     /// </summary>
-    private static string? RanNoTests(IReadOnlyList<Enactive.Core.Builds.IEcosystem> ecosystems, string command, string output)
+    private static Enactive.Core.Builds.IEcosystem? RanNoTests(IReadOnlyList<Enactive.Core.Builds.IEcosystem> ecosystems, string command, string output)
     {
         if (ecosystems.FirstOrDefault(e => e.RunsTests(command)) is not { } runner)
             return null;
         var report = runner.ParseTests(output);
-        return report is { Cases.Count: > 0 } or { Summary.Total: > 0 } ? null : runner.Name;
+        return report is { Cases.Count: > 0 } or { Summary.Total: > 0 } ? null : runner;
     }
 
     private static bool TryExitCode(ToolResult result, out int exitCode)

@@ -44,6 +44,31 @@ public sealed class AReadOnlyStepChangesNothingTests
         Assert.DoesNotContain("This step is READ-ONLY", secondInstruction[secondInstruction.LastIndexOf("Proceed with this step", StringComparison.Ordinal)..], StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The scratch folder itself is the step's as well, however it is written. Refused while what is under it passed, the
+    /// step took the refusal - which says the folder is its own - for "no files at all", and gave up its diagnostic
+    /// (run bb77e810, 2026-10-09).
+    /// </summary>
+    [Theory]
+    [InlineData(".enactive/scratch")]
+    [InlineData(".enactive/scratch/")]
+    [InlineData(@".enactive\scratch")]
+    public async Task A_read_only_step_may_make_the_scratch_folder_itself(string folder)
+    {
+        using var fx = new EngineFixture();
+        fx.Write("invoices/a.txt", "total: 10");
+        var worker = new FakeChatProvider(
+            Turn.Says(Plan),
+            Turn.Calls1("create_directory", System.Text.Json.JsonSerializer.Serialize(new { path = folder }), "c1"),
+            Turn.Says("a.txt: the total should be 12."),
+            Turn.Says("Nothing to correct after all."));
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer")), "check the invoices and correct the totals");
+
+        Assert.True(events.Any(e => e.Kind == EventKind.ToolResult && e.Summary.StartsWith("create_directory -> ok", StringComparison.Ordinal)), events.Text());
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.ToolResult && e.Summary.Contains("planned as read-only", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task The_reviewer_of_a_read_only_step_is_told_it_was_planned_to_change_nothing()
     {

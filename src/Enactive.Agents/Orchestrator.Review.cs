@@ -174,6 +174,9 @@ public sealed partial class Orchestrator
                 await Emit(EventKind.ReviewPassed,
                     $"PASS ({mode} review){(string.IsNullOrEmpty(pass.Notes) ? "" : ": " + pass.Notes)}");
                 break;
+            case ReviewVerdict.Unreachable unreachable:
+                await Emit(EventKind.ReviewFailed, $"NOT REACHABLE within the request ({mode} review): {unreachable.Notes}");
+                break;
         }
         return new(review);
     }

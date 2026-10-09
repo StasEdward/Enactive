@@ -35,7 +35,21 @@ public sealed record FileWriteRecord(
     // string, one file became two records, and a revert asked about one spelling could not see the
     // other step's write under the other. Empty only for a record made before this field existed.
     string Key = "",
-    long? AppendBeforeLength = null);
+    long? AppendBeforeLength = null,
+    // The plan step whose scope made it, when the scope was opened for one - what lets a run that carries an interrupted
+    // one on put back exactly the interrupted steps' writes and none of the finished steps'.
+    Guid? Step = null);
+
+/// <summary>What a run's record of its writes holds on disk: whose it is, the run it carried on, and every write.</summary>
+public sealed record UndoJournalFile(Guid RunId, Guid? Continues, IReadOnlyList<FileWriteRecord> Writes);
+
+/// <summary>How the workspace was when a run began (RunStart), as kept beside its record: a git tree, or every file's size, time and hash.</summary>
+public sealed record RunStartFile(string? Tree, Dictionary<string, RunStartEntry>? Files);
+
+public sealed record RunStartEntry(long Size, long Ticks, string? Hash);
+
+/// <summary>A file an earlier run changed, as its record says, and whether it is still as that run left it.</summary>
+public sealed record EarlierChange(string Path, bool ExistedBefore, bool AsLeft);
 
 /// <summary>Why an undo could not be performed, or that it was.</summary>
 public sealed record UndoResult(bool Undone, string? Conflict = null, bool Restored = false)
@@ -59,7 +73,17 @@ public sealed record UndoResult(bool Undone, string? Conflict = null, bool Resto
 public sealed class DiskArtifactStore : IOwnedArtifactStore
 {
     private readonly string _root;
-    private readonly string _backupRoot;
+    // Set again when the store is bound to a run (BeginRun): the copies, and the record beside them, go under the run's
+    // own id, so a later process can find them by the run.
+    private string _backupRoot;
+    private Guid? _runId;
+    private Guid? _continues;
+    // What the runs this one carries on wrote, oldest first - read, never written to.
+    private IReadOnlyList<FileWriteRecord> _prior = [];
+    // How the workspace was when the run began (MeasuredFrom), and when the run this one carries on began.
+    private RunStart? _runStart;
+    private WorkspaceSnapshot? _priorStart;
+    private readonly Dictionary<int, Guid> _stepOfOwner = new();
     private readonly ConcurrentDictionary<Guid, string> _paths = new();
 
     /// <summary>
@@ -168,6 +192,44 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
         => LastWrite(relativePath) is { ExistedBefore: true } write
            && (write.AppendBeforeLength is not null || write.BackupPath is { } backup && File.Exists(backup));
 
+    /// <summary>
+    /// How the path stood before the run first changed it. The first write's backup holds the bytes it displaced; a
+    /// first write that only appended displaced nothing, and the file's first bytes up to where it appended are still
+    /// how it was - a later write that replaces them backs them up first (PreserveAppendPrefixes).
+    /// </summary>
+    public async Task<BeforeRun> BeforeRunAsync(string relativePath, CancellationToken ct)
+    {
+        // A run that carries another on asks the earliest record first: "before the run" is before the task's first
+        // attempt began, not before this attempt.
+        var first = KeyOrNull(relativePath) is { } key && _prior.FirstOrDefault(w => SameFile(w.Key, key)) is { } earlier
+            ? earlier
+            : FirstWrite(relativePath);
+        var stored = await StoredBeforeRunAsync(relativePath, first, ct);
+        return _runStart is { } start ? await start.CorrectAsync(relativePath, stored, ct) : stored;
+    }
+
+    /// <summary>What this store's own record says - the files its writes displaced, and nothing of what a command did.</summary>
+    private async Task<BeforeRun> StoredBeforeRunAsync(string relativePath, FileWriteRecord? first, CancellationToken ct)
+    {
+        if (first is null) return BeforeRun.Untouched;
+        if (!first.ExistedBefore) return BeforeRun.Absent;
+        try
+        {
+            if (first.BackupPath is { } backup && File.Exists(backup))
+                return new BeforeRun(BeforeRunState.Kept, await File.ReadAllBytesAsync(backup, ct));
+            if (first.AppendBeforeLength is { } length && ResolveInsideRoot(relativePath) is var full && File.Exists(full))
+            {
+                await using var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                if (stream.Length < length) return BeforeRun.Lost;
+                var bytes = new byte[length];
+                await stream.ReadExactlyAsync(bytes, ct);
+                return new BeforeRun(BeforeRunState.Kept, bytes);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
+        return BeforeRun.Lost;
+    }
+
     /// <summary>The state this path was in before the run first touched it.</summary>
     public FileWriteRecord? FirstWrite(string relativePath)
     {
@@ -205,6 +267,203 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     }
 
     public IArtifactScope BeginStep() => new ArtifactScope(this, NewOwner());
+
+    public IArtifactScope BeginStep(Guid step)
+    {
+        var owner = NewOwner();
+        lock (_journalGate)
+            _stepOfOwner[owner] = step;
+        return new ArtifactScope(this, owner);
+    }
+
+    /// <summary>Where a run's record of its writes is kept: beside the copies it took.</summary>
+    internal static string JournalPath(string root, Guid runId)
+        => Path.Combine(root, WorkspaceGuard.ReservedFolder, "undo", runId.ToString("N"), "journal.json");
+
+    private static readonly System.Text.Json.JsonSerializerOptions JournalJson = new() { WriteIndented = false };
+
+    public void BeginRun(Guid runId, Guid? continues)
+    {
+        var prior = continues is { } earlier ? ReadChain(_root, earlier) : [];
+        // The earliest start kept along the chain: "before the run" is before the task's first attempt began.
+        var priorStart = continues is { } carried
+            ? ReadJournals(_root, carried).Select(j => ReadStart(_root, j.RunId)).FirstOrDefault(s => s is not null)
+            : null;
+        lock (_journalGate)
+        {
+            _runId = runId;
+            _continues = continues;
+            _backupRoot = Path.GetDirectoryName(JournalPath(_root, runId))!;
+            _prior = prior;
+            _priorStart = priorStart;
+            _runStart = null;
+            PersistLocked();
+        }
+    }
+
+    /// <summary>
+    /// Kept in a file of its own, written once: the record beside it is written again after every write, and a scan of a
+    /// workspace outside git is every file's size, time and hash. Kept at all because a person's answer is matched to
+    /// its question word for word, and a resumed run that could no longer say whether a file was there before the run
+    /// asked again what had been answered.
+    /// </summary>
+    public void MeasuredFrom(RunStart start)
+    {
+        Guid? runId;
+        lock (_journalGate)
+        {
+            _runStart = start;
+            runId = _runId;
+        }
+        if (runId is not { } id || start.Snapshot is not { } snapshot) return;
+        try
+        {
+            var path = StartPath(_root, id);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new RunStartFile(snapshot.Tree,
+                snapshot.Files?.ToDictionary(f => f.Key, f => new RunStartEntry(f.Value.Size, f.Value.Ticks, f.Value.Hash))), JournalJson));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    public WorkspaceSnapshot? StartCarriedOn => _priorStart;
+
+    private static string StartPath(string root, Guid runId)
+        => Path.Combine(Path.GetDirectoryName(JournalPath(root, runId))!, "start.json");
+
+    private static WorkspaceSnapshot? ReadStart(string root, Guid runId)
+    {
+        try
+        {
+            var path = StartPath(Path.GetFullPath(root), runId);
+            if (!File.Exists(path) || System.Text.Json.JsonSerializer.Deserialize<RunStartFile>(File.ReadAllText(path), JournalJson) is not { } file)
+                return null;
+            return new WorkspaceSnapshot(file.Tree, file.Files?.ToDictionary(
+                f => f.Key, f => (f.Value.Size, f.Value.Ticks, f.Value.Hash), StringComparer.OrdinalIgnoreCase));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { return null; }
+    }
+
+    /// <summary>
+    /// The record written again after every change to it - whole, to a file beside and then moved into place, so a
+    /// process killed in the middle leaves the record before it rather than half of one. Best effort: a record that
+    /// cannot be written must not be why a write fails, and then a later process knows less, as before this existed.
+    /// </summary>
+    private void PersistLocked()
+    {
+        if (_runId is not { } runId) return;
+        try
+        {
+            var path = JournalPath(_root, runId);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            File.WriteAllText(temporary, System.Text.Json.JsonSerializer.Serialize(new UndoJournalFile(runId, _continues, _journal.ToArray()), JournalJson));
+            File.Move(temporary, path, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>A write recorded as the step's whose scope made it, and the record kept on disk.</summary>
+    private void Record(FileWriteRecord write)
+    {
+        _journal.Add(write.Owner >= 0 && _stepOfOwner.TryGetValue(write.Owner, out var step) ? write with { Step = step } : write);
+        PersistLocked();
+    }
+
+    /// <summary>
+    /// What a run, and every run it carried on, wrote - oldest first. Empty when no record of it is kept (pruned, never
+    /// bound, unreadable). Followed at most a few runs back: a chain longer than that is not one a person resumed by hand.
+    /// </summary>
+    public static IReadOnlyList<FileWriteRecord> ReadChain(string root, Guid runId)
+        => ReadJournals(root, runId).SelectMany(j => j.Writes.OrderBy(w => w.Sequence)).ToArray();
+
+    /// <summary>A run's record and those of the runs it carried on, oldest first.</summary>
+    private static IReadOnlyList<UndoJournalFile> ReadJournals(string root, Guid runId)
+    {
+        var journals = new List<UndoJournalFile>();
+        var seen = new HashSet<Guid>();
+        for (Guid? id = runId; id is { } current && journals.Count < 10 && seen.Add(current);)
+        {
+            var path = JournalPath(Path.GetFullPath(root), current);
+            UndoJournalFile? file = null;
+            try { if (File.Exists(path)) file = System.Text.Json.JsonSerializer.Deserialize<UndoJournalFile>(File.ReadAllText(path), JournalJson); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { }
+            if (file is null) break;
+            journals.Add(file);
+            id = file.Continues;
+        }
+        journals.Reverse();
+        return journals;
+    }
+
+    /// <summary>The files an earlier run - and the runs it carried on - changed, and whether each is still as it left it.</summary>
+    public static IReadOnlyList<EarlierChange> ChangesOf(WorkspaceInfo workspace, Guid runId)
+    {
+        var store = new DiskArtifactStore(workspace);
+        return store.Changes(ReadChain(store._root, runId));
+    }
+
+    /// <summary>Puts back everything an earlier run - and the runs it carried on - changed, where a file is still as it left it.</summary>
+    public static Task<RevertReport> PutBackRunAsync(WorkspaceInfo workspace, Guid runId, CancellationToken ct)
+    {
+        var store = new DiskArtifactStore(workspace);
+        return store.PutBackAsync(ReadChain(store._root, runId), _ => true, ct);
+    }
+
+    public Task<RevertReport> PutBackStepsAsync(IReadOnlyCollection<Guid> steps, CancellationToken ct)
+        => PutBackAsync(_prior, w => w.Step is { } step && steps.Contains(step), ct);
+
+    private IReadOnlyList<EarlierChange> Changes(IReadOnlyList<FileWriteRecord> writes)
+        => writes.Where(w => w.Key.Length > 0).GroupBy(w => w.Key, WorkspaceGuard.Comparison == StringComparison.Ordinal
+                ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase)
+            .Select(g =>
+            {
+                var first = g.First();
+                var last = g.Last();
+                string? now;
+                try { now = FileHash.OfFile(ResolveInsideRoot(first.RelativePath)); }
+                catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException) { now = "?"; }
+                return new EarlierChange(first.RelativePath, first.ExistedBefore, string.Equals(now, last.AfterHash, StringComparison.Ordinal));
+            })
+            .ToArray();
+
+    /// <summary>
+    /// Puts back, file by file, what the writes <paramref name="ours"/> picks out changed - to how each file was before the
+    /// first of them, by the same rule a rejected step's revert keeps (<see cref="Restore"/>): only a file still exactly as
+    /// the last write left it, and only when no write that is not ours came after our first. What it does is not recorded
+    /// as this run's writes: it takes the earlier run's back, it does not make new work.
+    /// </summary>
+    private async Task<RevertReport> PutBackAsync(IReadOnlyList<FileWriteRecord> writes, Func<FileWriteRecord, bool> ours, CancellationToken ct)
+    {
+        var reverted = new List<string>();
+        var kept = new List<string>();
+        var reasons = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var comparer = WorkspaceGuard.Comparison == StringComparison.Ordinal ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
+        foreach (var file in writes.Where(w => w.Key.Length > 0).GroupBy(w => w.Key, comparer))
+        {
+            var all = file.ToArray();
+            var mine = all.Where(ours).ToArray();
+            if (mine.Length == 0) continue;
+            var path = mine[0].RelativePath;
+            var firstMine = Array.IndexOf(all, mine[0]);
+            if (all.Skip(firstMine + 1).Any(w => !ours(w)))
+            {
+                kept.Add(path);
+                reasons[path] = "a step that finished wrote it after";
+                continue;
+            }
+            var gate = GateFor(file.Key);
+            await gate.WaitAsync(ct);
+            try
+            {
+                var outcome = Restore(path, mine[0], all[^1]);
+                if (outcome.Undone) reverted.Add(path);
+                else { kept.Add(path); reasons[path] = outcome.Conflict ?? "it could not be put back"; }
+            }
+            finally { gate.Release(); }
+        }
+        return new RevertReport(reverted, kept, reasons);
+    }
 
     /// <summary>
     /// Every path this owner wrote or removed, from the journal — the record made when the operation
@@ -320,7 +579,7 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
             {
                 var afterHash = FileHash.OfFile(fullPath)!;
                 lock (_journalGate)
-                    _journal.Add(new FileWriteRecord(
+                    Record(new FileWriteRecord(
                         relativePath, existed, beforeHash, backupPath, afterHash, owner, ++_sequence, key));
             }
         }
@@ -380,7 +639,7 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
 
             File.Delete(fullPath);
             lock (_journalGate)
-                _journal.Add(new FileWriteRecord(
+                Record(new FileWriteRecord(
                     relativePath, ExistedBefore: true, beforeHash, backupPath, AfterHash: null, owner,
                     ++_sequence, key));
         }
@@ -413,7 +672,10 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
 
             if (KeyOrNull(relativePath) is { } key)
                 lock (_journalGate)
+                {
                     _journal.RemoveAll(w => SameFile(w.Key, key));
+                    PersistLocked();
+                }
 
             return outcome;
         }
@@ -521,7 +783,10 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
                 // other path's writes, stay exactly where they were. Other scopes' checkpoints are
                 // counter values and are unaffected by this.
                 lock (_journalGate)
+                {
                     _journal.RemoveAll(w => w.Owner == owner && SameFile(w.Key, key));
+                    PersistLocked();
+                }
             }
             finally { gate.Release(); }
         }
@@ -627,7 +892,7 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
                 await AtomicWrite.Replace(full, output => writeTail(null, output));
                 if (!scratch)
                     lock (_journalGate)
-                        _journal.Add(new FileWriteRecord(relativePath, false, null, null,
+                        Record(new FileWriteRecord(relativePath, false, null, null,
                             FileHash.OfFile(full), owner, ++_sequence, key));
                 var created = Guid.NewGuid();
                 _paths[created] = full;
@@ -662,7 +927,7 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
                     intent.Complete();
                     if (!scratch)
                         lock (_journalGate)
-                            _journal.Add(new FileWriteRecord(relativePath, existed, beforeHash,
+                            Record(new FileWriteRecord(relativePath, existed, beforeHash,
                                 null, afterHash, owner, ++_sequence, key, length));
                 }
                 catch
@@ -713,6 +978,7 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
                     continue;
                 if (backup is null) throw new IOException("Cannot preserve append history before replacing this file.");
                 _journal[i] = entry with { BackupPath = backup };
+                PersistLocked();
             }
     }
 
