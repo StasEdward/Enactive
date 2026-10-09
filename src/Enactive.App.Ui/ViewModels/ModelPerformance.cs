@@ -2,12 +2,57 @@ namespace Enactive.App.Ui.ViewModels;
 using System.Collections.ObjectModel;
 using Enactive.Core.Chat;
 
-/// <summary>Session totals grouped by provider AND model. Only completed requests contribute.</summary>
+/// <summary>
+/// One run's totals, grouped by provider AND model. Only completed requests contribute.
+///
+/// <para>The run's, not the session's (2026-10-09): the panel summed every call since the window opened - background
+/// runs, scheduled ones, every run before - and after a run nobody could read that run's speed off it. Each call says
+/// which run it was for (ModelCallMetrics.RunId); the panel shows the run the window shows live, and starts again with the
+/// next one. A call can arrive before the window has learnt its run's id from the run's first event, so the last runs'
+/// calls are kept, and shown when their run is.</para>
+/// </summary>
 internal sealed class ModelPerformance
 {
+    /// <summary>How many runs' calls are kept for a run the window has not shown yet - a few, not the session.</summary>
+    internal const int RunsKept = 8;
+
     public ObservableCollection<ModelPerformanceRow> Rows { get; } = new();
     private readonly Dictionary<(string, string), Totals> _totals = new();
+    private readonly Dictionary<Guid, List<ModelCallMetrics>> _byRun = new();
+    private readonly Queue<Guid> _runs = new();
+    private Guid? _shown;
+
+    /// <summary>The run whose calls are shown now, or null before any.</summary>
+    public Guid? ShownRun => _shown;
+
+    /// <summary>A completed call. Shown when it is the shown run's; kept for a while when it is another run's; a call made
+    /// outside any run is nobody's to show.</summary>
     public void Add(ModelCallMetrics m)
+    {
+        if (m.RunId is not { } run) return;
+        if (!_byRun.TryGetValue(run, out var calls))
+        {
+            _byRun[run] = calls = [];
+            _runs.Enqueue(run);
+            while (_runs.Count > RunsKept && _runs.Dequeue() is var gone)
+                if (gone != _shown) _byRun.Remove(gone);
+        }
+        calls.Add(m);
+        if (run == _shown) Apply(m);
+    }
+
+    /// <summary>Shows one run's calls, from nothing: what came before belongs to other runs.</summary>
+    public void ShowRun(Guid run)
+    {
+        if (_shown == run) return;
+        _shown = run;
+        Rows.Clear();
+        _totals.Clear();
+        foreach (var m in _byRun.GetValueOrDefault(run) ?? [])
+            Apply(m);
+    }
+
+    private void Apply(ModelCallMetrics m)
     {
         var key = (m.ProviderId, m.Model);
         if (!_totals.TryGetValue(key, out var t)) _totals[key] = t = new();

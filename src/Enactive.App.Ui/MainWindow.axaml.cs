@@ -994,6 +994,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 // event rather than being told in advance. So does the live row, which needs it to be
                 // matched against the history when the run ends.
                 _vm.RunLog?.SetRun(ev.RunId);
+                // The panel of model figures is this run's, and starts again with the next (ModelPerformance).
+                _vm.Performance.ShowRun(ev.RunId);
                 if (_liveRow != Guid.Empty && _renderedRunId != ev.RunId)
                 {
                     _renderedRunId = ev.RunId;

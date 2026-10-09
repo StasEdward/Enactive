@@ -8,6 +8,8 @@ using Enactive.App.Ui.ViewModels;
 
 public sealed class ModelPerformanceTests
 {
+    private static readonly Guid Run = Guid.NewGuid();
+    private static ModelCallMetrics InRun(ModelCallMetrics m) => m with { RunId = Run };
     private static readonly ChatRequest Request = new("test", new[] { ChatMessage.User("hello") });
     private static ProviderDescriptor Descriptor(ProviderKind kind) => new("test", "test", kind, "http://localhost:1234/v1", null, new[] { "test" });
     private sealed class Handler(string body) : HttpMessageHandler
@@ -64,16 +66,16 @@ public sealed class ModelPerformanceTests
     [Fact]
     public void Rate_is_weighted_and_unknown_timings_do_not_dilute_it()
     {
-        var vm = new ModelPerformance();
-        vm.Add(new("a", "worker", 100, 100, 50, 12, 1, new(1, 10)));
-        vm.Add(new("a", "worker", 100, 100, null, 3, 1, new(1, 1)));
-        vm.Add(new("a", "worker", 100, 900, null, 2, null, null));
+        var vm = new ModelPerformance(); vm.ShowRun(Run);
+        vm.Add(InRun(new("a", "worker", 100, 100, 50, 12, 1, new(1, 10))));
+        vm.Add(InRun(new("a", "worker", 100, 100, null, 3, 1, new(1, 1))));
+        vm.Add(InRun(new("a", "worker", 100, 900, null, 2, null, null)));
         var row = Assert.Single(vm.Rows);
         Assert.Equal($"{200.0 / 11:N1} T/s", row.Speed);
         Assert.Equal("Generation avg", row.SpeedLabel);
         Assert.Contains("decode 2/3", row.Explanation);
         Assert.Contains($"{50.0:N1}%", row.Cache);
-        vm.Add(new("b", "worker", null, null, null, 1, null, null));
+        vm.Add(InRun(new("b", "worker", null, null, null, 1, null, null)));
         Assert.Equal(2, vm.Rows.Count);
         Assert.Equal("—", vm.Rows[1].Speed);
         Assert.Contains("— in / — out", vm.Rows[1].Tokens);
@@ -81,11 +83,11 @@ public sealed class ModelPerformanceTests
     [Fact]
     public void Request_estimate_uses_weighted_totals_and_excludes_unknown_or_invalid_samples()
     {
-        var vm = new ModelPerformance();
-        vm.Add(new("cloud", "model", 100, 100, null, 10, null, null));
-        vm.Add(new("cloud", "model", 100, 100, null, 2, null, null));
-        vm.Add(new("cloud", "model", 100, null, null, 100, null, null));
-        vm.Add(new("cloud", "model", 100, 900, null, 0, null, null));
+        var vm = new ModelPerformance(); vm.ShowRun(Run);
+        vm.Add(InRun(new("cloud", "model", 100, 100, null, 10, null, null)));
+        vm.Add(InRun(new("cloud", "model", 100, 100, null, 2, null, null)));
+        vm.Add(InRun(new("cloud", "model", 100, null, null, 100, null, null)));
+        vm.Add(InRun(new("cloud", "model", 100, 900, null, 0, null, null)));
         var row = Assert.Single(vm.Rows);
         Assert.Equal($"≈ {200.0 / 12:N1} T/s", row.Speed);
         Assert.Equal("Whole request avg", row.SpeedLabel);
@@ -94,9 +96,9 @@ public sealed class ModelPerformanceTests
     [Fact]
     public void A_reported_zero_output_is_zero_rate_but_zero_duration_is_unknown()
     {
-        var vm = new ModelPerformance();
-        vm.Add(new("cloud", "zero", 100, 0, null, 2, null, null));
-        vm.Add(new("cloud", "unknown", 100, 50, null, 0, null, null));
+        var vm = new ModelPerformance(); vm.ShowRun(Run);
+        vm.Add(InRun(new("cloud", "zero", 100, 0, null, 2, null, null)));
+        vm.Add(InRun(new("cloud", "unknown", 100, 50, null, 0, null, null)));
         Assert.Equal($"≈ {0.0:N1} T/s", vm.Rows[0].Speed);
         Assert.Equal("—", vm.Rows[1].Speed);
     }
@@ -113,5 +115,84 @@ public sealed class ModelPerformanceTests
         var provider = new MeteredChatProvider(new FakeChatProvider(Turn.Says("hello")), "p", reports.Add);
         await foreach (var _ in provider.StreamChatAsync(Request, default)) break;
         Assert.Empty(reports);
+    }
+
+    // ── one run's figures, not the session's ──────────────────────────────
+
+    private static ModelCallMetrics Call(Guid run, string model = "worker") => new("p", model, 100, 10, null, 1, null, null, run);
+
+    /// <summary>
+    /// The panel summed every call since the window opened - background runs, every run before (2026-10-09). It shows the
+    /// run the window shows, and starts again with the next.
+    /// </summary>
+    [Fact]
+    public void The_panel_shows_one_run_and_starts_again_with_the_next()
+    {
+        var vm = new ModelPerformance();
+        Guid first = Guid.NewGuid(), next = Guid.NewGuid(), elsewhere = Guid.NewGuid();
+        vm.ShowRun(first);
+        vm.Add(Call(first));
+        vm.Add(Call(first));
+        vm.Add(Call(elsewhere, "background"));                         // a background run's call: not this run's
+        Assert.Equal(["worker"], vm.Rows.Select(r => r.Model));
+        Assert.Contains("2 calls", vm.Rows[0].Requests);
+
+        vm.ShowRun(next);
+        Assert.Empty(vm.Rows);
+        vm.Add(Call(next));
+        Assert.Contains("1 calls", vm.Rows.Single().Requests);
+    }
+
+    /// <summary>A call can come before the window has learnt its run from the run's first event: it is shown with its run.</summary>
+    [Fact]
+    public void A_call_that_came_before_its_run_was_shown_is_shown_with_it()
+    {
+        var vm = new ModelPerformance();
+        var run = Guid.NewGuid();
+        vm.Add(Call(run, "planner"));
+
+        vm.ShowRun(run);
+
+        Assert.Equal(["planner"], vm.Rows.Select(r => r.Model));
+    }
+
+    [Fact]
+    public void A_call_made_outside_any_run_is_not_shown()
+    {
+        var vm = new ModelPerformance();
+        var run = Guid.NewGuid();
+        vm.ShowRun(run);
+        vm.Add(new("p", "worker", 100, 10, null, 1, null, null));
+
+        Assert.Empty(vm.Rows);
+    }
+
+    /// <summary>Each call says the run it was made for - the scope it was made in.</summary>
+    [Fact]
+    public async Task A_call_carries_the_run_it_was_made_in()
+    {
+        var reports = new List<ModelCallMetrics>();
+        var provider = new MeteredChatProvider(new FakeChatProvider(Turn.Says("hello"), Turn.Says("again")), "p", reports.Add);
+        var run = Guid.NewGuid();
+        using (Enactive.Core.Diagnostics.LogScope.Begin(run, Guid.NewGuid()))
+        {
+            await foreach (var _ in provider.StreamChatAsync(Request, default)) { }
+            await provider.CompleteAsync(Request, default);
+        }
+
+        Assert.All(reports, m => Assert.Equal(run, m.RunId));
+        Assert.Equal(2, reports.Count);
+    }
+
+    /// <summary>The window shows the run its live events are from, and says the figures are the run's.</summary>
+    [Fact]
+    public void The_window_shows_the_live_run_s_figures()
+    {
+        var ui = Path.Combine(TestRepository.Root, "src", "Enactive.App.Ui");
+        var render = File.ReadAllText(Path.Combine(ui, "MainWindow.axaml.cs"));
+        var at = render.IndexOf("private void RenderEvent(WorkEvent ev)", StringComparison.Ordinal);
+        Assert.True(at >= 0);
+        Assert.Contains("_vm.Performance.ShowRun(ev.RunId);", render[at..(at + 1500)], StringComparison.Ordinal);
+        Assert.Contains("This run · completed requests", File.ReadAllText(Path.Combine(ui, "MainWindow.axaml")), StringComparison.Ordinal);
     }
 }

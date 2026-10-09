@@ -864,7 +864,7 @@
                     <Border Grid.Row="1" Background="{DynamicResource Brand.CardFill}" CornerRadius="6" Padding="12">
                         <StackPanel Spacing="8">
                             <TextBlock Classes="panelHeader" Text="MODEL PERFORMANCE" Margin="0" />
-                            <TextBlock Classes="hint" Text="This session · completed requests" FontSize="11" />
+                            <TextBlock Classes="hint" Text="This run · completed requests" FontSize="11" />
                             <TextBlock Classes="hint" Text="Statistics appear after a model responds."
                                        TextWrapping="Wrap" IsVisible="{Binding !Performance.Rows.Count}" />
                             <ScrollViewer MaxHeight="420" HorizontalScrollBarVisibility="Disabled">
