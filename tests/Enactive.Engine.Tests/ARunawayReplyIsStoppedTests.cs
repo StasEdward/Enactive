@@ -126,6 +126,44 @@ public sealed class ARunawayReplyIsStoppedTests
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
     }
 
+    // ── reasoning that goes round ───────────────────────────────────────────
+
+    /// <summary>
+    /// Run f08f1e, 2026-10-09: three turns of reasoning, 50-59 thousand characters each, every one repeating a paragraph
+    /// word for word by its 4,000th to 9,000th character, cut only at the token limit. A loop in the reasoning is stopped
+    /// as one in the reply is; its size alone is not (that is the provider's reasoning allowance).
+    /// </summary>
+    [Fact]
+    public void A_reasoning_that_goes_round_is_a_loop_and_its_size_alone_is_not()
+    {
+        var looping = new StringBuilder(Looping(50));
+        Assert.True(new RunawayReply().LoopIn(looping) is { Looped: true, InReasoning: true });
+
+        var long_ = new StringBuilder(Varied(RunawayReply.MaxTextChars * 2));
+        Assert.Null(new RunawayReply().LoopIn(long_));
+    }
+
+    [Fact]
+    public async Task A_looping_reasoning_is_stopped_told_to_act_and_the_step_goes_on()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("page.md", "the claim");
+        var provider = new FakeChatProvider(
+            Turn.Says(QuickAction),
+            Turn.Thinks(Looping(50)),
+            Turn.Calls1("read_file", """{"path":"page.md"}""", "r1"),
+            Turn.Says("Checked page.md: the claim is there."));
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "check the claims");
+
+        Assert.Contains(events, e => e.Kind == EventKind.ErrorObserved
+                                     && e.Summary.StartsWith("The model's reasoning was stopped", StringComparison.Ordinal));
+        Assert.Contains(provider.Requests.SelectMany(r => r.Messages),
+            m => m.Content?.Contains("Your reasoning was stopped", StringComparison.Ordinal) == true
+                 && m.Content.Contains("Decide from what you have and act", StringComparison.Ordinal));
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+    }
+
     [Fact]
     public async Task A_second_runaway_in_the_same_step_stops_the_step()
     {

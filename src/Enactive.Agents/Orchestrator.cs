@@ -3934,17 +3934,28 @@ public sealed partial class Orchestrator : IOrchestrator
             {
                 runawayStops++;
                 var written = contentBuilder.Length;
-                var kept = contentBuilder.ToString(0, Math.Min(stopped.KeepChars, written));
+                // A reasoning that went round: what it said as its reply so far stands whole; the reasoning is not kept.
+                var kept = stopped.InReasoning ? contentBuilder.ToString() : contentBuilder.ToString(0, Math.Min(stopped.KeepChars, written));
                 messages.Add(new ChatMessage(ChatRole.Assistant, kept, null));
 
-                yield return Ev(EventKind.ErrorObserved,
-                    $"The model's reply was stopped at {written:N0} characters: {stopped.Reason}.");
+                yield return Ev(EventKind.ErrorObserved, stopped.InReasoning
+                    ? $"The model's reasoning was stopped at {reasoningBuilder.Length:N0} characters: {stopped.Reason}."
+                    : $"The model's reply was stopped at {written:N0} characters: {stopped.Reason}.");
 
                 if (runawayStops > 1)
                 {
                     loopResult.Set(StepOutcomeKind.Incomplete,
                         $"the model's reply ran away again after being told why the first was stopped: {stopped.Reason}");
                     yield break;
+                }
+
+                if (stopped.InReasoning)
+                {
+                    messages.Add(ChatMessage.User(
+                        $"Your reasoning was stopped after {reasoningBuilder.Length:N0} characters: {stopped.Reason}. Going over "
+                        + "the same ground again will not settle it. Decide from what you have and act: call a tool - run the "
+                        + "code or the tests to find out what you were working out - or finish the step with what you found."));
+                    continue;
                 }
 
                 messages.Add(ChatMessage.User(

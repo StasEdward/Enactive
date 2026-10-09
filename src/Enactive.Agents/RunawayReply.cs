@@ -50,8 +50,24 @@ internal sealed class RunawayReply
 
     private int _checkedAt;
 
-    /// <summary>Why a reply was stopped, and how much of its text to keep.</summary>
-    internal sealed record Stop(string Reason, int KeepChars, bool Looped);
+    /// <summary>Why a reply was stopped, and how much of its text to keep - and whether what went round was its reasoning.</summary>
+    internal sealed record Stop(string Reason, int KeepChars, bool Looped, bool InReasoning = false);
+
+    /// <summary>
+    /// Called as REASONING arrives: a loop only - its size is the provider's reasoning allowance to bound, not this. Run
+    /// f08f1e, 2026-10-09: three turns of nothing but reasoning, 50-59 thousand characters each and no call, every one cut
+    /// at the 16,384-token limit after about four minutes - and each had begun repeating one paragraph word for word by its
+    /// 4,000th to 9,000th character ("in the next test I call MakeMove(0), MakeMove(3), MakeMove(6) again ..."). Watched,
+    /// each would have stopped at a few thousand tokens; twelve minutes went on the rest. The day before, a reasoning that
+    /// circled without repeating itself (run bb77e810) was measured too: that kind is not caught, and is not meant to be.
+    /// </summary>
+    public Stop? LoopIn(StringBuilder reasoning)
+    {
+        if (reasoning.Length - _checkedAt < CheckEveryChars)
+            return null;
+        _checkedAt = reasoning.Length;
+        return Loop(reasoning.ToString()) is { } loop ? loop with { InReasoning = true } : null;
+    }
 
     /// <summary>Called as text arrives. Null while the reply is fine.</summary>
     public Stop? After(StringBuilder text)
