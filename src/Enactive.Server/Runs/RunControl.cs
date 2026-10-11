@@ -41,6 +41,9 @@ internal sealed class ServerRun
 
     /// <summary>The saved task it is, with its permissions, checks, limits and role - a run tried again from one.</summary>
     public Core.Templates.ResolvedTaskSpec? Spec { get; }
+
+    /// <summary>The schedule that started it, when one did: a run nobody is watching, reported to the inbox.</summary>
+    public DueRun? Scheduled { get; init; }
     public string Owner { get; }
     public string Workspace { get; }
     public string Prompt { get; }
@@ -114,6 +117,12 @@ internal interface IRunControl
     /// </summary>
     StartResult Again(ClaimsPrincipal user, string workspace, Application.Rerun again, string action);
 
+    /// <summary>
+    /// A schedule's run, from the service's scheduler (ADR 0002 §10): in the same line as everybody's runs, nobody
+    /// watching it - its questions are refused, as the console's scheduled runs' are - and its end in the inbox.
+    /// </summary>
+    StartResult StartScheduled(DueRun due);
+
     /// <summary>Carries on a run that stopped at a question, now answered in the inbox: under the same task, as a new run.</summary>
     Task<StartResult> ContinueAsync(ClaimsPrincipal user, string workspace, Agents.ParkedDecision parked, string title);
     IReadOnlyList<ServerRun> List(ClaimsPrincipal user);
@@ -135,6 +144,33 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
 
     public StartResult Start(ClaimsPrincipal user, string workspace, string prompt)
         => StartRun(user, workspace, prompt, null, null, "run started");
+
+    public StartResult StartScheduled(DueRun due)
+    {
+        var root = Workspace.WorkspaceRegistry.Normalise(due.Schedule.WorkspaceRoot);
+        if (RunLauncher.Refusal(root, executor.Problem) is { } refused)
+        {
+            due.Hold.Dispose();
+            return new(null, refused);
+        }
+        ServerRun run;
+        lock (_gate)
+        {
+            if (_stopping)
+            {
+                due.Hold.Dispose();
+                return new(null, "The service is stopping.");
+            }
+            run = new ServerRun("schedule: " + due.Schedule.Name, root, due.Spec.Goal, queue.Enqueue(root), spec: due.Spec)
+            {
+                Scheduled = due
+            };
+            _runs.Add(run);
+        }
+        users.Audit("(scheduler)", "scheduled run started", $"{root}: {due.Schedule.Name} - {due.Why}");
+        _ = LifeAsync(run, run.Owner);
+        return new(run, null);
+    }
 
     public StartResult Again(ClaimsPrincipal user, string workspace, Application.Rerun again, string action)
         => StartRun(user, workspace, again.Goal, again.TaskId, null, action, again.Spec);
@@ -204,7 +240,11 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
             running = true;
             run.Notify();
             // The router asks through this run's questions, and remembers what the owner allows as the owner.
-            var decisions = new DecisionRouter(run.Questions, executor.Session, executor.Approvals, owner, parkQuestionsAfter);
+            // A schedule's run has nobody to ask: its questions are refused, as the console's are (UnattendedDecisionHandler),
+            // and what was allowed for unwatched runs answers before that. Everybody else's are asked in the browser.
+            IDecisionHandler decisions = run.Scheduled is not null
+                ? new Agents.UnattendedDecisionHandler()
+                : new DecisionRouter(run.Questions, executor.Session, executor.Approvals, owner, parkQuestionsAfter);
             await executor.ExecuteAsync(run, decisions, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -223,6 +263,8 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         finally
         {
             run.Ticket.Dispose();
+            // The schedule's claim and its workspace's lease, held from the tick that took it (DueSchedules).
+            run.Scheduled?.Hold.Dispose();
             users.Audit(owner, "run ended", run.Workspace + ": " + (run.Refused ?? run.Session.Failure ?? "finished"));
             run.End();
         }
@@ -337,13 +379,29 @@ internal sealed class EngineExecutor(ServerEngine engine) : IRunExecutor
 
         // A run from the browser (IntentSource.Web): attended, with the shell when the folder's level allows it, and
         // the person who started it named - whose remembered approvals answer for it (RunComposer, ApprovalStore rule 5).
-        var request = new RunRequest(workspace, run.Prompt, IntentSource.Web, run.TaskId, run.Resume, run.Spec,
-            Stage: saved.StageChanges, Principal: run.Owner)
-        {
-            Defaults = saved.Defaults
-        };
+        var scheduled = run.Scheduled;
+        var request = scheduled is not null
+            // The service account's own run, like the console's tick: no principal, its unwatched approvals.
+            ? new RunRequest(workspace, run.Prompt, IntentSource.Schedule, Spec: run.Spec) { Defaults = saved.Defaults }
+            : new RunRequest(workspace, run.Prompt, IntentSource.Web, run.TaskId, run.Resume, run.Spec,
+                Stage: saved.StageChanges, Principal: run.Owner)
+            {
+                Defaults = saved.Defaults
+            };
         await using var composedRun = await RunComposer.ComposeAsync(composed, request, decisions, ct);
         await run.Session.DrainAsync(composedRun.Events(ct), ct);
+
+        // Exactly one inbox item per scheduled run, whatever its ending - the item the console's tick files.
+        if (scheduled is not null)
+        {
+            var store = RunStoreFactory.Create(workspace);
+            var header = (await store.LoadSummariesAsync(CancellationToken.None))
+                .Where(r => r.RunId == run.Session.RunId).FirstOrDefault();
+            var record = header is null ? null : await store.LoadAsync(header.RunId, CancellationToken.None);
+            await InboxStoreFactory.Create(workspace).AppendAsync(ScheduledOutcome.For(workspace.Id, scheduled.Schedule.Id,
+                scheduled.Schedule.Name, record, DateTimeOffset.UtcNow), CancellationToken.None);
+            return;
+        }
 
         // Stopped at a question nobody answered in time: the question is in the ledger, and the inbox is where it is
         // found and answered - as a background run's is (InboxLines), so both read the same.

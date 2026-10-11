@@ -42,6 +42,7 @@
     <!-- The types here are internal, as they were in the window; these are the assemblies that use them.
          enactive-ui is App.Ui's AssemblyName, which is what InternalsVisibleTo matches, not the project name. -->
     <InternalsVisibleTo Include="enactive-ui" />
+    <InternalsVisibleTo Include="enactive" />
     <InternalsVisibleTo Include="Enactive.App.Ui.Tests" />
     <InternalsVisibleTo Include="Enactive.Engine.Tests" />
     <InternalsVisibleTo Include="Enactive.Server" />

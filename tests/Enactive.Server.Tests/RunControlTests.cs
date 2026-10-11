@@ -512,4 +512,38 @@ public sealed class RunControlTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_root, "outside.md")));
         Assert.Contains("not in this workspace", said);
     }
+
+    // ── the service's scheduler (phase 3) ──────────────────────────────────
+
+    /// <summary>
+    /// A due schedule becomes a run in the same line as everybody's: nobody watches it, so its question is refused at
+    /// once rather than waited on, and its schedule and folder are let go when it ends.
+    /// </summary>
+    [Fact]
+    public async Task A_due_schedule_runs_in_the_line_unwatched_and_lets_go_when_it_ends()
+    {
+        var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        var policy = new PermissionPolicy(PermissionLevel.Autonomous, ["*"], []);
+        var spec = new Enactive.Core.Templates.ResolvedTaskSpec("digest", 1, "Digest", Guid.NewGuid(), "project", _workspace,
+            "write the digest", new Dictionary<string, string>(), policy, [], Enactive.Core.Templates.ExecutionLimits.None, null, false);
+        var schedule = new Enactive.Core.Schedules.Schedule(Guid.NewGuid(), _workspace, "morning digest",
+            Enactive.Core.Schedules.ScheduledWork.FromPastRun(spec.Snapshot()),
+            Enactive.Core.Schedules.ScheduleTiming.Once(DateTimeOffset.Now.AddMinutes(-1)), policy, CreatedAt: DateTimeOffset.Now.AddHours(-1));
+        engine.Schedules.Save(schedule);
+        _engine.Ask = true;
+        var scheduler = new ServerScheduler(engine, _control, NullLogger<ServerScheduler>.Instance);
+
+        var run = Assert.Single(await scheduler.TickAsync(DateTimeOffset.Now, CancellationToken.None));
+
+        Assert.Equal(("schedule: morning digest", "write the digest"), (run.Owner, run.Prompt));
+        await WaitUntil(() => _engine.Answers.Count == 1);
+        Assert.NotEqual("allow", _engine.Answers[0]);
+        Assert.True(engine.Markers.IsRunning(schedule.Id));
+
+        await _engine.ReleaseNextAsync();
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(engine.Markers.IsRunning(schedule.Id));
+        Assert.Empty(await scheduler.TickAsync(DateTimeOffset.Now, CancellationToken.None));
+        Assert.Contains(_users.AuditTrail(), e => e is { Account: "(scheduler)", Action: "scheduled run started" });
+    }
 }

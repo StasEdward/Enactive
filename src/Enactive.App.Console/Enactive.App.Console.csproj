@@ -18,5 +18,7 @@
          provider, a model and a team of its own instead - so a scheduled run went out on an
          endpoint kind nobody had chosen, on a model that was not installed. -->
     <ProjectReference Include="..\Enactive.Settings\Enactive.Settings.csproj" />
+    <!-- The application layer: taking a due schedule (DueSchedules) is the service's scheduler's too. -->
+    <ProjectReference Include="..\Enactive.Application\Enactive.Application.csproj" />
   </ItemGroup>
 </Project>

@@ -84,6 +84,9 @@ internal static class ServerApp
         builder.Services.AddSingleton<Runs.ServerHistory>();
         builder.Services.AddSingleton<Runs.ServerInbox>();
         builder.Services.AddHostedService<Runs.RunsStopWithTheService>();
+        // The schedules, every minute (ServerScheduler).
+        builder.Services.AddSingleton<Runs.ServerScheduler>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<Runs.ServerScheduler>());
         builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(30));
 
         builder.Services.AddSingleton(sp => new NetworkGate(options.Subnets(), options.HostNames, sp.GetRequiredService<ILogger<NetworkGate>>()));

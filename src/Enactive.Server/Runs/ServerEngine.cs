@@ -22,6 +22,8 @@ internal sealed class ServerEngine : IDisposable
         _log = new LogHub(minLevel: Core.Diagnostics.LogLevel.Debug, downstream: [logFile]);
         Approvals = new ApprovalStore(Path.Combine(dataFolder, "permissions.json"));
         Workspaces = WorkspaceRegistry.Load(filePath: Path.Combine(dataFolder, "workspaces.json"));
+        Schedules = new Core.Schedules.ScheduleStore(Path.Combine(dataFolder, "schedules.json"));
+        Markers = new Core.Schedules.RunMarkers(Path.Combine(dataFolder, "running"));
 
         var settings = AppSettings.Load(Path.Combine(dataFolder, "settings.json"));
         Settings = settings;
@@ -47,6 +49,12 @@ internal sealed class ServerEngine : IDisposable
 
     /// <summary>The folders the service has run in, with the level and worker saved for each.</summary>
     public WorkspaceRegistry Workspaces { get; }
+
+    /// <summary>The service account's schedules - the same file its own console tick would read.</summary>
+    public Core.Schedules.ScheduleStore Schedules { get; }
+
+    /// <summary>Which schedules are running now, shared with a console tick of the same account so neither runs one twice.</summary>
+    public Core.Schedules.RunMarkers Markers { get; }
 
     public void Dispose()
     {
