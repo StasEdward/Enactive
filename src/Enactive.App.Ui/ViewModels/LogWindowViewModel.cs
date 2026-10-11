@@ -16,28 +16,12 @@ internal sealed class LogRow
     public LogRow(LogEntry entry)
     {
         Entry = entry;
-        // Padded so the category and message columns stay aligned whether or not a line has a step.
-        var run = LogWindowViewModel.RunToken(entry).PadRight(9);
-        var cat = string.IsNullOrEmpty(entry.Category) ? "" : $" [{entry.Category}]";
-        var msg = entry.Message.Length > 200 ? entry.Message[..200] + "…" : entry.Message;
-        msg = msg.Replace("\r", " ").Replace("\n", " ");
-        if (msg.Length > 200)
-            msg = msg[..200] + "…";
-        Line = $"{entry.At.ToLocalTime():HH:mm:ss.fff}  {Short(entry.Level)}  {entry.Source,-12} {run}{cat}  {msg}";
+        // The line as every host writes it (LogText) - and as the analysis and the export read it.
+        Line = LogText.Line(entry);
     }
 
     public LogEntry Entry { get; }
     public string Line { get; }
-
-    private static string Short(LogLevel level) => level switch
-    {
-        LogLevel.Trace => "TRC",
-        LogLevel.Debug => "DBG",
-        LogLevel.Info => "INF",
-        LogLevel.Warn => "WRN",
-        LogLevel.Error => "ERR",
-        _ => "?"
-    };
 }
 
 /// <summary>One source chip. Unticking it hides that plane of the log.</summary>
@@ -348,15 +332,7 @@ internal sealed class LogWindowViewModel : ObservableObject
     /// </summary>
     private string Render()
     {
-        var text = new StringBuilder();
-        foreach (var row in Rows.OrderBy(r => r.Entry.At).ThenBy(r => r.Entry.Seq))
-        {
-            text.AppendLine(row.Line);
-            if (!string.IsNullOrEmpty(row.Entry.Detail))
-                foreach (var line in row.Entry.Detail.Replace("\r\n", "\n").Split('\n'))
-                    text.Append("    | ").AppendLine(line);
-        }
-        return text.ToString();
+        return LogText.Render(Rows.Select(r => r.Entry));
     }
 
     /// <summary>

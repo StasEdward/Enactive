@@ -305,8 +305,11 @@ file - nothing for the desktop or older builds to read differently, and a change
 resolution - with the settings' shell rule on top (`SchedulePolicy`); *done differently:* a template is edited as
 its file's JSON (TemplateStore's own format, `TemplateValidator` before writing) rather than a form of fields - every
 field a template has is reachable at once; a field-by-field editor can come later.
-Left: MCP servers and the engine's switches on the settings page (kept as they are in the file meanwhile), the log
-page and its analysis, notices by mail, persistent staging.
+3.6 the log page: the service's own lines and the engine's in one `LogHub`, read by anybody signed in with the
+window's filter, analysed by an Operator with the review model; the line format and the export are `LogText`,
+shared with the window's log.
+Left: MCP servers and the engine's switches on the settings page (kept as they are in the file meanwhile), notices
+by mail, persistent staging.
 
 ## Phase 4 - desktop as a client (optional)
 

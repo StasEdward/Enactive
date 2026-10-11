@@ -10,13 +10,13 @@ using LogLevel = Enactive.Core.Diagnostics.LogLevel;
 /// so a run and the request that started it read in one place. The Event Log gets what the Windows service host
 /// sends it; a file is what somebody reads afterwards.
 /// </summary>
-internal sealed class FileLoggerProvider(FileLogSink sink) : ILoggerProvider
+internal sealed class FileLoggerProvider(ILogSink sink) : ILoggerProvider
 {
     public ILogger CreateLogger(string categoryName) => new Writer(sink, categoryName);
 
     public void Dispose() { }
 
-    private sealed class Writer(FileLogSink sink, string category) : ILogger
+    private sealed class Writer(ILogSink sink, string category) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 

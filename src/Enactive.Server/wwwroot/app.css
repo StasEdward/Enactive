@@ -81,3 +81,5 @@ main > label input:not([type="checkbox"]), main > label select, main > label tex
 fieldset label input:not([type="checkbox"]), fieldset label select, fieldset label textarea { display: block; width: 100%; max-width: 720px; }
 .start.wide { max-width: 960px; }
 .start.wide textarea { font-family: var(--font-mono); font-size: 0.85rem; }
+.file.log { white-space: pre; font-size: 0.8rem; max-height: 70vh; }
+.sources label { font-size: 0.85rem; color: var(--text-muted); }

@@ -280,3 +280,15 @@ test('an operator writes a template and schedules it, and the schedule says when
   await context.close();
 });
 
+test('a viewer reads the service log, narrowed, and is offered no model to ask', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'vera');
+  await page.getByRole('link', { name: 'Log', exact: true }).click();
+  await expect(page.locator('pre.log')).toContainText('Application started');
+  await expect(page.getByRole('button', { name: /Ask a model/ })).toHaveCount(0);
+
+  await page.getByLabel('Containing').fill('no line says this');
+  await page.getByRole('button', { name: 'Show' }).click();
+  await expect(page.getByText('0 entries')).toBeVisible();
+  await context.close();
+});
+

@@ -87,6 +87,7 @@ public sealed class ApplicationLayerTests
     [InlineData(typeof(ModelReaches))]
     [InlineData(typeof(WorkspaceFiles))]
     [InlineData(typeof(DueSchedules))]
+    [InlineData(typeof(LogText))]
     [InlineData(typeof(RunRecovery))]
     public void Moved_types_come_from_the_application_assembly(Type type)
         => Assert.Equal("Enactive.Application", type.Assembly.GetName().Name);

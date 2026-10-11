@@ -41,9 +41,17 @@ internal static class ServerApp
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton(new ServerFolders(dataFolder));
 
+        // One log for the process: the service's own lines and the engine's, kept recent in memory for the log page and
+        // written to the daily file. They were two - the page would have shown the engine and not the request that
+        // started its run.
         var logFile = new FileLogSink(Path.Combine(dataFolder, "logs", "server"));
+        var log = new LogHub(minLevel: Enactive.Core.Diagnostics.LogLevel.Debug, downstream: [logFile]);
         builder.Services.AddSingleton(logFile);
-        builder.Logging.AddProvider(new FileLoggerProvider(logFile));
+        builder.Services.AddSingleton(log);
+        builder.Logging.AddProvider(new FileLoggerProvider(log));
+        // The framework says every request at Information - a line per page, script and hub message - which would push
+        // the runs out of the log the page keeps. Its warnings and errors still come through; the host's start and stop do.
+        builder.Logging.AddFilter("Microsoft.AspNetCore", Microsoft.Extensions.Logging.LogLevel.Warning);
 
         // The pages' scripts and styles from a build as from a publish. Without it a build run outside Development - the
         // browser tests' harness, a trial on the server before installing - served blazor.web.js and the stylesheets
@@ -75,7 +83,7 @@ internal static class ServerApp
 
         // Runs: the engine (built when first asked for, from the service account's settings), the line of runs, and
         // the one interface every action on a run goes through (IRunControl) - which checks who is asking.
-        builder.Services.AddSingleton(sp => new Runs.ServerEngine(dataFolder, sp.GetRequiredService<FileLogSink>()));
+        builder.Services.AddSingleton(sp => new Runs.ServerEngine(dataFolder, sp.GetRequiredService<LogHub>()));
         builder.Services.AddSingleton(new Enactive.Application.RunQueue(options.MaxActiveRuns));
         builder.Services.AddSingleton<Runs.IRunExecutor>(sp => new Runs.EngineExecutor(sp.GetRequiredService<Runs.ServerEngine>()));
         builder.Services.AddSingleton<Runs.IRunControl>(sp => new Runs.RunControl(sp.GetRequiredService<UserStore>(),
@@ -88,6 +96,7 @@ internal static class ServerApp
         builder.Services.AddSingleton<AccountAdmin>();
         builder.Services.AddSingleton<Runs.ServerSettings>();
         builder.Services.AddSingleton<Runs.ServerLibrary>();
+        builder.Services.AddSingleton<Runs.ServerLogs>();
         builder.Services.AddHostedService<Runs.RunsStopWithTheService>();
         // The schedules, every minute (ServerScheduler).
         builder.Services.AddSingleton<Runs.ServerScheduler>();

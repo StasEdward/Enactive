@@ -17,11 +17,16 @@ internal sealed class ServerEngine : IDisposable
     private readonly object _gate = new();
     private (ComposedEngine? Engine, string? Problem, AppSettings Settings) _now;
 
+    /// <summary>A test's: an engine with a log of its own, into this file.</summary>
     public ServerEngine(string dataFolder, FileLogSink logFile)
+        : this(dataFolder, new LogHub(minLevel: Core.Diagnostics.LogLevel.Debug, downstream: [logFile]))
     {
-        // The engine's log into the same daily file as the service's own, so a run and the request that started it
-        // read in one place.
-        _log = new LogHub(minLevel: Core.Diagnostics.LogLevel.Debug, downstream: [logFile]);
+    }
+
+    /// <param name="log">The service's one log - its own lines and the engine's, so a run and the request that started it read in one place.</param>
+    public ServerEngine(string dataFolder, LogHub log)
+    {
+        _log = log;
         SettingsFile = Path.Combine(dataFolder, "settings.json");
         Approvals = new ApprovalStore(Path.Combine(dataFolder, "permissions.json"));
         Workspaces = WorkspaceRegistry.Load(filePath: Path.Combine(dataFolder, "workspaces.json"));
@@ -81,9 +86,8 @@ internal sealed class ServerEngine : IDisposable
     /// <summary>Which schedules are running now, shared with a console tick of the same account so neither runs one twice.</summary>
     public Core.Schedules.RunMarkers Markers { get; }
 
-    public void Dispose()
-    {
-        _http.Dispose();
-        _log.Dispose();
-    }
+    /// <summary>The log the engine writes to - the service's one log.</summary>
+    public LogHub Log => _log;
+
+    public void Dispose() => _http.Dispose();
 }
