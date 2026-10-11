@@ -19,6 +19,9 @@ internal static class Links
     public static string Schedule(string workspace, Guid? id)
         => $"library/schedule?ws={Uri.EscapeDataString(workspace)}" + (id is null ? "" : $"&id={id}");
 
+    public static string Proposals(string workspace, string set)
+        => $"proposals/view?ws={Uri.EscapeDataString(workspace)}&set={Uri.EscapeDataString(set)}";
+
     public static string File(string workspace, string path)
         => $"file?ws={Uri.EscapeDataString(workspace)}&path={Uri.EscapeDataString(path)}";
 }

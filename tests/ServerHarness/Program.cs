@@ -49,7 +49,20 @@ var app = ServerApp.Build([], options, data, certificate,
     b => b.Services.AddSingleton<IRunExecutor>(new AskingOnce(new ApprovalStore(Path.Combine(data, "permissions.json")))));
 // The folder is one the service has run in, as the engine's executor would have recorded it on a first run: the
 // workspace and history pages list it.
-app.Services.GetRequiredService<ServerEngine>().Workspaces.Touch(Path.Combine(data, "project"));
+var project = Path.Combine(data, "project");
+app.Services.GetRequiredService<ServerEngine>().Workspaces.Touch(project);
+
+// A staged run of alice's that ended with one proposal waiting - proposal.md's second draft - kept as EngineExecutor
+// keeps a browser run's (ServerStaging), for the proposals page to apply.
+File.WriteAllText(Path.Combine(project, "proposal.md"), "first draft\n");
+{
+    var staging = app.Services.GetRequiredService<ServerStaging>();
+    var folder = staging.Begin(project, Guid.NewGuid(), "alice", "redraft the proposal");
+    using var store = new Enactive.Workspace.StagingArtifactStore(project, folder);
+    await store.CreateAsync("proposal.md", Enactive.Core.Artifacts.ArtifactKind.FileSet, "proposal",
+        s => s.WriteAsync("second draft\n"u8.ToArray()).AsTask(), CancellationToken.None);
+    await staging.EndAsync(project, folder, "redraft the proposal", null, store);
+}
 await app.StartAsync();
 Console.WriteLine("ready");
 await app.WaitForShutdownAsync();

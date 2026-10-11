@@ -314,7 +314,13 @@ most, to `NoticeRecipients` in server.json (none: none) through the settings' ma
 3.8 MCP servers and the engine's switches on the settings page: an MCP server's environment and headers are named,
 never shown, kept when nothing new is typed (`McpServerForm`); a connection is tried by an Admin only. The text of
 the switches' boxes becomes the engine section by `EngineSwitches`, shared with the window's settings.
-Left: persistent staging.
+3.9 persistent staging: `StagingArtifactStore` takes a folder to keep its proposals in (bytes plus a manifest
+rewritten after every change) and `Reopen`s it later with the same apply rules; `RunRequest.KeepProposalsIn`, and a
+web run stages only with one. `ServerStaging` keeps a browser run's under `.enactive/staging/<run>` with its owner,
+files an inbox item when proposals wait, lets anybody signed in read them (the Proposals page, with diffs) and an
+Operator apply or reject each once the run has ended, audited; the folder goes when every proposal is decided.
+*Not done:* a retention for proposals nobody decides (they wait, listed with their age); a scheduled run still
+cannot stage (nobody watches it - RunComposer's rule stands).
 
 ## Phase 4 - desktop as a client (optional)
 

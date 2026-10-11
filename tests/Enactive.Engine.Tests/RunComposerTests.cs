@@ -494,14 +494,22 @@ public sealed class RunComposerTests
     }
 
     /// <summary>
-    /// Watched, but its proposals would be kept in the service's memory: a closed tab leaves nobody to apply them and
-    /// a restart loses them, while the history says the changes were staged.
+    /// Watched, but proposals kept in the service's memory are not enough: a closed tab leaves nobody to apply them
+    /// and a restart loses them, while the history says the changes were staged. With a folder to keep them in, it
+    /// stages there.
     /// </summary>
     [Fact]
-    public void A_run_from_the_browser_cannot_stage_yet()
+    public async Task A_run_from_the_browser_stages_only_into_a_folder_that_keeps_the_proposals()
     {
         using var fx = new EngineFixture();
-        Assert.Contains("cannot stage yet", RunComposer.Refusal(FromBrowser(fx, "answer", "alice", stage: true)));
+        Assert.Contains("without a folder to keep", RunComposer.Refusal(FromBrowser(fx, "answer", "alice", stage: true)));
+
+        var folder = Path.Combine(fx.Root, ".enactive", "staging", "one");
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
+        await using var staged = await RunComposer.ComposeAsync(engine,
+            FromBrowser(fx, "answer", "alice", stage: true) with { KeepProposalsIn = folder }, fx.Decisions, default);
+
+        Assert.Equal(folder, Assert.IsType<StagingArtifactStore>(staged.Artifacts).KeptIn);
     }
 
     /// <summary>

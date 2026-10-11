@@ -14,11 +14,21 @@ internal sealed class StagedContent : IDisposable
     internal Stream Open() => new FileStream(_owner.Name, FileMode.Open, FileAccess.Read,
         FileShare.ReadWrite | FileShare.Delete, 8192, FileOptions.SequentialScan);
 
-    internal static async Task<StagedContent> CaptureAsync(Func<Stream, Task> write, CancellationToken ct)
+    /// <summary>The file the bytes are in: what a kept proposal's manifest names.</summary>
+    internal string FileName => Path.GetFileName(_owner.Name);
+
+    /// <param name="keepIn">
+    /// A folder to keep the bytes in after this process is gone - a staging store that persists its proposals.
+    /// Null: a private temporary file, deleted on close.
+    /// </param>
+    internal static async Task<StagedContent> CaptureAsync(Func<Stream, Task> write, CancellationToken ct, string? keepIn = null)
     {
-        var stream = new FileStream(Path.Combine(Path.GetTempPath(), $"enactive-stage-{Guid.NewGuid():N}"),
+        var stream = new FileStream(
+            keepIn is null
+                ? Path.Combine(Path.GetTempPath(), $"enactive-stage-{Guid.NewGuid():N}")
+                : Path.Combine(keepIn, $"{Guid.NewGuid():N}.bin"),
             FileMode.CreateNew, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete,
-            8192, FileOptions.DeleteOnClose | FileOptions.Asynchronous);
+            8192, keepIn is null ? FileOptions.DeleteOnClose | FileOptions.Asynchronous : FileOptions.Asynchronous);
         try
         {
             ct.ThrowIfCancellationRequested();
@@ -31,7 +41,22 @@ internal sealed class StagedContent : IDisposable
             var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, ct).ConfigureAwait(false));
             return new StagedContent(stream, hash);
         }
-        catch { await stream.DisposeAsync().ConfigureAwait(false); throw; }
+        catch
+        {
+            await stream.DisposeAsync().ConfigureAwait(false);
+            // A kept file is not deleted on close: half a proposal left in the folder would be read as one.
+            if (keepIn is not null)
+                File.Delete(stream.Name);
+            throw;
+        }
+    }
+
+    /// <summary>Bytes a kept store wrote earlier, opened again - by a later process, to apply or reject them.</summary>
+    internal static StagedContent Reopen(string path)
+    {
+        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 8192);
+        try { return new StagedContent(stream, Convert.ToHexString(SHA256.HashData(stream))); }
+        catch { stream.Dispose(); throw; }
     }
 
     internal static StagedContent FromText(string text)

@@ -85,7 +85,9 @@ internal static class ServerApp
         // the one interface every action on a run goes through (IRunControl) - which checks who is asking.
         builder.Services.AddSingleton(sp => new Runs.ServerEngine(dataFolder, sp.GetRequiredService<LogHub>()));
         builder.Services.AddSingleton(new Enactive.Application.RunQueue(options.MaxActiveRuns));
-        builder.Services.AddSingleton<Runs.IRunExecutor>(sp => new Runs.EngineExecutor(sp.GetRequiredService<Runs.ServerEngine>()));
+        builder.Services.AddSingleton<Runs.ServerStaging>();
+        builder.Services.AddSingleton<Runs.IRunExecutor>(sp => new Runs.EngineExecutor(sp.GetRequiredService<Runs.ServerEngine>(),
+            sp.GetRequiredService<Runs.ServerStaging>()));
         builder.Services.AddSingleton<Runs.IRunControl>(sp => new Runs.RunControl(sp.GetRequiredService<UserStore>(),
             sp.GetRequiredService<Enactive.Application.RunQueue>(), sp.GetRequiredService<Runs.IRunExecutor>(),
             sp.GetRequiredService<ILogger<Runs.RunControl>>(), TimeSpan.FromMinutes(options.QuestionWaitMinutes),
@@ -183,6 +185,18 @@ internal static class ServerApp
             return run is not null
                 ? Results.LocalRedirect($"/runs/{run.Id}")
                 : Results.LocalRedirect("/" + Components.Links.History(workspace) + "&said=" + Uri.EscapeDataString(refusal ?? ""));
+        });
+
+        // A kept proposal applied or rejected (ServerStaging checks the role and the run's end), back to its page.
+        app.MapPost("/proposals/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerStaging staging) =>
+        {
+            if (!await antiforgery.IsRequestValidAsync(context))
+                return Results.BadRequest();
+            var form = await context.Request.ReadFormAsync();
+            var (workspace, set) = (form["ws"].ToString(), form["set"].ToString());
+            var said = await staging.ActAsync(context.User, workspace, set,
+                Guid.TryParse(form["change"], out var change) ? change : Guid.Empty, form["act"] == "apply", context.RequestAborted);
+            return Results.LocalRedirect("/" + Components.Links.Proposals(workspace, set) + "&said=" + Uri.EscapeDataString(said));
         });
 
         // The history's actions - try again, run again, delete a run or a file, forget an unfinished run - after the

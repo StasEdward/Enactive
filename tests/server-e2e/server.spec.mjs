@@ -312,3 +312,22 @@ test('a viewer reads the service log, narrowed, and is offered no model to ask',
   await context.close();
 });
 
+
+test('a viewer reads a staged run\'s proposal, and an operator applies it to the file', async ({ browser }) => {
+  const viewer = await signedIn(browser, 'vera');
+  await viewer.page.getByRole('link', { name: 'Proposals', exact: true }).click();
+  await viewer.page.getByRole('link', { name: /redraft the proposal/ }).click();
+  await expect(viewer.page.locator('pre.file')).toContainText('+ second draft');
+  await expect(viewer.page.getByRole('button', { name: 'Apply' })).toHaveCount(0);
+  await viewer.context.close();
+
+  const { context, page } = await signedIn(browser, 'alice');
+  await page.goto('/proposals');
+  await page.getByRole('link', { name: /redraft the proposal/ }).click();
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await expect(page.getByText(/^Applied: proposal\.md\. Every proposal of this run is decided\./)).toBeVisible();
+
+  await page.goto('/proposals');
+  await expect(page.getByText('Nothing waits.')).toBeVisible();
+  await context.close();
+});

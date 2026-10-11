@@ -62,6 +62,14 @@ public sealed record RunRequest(
     public required WorkspaceDefaults Defaults { get; init; }
 
     /// <summary>
+    /// A folder to keep a staged run's proposals in, so they outlive the process that ran it (StagingArtifactStore's
+    /// keepIn). A host whose person may close the page or whose process may restart before anybody applies them -
+    /// the service's browser - must give one, or staging is refused (<see cref="RunComposer.Refusal"/>). Null: in
+    /// memory, for the window that shows them.
+    /// </summary>
+    public string? KeepProposalsIn { get; init; }
+
+    /// <summary>
     /// A task from a phone, governed by what is saved against THE WORKSPACE IT NAMES - its level, its worker,
     /// its staging - and not by the desktop's slider, which is about whatever folder happens to be open
     /// there. Reading the slider for both once ran a remote task at whatever permission an unrelated project
@@ -166,13 +174,12 @@ public static class RunComposer
                    + "directly while the history claimed the changes were staged. Turn Stage changes off for this "
                    + "workspace, or run the task in the foreground on the desktop.";
 
-        // The browser's person IS watching, but the proposals live in the service's memory: a closed tab
-        // leaves them with nobody to apply them, and a restart of the service loses them while the history
-        // says the changes were staged. Until proposals are kept on disk (server plan, A4), it is refused.
-        if (request.Stage && request.Source == IntentSource.Web)
-            return "Stage changes is on, and a run from the browser cannot stage yet: its proposals would be "
-                   + "kept only in the service's memory and lost with it. Turn Stage changes off for this "
-                   + "workspace, or run the task on the desktop.";
+        // The browser's person IS watching, but proposals in the service's memory are not enough: a closed tab
+        // leaves them with nobody to apply them, and a restart of the service loses them while the history says
+        // the changes were staged. Staged only when they are kept on disk (KeepProposalsIn).
+        if (request.Stage && request.Source == IntentSource.Web && request.Resume is null && request.KeepProposalsIn is null)
+            return "Stage changes is on, and a run from the browser cannot stage without a folder to keep its "
+                   + "proposals in: they would be held only in the service's memory and lost with it.";
 
         return null;
     }
@@ -218,7 +225,9 @@ public static class RunComposer
             // that is the only kind of run that is ever checkpointed - so staging the rest would put half
             // of one piece of work behind a review gate and leave the other half applied.
             var staged = request.Stage && request.Resume is null;
-            IArtifactStore artifacts = staged ? new StagingArtifactStore(workspace.RootPath) : new DiskArtifactStore(workspace);
+            IArtifactStore artifacts = staged
+                ? new StagingArtifactStore(workspace.RootPath, request.KeepProposalsIn)
+                : new DiskArtifactStore(workspace);
 
             // What governs the run, and what its history says governed it. A resumed run continues under
             // what it was started with: the slider will have moved by now - it is a control, not a record

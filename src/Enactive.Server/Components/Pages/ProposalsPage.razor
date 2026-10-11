@@ -1,0 +1,38 @@
+@page "/proposals"
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerStaging Staging
+
+<PageTitle>Proposed changes - Enactive</PageTitle>
+
+<h1>Proposed changes</h1>
+<p class="where">Runs in a folder set to stage changes propose them here instead of writing them. Nothing is written until
+    somebody applies it.</p>
+
+@if (_sets.Count == 0)
+{
+    <p class="where">Nothing waits.</p>
+}
+else
+{
+    <ul class="list">
+        @foreach (var set in _sets)
+        {
+            <li>
+                <a href="@Links.Proposals(set.Workspace, set.Id)">@Title(set.Prompt)</a>
+                <span class="where">@set.Workspace · @set.Owner · @set.Started.ToString("yyyy-MM-dd HH:mm") ·
+                    @(set.Running ? "the run is still going" : $"{set.Pending} of {set.Total} waiting")</span>
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    private IReadOnlyList<StagedSet> _sets = [];
+
+    protected override async Task OnInitializedAsync() => _sets = Staging.List((await Auth).User);
+
+    private static string Title(string prompt) => Enactive.Application.RunLauncher.Title(prompt);
+}

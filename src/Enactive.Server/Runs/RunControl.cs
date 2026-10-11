@@ -367,7 +367,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
 }
 
 /// <summary>The engine's side of a run on the service: composed as a run from the web, drained into its session.</summary>
-internal sealed class EngineExecutor(ServerEngine engine) : IRunExecutor
+internal sealed class EngineExecutor(ServerEngine engine, ServerStaging staging) : IRunExecutor
 {
     public string? Problem => engine.Problem;
     public SessionApprovals Session => engine.Current?.Session ?? new SessionApprovals();
@@ -382,16 +382,30 @@ internal sealed class EngineExecutor(ServerEngine engine) : IRunExecutor
         // A run from the browser (IntentSource.Web): attended, with the shell when the folder's level allows it, and
         // the person who started it named - whose remembered approvals answer for it (RunComposer, ApprovalStore rule 5).
         var scheduled = run.Scheduled;
+        // A folder set to stage keeps a browser run's proposals on disk, for whoever applies them later (ServerStaging).
+        // Not a scheduled run's - nobody watches it (RunComposer refuses that) - nor a resumed one, which never stages.
+        var keep = scheduled is null && saved.StageChanges && run.Resume is null ? staging.Begin(run.Workspace, run.Id, run.Owner, run.Prompt) : null;
         var request = scheduled is not null
             // The service account's own run, like the console's tick: no principal, its unwatched approvals.
             ? new RunRequest(workspace, run.Prompt, IntentSource.Schedule, Spec: run.Spec) { Defaults = saved.Defaults }
             : new RunRequest(workspace, run.Prompt, IntentSource.Web, run.TaskId, run.Resume, run.Spec,
                 Stage: saved.StageChanges, Principal: run.Owner)
             {
-                Defaults = saved.Defaults
+                Defaults = saved.Defaults,
+                KeepProposalsIn = keep
             };
-        await using var composedRun = await RunComposer.ComposeAsync(composed, request, decisions, ct);
-        await run.Session.DrainAsync(composedRun.Events(ct), ct);
+        Core.Artifacts.IArtifactStore? artifacts = null;
+        try
+        {
+            await using var composedRun = await RunComposer.ComposeAsync(composed, request, decisions, ct);
+            artifacts = composedRun.Artifacts;
+            await run.Session.DrainAsync(composedRun.Events(ct), ct);
+        }
+        finally
+        {
+            if (keep is not null)
+                await staging.EndAsync(run.Workspace, keep, RunState.Title(run), run.Session.RunId, artifacts);
+        }
 
         // Exactly one inbox item per scheduled run, whatever its ending - the item the console's tick files.
         if (scheduled is not null)
