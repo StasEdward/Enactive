@@ -92,6 +92,26 @@
         <Setter Property="Spacing" Value="6" />
     </Style>
 
+    <!-- A scrolled form: the bar stands beside the content, not over it. With AllowAutoHide on (Fluent's
+         default) the content is laid under the bar, which covered the form's right margin - the fields ran
+         into the bar, with a gap on the left and none on the right. Off, the bar has its own column and the
+         content's own margin is the gap. "bare" is for content without a margin of its own: the gap goes
+         on the bar, so it is there only while the bar is. -->
+    <Style Selector="ScrollViewer.gutter">
+        <Setter Property="AllowAutoHide" Value="False" />
+    </Style>
+    <Style Selector="ScrollViewer.gutter.bare /template/ ScrollBar#PART_VerticalScrollBar">
+        <Setter Property="Margin" Value="12,0,0,0" />
+    </Style>
+    <!-- The same for a list, which scrolls inside its own template: its cards have no margin of their own,
+         so the gap goes on the bar, as with "bare". -->
+    <Style Selector="ListBox.gutter">
+        <Setter Property="ScrollViewer.AllowAutoHide" Value="False" />
+    </Style>
+    <Style Selector="ListBox.gutter /template/ ScrollViewer#PART_ScrollViewer /template/ ScrollBar#PART_VerticalScrollBar">
+        <Setter Property="Margin" Value="12,0,0,0" />
+    </Style>
+
     <!-- The row of buttons that closes a dialog. -->
     <Style Selector="StackPanel.actions">
         <Setter Property="Orientation" Value="Horizontal" />
