@@ -251,6 +251,19 @@ not needed: the component logic sits in `RunControl`/`RunSession`, tested direct
 real model, a second host refused its workspace - need an installed service and a model, and are not written.
 
 
+## Re-estimate after the slice (2026-10-12)
+
+Phases 0 and 1 took two working days of agent time, not four weeks - the estimate was for a person. What the
+slice showed about the rest:
+- **Phase 2 stays ~1 week (person).** The parts exist: `DecisionLedger` parks a question and gives the answer when
+  the step is asked again, `InboxDecisions` answers from the inbox, `BackgroundRun` carries a run on. New: the
+  orphaned-question timeout for web runs (park instead of wait), the inbox page, the crash-recovery list with the
+  repeat warning and a resume button.
+- **Phase 3 stays ~2-3 weeks.** The scheduler is `ScheduleTick` plus `ScheduledStart` (0.4) in a hosted service;
+  the editors and settings are the bulk; persistent staging is the one new mechanism.
+- Risks seen: Blazor pages must not rely on interactivity before the connection is up (found in 1.7); every
+  security check had to be proved against Kestrel, not only the test server (two holes found that way).
+
 ## Phase 2 - running, complete
 
 - Inbox page: parked decisions (A3 timeout path), finished background runs, schedule results; answering resumes.
