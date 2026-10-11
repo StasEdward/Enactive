@@ -311,8 +311,10 @@ shared with the window's log.
 3.7 notices by mail (`MailNotices`): what arrived in the inbox since the last mail, in one message a minute at
 most, to `NoticeRecipients` in server.json (none: none) through the settings' mail server; the SMTP send is
 `MailSending`, shared with the send_email tool.
-Left: MCP servers and the engine's switches on the settings page (kept as they are in the file meanwhile),
-persistent staging.
+3.8 MCP servers and the engine's switches on the settings page: an MCP server's environment and headers are named,
+never shown, kept when nothing new is typed (`McpServerForm`); a connection is tried by an Admin only. The text of
+the switches' boxes becomes the engine section by `EngineSwitches`, shared with the window's settings.
+Left: persistent staging.
 
 ## Phase 4 - desktop as a client (optional)
 

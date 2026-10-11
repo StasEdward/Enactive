@@ -550,15 +550,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private async Task<bool> ConfirmAsync(string headline, string detail)
         => ConfirmRequested is null || await ConfirmRequested(headline, detail);
 
-    /// <summary>
-    /// What a box that holds a number says: the number, or the fallback when it is not one, or not one the rule
-    /// accepts. A number typed wrong is not a choice, and the fallback - the engine's own default, mostly - is.
-    /// </summary>
-    private static int NumberOr(string text, int fallback, Func<int, bool> accepts)
-        => int.TryParse(text.Trim(), out var value) && accepts(value) ? value : fallback;
-
-    private static int PositiveOr(string text, int fallback) => NumberOr(text, fallback, v => v > 0);
-
     private async Task SaveAsync()
     {
         // Disabled while a connection code is applied; checked here too, because a disabled button is
@@ -569,42 +560,28 @@ internal sealed partial class SettingsViewModel : ObservableObject
         await _startupLoad;
         _working.GlobalInstructions = GlobalInstructions;
         _working.VerifyWrites = VerifyWrites;
-        // The engine's switches, as one new value of the settings' own section. What does not parse falls back to the
-        // engine's own default (EngineOptions.Default) - a number typed wrong is not a choice, and the defaults are
-        // written in one place.
-        var engineDefault = EngineOptions.Default;
-        var budgets = engineDefault.GenerationBudgets;
-        _working.Engine = _working.Engine with
+        // The engine's switches, as one new value of the settings' own section - by the rules the service's settings
+        // page uses too (EngineSwitches).
+        _working.Engine = new EngineSwitches
         {
-            NumCtx = int.TryParse(NumCtxText.Trim(), out var n) ? n : null,
-            RepairConsultation = _working.Engine.RepairConsultation with
-            {
-                // "provider/model", read as every model reference in the settings is (AppSettings.ParseRef).
-                Model = AppSettings.ParseRef(RepairModelText.Trim()),
-                // Fewer than two failed repairs is not a pattern worth a stronger model's time: 0 is "never".
-                FailedRepairs = NumberOr(RepairThresholdText, 0, v => v >= 2)
-            },
-            GenerationBudgets = new(
-                Action: PositiveOr(GenerationActionText, budgets.Action),
-                FileWrite: PositiveOr(GenerationFileWriteText, budgets.FileWrite),
-                FinalAnswer: PositiveOr(GenerationFinalAnswerText, budgets.FinalAnswer),
-                Handover: PositiveOr(GenerationHandoverText, budgets.Handover),
-                Planner: PositiveOr(GenerationPlannerText, budgets.Planner)),
+            NumCtx = NumCtxText,
+            GenerationAction = GenerationActionText,
+            GenerationFileWrite = GenerationFileWriteText,
+            GenerationFinalAnswer = GenerationFinalAnswerText,
+            GenerationHandover = GenerationHandoverText,
+            GenerationPlanner = GenerationPlannerText,
+            RepairModel = RepairModelText,
+            RepairThreshold = RepairThresholdText,
             DisableThinking = DisableThinking,
             AllowImplicitToolCalls = AllowImplicitToolCalls,
-            // Clamped here as well as in the orchestrator: what is saved should be what will be used, or
-            // the settings window shows one number while the engine quietly runs another.
-            ReviewRetries = Math.Clamp(NumberOr(ReviewRetriesText, engineDefault.ReviewRetries, _ => true), 0, 5),
+            ReviewRetries = ReviewRetriesText,
             RevertRejectedSteps = RevertRejectedSteps,
-            MaxParallelSteps = PositiveOr(MaxParallelStepsText, engineDefault.MaxParallelSteps),
-            // Anything unparseable or below the floor falls back to the default rather than to the
-            // number typed: an evidence block too small to hold its header is not a smaller setting,
-            // it is a reviewer shown nothing.
-            EvidenceBudget = NumberOr(EvidenceBudgetText, engineDefault.EvidenceBudget, v => v >= ExecutionJournal.MinimumBudget)
-        };
+            MaxParallelSteps = MaxParallelStepsText,
+            EvidenceBudget = EvidenceBudgetText
+        }.ApplyTo(_working.Engine);
         // A number that does not parse means the default, not zero: zero here is "keep everything",
         // a deliberate choice, and reaching it by typing nonsense would be the opposite of one.
-        _working.LogRetentionDays = NumberOr(LogRetentionDaysText, FileLogSink.DefaultRetentionDays, v => v >= 0);
+        _working.LogRetentionDays = EngineSwitches.NumberOr(LogRetentionDaysText, FileLogSink.DefaultRetentionDays, v => v >= 0);
         _working.LogPromptBodies = LogPromptBodies;
         _working.ShellCommands = Enum.IsDefined((ShellCommandPolicy)ShellCommandsIndex)
             ? (ShellCommandPolicy)ShellCommandsIndex

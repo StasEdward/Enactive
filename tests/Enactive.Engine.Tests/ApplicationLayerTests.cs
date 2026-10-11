@@ -62,6 +62,7 @@ public sealed class ApplicationLayerTests
     [InlineData(typeof(InboxDecisions))]
     [InlineData(typeof(IStartupEntry))]
     [InlineData(typeof(LogFilter))]
+    [InlineData(typeof(EngineSwitches))]
     [InlineData(typeof(SchedulePolicy))]
     [InlineData(typeof(SettingsSave))]
     [InlineData(typeof(ObservableObject))]

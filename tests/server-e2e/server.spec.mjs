@@ -256,6 +256,26 @@ test('an admin adds a provider with its key on the settings page, and the key ne
   await context.close();
 });
 
+test('an admin adds an MCP server with a token header, and the page names the header but never shows the token', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'ada');
+  await page.goto('/admin/settings');
+  await expect(page.getByRole('heading', { name: 'MCP servers' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Add an MCP server' }).click();
+  const added = page.locator('fieldset.card').filter({ has: page.getByRole('button', { name: 'Remove server' }) }).last();
+  await added.getByLabel('Id').fill('tracker');
+  await added.getByLabel('Transport').selectOption('Http');
+  await added.getByLabel('Address').fill('https://mcp.example.com/');
+  await added.getByLabel(/New headers/).fill('Authorization: Bearer tk-e2e-secret');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByText(/^Saved\./)).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByText('Credentials: Authorization: …')).toBeVisible();
+  expect(await page.content()).not.toContain('tk-e2e-secret');
+  await context.close();
+});
+
 test('an operator writes a template and schedules it, and the schedule says when it runs next', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
   await page.goto('/workspaces');

@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using Enactive.Server.Accounts;
 using Enactive.Settings;
+using Enactive.Tools.Mcp;
 
 /// <summary>The settings as an Admin opened them: a copy to edit, and the version it was opened at.</summary>
 internal sealed record OpenedSettings(AppSettings Copy, string Version);
@@ -57,6 +58,34 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine)
         return (true, engine.Problem is { } still
             ? "Saved. " + still
             : "Saved. The next run uses them; runs already going finish on what they started with.");
+    }
+
+    /// <summary>
+    /// Connects to an MCP server as the page has it and lists its tools: what it offers, or why it could not be
+    /// reached. An Admin's - a stdio server is a program the service STARTS, as its own account.
+    /// </summary>
+    public async Task<string> TestMcpAsync(ClaimsPrincipal user, McpServerConfig config, CancellationToken ct)
+    {
+        if (Admin(user) is null)
+            return NotAdmin(user);
+        if (config.Validate() is { } problem)
+            return problem;
+        try
+        {
+            // Started in the data folder unless the server names its own: the service has no "current" project.
+            await using var connection = await McpConnection.ConnectAsync(config, Path.GetDirectoryName(engine.SettingsFile)!, ct);
+            return $"Connected · {connection.Tools.Count} tool(s): " + string.Join(", ", connection.Tools.Select(t => t.Definition.Name));
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return $"No answer within {config.TimeoutSeconds} s.";
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The type, not the message: a failed start can echo the command line, and with it what the environment
+            // was built from.
+            return $"Could not connect ({ex.GetType().Name}). Check the command or address, the credentials, and that the server runs.";
+        }
     }
 
     /// <summary>The file's content, as a version: what a save compares against.</summary>

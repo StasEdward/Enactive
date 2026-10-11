@@ -5,6 +5,8 @@
 @using Enactive.Core.Providers
 @using Enactive.Server.Runs
 @using Enactive.Settings
+@using Enactive.Application
+@using Enactive.Tools.Mcp
 @using Microsoft.AspNetCore.Components.Authorization
 @inject ServerSettings Service
 
@@ -108,7 +110,68 @@ else if (_opened is { } opened)
     <label>To, comma separated <input @bind="RecipientsText" /></label>
     <label><input type="checkbox" @bind="s.Smtp.SendWithoutAsking" /> Send without asking</label>
 
-    <p class="where">Not here yet: MCP servers and the engine's switches - they are kept as they are in the file.</p>
+    <h2>MCP servers</h2>
+    <p class="where">A stdio server is a program the service starts, as the service's own account.</p>
+    @foreach (var server in s.McpServers.ToList())
+    {
+        var form = FormOf(server);
+        <fieldset class="card">
+            <label>Id <input @bind="server.Id" /></label>
+            <label><input type="checkbox" @bind="server.Enabled" /> On</label>
+            <label><input type="checkbox" @bind="server.RequireApproval" /> Ask before each call</label>
+            <label>Transport
+                <select @bind="server.Transport">
+                    @foreach (var transport in Enum.GetValues<McpTransportKind>())
+                    {
+                        <option value="@transport">@transport</option>
+                    }
+                </select>
+            </label>
+            @if (server.Transport == McpTransportKind.Stdio)
+            {
+                <label>Command <input @bind="server.Command" /></label>
+                <label>Arguments, one per line <textarea rows="3" @bind="form.Arguments"></textarea></label>
+                <label>Working folder (empty: the data folder) <input @bind="server.WorkingDirectory" /></label>
+            }
+            else
+            {
+                <label>Address <input @bind="server.Url" placeholder="https://mcp.example.com/" /></label>
+            }
+            <label>Timeout, seconds <input type="number" min="1" max="600" @bind="form.Timeout" /></label>
+            <p class="where">Credentials: @McpServerForm.NamesSet(server)</p>
+            <label>New environment, NAME=value per line (replaces it)
+                <textarea rows="2" autocomplete="off" @bind="form.NewEnvironment"></textarea></label>
+            <label>New headers, Name: value per line (replaces them)
+                <textarea rows="2" autocomplete="off" @bind="form.NewHeaders"></textarea></label>
+            <label><input type="checkbox" @bind="form.ClearCredentials" /> Remove its environment and headers</label>
+            <div class="answers">
+                <button class="secondary" @onclick="() => TestMcpAsync(server)" disabled="@_testing">Test the connection</button>
+                <button class="secondary" @onclick="() => s.McpServers.Remove(server)">Remove server</button>
+            </div>
+            @if (_tested.TryGetValue(server, out var tested))
+            {
+                <p class="where">@tested</p>
+            }
+        </fieldset>
+    }
+    <button class="secondary" @onclick="() => AddMcp(s)">Add an MCP server</button>
+
+    <h2>Engine</h2>
+    <p class="where">A number that does not parse means the engine's default.</p>
+    <label>Context window asked of a local model (empty: the model's own) <input @bind="_engine.NumCtx" /></label>
+    <label>Tokens per action <input @bind="_engine.GenerationAction" /></label>
+    <label>Tokens per file written <input @bind="_engine.GenerationFileWrite" /></label>
+    <label>Tokens per final answer <input @bind="_engine.GenerationFinalAnswer" /></label>
+    <label>Tokens per handover <input @bind="_engine.GenerationHandover" /></label>
+    <label>Tokens per plan <input @bind="_engine.GenerationPlanner" /></label>
+    <label>A stronger model for failing repairs <select @bind="_engine.RepairModel">@ModelOptions(s)</select></label>
+    <label>…consulted after this many failed repairs (0: never) <input @bind="_engine.RepairThreshold" /></label>
+    <label>Redos of a rejected step (0-5) <input @bind="_engine.ReviewRetries" /></label>
+    <label>Steps at once <input @bind="_engine.MaxParallelSteps" /></label>
+    <label>Characters of evidence a reviewer is shown <input @bind="_engine.EvidenceBudget" /></label>
+    <label><input type="checkbox" @bind="_engine.DisableThinking" /> Ask a local model not to think aloud</label>
+    <label><input type="checkbox" @bind="_engine.AllowImplicitToolCalls" /> Run tool calls a model only describes</label>
+    <label><input type="checkbox" @bind="_engine.RevertRejectedSteps" /> Put a rejected step's files back</label>
 
     <div class="answers">
         <button @onclick="SaveAsync">Save</button>
@@ -134,6 +197,12 @@ else if (_opened is { } opened)
     private readonly Dictionary<ProviderConfig, Box> _keys = new();
     private readonly Dictionary<WorkerConfig, Box> _tools = new();
     private string RecipientsText { get; set; } = "";
+    private readonly Dictionary<McpServerConfig, McpServerForm> _mcp = new();
+    private readonly Dictionary<McpServerConfig, string> _tested = new();
+    private EngineSwitches _engine = new();
+    private bool _testing;
+
+    private McpServerForm FormOf(McpServerConfig c) => _mcp.TryGetValue(c, out var f) ? f : _mcp[c] = McpServerForm.Of(c);
 
     private Box ModelsOf(ProviderConfig p) => _models.TryGetValue(p, out var b) ? b : _models[p] = new Box(string.Join("\n", p.Models));
     private Box NewKey(ProviderConfig p) => _keys.TryGetValue(p, out var b) ? b : _keys[p] = new Box("");
@@ -144,7 +213,8 @@ else if (_opened is { } opened)
     private async Task OpenAsync()
     {
         (_opened, _problem) = Service.Open((await Auth).User);
-        _models.Clear(); _keys.Clear(); _tools.Clear();
+        _models.Clear(); _keys.Clear(); _tools.Clear(); _mcp.Clear(); _tested.Clear();
+        _engine = _opened is null ? new() : EngineSwitches.Of(_opened.Copy.Engine);
         _newMailPassword = "";
         RecipientsText = _opened is null ? "" : string.Join(", ", _opened.Copy.Smtp.Recipients);
         _said = null;
@@ -162,6 +232,13 @@ else if (_opened is { } opened)
         if (_newMailPassword.Length > 0)
             s.Smtp.Password = _newMailPassword;
         s.Smtp.Recipients = Lines(RecipientsText, ',');
+        s.Engine = _engine.ApplyTo(s.Engine);
+        foreach (var (server, form) in _mcp)
+            if (s.McpServers.Contains(server) && form.ApplyTo(server) is { } problem)
+            {
+                _said = "Not saved - " + problem;
+                return;
+            }
 
         var (saved, said) = Service.Save((await Auth).User, _opened);
         if (saved)
@@ -173,6 +250,34 @@ else if (_opened is { } opened)
         => text.Split(separator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
     private static void AddProvider(AppSettings s) => s.Providers.Add(new ProviderConfig { Id = Unique(s, "provider") });
+
+    private static void AddMcp(AppSettings s)
+    {
+        for (var i = 1; ; i++)
+            if (!s.McpServers.Any(m => m.Id == $"server{i}"))
+            {
+                s.McpServers.Add(new McpServerConfig { Id = $"server{i}" });
+                return;
+            }
+    }
+
+    /// <summary>On a copy, with what is typed so far: testing does not change what Save will write.</summary>
+    private async Task TestMcpAsync(McpServerConfig server)
+    {
+        _testing = true;
+        try
+        {
+            var copy = server.Clone();
+            var form = FormOf(server);
+            var trial = new McpServerForm { Arguments = form.Arguments, NewEnvironment = form.NewEnvironment,
+                NewHeaders = form.NewHeaders, ClearCredentials = form.ClearCredentials, Timeout = form.Timeout };
+            _tested[server] = trial.ApplyTo(copy) ?? await Service.TestMcpAsync((await Auth).User, copy, CancellationToken.None);
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
 
     private static void AddWorker(AppSettings s) => s.Workers.Add(new WorkerConfig { Id = Unique(s, "worker"), Role = "worker" });
 
