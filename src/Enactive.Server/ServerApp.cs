@@ -73,6 +73,7 @@ internal static class ServerApp
         builder.Services.AddSingleton(new Enactive.Application.RunQueue(options.MaxActiveRuns));
         builder.Services.AddSingleton<Runs.IRunExecutor>(sp => new Runs.EngineExecutor(sp.GetRequiredService<Runs.ServerEngine>()));
         builder.Services.AddSingleton<Runs.IRunControl, Runs.RunControl>();
+        builder.Services.AddSingleton<Runs.ServerHistory>();
 
         builder.Services.AddSingleton(sp => new NetworkGate(options.Subnets(), options.HostNames, sp.GetRequiredService<ILogger<NetworkGate>>()));
 

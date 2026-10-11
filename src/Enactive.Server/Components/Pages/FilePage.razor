@@ -1,0 +1,30 @@
+@page "/file"
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerHistory History
+
+<PageTitle>@FilePath - Enactive</PageTitle>
+
+<p><a href="@Links.History(Ws ?? "")">← @Ws</a></p>
+<h1 class="path">@FilePath</h1>
+@if (_problem is not null)
+{
+    <p class="said">@_problem</p>
+}
+else
+{
+    @* Shown as text, never as markup: a file of the workspace is data, whatever it contains. *@
+    <pre class="file">@_text</pre>
+}
+
+@code {
+    [SupplyParameterFromQuery] private string? Ws { get; set; }
+    [SupplyParameterFromQuery(Name = "path")] private string? FilePath { get; set; }
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    private string? _text;
+    private string? _problem;
+
+    protected override async Task OnInitializedAsync()
+        => (_text, _problem) = History.File((await Auth).User, Ws ?? "", FilePath ?? "");
+}

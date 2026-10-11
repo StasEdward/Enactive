@@ -47,7 +47,7 @@ internal sealed class RunListItemViewModel
         Meta = $"{Ago(record.StartedAt)} · {Outcome(record)}";
 
         var elapsed = record.FinishedAt - record.StartedAt;
-        Tooltip = $"{Title}\n{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {record.Status} · {Duration(elapsed)}";
+        Tooltip = $"{Title}\n{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {record.Status} · {RunDigest.Duration(elapsed)}";
     }
 
     public RunSummary Record { get; }
@@ -106,15 +106,7 @@ internal sealed class RunListItemViewModel
         if (record.Artifacts.Count > 0)
             return $"{record.Artifacts.Count} artifact{(record.Artifacts.Count == 1 ? "" : "s")}";
 
-        return Duration(record.FinishedAt - record.StartedAt);
-    }
-
-    private static string Duration(TimeSpan span)
-    {
-        var seconds = span.TotalSeconds;
-        if (seconds < 0)
-            seconds = 0;
-        return seconds >= 60 ? $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s" : $"{seconds:0}s";
+        return RunDigest.Duration(record.FinishedAt - record.StartedAt);
     }
 }
 
@@ -255,27 +247,17 @@ internal sealed class PastRunViewModel : ObservableObject
         Func<TaskTemplate?>? currentTemplate = null)
     {
         Record = record;
-        Title = RunTitle.For(record);
-
-        var siblings = attempts is { Count: > 0 } ? attempts : new IRunHeader[] { record };
-        var attemptNo = RunHistory.AttemptNumber(siblings, record.RunId);
-        AttemptLabel = siblings.Count > 1
-            ? $"attempt {attemptNo} of {siblings.Count}"
-            : string.Empty;
+        // The head of the page - title, what was asked, attempt, the figures, what it was allowed - is the run's, and
+        // the service shows the same one (RunDigest).
+        var digest = RunDigest.Of(record, attempts);
+        Title = digest.Title;
+        AttemptLabel = digest.AttemptLabel;
         HasAttempts = AttemptLabel.Length > 0;
 
         Spec = ResolvedTaskSpec.Parse(record.Spec);
         Request = RunHistory.RequestOf(record);
-
-        // Only when it says something the title does not: a typed request IS the title, and
-        // repeating it underneath is noise.
-        var asked = RunTitle.OneLine(Request, 160);
-        Subtitle = asked.StartsWith(Title, StringComparison.Ordinal) ? string.Empty : asked;
-
-        // Retry re-runs THIS specification, exactly as it was. For a run that was typed rather than
-        // started from a template there is no specification, so it re-runs the request instead -
-        // which is why the request is recorded as a value.
-        CanRetry = Spec is not null || !string.IsNullOrWhiteSpace(Request);
+        Subtitle = digest.Subtitle;
+        CanRetry = digest.CanRetry;
 
         // Run again re-resolves the template as it stands NOW. Only offered when the template is
         // still there: a template that has been deleted or renamed has no current version, and a
@@ -290,21 +272,16 @@ internal sealed class PastRunViewModel : ObservableObject
 
         RetryCommand = new RelayCommand(() => RetryRequested?.Invoke(this), () => CanRetry);
         RunAgainCommand = new RelayCommand(() => RunAgainRequested?.Invoke(this), () => CanRunAgain);
-        Status = record.Status;
-        // The pill is a tint with the colour in the word - see Brand. The 3px edge on a run
-        // CARD stays saturated: an edge that thin has nowhere to put a tint.
-
-        var elapsed = record.FinishedAt - record.StartedAt;
-        var model = string.IsNullOrWhiteSpace(record.Model) ? "unknown model" : record.Model;
-        Meta = $"{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {model} · run {record.RunId:N}";
+        Status = digest.Status;
+        Meta = digest.Meta;
 
         // Folded from the record exactly as the live window folds the events as they arrive (RunFeed).
         foreach (var card in RunFeed.Replay(record).Cards)
             Steps.Add(new StepCardViewModel(card));
         foreach (var row in RunTimeline.Fold(record))
             Events.Add(row);
-        foreach (var a in record.Artifacts)
-            Artifacts.Add(new ArtifactItemViewModel(PathOf(a), open, remove));
+        foreach (var path in digest.Artifacts)
+            Artifacts.Add(new ArtifactItemViewModel(path, open, remove));
         foreach (var d in record.Decisions)
             Decisions.Add(d);
 
@@ -312,34 +289,18 @@ internal sealed class PastRunViewModel : ObservableObject
         Routing = RunRouting.From(record);
         ModelWork = ModelWorkSplit.From(record, reachOf ?? (_ => ModelReach.Unknown));
 
-        // Null usage means the run predates the counting, or the provider never reported - which is
-        // not the same as zero and does not get to look like it.
-        TokensText = record.Usage is { } u ? TokenCounts.Compact(u.Total) : "—";
-        TokensDetail = record.Usage is { } u2
-            ? $"{TokenCounts.Compact(u2.PromptTokens)} in · {TokenCounts.Compact(u2.CompletionTokens)} out"
-            : "nothing reported";
-
+        TokensText = digest.TokensText;
+        TokensDetail = digest.TokensDetail;
         ArtifactCountText = Artifacts.Count.ToString();
-        ToolCallsText = record.Events.Count(e => e.Kind == nameof(EventKind.ToolInvoked)).ToString();
-        ElapsedText = Duration(elapsed);
+        ToolCallsText = digest.ToolCalls.ToString();
+        ElapsedText = digest.ElapsedText;
+        StepsText = digest.StepsText;
 
-        var done = Steps.Count(c => c.StatusWord is "done" or "skipped");
-        StepsText = Steps.Count == 0 ? "—" : $"{done} / {Steps.Count} steps";
-
-        // What it was ALLOWED to do, as recorded. Runs from before this was kept say so rather
-        // than showing today's slider position and passing it off as history.
-        if (record.Settings is { } set)
-        {
-            HasSettings = true;
-            AutonomyText = set.AutonomyName;
-            Autonomy = set.Autonomy;
-            WorkerText = string.IsNullOrWhiteSpace(set.Worker) ? "default worker" : set.Worker;
-            StagingText = set.Staged ? "changes were staged for review" : "changes were applied directly";
-        }
-        else
-        {
-            AutonomyText = WorkerText = StagingText = string.Empty;
-        }
+        HasSettings = digest.HasSettings;
+        AutonomyText = digest.AutonomyText;
+        Autonomy = digest.Autonomy;
+        WorkerText = digest.WorkerText;
+        StagingText = digest.StagingText;
 
         ShowExecutionCommand = new RelayCommand(() => SelectedTab = 0);
         ShowArtifactsCommand = new RelayCommand(() => SelectedTab = 1);
@@ -349,7 +310,7 @@ internal sealed class PastRunViewModel : ObservableObject
         // nothing, so it opens on the timeline instead - which is what such a record actually holds.
         // WHY there are none is Core's answer, not this window's: there are two reasons and they
         // send a person to two different places.
-        NoStepsReason = RunReport.WhyNoSteps(record);
+        NoStepsReason = digest.NoStepsReason;
         if (Steps.Count == 0)
             SelectedTab = 2;
     }
@@ -419,30 +380,6 @@ internal sealed class PastRunViewModel : ObservableObject
     public bool HasArtifacts => Artifacts.Count > 0;
     public bool HasNoArtifacts => Artifacts.Count == 0;
     public bool HasDecisions => Decisions.Count > 0;
-
-    private static string Duration(TimeSpan span)
-    {
-        var seconds = span.TotalSeconds;
-        if (seconds < 0)
-            seconds = 0;
-        return seconds >= 60 ? $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s" : $"{seconds:0}s";
-    }
-
-    /// <summary>
-    /// A recorded artifact is the path. Older records kept the whole sentence — "FileSet: path" —
-    /// and only a KNOWN artifact kind is stripped off the front of one, because splitting on the
-    /// first ": " would eat the start of any path that happens to contain one.
-    /// </summary>
-    private static string PathOf(string artifact)
-    {
-        var colon = artifact.IndexOf(": ", StringComparison.Ordinal);
-        if (colon < 0)
-            return artifact;
-
-        return Enum.TryParse<ArtifactKind>(artifact[..colon], ignoreCase: true, out _)
-            ? artifact[(colon + 2)..]
-            : artifact;
-    }
 }
 
 /// <summary>

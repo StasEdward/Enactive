@@ -232,6 +232,80 @@ public sealed partial class SignInTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, (await browser.SendAsync(Negotiate())).StatusCode);
     }
 
+    // ── reading (server plan 1.6) ───────────────────────────────────────────
+
+    /// <summary>A workspace the service has run in, with one finished run that wrote one file.</summary>
+    private async Task<(string Root, Enactive.Core.History.RunRecord Run)> KnownWorkspaceAsync()
+    {
+        var root = Path.Combine(_root, "project");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "digest.md"), "three mails <script>alert(1)</script>");
+        _app.Services.GetRequiredService<Enactive.Server.Runs.ServerEngine>().Workspaces.Touch(root);
+
+        var at = DateTimeOffset.Now;
+        var run = new Enactive.Core.History.RunRecord(Guid.NewGuid(), Guid.NewGuid(), "digest the inbox", "qwen", at, at.AddSeconds(5), "Completed",
+            [new Enactive.Core.History.RunEventRecord(at, "ToolInvoked", "write_file digest.md")], ["digest.md"], []);
+        await Enactive.Workspace.RunStoreFactory.Create(Enactive.Core.Context.WorkspaceInfo.For(root)).SaveAsync(run, CancellationToken.None);
+        return (root, run);
+    }
+
+    private async Task<string> SignedInPageAsync(string path)
+    {
+        var browser = NewBrowser();
+        await SignInAsync(browser, "alice", Password);
+        var response = await browser.GetAsync(path);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    [Fact]
+    public async Task The_workspaces_the_service_ran_in_are_listed_and_their_runs_read()
+    {
+        var (root, run) = await KnownWorkspaceAsync();
+
+        Assert.Contains("project", await SignedInPageAsync("/workspaces"));
+        Assert.Contains("digest the inbox", await SignedInPageAsync("/history?ws=" + Uri.EscapeDataString(root)));
+
+        var page = await SignedInPageAsync($"/history/run?ws={Uri.EscapeDataString(root)}&id={run.RunId}");
+        Assert.Contains("digest the inbox", page);
+        Assert.Contains("write_file digest.md", page);
+        Assert.Contains("digest.md", page);
+    }
+
+    /// <summary>
+    /// A Viewer reads runs, not the server's disks: a folder the service never ran in is not one whose history it shows,
+    /// however the address is typed.
+    /// </summary>
+    [Fact]
+    public async Task A_folder_the_service_does_not_know_is_not_read()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "elsewhere"));
+
+        var page = await SignedInPageAsync("/history?ws=" + Uri.EscapeDataString(Path.Combine(_root, "elsewhere")));
+
+        Assert.Contains("does not know that folder", page);
+    }
+
+    /// <summary>A file is shown as text, never as markup, and only from inside the workspace.</summary>
+    [Fact]
+    public async Task A_file_is_shown_as_text_from_inside_the_workspace_only()
+    {
+        var (root, _) = await KnownWorkspaceAsync();
+        File.WriteAllText(Path.Combine(_root, "secret.txt"), "the service's own");
+
+        var file = await SignedInPageAsync($"/file?ws={Uri.EscapeDataString(root)}&path=digest.md");
+        Assert.Contains("three mails &lt;script&gt;", file);
+        Assert.DoesNotContain("<script>alert(1)", file);
+
+        var outside = await SignedInPageAsync($"/file?ws={Uri.EscapeDataString(root)}&path={Uri.EscapeDataString("..\\secret.txt")}");
+        Assert.Contains("not in this workspace", outside);
+        Assert.DoesNotContain("the service's own", outside);
+    }
+
+    [Fact]
+    public async Task The_reading_pages_need_a_signed_in_person()
+        => Assert.Equal(HttpStatusCode.Redirect, (await NewBrowser().GetAsync("/workspaces")).StatusCode);
+
     [Fact]
     public async Task Health_answers_without_signing_in()
         => Assert.Equal(HttpStatusCode.OK, (await NewBrowser().GetAsync("/health")).StatusCode);

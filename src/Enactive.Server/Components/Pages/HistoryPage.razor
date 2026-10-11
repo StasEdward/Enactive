@@ -1,0 +1,67 @@
+@page "/history"
+@using Enactive.Core.History
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerHistory History
+
+<PageTitle>History - Enactive</PageTitle>
+
+@if (_problem is not null)
+{
+    <p class="said">@_problem</p>
+}
+else if (_list is not null)
+{
+    <h1>@(_name ?? Ws)</h1>
+    <p class="where">@Ws</p>
+
+    @if (_list.Resumable.Count > 0)
+    {
+        <h2>Unfinished</h2>
+        <ul class="list">
+            @foreach (var checkpoint in _list.Resumable)
+            {
+                <li>@RunTitle.OneLine(checkpoint.Title) <span class="where">@checkpoint.Remaining step(s) left · stopped @checkpoint.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span></li>
+            }
+        </ul>
+    }
+
+    <h2>Runs</h2>
+    @if (_list.Problem is not null)
+    {
+        <p class="said">The history could not be read: @_list.Problem</p>
+    }
+    else if (_list.Runs.Count == 0)
+    {
+        <p>No runs recorded in this workspace.</p>
+    }
+    else
+    {
+        <ul class="list">
+            @foreach (var run in _list.Runs.OrderByDescending(r => r.StartedAt))
+            {
+                <li>
+                    <a href="@Links.PastRun(Ws!, run.RunId)">@RunTitle.For(run)</a>
+                    <span class="state">@run.Status</span>
+                    <span class="where">@run.StartedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+                </li>
+            }
+        </ul>
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery] private string? Ws { get; set; }
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    private Enactive.Application.HistoryList? _list;
+    private string? _problem;
+    private string? _name;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await Auth).User;
+        _name = History.Workspace(user, Ws ?? "")?.Name;
+        (_list, _problem) = await History.ListAsync(user, Ws ?? "", CancellationToken.None);
+    }
+}

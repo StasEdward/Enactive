@@ -2252,30 +2252,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         // whether a legacy in-workspace file counts are all answered in there.
         //
         // They used to be answered here, correctly, in a WinExe no test project references.
-        /// <summary>
-        /// Where a provider runs, by its id. The engine records WHICH provider produced each turn and
-        /// deliberately stops there — it has no idea of a provider's address. This is the only place
-        /// that does, because addresses are settings.
-        ///
-        /// A provider the settings no longer contain is Unknown, not Cloud: a deleted or renamed
-        /// provider is a gap in what we know, and filing it under "cloud" would put made-up numbers next
-        /// to real ones. Same rule as the token tile's em dash.
-        /// </summary>
-        private ModelReach ReachOf(string? providerId)
-        {
-            if (string.IsNullOrWhiteSpace(providerId))
-                return ModelReach.Unknown;
-
-            var provider = _settings.Providers.FirstOrDefault(
-                p => string.Equals(p.Id, providerId, StringComparison.OrdinalIgnoreCase));
-
-            if (provider is null)
-                return ModelReach.Unknown;
-
-            return Enactive.Settings.ProviderReach.Local(provider.BaseUrl)
-                ? ModelReach.Local
-                : ModelReach.Cloud;
-        }
+        /// <summary>Where a provider runs, by its id, against this window's settings (ModelReaches).</summary>
+        private ModelReach ReachOf(string? providerId) => ModelReaches.Of(_settings, providerId);
 
         /// <summary>
         /// Says once per workspace that an old in-folder approvals file is being ignored, so being asked

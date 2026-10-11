@@ -24,6 +24,7 @@ internal sealed class ServerEngine : IDisposable
         Workspaces = WorkspaceRegistry.Load(filePath: Path.Combine(dataFolder, "workspaces.json"));
 
         var settings = AppSettings.Load(Path.Combine(dataFolder, "settings.json"));
+        Settings = settings;
         if (EngineComposition.Missing(settings) is { Count: > 0 } missing)
         {
             Problem = "The service has no engine to run on: " + string.Join(" ", missing)
@@ -37,6 +38,9 @@ internal sealed class ServerEngine : IDisposable
     public ComposedEngine? Current { get; }
 
     public string? Problem { get; }
+
+    /// <summary>The service account's settings, as loaded - the providers' addresses decide where a model ran (ModelReaches).</summary>
+    public AppSettings? Settings { get; }
 
     /// <summary>"Allow (workspace)" as the service remembers it: per person (ApprovalStore, rule 5), in its own data folder.</summary>
     public ApprovalStore Approvals { get; }

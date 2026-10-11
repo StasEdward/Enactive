@@ -2,9 +2,13 @@
 @using Microsoft.AspNetCore.Components.Authorization
 
 <header class="top">
-    <span class="mark">Enactive</span>
+    <a class="mark" href="/"><img src="brand/mark-loop.svg" alt="" />Enactive</a>
     <AuthorizeView>
         <Authorized>
+            <nav class="nav">
+                <a href="/">Runs</a>
+                <a href="workspaces">Workspaces</a>
+            </nav>
             <span class="who">@context.User.Identity?.Name</span>
             <form method="post" action="/signout" class="signout">
                 <AntiforgeryToken />

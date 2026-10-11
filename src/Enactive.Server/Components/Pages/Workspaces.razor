@@ -1,0 +1,31 @@
+@page "/workspaces"
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerHistory History
+
+<PageTitle>Workspaces - Enactive</PageTitle>
+
+<h1>Workspaces</h1>
+@if (_workspaces.Count == 0)
+{
+    <p>The service has not run in any folder yet. A run started from the Runs page adds its folder here.</p>
+}
+else
+{
+    <ul class="list">
+        @foreach (var workspace in _workspaces)
+        {
+            <li>
+                <a href="@Links.History(workspace.RootPath)">@workspace.Name</a>
+                <span class="where">@workspace.RootPath · last used @workspace.LastOpenedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+    private IReadOnlyList<Enactive.Workspace.WorkspaceEntry> _workspaces = [];
+
+    protected override async Task OnInitializedAsync() => _workspaces = History.Workspaces((await Auth).User);
+}

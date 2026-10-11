@@ -26,4 +26,10 @@
     <InternalsVisibleTo Include="Enactive.Server.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The brand - palette, type, marks - is the gateway's wwwroot/brand, served here at /brand by link, not copied:
+         a copy is a second palette, and the second one is the one nobody updates. -->
+    <Content Include="..\Enactive.Remote.Gateway\wwwroot\brand\**" LinkBase="wwwroot\brand" />
+  </ItemGroup>
+
 </Project>

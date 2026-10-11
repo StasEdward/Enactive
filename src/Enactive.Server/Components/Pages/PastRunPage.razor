@@ -1,0 +1,129 @@
+@page "/history/run"
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerHistory History
+
+<PageTitle>@(_run?.Digest.Title ?? "Run") - Enactive</PageTitle>
+
+@if (_problem is not null)
+{
+    <p class="said">@_problem</p>
+}
+else if (_run is { } run)
+{
+    var d = run.Digest;
+    <p><a href="@Links.History(Ws!)">← @Ws</a></p>
+    <h1>@d.Title</h1>
+    @if (d.Subtitle.Length > 0)
+    {
+        <p class="subtitle">@d.Subtitle</p>
+    }
+    <p class="where">@d.Meta@(d.AttemptLabel.Length > 0 ? " · " + d.AttemptLabel : "")</p>
+
+    <dl class="tiles">
+        <div><dt>Status</dt><dd>@d.Status</dd></div>
+        <div><dt>Steps</dt><dd>@d.StepsText</dd></div>
+        <div><dt>Tool calls</dt><dd>@d.ToolCalls</dd></div>
+        <div><dt>Tokens</dt><dd title="@d.TokensDetail">@d.TokensText</dd></div>
+        <div><dt>Time</dt><dd>@d.ElapsedText</dd></div>
+        <div><dt>Files</dt><dd>@d.Artifacts.Count</dd></div>
+    </dl>
+    @if (d.HasSettings)
+    {
+        <p class="where">Ran at @d.AutonomyText · @d.WorkerText · @d.StagingText</p>
+    }
+
+    @if (run.Routing.Count > 0)
+    {
+        <h2>Which model served each phase</h2>
+        <ul class="list">
+            @foreach (var row in run.Routing)
+            {
+                <li>@row.Phase <span class="where">@row.Model</span></li>
+            }
+        </ul>
+    }
+    @if (run.Work.Count > 0)
+    {
+        <h2>Where the work ran</h2>
+        <ul class="list">
+            @foreach (var row in run.Work)
+            {
+                <li class="@row.Reach.ToString().ToLowerInvariant()">@row.Label <span class="where">@row.Detail</span></li>
+            }
+        </ul>
+    }
+
+    <h2>Steps</h2>
+    @if (run.Cards.Count == 0)
+    {
+        <p>@d.NoStepsReason</p>
+    }
+    else
+    {
+        <ol class="cards">
+            @foreach (var card in run.Cards)
+            {
+                <li class="card @card.Status.ToString().ToLowerInvariant()">
+                    <div class="card-head"><span class="card-title">@card.Title</span> <span class="card-status">@card.Status</span></div>
+                    <div class="card-activity">@card.Activity</div>
+                    @if (card.Entries.Count > 0)
+                    {
+                        <ul class="entries">
+                            @foreach (var entry in card.Entries)
+                            {
+                                <li class="entry @entry.Kind.ToString().ToLowerInvariant()">@entry.Label</li>
+                            }
+                        </ul>
+                    }
+                </li>
+            }
+        </ol>
+    }
+
+    <h2>Files it wrote</h2>
+    @if (d.Artifacts.Count == 0)
+    {
+        <p>None.</p>
+    }
+    else
+    {
+        <ul class="list">
+            @foreach (var path in d.Artifacts)
+            {
+                <li><a href="@Links.File(Ws!, path)">@path</a></li>
+            }
+        </ul>
+    }
+
+    @if (run.Decisions.Count > 0)
+    {
+        <h2>Decisions</h2>
+        <ul class="list">
+            @foreach (var decision in run.Decisions)
+            {
+                <li>@decision</li>
+            }
+        </ul>
+    }
+
+    <h2>Timeline</h2>
+    <table class="timeline">
+        @foreach (var line in run.Timeline)
+        {
+            <tr class="@line.Tone.ToString().ToLowerInvariant()"><td class="when">@line.When</td><td class="kind">@line.Kind</td><td>@line.Summary</td></tr>
+        }
+    </table>
+}
+
+@code {
+    [SupplyParameterFromQuery] private string? Ws { get; set; }
+    [SupplyParameterFromQuery] private Guid Id { get; set; }
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    private PastRun? _run;
+    private string? _problem;
+
+    protected override async Task OnInitializedAsync()
+        => (_run, _problem) = await History.OpenAsync((await Auth).User, Ws ?? "", Id, CancellationToken.None);
+}
