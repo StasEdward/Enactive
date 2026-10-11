@@ -2,9 +2,9 @@
 
 Date: 2026-10-11 (revised the same day after review)
 
-Status: draft. Implements [ADR 0002](../Docs/adr/0002-server-with-web-ui.md) (proposed). Nothing is implemented
-yet. The review's findings are folded in below; the ADR itself still needs the amendments listed in
-"ADR amendments".
+Status: phase 0 done in code (2026-10-11, branch `feature/application-layer`); the ADR amendments below are made.
+Implements [ADR 0002](../Docs/adr/0002-server-with-web-ui.md) (proposed). The review's findings are folded in
+below.
 
 ## Objective
 
@@ -264,7 +264,7 @@ Estimate: **2 weeks** (1.1-1.5 one, 1.6-1.7 one).
 `IRunControl` and `IDecisionPresenter` are the seams; a SignalR client implementation of `IRunControl` is the
 work. Not planned further.
 
-## ADR amendments to make before implementation starts
+## ADR amendments (made 2026-10-11)
 
 1. Trust model paragraph (A1): mutually trusting operators; isolation is out of scope and why.
 2. §6 / §8: "one owner" is per workspace via a lease taken by every host; the settings-folder lock alone is
