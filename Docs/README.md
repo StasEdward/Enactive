@@ -10,6 +10,7 @@ namespaces, assemblies, env vars and on-disk data folders all use the new name (
 |---|---|
 | [`wiki/`](wiki/README.md) | The guide: getting started, models and phases, running tasks, templates and schedules, settings, remote access, operations, architecture |
 | [`REMOTE_OPERATIONS.md`](REMOTE_OPERATIONS.md) | Running your own remote-access gateway: what to install, what each setting means, backups, what is left manual |
+| [`adr/`](adr/) | Decisions and their reasons: [one run composer](adr/0001-one-run-composer.md), [a service on the local network with a web UI](adr/0002-server-with-web-ui.md) (proposed) |
 | [`../bench/README.md`](../bench/README.md) | The live benchmark: tasks with a ground truth, run through the engine as it is configured |
 
 The engine turns one intent into real, reviewable, recorded action:
