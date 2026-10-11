@@ -40,6 +40,13 @@ internal sealed record ServerOptions
     /// <summary>How many runs go at once; each run's own parallel steps are its own (ADR 0002 §9).</summary>
     public int MaxActiveRuns { get; init; } = 2;
 
+    /// <summary>
+    /// How long a run's question waits for an answer before the run stops at it and the question goes to the inbox
+    /// (ADR 0002 §9). Half an hour: enough to step away and come back, not long enough for a closed tab to hold a run's
+    /// slot and folder all afternoon (decided 2026-10-12).
+    /// </summary>
+    public int QuestionWaitMinutes { get; init; } = 30;
+
     private static readonly JsonSerializerOptions Json = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -103,6 +110,8 @@ internal sealed record ServerOptions
 
         if (MaxActiveRuns < 1)
             problems.Add("MaxActiveRuns must be at least 1.");
+        if (QuestionWaitMinutes < 1)
+            problems.Add("QuestionWaitMinutes must be at least 1.");
 
         return problems;
     }

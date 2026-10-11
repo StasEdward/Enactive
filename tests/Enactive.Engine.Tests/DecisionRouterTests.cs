@@ -215,4 +215,41 @@ public sealed class DecisionRouterTests : IDisposable
         Assert.Equal("deny", (await second).OptionId);
         Assert.Equal(2, card.Shown.Count);
     }
+
+    // ── a question nobody answers (the service) ─────────────────────────────
+
+    /// <summary>
+    /// On the service a closed tab must not hold a run's slot and folder for hours: unanswered for the set time, the
+    /// run is told to stop at the question and keep it (the engine writes it down; the inbox answers it), and the card
+    /// comes down.
+    /// </summary>
+    [Fact]
+    public async Task A_question_nobody_answers_in_time_is_kept_and_the_run_stops_at_it()
+    {
+        var card = new Card();
+        var router = new DecisionRouter(card, _session, _approvals, parkAfter: TimeSpan.FromMilliseconds(100));
+        var question = Ask();
+
+        var parked = await Assert.ThrowsAsync<Enactive.Agents.DecisionPendingException>(
+            () => router.RequestAsync(question, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(question.Id, parked.Request.Id);
+        Assert.Contains(question.Id, card.Cleared);
+        Assert.False(router.IsPending);
+        Assert.False(await card.ClickAsync("Allow"), "A click after the question was kept still answered it here.");
+    }
+
+    [Fact]
+    public async Task A_question_answered_in_time_is_not_kept()
+    {
+        var card = new Card();
+        var router = new DecisionRouter(card, _session, _approvals, parkAfter: TimeSpan.FromMilliseconds(300));
+
+        var asked = router.RequestAsync(Ask(), CancellationToken.None);
+        await card.ClickAsync("Allow");
+
+        Assert.Equal("allow", (await asked).OptionId);
+        await Task.Delay(500);
+    }
 }
+

@@ -1,0 +1,65 @@
+@page "/inbox"
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerInbox Inbox
+
+<PageTitle>Inbox - Enactive</PageTitle>
+
+<h1>Inbox</h1>
+<p class="where">What runs nobody was watching reported back, and the questions they stopped at.</p>
+@if (Said is { Length: > 0 })
+{
+    <p class="said" role="alert">@Said</p>
+}
+
+@if (_entries.Count == 0)
+{
+    <p>Nothing here.</p>
+}
+else
+{
+    <ul class="list inbox">
+        @foreach (var entry in _entries)
+        {
+            <li class="@entry.Item.Kind @entry.Item.Status">
+                <div><strong>@entry.Item.Title</strong> <span class="where">@entry.Item.Summary · @entry.Item.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span></div>
+                <div class="where">@entry.Workspace</div>
+                @if (entry.Waiting is { } waiting)
+                {
+                    <section class="question">
+                        <h2>@waiting.Topic</h2>
+                        <pre>@waiting.FullText</pre>
+                        <AuthorizeView Policy="Operator">
+                            <Authorized>
+                                <div class="answers">
+                                    @foreach (var option in waiting.Options)
+                                    {
+                                        @* One small form per answer: a plain post, working before any live connection. *@
+                                        <form method="post" action="/inbox/answer">
+                                            <AntiforgeryToken />
+                                            <input type="hidden" name="ws" value="@entry.Workspace" />
+                                            <input type="hidden" name="item" value="@entry.Item.Id" />
+                                            <input type="hidden" name="option" value="@option.Id" />
+                                            <button type="submit">@option.Label</button>
+                                        </form>
+                                    }
+                                </div>
+                                <p class="where">Answering carries the run on, under the same task, as a run of yours.</p>
+                            </Authorized>
+                        </AuthorizeView>
+                    </section>
+                }
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+    [SupplyParameterFromQuery] private string? Said { get; set; }
+
+    private IReadOnlyList<InboxEntry> _entries = [];
+
+    protected override async Task OnInitializedAsync()
+        => _entries = await Inbox.ListAsync((await Auth).User, CancellationToken.None);
+}

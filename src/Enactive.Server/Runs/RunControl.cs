@@ -3,6 +3,10 @@ namespace Enactive.Server.Runs;
 using System.Security.Claims;
 using Enactive.Application;
 using Enactive.Core.Context;
+using Enactive.Core.History;
+using Enactive.Core.Inbox;
+using Enactive.Workspace;
+using Enactive.Core.Events;
 using Enactive.Core.Intents;
 using Enactive.Core.Permissions;
 using Enactive.Server.Accounts;
@@ -13,8 +17,11 @@ internal sealed class ServerRun
 {
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public ServerRun(string owner, string workspace, string prompt, RunQueue.Ticket ticket)
+    public ServerRun(string owner, string workspace, string prompt, RunQueue.Ticket ticket, Guid? taskId = null,
+        RunCheckpoint? resume = null)
     {
+        TaskId = taskId;
+        Resume = resume;
         Owner = owner;
         Workspace = workspace;
         Prompt = prompt;
@@ -24,6 +31,12 @@ internal sealed class ServerRun
     }
 
     public Guid Id => Session.Id;
+
+    /// <summary>The task this run carries on - one stopped at a question, or interrupted - or null for a new task.</summary>
+    public Guid? TaskId { get; }
+
+    /// <summary>The step boundary it carries on from, when it has one.</summary>
+    public RunCheckpoint? Resume { get; }
     public string Owner { get; }
     public string Workspace { get; }
     public string Prompt { get; }
@@ -84,13 +97,24 @@ internal sealed record StartResult(ServerRun? Run, string? Refusal);
 internal interface IRunControl
 {
     StartResult Start(ClaimsPrincipal user, string workspace, string prompt);
+
+    /// <summary>
+    /// Carries on an interrupted run from its last step boundary (crash recovery): its owner or any Operator, after
+    /// being told what runs again (RunRecovery). Never on its own - a person decides.
+    /// </summary>
+    Task<StartResult> ResumeAsync(ClaimsPrincipal user, string workspace, Guid runId);
+
+    /// <summary>Carries on a run that stopped at a question, now answered in the inbox: under the same task, as a new run.</summary>
+    Task<StartResult> ContinueAsync(ClaimsPrincipal user, string workspace, Agents.ParkedDecision parked, string title);
     IReadOnlyList<ServerRun> List(ClaimsPrincipal user);
     ServerRun? Find(ClaimsPrincipal user, Guid id);
     string? Cancel(ClaimsPrincipal user, Guid id);
     string? Answer(ClaimsPrincipal user, Guid id, Guid question, string choice);
 }
 
-internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor executor, ILogger<RunControl> log) : IRunControl
+/// <param name="parkQuestionsAfter">How long a question waits before the run stops at it for the inbox; null, never.</param>
+internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor executor, ILogger<RunControl> log,
+    TimeSpan? parkQuestionsAfter = null) : IRunControl
 {
     private readonly object _gate = new();
     private readonly List<ServerRun> _runs = new();
@@ -100,6 +124,31 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
     private const int KeepFinished = 50;
 
     public StartResult Start(ClaimsPrincipal user, string workspace, string prompt)
+        => StartRun(user, workspace, prompt, null, null, "run started");
+
+    public async Task<StartResult> ResumeAsync(ClaimsPrincipal user, string workspace, Guid runId)
+    {
+        if (Allowed(user, Role.Operator) is null)
+            return new(null, NotAllowed(user, "resume a run"));
+        var root = Workspace.WorkspaceRegistry.Normalise(workspace);
+        var checkpoints = await new JsonCheckpointStore(WorkspaceInfo.For(root)).LoadAllAsync(CancellationToken.None);
+        if (checkpoints.FirstOrDefault(c => c.RunId == runId) is not { } checkpoint)
+            return new(null, "There is no such unfinished run in that folder.");
+        if (!checkpoint.IsResumable)
+            return new(null, "That run has no step left to run; it can only be forgotten.");
+        return StartRun(user, root, checkpoint.Request, checkpoint.TaskId, checkpoint, "run resumed");
+    }
+
+    public async Task<StartResult> ContinueAsync(ClaimsPrincipal user, string workspace, Agents.ParkedDecision parked, string title)
+    {
+        if (Allowed(user, Role.Operator) is null)
+            return new(null, NotAllowed(user, "carry a run on"));
+        var root = Workspace.WorkspaceRegistry.Normalise(workspace);
+        var checkpoint = await BackgroundRun.ContinueFromAsync(parked, root, warning => log.LogWarning("{Warning}", warning), CancellationToken.None);
+        return StartRun(user, root, checkpoint?.Request ?? title, parked.TaskId, checkpoint, "run carried on");
+    }
+
+    private StartResult StartRun(ClaimsPrincipal user, string workspace, string prompt, Guid? taskId, RunCheckpoint? resume, string action)
     {
         if (Allowed(user, Role.Operator) is not { } account)
             return new(null, NotAllowed(user, "start a run"));
@@ -118,13 +167,13 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         {
             if (_stopping)
                 return new(null, "The service is stopping; start the run again when it is back.");
-            run = new ServerRun(account.Name, root, prompt.Trim(), queue.Enqueue(root));
+            run = new ServerRun(account.Name, root, prompt.Trim(), queue.Enqueue(root), taskId, resume);
             _runs.Add(run);
             var finished = _runs.Where(r => r.Ended.IsCompleted).ToList();
             foreach (var old in finished.Take(Math.Max(0, finished.Count - KeepFinished)))
                 _runs.Remove(old);
         }
-        users.Audit(account.Name, "run started", $"{root}: {run.Prompt}");
+        users.Audit(account.Name, action, $"{root}: {run.Prompt}");
         _ = LifeAsync(run, account.Name);
         return new(run, null);
     }
@@ -141,7 +190,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
             running = true;
             run.Notify();
             // The router asks through this run's questions, and remembers what the owner allows as the owner.
-            var decisions = new DecisionRouter(run.Questions, executor.Session, executor.Approvals, owner);
+            var decisions = new DecisionRouter(run.Questions, executor.Session, executor.Approvals, owner, parkQuestionsAfter);
             await executor.ExecuteAsync(run, decisions, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -274,12 +323,22 @@ internal sealed class EngineExecutor(ServerEngine engine) : IRunExecutor
 
         // A run from the browser (IntentSource.Web): attended, with the shell when the folder's level allows it, and
         // the person who started it named - whose remembered approvals answer for it (RunComposer, ApprovalStore rule 5).
-        var request = new RunRequest(workspace, run.Prompt, IntentSource.Web, Stage: saved.StageChanges, Principal: run.Owner)
+        var request = new RunRequest(workspace, run.Prompt, IntentSource.Web, run.TaskId, run.Resume,
+            Stage: saved.StageChanges, Principal: run.Owner)
         {
             Defaults = saved.Defaults
         };
         await using var composedRun = await RunComposer.ComposeAsync(composed, request, decisions, ct);
         await run.Session.DrainAsync(composedRun.Events(ct), ct);
+
+        // Stopped at a question nobody answered in time: the question is in the ledger, and the inbox is where it is
+        // found and answered - as a background run's is (InboxLines), so both read the same.
+        if (run.Session.Outcome == RunOutcomeKind.NeedsUser)
+        {
+            var line = InboxLines.For(nameof(RunOutcomeKind.NeedsUser), 0, 0, null);
+            await InboxStoreFactory.Create(workspace).AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, line.Kind,
+                RunState.Title(run), line.Summary, run.Session.RunId ?? Guid.Empty, "unread", DateTimeOffset.UtcNow), CancellationToken.None);
+        }
     }
 }
 

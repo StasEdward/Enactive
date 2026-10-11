@@ -57,6 +57,9 @@ internal sealed class RunSession
     /// <summary>Completes when the run has ended, however it ended.</summary>
     public Task Ended => _ended.Task;
 
+    /// <summary>How the run ended, as the engine said it; null until it has.</summary>
+    public RunOutcomeKind? Outcome { get; private set; }
+
     /// <summary>Why the run stopped without ending properly - an error the engine threw - or null.</summary>
     public string? Failure { get; private set; }
 
@@ -118,6 +121,8 @@ internal sealed class RunSession
         lock (_gate)
         {
             RunId ??= ev.RunId;
+            if (ev.Kind is EventKind.TaskCompleted or EventKind.TaskFailed)
+                Outcome = ev.Outcome() ?? (ev.Kind == EventKind.TaskCompleted ? RunOutcomeKind.Completed : RunOutcomeKind.Failed);
             var entry = new JournalEntry(++_seq, ev);
             _feed.Apply(ev);
             _activity.Apply(ev);

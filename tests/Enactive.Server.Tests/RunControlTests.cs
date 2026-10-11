@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Threading.Channels;
 using Enactive.Application;
 using Enactive.Core.Events;
+using Enactive.Core.History;
 using Enactive.Core.Permissions;
 using Enactive.Server.Accounts;
 using Enactive.Server.Runs;
@@ -294,5 +295,128 @@ public sealed class RunControlTests : IDisposable
         public ApprovalStore Approvals { get; } = new(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json"));
         public Task ExecuteAsync(ServerRun run, IDecisionHandler decisions, CancellationToken ct) => Task.Delay(Timeout.Infinite);
     }
-}
 
+    // ── phase 2: a question kept for the inbox, an interrupted run resumed ─
+
+    /// <summary>A question nobody answers in time stops the run at it, rather than holding its slot and folder.</summary>
+    [Fact]
+    public async Task A_question_nobody_answers_in_time_stops_the_run_at_it()
+    {
+        _engine.Ask = true;
+        var control = new RunControl(_users, new RunQueue(2), _engine, NullLogger<RunControl>.Instance, TimeSpan.FromMilliseconds(150));
+
+        var run = control.Start(As("alice"), _workspace, "write the digest").Run!;
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Null(run.Questions.Pending);
+        Assert.Contains("Waiting for a decision", run.Refused);
+    }
+
+    private (Enactive.Agents.ParkedDecision Parked, Guid ItemId) ParkedInTheInbox()
+    {
+        var taskId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var question = new DecisionRequest(taskId, "Approve send_email", "to the team",
+            [new("allow", "Allow"), new("deny", "Deny")], "allow", Subject: "send_email");
+        var parked = new Enactive.Agents.DecisionLedger(_workspace).Park(question);
+
+        var workspace = Enactive.Core.Context.WorkspaceInfo.For(_workspace);
+        var at = DateTimeOffset.Now;
+        Enactive.Workspace.RunStoreFactory.Create(workspace).SaveAsync(new Enactive.Core.History.RunRecord(runId, taskId,
+            "mail the digest", "qwen", at, at, "NeedsUser", [], [], []), CancellationToken.None).GetAwaiter().GetResult();
+        var itemId = Guid.NewGuid();
+        Enactive.Workspace.InboxStoreFactory.Create(workspace).AppendAsync(new Enactive.Core.Inbox.InboxItem(itemId, workspace.Id,
+            "decision", "mail the digest", "Waiting for your decision", runId, "unread", at), CancellationToken.None).GetAwaiter().GetResult();
+        return (parked, itemId);
+    }
+
+    private ServerInbox InboxOf(IRunControl control)
+    {
+        var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        engine.Workspaces.Touch(_workspace);
+        return new ServerInbox(_users, engine, control);
+    }
+
+    /// <summary>
+    /// The inbox shows the question a run stopped at; answering it carries the run on under the same task - the
+    /// recorded answer is what the step is given when it asks again.
+    /// </summary>
+    [Fact]
+    public async Task A_question_answered_in_the_inbox_carries_its_run_on_under_the_same_task()
+    {
+        var (parked, itemId) = ParkedInTheInbox();
+        var inbox = InboxOf(_control);
+
+        var entry = Assert.Single(await inbox.ListAsync(As("vera"), CancellationToken.None));
+        Assert.Equal("Approve send_email", entry.Waiting?.Topic);
+
+        var (said, carried) = await inbox.AnswerAsync(As("bob"), _workspace, itemId, "allow", CancellationToken.None);
+
+        Assert.Contains("carries on", said);
+        var run = _control.Find(As("bob"), carried!.Value)!;
+        Assert.Equal(parked.TaskId, run.TaskId);
+        Assert.Equal("bob", run.Owner);
+        Assert.Null(Assert.Single(await inbox.ListAsync(As("bob"), CancellationToken.None)).Waiting);
+        await _engine.ReleaseNextAsync();
+    }
+
+    [Fact]
+    public async Task A_viewer_reads_the_inbox_but_cannot_answer_it()
+    {
+        var (_, itemId) = ParkedInTheInbox();
+        var inbox = InboxOf(_control);
+
+        var (said, carried) = await inbox.AnswerAsync(As("vera"), _workspace, itemId, "allow", CancellationToken.None);
+
+        Assert.Null(carried);
+        Assert.Contains("role does not include", said);
+        Assert.NotNull(Assert.Single(await inbox.ListAsync(As("vera"), CancellationToken.None)).Waiting);
+    }
+
+    private RunCheckpoint Interrupted(params string[] statuses)
+    {
+        var checkpoint = new RunCheckpoint(Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+            "mail the digest", "mail the digest", null, null,
+            statuses.Select((s, i) => new CheckpointStep(Guid.NewGuid(), $"step {i + 1}", [], "low", s)).ToList(),
+            [], [], [], 1, 0);
+        new Enactive.Workspace.JsonCheckpointStore(Enactive.Core.Context.WorkspaceInfo.For(_workspace))
+            .SaveAsync(checkpoint, CancellationToken.None).GetAwaiter().GetResult();
+        return checkpoint;
+    }
+
+    /// <summary>Crash recovery is a person's click, by the owner or any Operator: the run carries on from its boundary.</summary>
+    [Fact]
+    public async Task An_interrupted_run_is_resumed_from_its_checkpoint_as_the_same_task()
+    {
+        var checkpoint = Interrupted("Done", "Running", "Pending");
+
+        var (run, refusal) = await _control.ResumeAsync(As("bob"), _workspace, checkpoint.RunId);
+
+        Assert.Null(refusal);
+        Assert.Equal(checkpoint.TaskId, run!.TaskId);
+        Assert.Equal(checkpoint.RunId, run.Resume!.RunId);
+        Assert.Contains(_users.AuditTrail(), e => e is { Account: "bob", Action: "run resumed" });
+        await _engine.ReleaseNextAsync();
+    }
+
+    [Fact]
+    public async Task A_run_with_nothing_left_to_run_is_not_resumed_and_a_viewer_resumes_nothing()
+    {
+        var finished = Interrupted("Done", "Done");
+        var interrupted = Interrupted("Running");
+
+        Assert.Contains("no step left", (await _control.ResumeAsync(As("alice"), _workspace, finished.RunId)).Refusal);
+        Assert.Contains("role does not include", (await _control.ResumeAsync(As("vera"), _workspace, interrupted.RunId)).Refusal);
+    }
+
+    /// <summary>Said before the button: the step that was running runs again, and what it did outside may happen twice.</summary>
+    [Fact]
+    public void Resuming_says_which_step_runs_again_and_what_may_be_done_twice()
+    {
+        var warning = Enactive.Application.RunRecovery.Warning(Interrupted("Done", "Running", "Pending"));
+
+        Assert.Contains("Step 2, “step 2”, runs again from its start", warning);
+        Assert.Contains("may be done twice", warning);
+        Assert.Contains("2 step(s) are left", warning);
+    }
+}

@@ -65,3 +65,7 @@ input, textarea { font: inherit; background: var(--bg-card); color: var(--text);
 .timeline tr.quiet td { color: var(--text-faint); }
 
 .file { white-space: pre-wrap; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; overflow: auto; }
+
+.warning { color: var(--warning); margin: 4px 0; }
+.inbox li.unread strong::before { content: "● "; color: var(--accent); }
+.inbox .answers form { margin: 0; }

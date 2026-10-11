@@ -35,8 +35,14 @@ internal interface IDecisionPresenter
 /// that would drift - in the permissive direction, the one that matters (a shell remembered for good).</para>
 /// </summary>
 /// <param name="principal">Who answers, for a host serving several people; null for the account the process runs as.</param>
+/// <param name="parkAfter">
+/// How long a question waits before the run stops at it and it goes to the inbox, to be answered there (the service:
+/// a closed tab must not hold a run's slot and folder for hours). Null waits for as long as it takes - the window,
+/// whose person is at the screen or closes the window and with it the run.
+/// </param>
 internal sealed class DecisionRouter(
-    IDecisionPresenter presenter, SessionApprovals session, ApprovalStore approvals, string? principal = null) : IDecisionHandler
+    IDecisionPresenter presenter, SessionApprovals session, ApprovalStore approvals, string? principal = null,
+    TimeSpan? parkAfter = null) : IDecisionHandler
 {
     private readonly DecisionQueue _queue = new();
     private readonly object _gate = new();
@@ -90,6 +96,10 @@ internal sealed class DecisionRouter(
         // card stayed up and "a decision is pending" stayed true, so the NEXT run would not start - held by a question
         // belonging to a task that had already been stopped.
         using var registration = ct.Register(() => completion.Cancel(ct));
+        using var parking = new CancellationTokenSource();
+        if (parkAfter is { } wait)
+            _ = Task.Delay(wait, parking.Token).ContinueWith(_ => completion.Park(request),
+                CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
         lock (_gate)
             _pending = completion;
         try
@@ -101,6 +111,7 @@ internal sealed class DecisionRouter(
         }
         finally
         {
+            parking.Cancel();
             lock (_gate)
             {
                 if (ReferenceEquals(_pending, completion))

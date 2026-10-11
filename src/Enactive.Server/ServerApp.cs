@@ -78,8 +78,11 @@ internal static class ServerApp
         builder.Services.AddSingleton(sp => new Runs.ServerEngine(dataFolder, sp.GetRequiredService<FileLogSink>()));
         builder.Services.AddSingleton(new Enactive.Application.RunQueue(options.MaxActiveRuns));
         builder.Services.AddSingleton<Runs.IRunExecutor>(sp => new Runs.EngineExecutor(sp.GetRequiredService<Runs.ServerEngine>()));
-        builder.Services.AddSingleton<Runs.IRunControl, Runs.RunControl>();
+        builder.Services.AddSingleton<Runs.IRunControl>(sp => new Runs.RunControl(sp.GetRequiredService<UserStore>(),
+            sp.GetRequiredService<Enactive.Application.RunQueue>(), sp.GetRequiredService<Runs.IRunExecutor>(),
+            sp.GetRequiredService<ILogger<Runs.RunControl>>(), TimeSpan.FromMinutes(options.QuestionWaitMinutes)));
         builder.Services.AddSingleton<Runs.ServerHistory>();
+        builder.Services.AddSingleton<Runs.ServerInbox>();
         builder.Services.AddHostedService<Runs.RunsStopWithTheService>();
         builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(30));
 
@@ -137,6 +140,30 @@ internal static class ServerApp
                 await context.SignOutAsync();
                 return Results.LocalRedirect("/signin");
             });
+
+        // The inbox's answer and crash recovery's resume: form posts from static pages, with their antiforgery token
+        // checked here (as for sign-out), the person's role checked by the services. Each goes on to the run's page.
+        app.MapPost("/inbox/answer", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerInbox inbox) =>
+        {
+            if (!await antiforgery.IsRequestValidAsync(context))
+                return Results.BadRequest();
+            var form = await context.Request.ReadFormAsync();
+            var (said, run) = await inbox.AnswerAsync(context.User, form["ws"].ToString(),
+                Guid.TryParse(form["item"], out var item) ? item : Guid.Empty, form["option"].ToString(), context.RequestAborted);
+            return run is { } id ? Results.LocalRedirect($"/runs/{id}") : Results.LocalRedirect("/inbox?said=" + Uri.EscapeDataString(said));
+        });
+        app.MapPost("/runs/resume", async (HttpContext context, IAntiforgery antiforgery, Runs.IRunControl runs) =>
+        {
+            if (!await antiforgery.IsRequestValidAsync(context))
+                return Results.BadRequest();
+            var form = await context.Request.ReadFormAsync();
+            var workspace = form["ws"].ToString();
+            var (run, refusal) = await runs.ResumeAsync(context.User, workspace,
+                Guid.TryParse(form["run"], out var id) ? id : Guid.Empty);
+            return run is not null
+                ? Results.LocalRedirect($"/runs/{run.Id}")
+                : Results.LocalRedirect("/" + Components.Links.History(workspace) + "&said=" + Uri.EscapeDataString(refusal ?? ""));
+        });
 
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
         return app;

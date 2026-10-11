@@ -1,5 +1,6 @@
 namespace Enactive.Application;
 
+using Enactive.Agents;
 using Enactive.Core.Permissions;
 
 /// <summary>Cancellation and remembered approval have one winner, even on different threads.</summary>
@@ -12,6 +13,15 @@ internal sealed class DecisionCompletion
     {
         lock (_gate) _source.TrySetCanceled(ct);
     }
+    /// <summary>
+    /// Nobody answered in time: the run is told to stop at the question and keep it (DecisionPendingException - the
+    /// engine writes it down and ends the run as waiting for somebody), unless an answer or a cancel won first.
+    /// </summary>
+    public bool Park(DecisionRequest request)
+    {
+        lock (_gate) return _source.TrySetException(new DecisionPendingException(request));
+    }
+
     public bool Resolve(string optionId, Action? remember = null)
     {
         lock (_gate)
