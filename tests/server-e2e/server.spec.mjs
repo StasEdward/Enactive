@@ -233,3 +233,26 @@ test('a folder under the roots is added as a workspace by browsing, and nothing 
   await context.close();
 });
 
+test('an admin adds a provider with its key on the settings page, and the key never comes back to a page', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'ada');
+  await page.getByRole('link', { name: 'Settings' }).click();
+  await expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Add a provider' }).click();
+  const added = page.locator('fieldset.card').filter({ has: page.getByRole('button', { name: 'Remove provider' }) }).last();
+  await added.getByLabel('Id').fill('box');
+  await added.getByLabel('Address').fill('http://127.0.0.1:8080/v1');
+  await added.getByLabel('Models, one per line').fill('qwen');
+  await added.getByLabel(/API key/).fill('sk-e2e-secret');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByText(/^Saved\./)).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible();
+  expect(await page.content()).not.toContain('sk-e2e-secret');
+  // The page says a key is set - and nothing more of it. (Blazor sets an input's value as a property, so the
+  // provider's row is not found by a value attribute; the status is enough.)
+  await expect(page.getByText('set', { exact: true }).first()).toBeVisible();
+  await context.close();
+});
+

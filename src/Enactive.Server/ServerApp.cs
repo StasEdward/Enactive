@@ -86,6 +86,7 @@ internal static class ServerApp
         builder.Services.AddSingleton<Runs.ServerHistory>();
         builder.Services.AddSingleton<Runs.ServerInbox>();
         builder.Services.AddSingleton<AccountAdmin>();
+        builder.Services.AddSingleton<Runs.ServerSettings>();
         builder.Services.AddHostedService<Runs.RunsStopWithTheService>();
         // The schedules, every minute (ServerScheduler).
         builder.Services.AddSingleton<Runs.ServerScheduler>();

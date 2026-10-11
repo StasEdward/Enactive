@@ -1,0 +1,201 @@
+@page "/admin/settings"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = "Admin")]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using Enactive.Core.Permissions
+@using Enactive.Core.Providers
+@using Enactive.Server.Runs
+@using Enactive.Settings
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerSettings Service
+
+<PageTitle>Settings - Enactive</PageTitle>
+
+@* Live, so lists can grow and shrink without a post per row; not drawn before its connection, so nothing typed is
+   lost (found by tests/server-e2e on the runs page). The settings object stays on the service: a key or a password
+   is never put on this page - only whether one is set, and a box for a new one. *@
+
+<h1>Settings</h1>
+@if (_problem is not null)
+{
+    <p class="said">@_problem</p>
+}
+else if (_opened is { } opened)
+{
+    var s = opened.Copy;
+    <p class="where">The service account's settings.json. Saved, they apply to the next run; a run already going finishes on what it started with.</p>
+
+    <h2>Providers</h2>
+    @foreach (var provider in s.Providers.ToList())
+    {
+        <fieldset class="card">
+            <label>Id <input @bind="provider.Id" /></label>
+            <label>Name <input @bind="provider.DisplayName" /></label>
+            <label>Kind
+                <select @bind="provider.Kind">
+                    @foreach (var kind in Enum.GetValues<ProviderKind>())
+                    {
+                        <option value="@kind">@kind</option>
+                    }
+                </select>
+            </label>
+            <label>Address <input @bind="provider.BaseUrl" placeholder="http://127.0.0.1:8080/v1" /></label>
+            <label>Models, one per line <textarea rows="3" @bind="ModelsOf(provider).Text"></textarea></label>
+            <label>API key <span class="where">@(provider.ApiKey.Length > 0 ? "set" : "not set")</span>
+                <input type="password" autocomplete="off" placeholder="a new key replaces the one set" @bind="NewKey(provider).Text" />
+            </label>
+            <button class="secondary" @onclick="() => s.Providers.Remove(provider)">Remove provider</button>
+        </fieldset>
+    }
+    <button class="secondary" @onclick="() => AddProvider(s)">Add a provider</button>
+
+    <h2>Which model does what</h2>
+    <label>Planning <select @bind="s.Bindings.Plan">@ModelOptions(s)</select></label>
+    <label>Review <select @bind="s.Bindings.Review">@ModelOptions(s)</select></label>
+    <label>Light steps <select @bind="s.Bindings.ExecuteLight">@ModelOptions(s)</select></label>
+    <label>Heavy steps <select @bind="s.Bindings.ExecuteHeavy">@ModelOptions(s)</select></label>
+
+    <h2>Workers</h2>
+    @foreach (var worker in s.Workers.ToList())
+    {
+        <fieldset class="card">
+            <label>Id <input @bind="worker.Id" /></label>
+            <label>Role <input @bind="worker.Role" /></label>
+            <label>Model <select @bind="worker.Model">@ModelOptions(s)</select></label>
+            <label>Level
+                <select @bind="worker.Level">
+                    @foreach (var level in Enum.GetValues<PermissionLevel>())
+                    {
+                        <option value="@level">@level</option>
+                    }
+                </select>
+            </label>
+            <label>Tools, comma separated (empty: every tool) <input @bind="ToolsOf(worker).Text" /></label>
+            <label>Instructions <textarea rows="3" @bind="worker.Instructions"></textarea></label>
+            <button class="secondary" @onclick="() => s.Workers.Remove(worker)">Remove worker</button>
+        </fieldset>
+    }
+    <button class="secondary" @onclick="() => AddWorker(s)">Add a worker</button>
+
+    <h2>Runs</h2>
+    <label>Commands
+        <select @bind="s.ShellCommands">
+            @foreach (var policy in Enum.GetValues<ShellCommandPolicy>())
+            {
+                <option value="@policy">@policy</option>
+            }
+        </select>
+    </label>
+    <label>Instructions for every run <textarea rows="4" @bind="s.GlobalInstructions"></textarea></label>
+    <label>Runs kept per workspace (0 keeps all) <input type="number" min="0" @bind="s.KeepRuns" /></label>
+    <label>Days of logs kept (0 keeps all) <input type="number" min="0" @bind="s.LogRetentionDays" /></label>
+    <label><input type="checkbox" @bind="s.LogPromptBodies" /> Log what is sent to the models in full</label>
+    <label><input type="checkbox" @bind="s.VerifyWrites" /> Read every written file back</label>
+
+    <h2>Web search</h2>
+    <label><input type="checkbox" @bind="s.Web.Enabled" /> Runs may search the web</label>
+    <label>Search address <input @bind="s.Web.SearchUrl" /></label>
+    <label><input type="checkbox" @bind="s.Web.UseWithoutAsking" /> Without asking</label>
+
+    <h2>Mail</h2>
+    <label>Server <input @bind="s.Smtp.Host" /></label>
+    <label>Port <input type="number" @bind="s.Smtp.Port" /></label>
+    <label><input type="checkbox" @bind="s.Smtp.StartTls" /> STARTTLS</label>
+    <label>User <input @bind="s.Smtp.User" autocomplete="off" /></label>
+    <label>Password <span class="where">@(s.Smtp.Password.Length > 0 ? "set" : "not set")</span>
+        <input type="password" autocomplete="off" placeholder="a new password replaces the one set" @bind="_newMailPassword" />
+    </label>
+    <label>From <input @bind="s.Smtp.From" /></label>
+    <label>To, comma separated <input @bind="RecipientsText" /></label>
+    <label><input type="checkbox" @bind="s.Smtp.SendWithoutAsking" /> Send without asking</label>
+
+    <p class="where">Not here yet: MCP servers and the engine's switches - they are kept as they are in the file.</p>
+
+    <div class="answers">
+        <button @onclick="SaveAsync">Save</button>
+        <button class="secondary" @onclick="OpenAsync">Discard my changes</button>
+    </div>
+    @if (_said is not null)
+    {
+        <p class="said" role="alert">@_said</p>
+    }
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    private OpenedSettings? _opened;
+    private string? _problem;
+    private string? _said;
+    private string _newMailPassword = "";
+
+    // Texts the inputs edit, kept per object until Save turns them into the settings' own lists and secrets.
+    private sealed class Box(string text) { public string Text { get; set; } = text; }
+    private readonly Dictionary<ProviderConfig, Box> _models = new();
+    private readonly Dictionary<ProviderConfig, Box> _keys = new();
+    private readonly Dictionary<WorkerConfig, Box> _tools = new();
+    private string RecipientsText { get; set; } = "";
+
+    private Box ModelsOf(ProviderConfig p) => _models.TryGetValue(p, out var b) ? b : _models[p] = new Box(string.Join("\n", p.Models));
+    private Box NewKey(ProviderConfig p) => _keys.TryGetValue(p, out var b) ? b : _keys[p] = new Box("");
+    private Box ToolsOf(WorkerConfig w) => _tools.TryGetValue(w, out var b) ? b : _tools[w] = new Box(string.Join(", ", w.Tools));
+
+    protected override Task OnInitializedAsync() => OpenAsync();
+
+    private async Task OpenAsync()
+    {
+        (_opened, _problem) = Service.Open((await Auth).User);
+        _models.Clear(); _keys.Clear(); _tools.Clear();
+        _newMailPassword = "";
+        RecipientsText = _opened is null ? "" : string.Join(", ", _opened.Copy.Smtp.Recipients);
+        _said = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        var s = _opened!.Copy;
+        foreach (var (provider, box) in _models)
+            provider.Models = Lines(box.Text, '\n');
+        foreach (var (provider, box) in _keys)
+            if (box.Text.Length > 0) provider.ApiKey = box.Text;
+        foreach (var (worker, box) in _tools)
+            worker.Tools = Lines(box.Text, ',');
+        if (_newMailPassword.Length > 0)
+            s.Smtp.Password = _newMailPassword;
+        s.Smtp.Recipients = Lines(RecipientsText, ',');
+
+        var (saved, said) = Service.Save((await Auth).User, _opened);
+        if (saved)
+            await OpenAsync();
+        _said = said;
+    }
+
+    private static List<string> Lines(string text, char separator)
+        => text.Split(separator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+    private static void AddProvider(AppSettings s) => s.Providers.Add(new ProviderConfig { Id = Unique(s, "provider") });
+
+    private static void AddWorker(AppSettings s) => s.Workers.Add(new WorkerConfig { Id = Unique(s, "worker"), Role = "worker" });
+
+    private static string Unique(AppSettings s, string stem)
+    {
+        for (var i = 1; ; i++)
+            if (!s.Providers.Any(p => p.Id == $"{stem}{i}") && !s.Workers.Any(w => w.Id == $"{stem}{i}"))
+                return $"{stem}{i}";
+    }
+
+    private static RenderFragment ModelOptions(AppSettings s) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "option");
+        builder.AddAttribute(seq++, "value", "");
+        builder.AddContent(seq++, "(none)");
+        builder.CloseElement();
+        foreach (var model in s.ModelCatalog())
+        {
+            builder.OpenElement(seq++, "option");
+            builder.AddAttribute(seq++, "value", model);
+            builder.AddContent(seq++, model);
+            builder.CloseElement();
+        }
+    };
+}
