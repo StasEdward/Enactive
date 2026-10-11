@@ -112,6 +112,9 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     /// <summary>What each workspace was left showing in the middle column. See OpenRunMemory.</summary>
     private readonly OpenRunMemory _openRuns = new();
 
+    /// <summary>Reading and forgetting runs, and the questions asked first (RunHistoryService).</summary>
+    private readonly RunHistoryService _history;
+
     /// <summary>Runs in flight, and the workspace each belongs to - see LiveRuns.</summary>
     private readonly LiveRuns _liveRuns = new();
 
@@ -161,6 +164,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         _settings = AppSettings.Load();
         // The desktop's questions are its account's own: no principal (ApprovalStore, rule 5).
         _decisions = new DecisionRouter(this, _sessionApprovals, ApprovalStore.Default);
+        _history = new RunHistoryService(() => _settings.KeepRuns);
 
         // A settings file the app cannot build from must not make the app unlaunchable. Saving is
         // validated now, but a file edited by hand — or written by an older build — can still be
@@ -1750,7 +1754,6 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 return;
             }
             var engine = CurrentEngine();
-            var inbox = InboxStoreFactory.Create(workspace);
             _registry.Touch(fullPath);
             RefreshWorkspaces();
 
@@ -1778,25 +1781,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             {
                 try
                 {
-                    // A question nobody is here for is kept, not refused: the run stops at it, the
-                    // inbox shows it where it can be answered, and answering carries the run on
-                    // (ContinueParkedAsync). It used to be answered "no" on the spot, and the only
-                    // way to get "yes" in was to start the whole task again, in the foreground.
-                    await using var composed = await RunComposer.ComposeAsync(
-                        engine, request, new ParkingDecisionHandler(), ct);
-                    await BackgroundRunner.RunAsync(composed.Events(ct), inbox, workspace, text, ct);
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    // Composition can be cancelled before the recorder ever receives a run id.
-                    var line = InboxLines.For("Cancelled", 0, 0, null);
-                    await inbox.AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, line.Kind, text,
-                        line.Summary, Guid.Empty, "unread", DateTimeOffset.UtcNow), CancellationToken.None);
-                }
-                catch (Exception ex)
-                {
-                    await inbox.AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, "error", text,
-                        "Failed to start: " + ex.Message, Guid.Empty, "unread", DateTimeOffset.UtcNow), CancellationToken.None);
+                    // To its end and into the Inbox, however it ends - as every host runs one (BackgroundRun).
+                    await BackgroundRun.RunAsync(engine, request, text, ct);
                 }
                 finally
                 {
@@ -1826,9 +1812,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     private async Task ContinueParkedAsync(ParkedDecision parked, InboxItem item, string workspaceRoot)
     {
         var fullPath = Path.GetFullPath(workspaceRoot);
-        RunCheckpoint? checkpoint = null;
-        try { checkpoint = await ParkedRuns.CheckpointForAsync(new JsonCheckpointStore(WorkspaceFrom(fullPath)), parked.TaskId, CancellationToken.None); }
-        catch (Exception ex) { _log.Warn(LogSource.System, "Could not read the checkpoints to carry a run on: " + ex.Message); }
+        var checkpoint = await BackgroundRun.ContinueFromAsync(parked, fullPath,
+            warning => _log.Warn(LogSource.System, warning), CancellationToken.None);
 
         await Dispatcher.UIThread.InvokeAsync(() =>
             StartBackground(checkpoint?.Request ?? item.Title, fullPath, parked.TaskId, checkpoint));
@@ -1900,26 +1885,19 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         if (string.IsNullOrEmpty(path))
             return;
 
-        RunRecord? record;
-        try
-        {
-            record = await RunStoreFactory.Create(WorkspaceFrom(path))
-                .LoadAsync(summary.RunId, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _vm.Runs.Fail(ex.Message);
-            return;
-        }
-
+        var (record, problem) = await _history.OpenAsync(path, summary, CancellationToken.None);
         if (record is null)
         {
-            _vm.Runs.Fail($"That run is no longer in the store: {RunTitle.For(summary)}");
+            _vm.Runs.Fail(problem ?? "That run could not be opened.");
             return;
         }
 
         _vm.ShowPastRun(BuildPastRun(record));
     }
+
+    /// <summary>A question of the history's, asked in a dialog of this window.</summary>
+    private Task<bool> AskAsync(Question question)
+        => ConfirmWindow.AskAsync(this, question.Headline, question.Body, question.Confirm, question.Cancel);
 
     /// <summary>
     /// Builds the read-only view of a stored run. Its artifacts get the same two actions the live
@@ -1960,20 +1938,10 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     /// </summary>
     private void Retry(PastRunViewModel past)
     {
-        var taskId = past.Record.TaskId == Guid.Empty ? Guid.NewGuid() : past.Record.TaskId;
-
-        if (past.Spec is { } spec)
-        {
-            _vm.InputText = spec.Goal;
-            _ = RunAsync(background: false, spec, taskId);
+        if (RunHistoryService.Retry(past.Record) is not { } again)
             return;
-        }
-
-        if (past.Request is { Length: > 0 } request)
-        {
-            _vm.InputText = request;
-            _ = RunAsync(background: false, spec: null, taskId);
-        }
+        _vm.InputText = again.Goal;
+        _ = RunAsync(background: false, again.Spec, again.TaskId);
     }
 
     /// <summary>
@@ -1983,32 +1951,19 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     /// </summary>
     private void RunAgain(PastRunViewModel past)
     {
-        if (past.Spec is not { } old)
-            return;
-
         var root = WorkspaceRegistry.Normalise(_vm.WorkspacePath);
-        if (new TemplateStore(root).Find(old.TemplateId) is not { } template)
-            return;
-
-        var workspace = WorkspaceInfo.For(root);
-        var resolved = TemplateResolution.Resolve(
-            template, workspace, PolicyFor(_vm.AutonomyTier), old.Parameters);
-
-        if (resolved.Spec is not { } spec)
+        var (again, problem) = RunHistoryService.RunAgain(root, past.Record, PolicyFor(_vm.AutonomyTier));
+        if (problem is not null)
         {
-            // The template has changed under it - a new required parameter, a value its type no
-            // longer accepts. Say which, rather than doing nothing when a button is pressed.
             _vm.StatusPhase = "Error";
-            _vm.CurrentAction =
-                $"'{template.Name}' has changed since this run: "
-                + string.Join("; ", resolved.Problems.Select(p => p.Message))
-                + " Open Templates and fill it in again.";
+            _vm.CurrentAction = problem;
             return;
         }
+        if (again is null)
+            return;
 
-        var taskId = past.Record.TaskId == Guid.Empty ? Guid.NewGuid() : past.Record.TaskId;
-        _vm.InputText = spec.Goal;
-        _ = RunAsync(background: false, spec, taskId);
+        _vm.InputText = again.Goal;
+        _ = RunAsync(background: false, again.Spec, again.TaskId);
     }
 
     /// <summary>Opens an artifact in the viewer. Reading is safe at any age.</summary>
@@ -2016,7 +1971,9 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     {
         try
         {
-            var full = Path.Combine(root, item.RelativePath);
+            // Only a file under the workspace: a record naming one outside it is not this folder's to show.
+            var full = RunHistoryService.FileOf(root, item.RelativePath)
+                       ?? throw new InvalidOperationException("That path is not in this workspace.");
 
             // The PATH goes with the text, because it is what decides how the file is shown -
             // see ArtifactViewerCatalog. A run's deliverable is often one Markdown document, and
@@ -2076,38 +2033,19 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
     private async Task DeletePastArtifactAsync(string root, ArtifactItemViewModel item)
     {
-        var full = Path.Combine(root, item.RelativePath);
-        if (!File.Exists(full))
+        if (RunHistoryService.DeleteFile(root, item.RelativePath) is not { } question)
         {
             item.Status = "already gone";
             item.CanAct = false;
             return;
         }
 
-        // The file's own date is the whole point of asking: a week of edits does not show up in a
-        // run record, and this deletes what is on disk NOW, not what the run wrote.
-        var changed = File.GetLastWriteTime(full).ToString("yyyy-MM-dd HH:mm");
-        var go = await ConfirmWindow.AskAsync(
-            this,
-            $"Delete \u201c{item.RelativePath}\u201d?",
-            $"This deletes the file as it is on disk now, last changed {changed} - not the version this run wrote. "
-            + "There is no undo.",
-            "Delete",
-            "Keep");
-
-        if (!go)
+        if (!await AskAsync(question))
             return;
 
-        try
-        {
-            File.Delete(full);
-            item.Status = "deleted";
-            item.CanAct = false;
-        }
-        catch (Exception ex)
-        {
-            item.Status = "error: " + ex.Message;
-        }
+        var (status, done) = RunHistoryService.DeleteFileNow(root, item.RelativePath);
+        item.Status = status;
+        if (done) item.CanAct = false;
     }
 
     /// <summary>
@@ -2133,41 +2071,14 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     /// </summary>
     private async Task DeleteRunsAsync(IReadOnlyList<RunSummary> runs)
     {
-        if (runs.Count == 0)
-            return;
-
-        var artifacts = runs.Sum(r => r.Artifacts.Count);
-
-        if (!await ConfirmWindow.AskAsync(
-                this,
-                $"Delete {runs.Count} run{(runs.Count == 1 ? "" : "s")}?",
-                "Their history goes: what was asked, every step, and every event behind it. "
-                + "This cannot be undone."
-                + (artifacts > 0
-                    ? $" The {artifacts} file(s) they wrote stay in your workspace — only the record "
-                      + "of them goes."
-                    : ""),
-                $"Delete {runs.Count}", "Keep"))
+        if (runs.Count == 0 || !await AskAsync(RunHistoryService.DeleteMany(runs)))
             return;
 
         var path = _vm.WorkspacePath.Trim();
         if (string.IsNullOrEmpty(path))
             return;
 
-        var store = RunStoreFactory.Create(WorkspaceFrom(path));
-        var refused = 0;
-
-        foreach (var run in runs)
-        {
-            try
-            {
-                await store.DeleteAsync(run.RunId, CancellationToken.None);
-            }
-            catch (Exception)
-            {
-                refused++;
-            }
-        }
+        var refused = await _history.DeleteAsync(path, runs, CancellationToken.None);
 
         // Not something to come back to, in this workspace or any other.
         foreach (var run in runs)
@@ -2178,8 +2089,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
         await LoadRunsAsync();
 
-        if (refused > 0)
-            _vm.Runs.Fail($"{refused} of {runs.Count} could not be deleted; the rest are gone.");
+        if (refused is not null)
+            _vm.Runs.Fail(refused);
     }
 
     /// <summary>
@@ -2191,47 +2102,30 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         var path = _vm.WorkspacePath.Trim();
         if (string.IsNullOrEmpty(path))
             return;
-        var workspace = WorkspaceFrom(path);
 
-        // What it changed, from the record the store kept on disk (DiskArtifactStore.ChangesOf). The files are put back
-        // only when the person says so, and the question names them. A run interrupted before the record existed, or
-        // whose record was pruned, has nothing to name, and is asked as before.
-        var changes = DiskArtifactStore.ChangesOf(workspace, checkpoint.RunId);
-        var headline = $"Delete the unfinished run “{RunTitle.OneLine(checkpoint.Title)}”?";
-        var cannotResume = $"It can no longer be resumed: the {checkpoint.Remaining} step(s) left will not be run. "
-                           + "Its history, if it has any, stays in the list.";
+        // What it changed is named in the question, and put back only when the person says so (RunHistoryService).
+        var question = RunHistoryService.ForgetUnfinished(path, checkpoint);
         var putBack = false;
-        if (changes.Count == 0)
+        if (question.Alternative is null)
         {
-            if (!await ConfirmWindow.AskAsync(this, headline,
-                    cannotResume + " No record of the files it changed is kept, so they stay as they are.", "Delete", "Keep"))
+            if (!await AskAsync(question))
                 return;
         }
         else
         {
-            var choice = await ConfirmWindow.ChooseAsync(this, headline, cannotResume + "\n\n" + UnfinishedChanges.Describe(changes),
-                "Delete and put the files back", "Delete, keep the files", "Keep");
+            var choice = await ConfirmWindow.ChooseAsync(this, question.Headline, question.Body,
+                question.Confirm, question.Alternative, question.Cancel);
             if (choice == ConfirmChoice.Cancel)
                 return;
             putBack = choice == ConfirmChoice.Confirm;
         }
 
-        if (putBack)
+        var (kept, problem) = await _history.ForgetUnfinishedAsync(path, checkpoint, putBack, CancellationToken.None);
+        if (kept is not null)
+            _vm.Runs.Fail(kept);
+        if (problem is not null)
         {
-            var report = await DiskArtifactStore.PutBackRunAsync(workspace, checkpoint.RunId, CancellationToken.None);
-            if (report.Kept.Count > 0)
-                _vm.Runs.Fail($"Put back {report.Reverted.Count} file(s); left {report.Kept.Count} as they are: "
-                              + string.Join("; ", report.Kept.Select(p => $"{p} ({report.Reasons?.GetValueOrDefault(p) ?? "kept"})")));
-        }
-
-        try
-        {
-            await new JsonCheckpointStore(workspace).DeleteAsync(checkpoint.RunId, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            // Said, and the row left: one that vanishes while its checkpoint is still on disk comes back on the next Refresh.
-            _vm.Runs.Fail("Could not delete that unfinished run: " + ex.Message);
+            _vm.Runs.Fail(problem);
             return;
         }
 
@@ -2240,35 +2134,16 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
     private async Task DeleteRunAsync(RunSummary record)
     {
-        var artifacts = record.Artifacts.Count;
-        if (!await ConfirmWindow.AskAsync(
-                this,
-                $"Delete the run “{RunTitle.For(record)}”?",
-                // It used to name the event count. The list holds headers now, so that number is not
-                // known here - and reading the whole run to put a number in a warning about deleting
-                // it would be an odd thing to spend a transcript on.
-                "Its history goes: what was asked, every step, and every event behind it. "
-                + "This cannot be undone."
-                + (artifacts > 0
-                    ? $" The {artifacts} file(s) it wrote stay in your workspace — only the record of "
-                      + "them goes."
-                    : ""),
-                "Delete", "Keep"))
+        if (!await AskAsync(RunHistoryService.DeleteOne(record)))
             return;
 
         var path = _vm.WorkspacePath.Trim();
         if (string.IsNullOrEmpty(path))
             return;
 
-        try
+        if (await _history.DeleteAsync(path, record, CancellationToken.None) is { } problem)
         {
-            await RunStoreFactory.Create(WorkspaceFrom(path)).DeleteAsync(record.RunId, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            // Said out loud and the list left alone. A row that vanishes from the screen while the
-            // record is still in the store is a lie the next Refresh exposes.
-            _vm.Runs.Fail("Could not delete that run: " + ex.Message);
+            _vm.Runs.Fail(problem);
             return;
         }
 
@@ -2282,48 +2157,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     }
 
     /// <summary>
-    /// Applies the workspace's run-retention setting, and returns what is left.
-    ///
-    /// <para>Off by default, and a COUNT rather than an age. What makes this list unusable is how
-    /// many rows are in it, and a week of heavy use puts more in it than a month of light use - an
-    /// age-based rule would leave the busy workspace, the one with the problem, untouched.</para>
-    ///
-    /// <para>A failure here is swallowed on purpose. Housekeeping that cannot run is not a reason
-    /// to fail the thing the person actually asked for, which was to see their runs.</para>
-    /// </summary>
-    private async Task<IReadOnlyList<RunSummary>> TrimAsync(
-        IRunStore store, IReadOnlyList<RunSummary> records)
-    {
-        var keep = _settings.KeepRuns;
-        var doomed = RunHousekeeping.BeyondTheNewest(records, keep);
-
-        if (doomed.Count == 0)
-            return records;
-
-        foreach (var run in doomed)
-        {
-            try
-            {
-                await store.DeleteAsync(run.RunId, CancellationToken.None);
-            }
-            catch (Exception)
-            {
-                // Left in the list rather than hidden: a row that is still in the store belongs on
-                // screen, and the next load will try again.
-                return records;
-            }
-        }
-
-        return records.Except(doomed).ToArray();
-    }
-
-    /// <summary>
-    /// Loads the workspace's runs for the context column. The store type is the environment's
-    /// choice (SQLite, MySQL or files), which is why the list does not create one itself.
-    ///
-    /// <para>Summaries, not records. The column shows six fields per row; it used to fetch every
-    /// event of every run in the workspace to fill them, which is a cost that grows with how much
-    /// work has been done here and is paid on every Refresh.</para>
+    /// Loads the workspace's runs for the context column - retention applied, interrupted runs read on their own
+    /// (RunHistoryService). The store type is the environment's choice (SQLite, MySQL or files).
     /// </summary>
     private async Task LoadRunsAsync()
     {
@@ -2335,42 +2170,21 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             return;
         }
 
-        var workspace = WorkspaceFrom(path);
-
-        // Interrupted runs first, and in their own try: a checkpoint folder that cannot be read must
-        // not cost the history list, which is the thing somebody opened this column for.
-        try
-        {
-            _vm.Runs.ShowResumable(
-                await new JsonCheckpointStore(workspace).LoadAllAsync(CancellationToken.None));
-        }
-        catch (Exception)
-        {
-            _vm.Runs.ShowResumable(Array.Empty<RunCheckpoint>());
-        }
-
-        try
-        {
-            var store = RunStoreFactory.Create(workspace);
-            var records = await store.LoadSummariesAsync(CancellationToken.None);
-
-            // Retention, applied where the list is read rather than on a timer: this is the moment
-            // the number of runs matters, and a background trimmer would be deleting somebody's
-            // history while they were not looking at it.
-            records = await TrimAsync(store, records);
-
-            _vm.Runs.Show(records);
-            // The history has just changed, and a live row whose run is now IN it must go. See
-            // RunColumn.Live: the window learns a run ended by two paths and they arrive in
-            // whatever order they arrive in.
-            RefreshLive();
-        }
-        catch (Exception ex)
+        var history = await _history.LoadAsync(path, CancellationToken.None);
+        _vm.Runs.ShowResumable(history.Resumable);
+        if (history.Problem is not null)
         {
             // A workspace whose store is unreachable is a fact to show, not a crash: the rest of
             // the window is still perfectly usable.
-            _vm.Runs.Fail(ex.Message);
+            _vm.Runs.Fail(history.Problem);
+            return;
         }
+
+        _vm.Runs.Show(history.Runs);
+        // The history has just changed, and a live row whose run is now IN it must go. See
+        // RunColumn.Live: the window learns a run ended by two paths and they arrive in
+        // whatever order they arrive in.
+        RefreshLive();
     }
 
     private async Task ShowTimelineAsync()

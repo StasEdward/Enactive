@@ -1,6 +1,8 @@
 namespace Enactive.Engine.Tests;
 
 using Enactive.Agents;
+using Enactive.Core.Inbox;
+using Enactive.Application;
 using Enactive.Core.Diagnostics;
 using Enactive.Core.Events;
 using Enactive.Core.History;
@@ -554,6 +556,54 @@ public sealed class RunComposerTests
 
         await composed.Resources.DisposeAsync();
         Assert.False(File.Exists(lease));
+    }
+
+    // ── a run nobody is watching (BackgroundRun) ────────────────────────────
+
+    private static async Task<InboxItem> OnlyInboxItemAsync(EngineFixture fx)
+        => Assert.Single(await InboxStoreFactory.Create(fx.Workspace).LoadAllAsync(CancellationToken.None));
+
+    /// <summary>Its end, whatever it is, is read in the Inbox - nobody was watching anywhere else.</summary>
+    [Fact]
+    public async Task A_background_run_ends_in_the_inbox()
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer), Turn.Says("done")), TempApprovals(), EngineFixture.WorkerWith());
+
+        await BackgroundRun.RunAsync(engine, Request(fx, "answer", IntentSource.Inbox), "answer", CancellationToken.None);
+
+        Assert.Equal("answer", (await OnlyInboxItemAsync(fx)).Title);
+    }
+
+    /// <summary>
+    /// Refused its folder because another process runs there: an end before it began is still an end, and the Inbox
+    /// says whose run is in the way.
+    /// </summary>
+    [Fact]
+    public async Task A_background_run_that_could_not_start_says_why_in_the_inbox()
+    {
+        using var fx = new EngineFixture();
+        using var other = WorkspaceLeaseTests.ForeignHolder(fx.Root, host: "enactive");
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
+
+        await BackgroundRun.RunAsync(engine, Request(fx, "write the digest", IntentSource.Inbox), "write the digest", CancellationToken.None);
+
+        var item = await OnlyInboxItemAsync(fx);
+        Assert.Equal("error", item.Kind);
+        Assert.StartsWith("Failed to start: Another Enactive process", item.Summary);
+    }
+
+    [Fact]
+    public async Task A_background_run_cancelled_before_it_began_is_in_the_inbox_as_cancelled()
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        await BackgroundRun.RunAsync(engine, Request(fx, "answer", IntentSource.Inbox), "answer", cancelled.Token);
+
+        Assert.Contains("ancel", (await OnlyInboxItemAsync(fx)).Summary);
     }
 
     // ── tools ───────────────────────────────────────────────────────────────

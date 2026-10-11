@@ -171,6 +171,24 @@ Only the tests the step touches are run.
 - `DecisionRouter : IDecisionHandler`: remembered approvals (by principal), parking, `DecisionCompletion`;
   asks an `IDecisionPresenter`. `ContinueParkedAsync`/`ObserveBackgroundAsync` move with it.
 - `IRunControl` (A7) assembled from the above; the desktop's `MainWindow` becomes its first client.
+- *Done differently:*
+  - `DecisionRouter` owns the queue, the choices offered (session / workspace / unwatched, none for a
+    shell to keep), what an answer remembers and as whom, and the withdrawn question; the window is an
+    `IDecisionPresenter`. Parking stays `ParkingDecisionHandler`'s (Agents) - the router is the
+    attended side.
+  - `RunHistoryService` returns its **questions** (`Question`) instead of taking confirm callbacks: a
+    browser asks across a round trip, and the words are then the same in both hosts. It also refuses a
+    record's path that climbs out of the workspace (`FileOf`) - the 1.6 path guard, started here. Undo
+    of the live run's files stays with the window, which holds the run's disk store.
+  - `BackgroundRun` (compose, run to the end, the Inbox item however it ends) and `ContinueFromAsync`
+    carry `StartBackground`'s and `ContinueParkedAsync`'s host-free part; the background group and
+    its rows stay with each host.
+  - **Deferred:** the settings **version** goes with the browser settings editor (phase 3), the one
+    writer that needs it, as it changes the settings file's format. `IRunControl` goes with
+    `RunSession` (1.4/1.5): its shape - start, cancel, answer, list, subscribe with the principal -
+    should be set by the first host that calls it over a wire, not guessed now.
+  - `MainWindow.axaml.cs` still holds the foreground run's orchestration and workspace switching
+    around the drawing; what it decides is now asked of the application layer.
 
 **Done when:** the desktop behaves as before (Stas's own run); touched tests pass; `MainWindow.axaml.cs` holds
 controls, binding and drawing only. Estimate: **2 weeks** (0.3-0.4 are new behaviour, not a move).
