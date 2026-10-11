@@ -3,9 +3,10 @@ namespace Enactive.App.Ui.ViewModels;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using Enactive.Agents;
+using Enactive.Application.Projections;
 using Enactive.Core.History;
 using Enactive.Workspace;
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
 
 /// <summary>A verb chip above the command bar. Clicking one prefixes the input.</summary>
 internal sealed class VerbChipViewModel
@@ -578,11 +579,11 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     public string TokensText => PromptTokens + CompletionTokens == 0
         ? "—"
-        : Compact(PromptTokens + CompletionTokens);
+        : TokenCounts.Compact(PromptTokens + CompletionTokens);
 
     public string TokensDetail => PromptTokens + CompletionTokens == 0
         ? "nothing reported"
-        : $"{Compact(PromptTokens)} in · {Compact(CompletionTokens)} out";
+        : $"{TokenCounts.Compact(PromptTokens)} in · {TokenCounts.Compact(CompletionTokens)} out";
 
     public void AddUsage(int promptTokens, int completionTokens,
         string? providerId = null, ModelReach where = ModelReach.Unknown)
@@ -604,14 +605,6 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     /// <summary>How much of this run ran on this machine and how much was bought.</summary>
     public ModelWorkSplit ModelWork { get; } = new();
-
-    /// <summary>A tile is about four characters wide, and 128000 does not fit in four.</summary>
-    internal static string Compact(int tokens) => tokens switch
-    {
-        >= 1_000_000 => $"{tokens / 1_000_000.0:0.#}M",
-        >= 1_000 => $"{tokens / 1_000.0:0.#}k",
-        _ => tokens.ToString()
-    };
 
     /// <summary>Which model actually served each phase of this run.</summary>
     public RunRouting Routing { get; } = new();

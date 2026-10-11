@@ -1,7 +1,7 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Text.Json;
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
 using Enactive.Tools.Mcp;
 
 internal sealed class McpEditViewModel : ObservableObject, IDisposable

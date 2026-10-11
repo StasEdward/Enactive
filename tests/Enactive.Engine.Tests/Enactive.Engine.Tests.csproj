@@ -26,13 +26,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="../../src/Enactive.App.Ui/ViewModels/ModelPerformance.cs" Link="Ui/ModelPerformance.cs" />
     <Compile Include="../../src/Enactive.App.Ui/RunEventPump.cs" Link="Ui/RunEventPump.cs" />
     <Compile Include="../../src/Enactive.App.Ui/RemoteAccessService.cs" Link="Ui/RemoteAccessService.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ForegroundRunSlot.cs" Link="Ui/ForegroundRunSlot.cs" />
     <Compile Include="../../src/Enactive.App.Ui/BatchObservableCollection.cs" Link="Ui/BatchObservableCollection.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/Mvvm/ObservableObject.cs" Link="Ui/ObservableObject.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/Mvvm/RelayCommand.cs" Link="Ui/RelayCommand.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/AddDeviceViewModel.cs" Link="Ui/AddDeviceViewModel.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/RemoteDevicesViewModel.cs" Link="Ui/RemoteDevicesViewModel.cs" />
     <Compile Include="../../src/Enactive.App.Ui/OneAtATime.cs" Link="Ui/OneAtATime.cs" />

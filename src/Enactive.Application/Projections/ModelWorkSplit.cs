@@ -1,7 +1,7 @@
-namespace Enactive.App.Ui.ViewModels;
+namespace Enactive.Application.Projections;
 
 using System.Collections.ObjectModel;
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
 using Enactive.Core.Events;
 using Enactive.Core.History;
 
@@ -113,7 +113,7 @@ internal sealed class ModelWorkSplit : ObservableObject
                 // Percent of TOKENS, not of calls: it is the closer proxy for how much thinking each
                 // side actually did. The call count sits next to it for the case where they disagree.
                 Detail: total > 0
-                    ? $"{MainWindowViewModel.Compact((int)Math.Min(int.MaxValue, tokens))} · "
+                    ? $"{TokenCounts.Compact((int)Math.Min(int.MaxValue, tokens))} · "
                       + $"{calls} call{(calls == 1 ? "" : "s")} · {tokens * 100 / total}%"
                     : $"{calls} call{(calls == 1 ? "" : "s")}",
                 Reach: reach));
@@ -125,3 +125,6 @@ internal sealed class ModelWorkSplit : ObservableObject
 
 /// <summary>One line of the split — drawn in the same green/blue local/remote language the provider list uses (Palette.Reach).</summary>
 internal sealed record ModelWorkRow(string Label, string Detail, ModelReach Reach);
+
+/// <summary>Where a provider that served a run's tokens is. Unknown is its own answer, never quietly folded into either.</summary>
+internal enum ModelReach { Local, Cloud, Unknown }

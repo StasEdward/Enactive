@@ -1,8 +1,9 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
+using Enactive.Application.Projections;
 using Enactive.Application;
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
 using Enactive.Core.History;
 using Enactive.Core.Inbox;
 
@@ -40,24 +41,6 @@ internal sealed class WaitingAnswerViewModel(string id, string label, bool recom
     public AsyncRelayCommand Command { get; } = new(() => answer(id));
 }
 
-/// <summary>One line of the run's timeline.</summary>
-internal sealed class RunEventViewModel
-{
-    public RunEventViewModel(DateTimeOffset at, string kind, string summary)
-    {
-        When = at.ToLocalTime().ToString("HH:mm:ss");
-        Kind = kind;
-        Summary = summary;
-        Tone = TimelineTones.Of(kind);
-    }
-
-    public string When { get; }
-    public string Kind { get; }
-    public string Summary { get; }
-
-    /// <summary>How the line reads - what its colour says (Palette.Timeline).</summary>
-    public TimelineTone Tone { get; }
-}
 
 /// <summary>
 /// The AI Inbox: what headless runs reported back while nobody was watching. Selecting an item opens

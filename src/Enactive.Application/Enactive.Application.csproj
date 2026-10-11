@@ -20,6 +20,12 @@
     assembly (ApplicationLayerTests), so a convenience import of a UI package fails a test rather than
     quietly making the service depend on a desktop toolkit.
 
+    Projections/ holds what is computed from a run for showing it - the timeline, which model served each
+    phase, the models' performance, the local/cloud split, what an unfinished run left behind. They
+    describe the run, so every host shows the same figures; how one person looks at it (a card folded
+    open) is not here and stays with the host that draws it. They raise change notifications on the
+    thread that changed them; marshalling to a UI thread is the host's (see Mvvm/ObservableObject).
+
     The namespace is Enactive.Application, which hides Avalonia's Application type from any file that
     imports Avalonia OUTSIDE its namespace declaration: walking out of Enactive.App.Ui, the compiler
     finds the namespace Enactive.Application before it gets to the file's usings. The three places in
@@ -29,6 +35,7 @@
     <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
     <ProjectReference Include="..\Enactive.Agents\Enactive.Agents.csproj" />
     <ProjectReference Include="..\Enactive.Settings\Enactive.Settings.csproj" />
+    <ProjectReference Include="..\Enactive.Workspace\Enactive.Workspace.csproj" />
   </ItemGroup>
 
   <ItemGroup>

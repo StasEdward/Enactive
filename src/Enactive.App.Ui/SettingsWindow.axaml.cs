@@ -87,7 +87,7 @@ internal sealed partial class SettingsWindow : Window
     /// ignored: a quick second click on the pencil is one person pressing it twice, not a request
     /// to open the same editor again.
     /// </summary>
-    private static void OpenTapped<T>(TappedEventArgs e, Func<T, Mvvm.RelayCommand> command)
+    private static void OpenTapped<T>(TappedEventArgs e, Func<T, Enactive.Application.Mvvm.RelayCommand> command)
         where T : class
     {
         if (e.Source is not Visual source || source.FindAncestorOfType<Button>(true) is not null)

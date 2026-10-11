@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui.ViewModels;
+namespace Enactive.Application.Projections;
 using System.Collections.ObjectModel;
 using Enactive.Core.Chat;
 

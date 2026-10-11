@@ -1,6 +1,7 @@
 namespace Enactive.Engine.Tests;
 using System.Net;
 using System.Text;
+using Enactive.Application.Projections;
 using Enactive.Core.Chat;
 using Enactive.Core.Providers;
 using Enactive.Providers;

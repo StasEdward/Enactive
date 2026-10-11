@@ -1,7 +1,7 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
 using Enactive.Settings;
 using Enactive.Tools.Mcp;
 

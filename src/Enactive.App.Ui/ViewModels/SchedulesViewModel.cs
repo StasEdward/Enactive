@@ -3,7 +3,7 @@ namespace Enactive.App.Ui.ViewModels;
 using System.Collections.ObjectModel;
 using Enactive.Application;
 using Enactive.Agents;
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
 using Enactive.Core.Context;
 using Enactive.Core.History;
 using Enactive.Core.Inbox;

@@ -4,7 +4,7 @@ using Enactive.Application;
 using Enactive.Agents;
 
 using System.Collections.ObjectModel;
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
 using Enactive.Providers;
 using Enactive.Core.Execution;
 using Enactive.Workspace;

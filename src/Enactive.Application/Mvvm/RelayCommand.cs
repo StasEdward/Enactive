@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui.Mvvm;
+namespace Enactive.Application.Mvvm;
 
 using System.Windows.Input;
 

@@ -2,6 +2,8 @@ namespace Enactive.Engine.Tests;
 
 using System.Reflection;
 using Enactive.Application;
+using Enactive.Application.Mvvm;
+using Enactive.Application.Projections;
 using Xunit;
 
 /// <summary>
@@ -62,6 +64,17 @@ public sealed class ApplicationLayerTests
     [InlineData(typeof(LogFilter))]
     [InlineData(typeof(SchedulePolicy))]
     [InlineData(typeof(SettingsSave))]
+    [InlineData(typeof(ObservableObject))]
+    [InlineData(typeof(RelayCommand))]
+    [InlineData(typeof(AsyncRelayCommand))]
+    [InlineData(typeof(RunTimeline))]
+    [InlineData(typeof(RunEventViewModel))]
+    [InlineData(typeof(TimelineTones))]
+    [InlineData(typeof(RunRouting))]
+    [InlineData(typeof(ModelPerformance))]
+    [InlineData(typeof(ModelWorkSplit))]
+    [InlineData(typeof(UnfinishedChanges))]
+    [InlineData(typeof(TokenCounts))]
     public void Moved_types_come_from_the_application_assembly(Type type)
         => Assert.Equal("Enactive.Application", type.Assembly.GetName().Name);
 }

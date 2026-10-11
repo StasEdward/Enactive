@@ -1,12 +1,17 @@
-namespace Enactive.App.Ui.Mvvm;
+namespace Enactive.Application.Mvvm;
 
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
 /// <summary>
 /// The entire MVVM framework this app has: change notification, and nothing else. Hand-written
-/// rather than taken from a toolkit on purpose - App.Ui's package list is Avalonia plus what the
-/// engine needs, and a view model here stays a plain object with properties and commands.
+/// rather than taken from a toolkit on purpose - a view model here stays a plain object with
+/// properties and commands, and the application layer takes no UI package (ApplicationLayerTests).
+///
+/// <para>The notification is raised on the thread that changed the value, and nothing here moves it
+/// anywhere else: getting it onto a UI thread is the host's job. The window changes these objects on
+/// its dispatcher already; a host that feeds them from the engine's thread must marshal first - a
+/// marshalling step in here would tie the shared layer to one host's notion of a UI thread.</para>
 /// </summary>
 internal abstract class ObservableObject : INotifyPropertyChanged
 {

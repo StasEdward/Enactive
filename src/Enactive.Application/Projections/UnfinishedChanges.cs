@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui.ViewModels;
+namespace Enactive.Application.Projections;
 
 using Enactive.Workspace;
 

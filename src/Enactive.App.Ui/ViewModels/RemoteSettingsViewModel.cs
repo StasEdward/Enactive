@@ -1,6 +1,6 @@
 namespace Enactive.App.Ui.ViewModels;
 
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
 using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Host;
 

@@ -1,8 +1,9 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
+using Enactive.Application.Projections;
 using Enactive.Core.Artifacts;
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
 using Enactive.Core.Events;
 using Enactive.Core.History;
 using Enactive.Core.Templates;
@@ -313,9 +314,9 @@ internal sealed class PastRunViewModel : ObservableObject
 
         // Null usage means the run predates the counting, or the provider never reported - which is
         // not the same as zero and does not get to look like it.
-        TokensText = record.Usage is { } u ? MainWindowViewModel.Compact(u.Total) : "—";
+        TokensText = record.Usage is { } u ? TokenCounts.Compact(u.Total) : "—";
         TokensDetail = record.Usage is { } u2
-            ? $"{MainWindowViewModel.Compact(u2.PromptTokens)} in · {MainWindowViewModel.Compact(u2.CompletionTokens)} out"
+            ? $"{TokenCounts.Compact(u2.PromptTokens)} in · {TokenCounts.Compact(u2.CompletionTokens)} out"
             : "nothing reported";
 
         ArtifactCountText = Artifacts.Count.ToString();

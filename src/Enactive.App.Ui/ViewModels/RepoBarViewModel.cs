@@ -1,7 +1,7 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Globalization;
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
 using Enactive.Workspace;
 
 /// <summary>

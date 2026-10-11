@@ -4,6 +4,7 @@ using System.Globalization;
 using Avalonia.Data.Converters;
 using Avalonia.Media;
 using Enactive.App.Ui.ViewModels;
+using Enactive.Application.Projections;
 using Enactive.Core.History;
 
 /// <summary>

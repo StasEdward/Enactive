@@ -12,6 +12,7 @@ using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Enactive.Application.Projections;
 using Enactive.Application;
 using Enactive.Agents;
 using Enactive.Core.Artifacts;

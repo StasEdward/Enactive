@@ -2,7 +2,7 @@ namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using Enactive.Agents;
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
 using Enactive.Core.Permissions;
 using Enactive.Core.Tools;
 using Enactive.Settings;

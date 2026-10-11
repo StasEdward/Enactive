@@ -3,7 +3,7 @@ namespace Enactive.App.Ui.ViewModels;
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using Avalonia.Threading;
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
 using Enactive.Core.Diagnostics;
 using Enactive.Workspace;
 
