@@ -5,7 +5,10 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Enactive.Secrets;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
 /// What the service needs before it starts at all (server plan 1.1): settings that say where, for whom and with
@@ -164,9 +167,23 @@ public sealed class ServerStartTests : IDisposable
 
     // ── the pipeline ────────────────────────────────────────────────────────
 
+    /// <summary>The test server leaves the client's address empty; the gate is NetworkGateTests' to test.</summary>
+    private sealed class FromInside : IStartupFilter
+    {
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+        {
+            app.Use((context, go) => { context.Connection.RemoteIpAddress = IPAddress.Parse("10.20.0.9"); return go(); });
+            next(app);
+        };
+    }
+
     private async Task<WebApplication> StartedAsync()
     {
-        var app = ServerApp.Build([], Good(), _root, certificate: null, b => b.WebHost.UseTestServer());
+        var app = ServerApp.Build([], Good() with { HostNames = ["localhost"] }, _root, certificate: null, b =>
+        {
+            b.WebHost.UseTestServer();
+            b.Services.AddTransient<IStartupFilter, FromInside>();
+        });
         await app.StartAsync();
         return app;
     }
