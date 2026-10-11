@@ -21,7 +21,7 @@
 
         <Panel Grid.Row="1">
 
-        <ScrollViewer>
+        <ScrollViewer Classes="gutter">
             <StackPanel Classes="form">
 
                 <TextBlock Classes="label" Text="Id" />

@@ -26,7 +26,7 @@
                      ones that live with this project. Cards with a coloured left edge, like every
                      other list here - amber for the selected one, and otherwise the colour of where
                      the template lives. -->
-                <ListBox Grid.Column="0" Classes="cards" Margin="10,10,5,0"
+                <ListBox Grid.Column="0" Classes="cards gutter" Margin="10,10,5,0"
                          ItemsSource="{Binding Templates}"
                          SelectedItem="{Binding Selected}">
                     <ListBox.ItemTemplate>
@@ -67,7 +67,7 @@
                         </StackPanel>
                     </StackPanel>
 
-                    <ScrollViewer>
+                    <ScrollViewer Classes="gutter bare">
                         <StackPanel Spacing="10">
 
                             <!-- The form, generated from what the template declares. A template

@@ -2842,10 +2842,10 @@ public sealed partial class Orchestrator : IOrchestrator
             session?.Track(journal);
             var loop = new ToolLoopResult();
 
-            await foreach (var repairEvent in RunToolLoopAsync(
+            await foreach (var repairEvent in InScope(runId, taskId, null, RunToolLoopAsync(
                 taskId, runId, provider, model, worker, messages, artifacts,
                 intent.Context, store, journal, new ReadLedger(), null, loop, budget, granted, ct, providerId,
-                attemptOrigin: ToolCallOrigin.Retry, changeLimits: session?.ChangeLimits, stepTitle: "Repair the failing final checks"))
+                attemptOrigin: ToolCallOrigin.Retry, changeLimits: session?.ChangeLimits, stepTitle: "Repair the failing final checks")))
                 yield return repairEvent;
 
             report = await InScopeAsync(runId, taskId, null,
@@ -3108,6 +3108,25 @@ public sealed partial class Orchestrator : IOrchestrator
     {
         using var _scope = LogScope.Begin(run, task, step);
         return await body();
+    }
+
+    /// <summary>
+    /// The same for a stream of events drained inside an async iterator: the scope is opened around each step of the
+    /// source, because the consumer's context is what each step resumes on. Without it the repair's tool loop ran
+    /// under no run (d26fb24f, 2026-10-11) - its prompts and tool calls logged as nobody's, and its model calls left
+    /// out of the run's figures, which take their run from the scope.
+    /// </summary>
+    private static async IAsyncEnumerable<T> InScope<T>(Guid run, Guid task, int? step, IAsyncEnumerable<T> source)
+    {
+        await using var items = source.GetAsyncEnumerator();
+        while (true)
+        {
+            bool more;
+            using (LogScope.Begin(run, task, step))
+                more = await items.MoveNextAsync();
+            if (!more) yield break;
+            yield return items.Current;
+        }
     }
 
     /// <summary>
@@ -4653,10 +4672,17 @@ public sealed partial class Orchestrator : IOrchestrator
     /// half minutes of the worker reading the code, two answers lost to the token limit, and report_blocked naming
     /// the tools the run had withheld before it began. Only the content-writing tools count: a role without any
     /// is a role's choice, not the run's, and copying or deleting files fixes nothing a check failed on.</para>
+    ///
+    /// <para>Nor does putting a file back (RestoresRunStart): it only returns what this run changed to how it was
+    /// before, which cannot fix a check that failed on the workspace as it was. Counted as a writer, it undid the
+    /// rule above: restore_file came on 2026-10-09, no deny list named it, and run d26fb24f (2026-10-11) - the same
+    /// release check, every writer denied - was sent to repair again: five minutes, a reply lost to the token limit,
+    /// two reasoning loops cut off.</para>
     /// </summary>
     private string? WhyRepairCannotWrite(Worker worker)
     {
-        var writers = _tools.Definitions.Where(d => d.Kind == ToolKind.Write && Allows(worker, d.Name)).Select(d => d.Name).ToArray();
+        var writers = _tools.Definitions
+            .Where(d => d.Kind == ToolKind.Write && !d.RestoresRunStart && Allows(worker, d.Name)).Select(d => d.Name).ToArray();
         if (writers.Length == 0)
             return null;
         var offer = OfferFor(worker);

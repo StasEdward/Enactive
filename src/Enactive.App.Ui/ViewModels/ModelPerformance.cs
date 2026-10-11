@@ -11,10 +11,23 @@ using Enactive.Core.Chat;
 /// next one. A call can arrive before the window has learnt its run's id from the run's first event, so the last runs'
 /// calls are kept, and shown when their run is.</para>
 /// </summary>
-internal sealed class ModelPerformance
+internal sealed class ModelPerformance : Mvvm.ObservableObject
 {
     /// <summary>How many runs' calls are kept for a run the window has not shown yet - a few, not the session.</summary>
     internal const int RunsKept = 8;
+
+    private bool _isExpanded;
+
+    /// <summary>Whether every figure is shown, or only each model's speed. Folded at first (2026-10-11): with all eight
+    /// lines a model, two models took most of the status column's height, and the speed was what was read off it.</summary>
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        private set => Set(ref _isExpanded, value);
+    }
+
+    /// <summary>A click on the panel opens it, the next folds it again.</summary>
+    public void Toggle() => IsExpanded = !IsExpanded;
 
     public ObservableCollection<ModelPerformanceRow> Rows { get; } = new();
     private readonly Dictionary<(string, string), Totals> _totals = new();

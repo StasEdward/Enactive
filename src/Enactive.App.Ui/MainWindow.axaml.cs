@@ -11,6 +11,7 @@ using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Enactive.Agents;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Context;
@@ -242,6 +243,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _repoPoll.Start();
         if (this.FindControl<Border>("RepoBar") is { } repoBar)
             repoBar.PointerPressed += (_, _) => _ = RefreshRepoAsync(forcePullRequest: true);
+        // A click anywhere on the model figures opens or folds them - but not one on the scroll bar of the opened panel,
+        // which is there to move through the figures, not to close them.
+        if (this.FindControl<Border>("PerformancePanel") is { } performance)
+            performance.Tapped += (_, e) =>
+            {
+                if ((e.Source as Visual)?.FindAncestorOfType<ScrollBar>(includeSelf: true) is null)
+                    _vm.Performance.Toggle();
+            };
         if (this.FindControl<Button>("RepoPullRequest") is { } pullRequest)
             pullRequest.Click += (_, _) => OpenRepoPage(_vm.Repo.PullRequestUrl);
         if (this.FindControl<Button>("RepoChecks") is { } checks)

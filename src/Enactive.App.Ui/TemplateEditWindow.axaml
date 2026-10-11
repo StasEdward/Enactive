@@ -28,7 +28,7 @@
 
             <Panel>
                 <!-- ── the form ──────────────────────────────────────────── -->
-                <ScrollViewer IsVisible="{Binding IsForm}">
+                <ScrollViewer Classes="gutter bare" IsVisible="{Binding IsForm}">
                     <StackPanel Spacing="6">
 
                         <TextBlock Classes="label" Text="Id" />

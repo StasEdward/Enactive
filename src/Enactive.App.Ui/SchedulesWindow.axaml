@@ -48,7 +48,7 @@
                     <TextBlock DockPanel.Dock="Bottom" Classes="hint" Text="{Binding Status}"
                                Margin="0,6,0,0" TextWrapping="Wrap" />
 
-                    <ListBox Classes="cards"
+                    <ListBox Classes="cards gutter"
                              ItemsSource="{Binding Schedules}"
                              SelectedItem="{Binding Selected}">
                         <ListBox.ItemTemplate>
@@ -78,7 +78,7 @@
                         <Button Content="Edit" Classes="go" Command="{Binding EditCommand}" />
                     </StackPanel>
 
-                    <ScrollViewer IsVisible="{Binding HasSelection}">
+                    <ScrollViewer Classes="gutter bare" IsVisible="{Binding HasSelection}">
                         <StackPanel Spacing="10">
 
                             <!-- A schedule is an approval given in advance for every future run, so
@@ -137,7 +137,7 @@
                         </StackPanel>
                     </StackPanel>
 
-                    <ScrollViewer>
+                    <ScrollViewer Classes="gutter bare">
                         <StackPanel Spacing="10">
 
                             <StackPanel>

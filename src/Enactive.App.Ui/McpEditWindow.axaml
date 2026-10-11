@@ -11,7 +11,7 @@
                 <Button Classes="primary" Content="Save" Command="{Binding SaveCommand}" />
                 <Button Content="Cancel" Command="{Binding CancelCommand}" />
             </StackPanel>
-            <ScrollViewer>
+            <ScrollViewer Classes="gutter bare">
                 <StackPanel Spacing="6">
                     <TextBlock Classes="label" Text="Server ID" />
                     <TextBox Text="{Binding Id}" PlaceholderText="e.g. desktop-commander" />

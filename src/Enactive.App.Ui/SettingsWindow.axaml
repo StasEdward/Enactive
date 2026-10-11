@@ -86,7 +86,7 @@
                         <Button Content="Add" Command="{Binding AddMcpCommand}" />
 
                     </StackPanel>
-                    <ListBox x:Name="McpList" Classes="cards" ItemsSource="{Binding McpServers}" SelectedItem="{Binding SelectedMcp}">
+                    <ListBox x:Name="McpList" Classes="cards gutter" ItemsSource="{Binding McpServers}" SelectedItem="{Binding SelectedMcp}">
                         <ListBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:McpServerRow">
                                 <Border Classes="card" BorderBrush="{Binding IsLocal, Converter={x:Static local:Palette.Local}}">
@@ -131,7 +131,7 @@
                     <StackPanel DockPanel.Dock="Bottom" Classes="actions">
                         <Button Content="New template" Command="{Binding AddTemplateCommand}" />
                     </StackPanel>
-                    <ListBox x:Name="TemplateList" Classes="cards" ItemsSource="{Binding Templates}" SelectedItem="{Binding SelectedTemplate}">
+                    <ListBox x:Name="TemplateList" Classes="cards gutter" ItemsSource="{Binding Templates}" SelectedItem="{Binding SelectedTemplate}">
                         <ListBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:TemplateRow">
                                 <Border Classes="card" BorderBrush="{Binding Edge, Converter={x:Static local:Palette.Template}}">
@@ -273,7 +273,7 @@
                 </StackPanel>
 
                 <!-- Scrolls: the trusted list grows with every device added. -->
-                <ScrollViewer IsVisible="{Binding IsRemote}">
+                <ScrollViewer Classes="gutter" IsVisible="{Binding IsRemote}">
                 <StackPanel Margin="12" Spacing="6">
                     <TextBlock Classes="label" Text="Remote access" />
                     <TextBlock Classes="hint" TextWrapping="Wrap"
@@ -379,7 +379,7 @@
                                    Text="All of these ship from one build, so they carry the same version. Two different numbers below mean a stale file is sitting in the program folder." />
                     </StackPanel>
 
-                    <ScrollViewer Margin="0,6,0,0">
+                    <ScrollViewer Classes="gutter bare" Margin="0,6,0,0">
                         <ItemsControl ItemsSource="{Binding Components}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="local:BuildComponent">
@@ -412,7 +412,7 @@
                                    IsVisible="{Binding !WritableRootRows.Count}"
                                    Text="{Binding WritableRootsEmpty}" />
 
-                        <ScrollViewer>
+                        <ScrollViewer Classes="gutter bare">
                             <ItemsControl ItemsSource="{Binding WritableRootRows}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:WritableRootRow">
@@ -439,7 +439,7 @@
                 </Panel>
 
                 <Panel IsVisible="{Binding IsAiGeneral}">
-                    <ScrollViewer>
+                    <ScrollViewer Classes="gutter">
                         <StackPanel Margin="12" Spacing="6">
 
                             <!-- Every explanation on this page is behind its own "?" — the text is
@@ -571,7 +571,7 @@
                         <StackPanel DockPanel.Dock="Bottom" Classes="actions">
                             <Button Content="Add" Command="{Binding AddProviderCommand}" />
                         </StackPanel>
-                        <ListBox x:Name="ProviderList" Classes="cards" ItemsSource="{Binding Providers}"
+                        <ListBox x:Name="ProviderList" Classes="cards gutter" ItemsSource="{Binding Providers}"
                                  SelectedItem="{Binding SelectedProvider}">
                             <ListBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:ProviderRow">
@@ -629,7 +629,7 @@
                         <StackPanel DockPanel.Dock="Bottom" Classes="actions">
                             <Button Content="Add" Command="{Binding AddWorkerCommand}" />
                         </StackPanel>
-                        <ListBox x:Name="WorkerList" Classes="cards" ItemsSource="{Binding Workers}"
+                        <ListBox x:Name="WorkerList" Classes="cards gutter" ItemsSource="{Binding Workers}"
                                  SelectedItem="{Binding SelectedWorker}">
                             <ListBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:WorkerRow">
@@ -668,7 +668,7 @@
                 </Panel>
 
                 <Panel IsVisible="{Binding IsAiPhases}">
-                    <ScrollViewer>
+                    <ScrollViewer Classes="gutter">
                         <StackPanel Margin="12" Spacing="6">
 
                             <TextBlock Classes="hint"
