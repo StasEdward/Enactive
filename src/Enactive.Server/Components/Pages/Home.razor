@@ -1,5 +1,4 @@
 @page "/"
-@rendermode InteractiveServer
 @using Enactive.Server.Runs
 @using Microsoft.AspNetCore.Components.Authorization
 @inject IRunControl Runs
@@ -7,18 +6,23 @@
 
 <PageTitle>Enactive</PageTitle>
 
+@* Rendered on the server and posted as a plain form (static rendering), not a live page: a live page's inputs and
+   buttons work only once its connection is up, and text typed or a click made before that was lost - the run was
+   started with an empty folder, or the form went off as a GET (found by tests/server-e2e). A form post works from the
+   first moment the page is there. *@
+
 <h1>Runs</h1>
 
 <AuthorizeView Policy="Operator">
-    <form class="start" @onsubmit="StartAsync">
-        <label>Folder on the server <input @bind="_workspace" placeholder="D:\work\project" /></label>
-        <label>Task <textarea @bind="_prompt" rows="3"></textarea></label>
+    <EditForm Model="Input!" method="post" OnValidSubmit="StartAsync" FormName="start" class="start" Context="form">
+        <label>Folder on the server <InputText @bind-Value="Input!.Workspace" placeholder="D:\work\project" /></label>
+        <label>Task <InputTextArea @bind-Value="Input!.Task" rows="3" /></label>
         <button type="submit">Run</button>
         @if (_said is not null)
         {
             <p class="said" role="alert">@_said</p>
         }
-    </form>
+    </EditForm>
 </AuthorizeView>
 
 @if (_runs.Count == 0)
@@ -27,7 +31,7 @@
 }
 else
 {
-    <ul class="runs">
+    <ul class="list">
         @foreach (var run in _runs)
         {
             <li>
@@ -42,17 +46,27 @@ else
 @code {
     [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
 
-    private string _workspace = "";
-    private string _prompt = "";
+    [SupplyParameterFromForm] private StartForm? Input { get; set; }
+
     private string? _said;
     private IReadOnlyList<ServerRun> _runs = [];
 
+    private sealed class StartForm
+    {
+        public string Workspace { get; set; } = "";
+        public string Task { get; set; } = "";
+    }
+
     protected override async Task OnInitializedAsync()
-        => _runs = Runs.List((await Auth).User);
+    {
+        // Set here, not by an initializer: a form post sets it from the form, and an initializer would be overwritten.
+        Input ??= new();
+        _runs = Runs.List((await Auth).User);
+    }
 
     private async Task StartAsync()
     {
-        var (run, refusal) = Runs.Start((await Auth).User, _workspace, _prompt);
+        var (run, refusal) = Runs.Start((await Auth).User, Input!.Workspace, Input.Task);
         if (run is null)
         {
             _said = refusal;

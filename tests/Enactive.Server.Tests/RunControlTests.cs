@@ -251,4 +251,48 @@ public sealed class RunControlTests : IDisposable
         await _engine.ReleaseNextAsync();
         await first.Ended.WaitAsync(TimeSpan.FromSeconds(10));
     }
+
+    // ── a planned stop ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Stopping the service cancels what runs (the engine stops at its step boundary, its checkpoint on disk) and waits
+    /// for it, and starts nothing new - a run started a moment before the stop would otherwise die with the process.
+    /// </summary>
+    [Fact]
+    public async Task A_planned_stop_cancels_the_runs_waits_for_them_and_starts_none()
+    {
+        var going = _control.Start(As("alice"), _workspace, "write the digest").Run!;
+        await WaitUntil(() => going.Session.Seq > 0);
+
+        var left = await _control.StopAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(0, left);
+        Assert.True(going.Ended.IsCompleted);
+        Assert.Equal("Cancelled by the service, stopping", RunState.Of(going));
+        Assert.Contains("stopping", _control.Start(As("alice"), _workspace, "too late").Refusal);
+    }
+
+    /// <summary>A run that will not end - stuck in a tool - does not keep the service from stopping; it is counted.</summary>
+    [Fact]
+    public async Task A_run_that_does_not_end_in_time_does_not_hold_the_stop()
+    {
+        var stuck = new RunControl(_users, new RunQueue(2), new Stuck(), NullLogger<RunControl>.Instance);
+        var run = stuck.Start(As("alice"), _workspace, "stuck").Run!;
+        await WaitUntil(() => run.Waiting is null);
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var left = await stuck.StopAsync(TimeSpan.FromMilliseconds(300));
+
+        Assert.Equal(1, left);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5));
+    }
+
+    private sealed class Stuck : IRunExecutor
+    {
+        public string? Problem => null;
+        public SessionApprovals Session { get; } = new();
+        public ApprovalStore Approvals { get; } = new(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json"));
+        public Task ExecuteAsync(ServerRun run, IDecisionHandler decisions, CancellationToken ct) => Task.Delay(Timeout.Infinite);
+    }
 }
+

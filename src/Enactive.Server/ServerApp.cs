@@ -45,6 +45,12 @@ internal static class ServerApp
         builder.Services.AddSingleton(logFile);
         builder.Logging.AddProvider(new FileLoggerProvider(logFile));
 
+        // The pages' scripts and styles from a build as from a publish. Without it a build run outside Development - the
+        // browser tests' harness, a trial on the server before installing - served blazor.web.js and the stylesheets
+        // with status 200 and no bytes, and every page stayed dead (found by tests/server-e2e). A published service has
+        // no build manifest, and this does nothing there.
+        builder.WebHost.UseStaticWebAssets();
+
         builder.WebHost.ConfigureKestrel(kestrel =>
         {
             kestrel.AddServerHeader = false;
@@ -74,6 +80,8 @@ internal static class ServerApp
         builder.Services.AddSingleton<Runs.IRunExecutor>(sp => new Runs.EngineExecutor(sp.GetRequiredService<Runs.ServerEngine>()));
         builder.Services.AddSingleton<Runs.IRunControl, Runs.RunControl>();
         builder.Services.AddSingleton<Runs.ServerHistory>();
+        builder.Services.AddHostedService<Runs.RunsStopWithTheService>();
+        builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(30));
 
         builder.Services.AddSingleton(sp => new NetworkGate(options.Subnets(), options.HostNames, sp.GetRequiredService<ILogger<NetworkGate>>()));
 

@@ -240,6 +240,17 @@ flight drains and writes a checkpoint; second host on a leased workspace is refu
 
 Estimate: **2 weeks** (1.1-1.5 one, 1.6-1.7 one).
 
+*Status 2026-10-12:* 1.6 and 1.7 done in code. Browser tests are `tests/server-e2e` over `tests/ServerHarness` (the
+real pipeline on Kestrel with a scripted engine, as RemoteHostHarness is for the panel) and run in CI on Windows:
+a run outliving its page, two tabs on one question, another Operator answering (but not remembering in the owner's
+name), a run waiting for its folder, a Viewer offered nothing, a role lowered with its page open. They found two
+defects the test server could not: a build served `blazor.web.js` empty, and text typed or a click made before a
+live page connected was lost (the start form is now a static post; the run page is not prerendered). bUnit was
+not needed: the component logic sits in `RunControl`/`RunSession`, tested directly. The planned stop is
+`RunControl.StopAsync` on the host's stop (unit-tested); the PROCESS tests - a real service stopped with a run on a
+real model, a second host refused its workspace - need an installed service and a model, and are not written.
+
+
 ## Phase 2 - running, complete
 
 - Inbox page: parked decisions (A3 timeout path), finished background runs, schedule results; answering resumes.

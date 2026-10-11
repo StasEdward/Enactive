@@ -94,6 +94,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
 {
     private readonly object _gate = new();
     private readonly List<ServerRun> _runs = new();
+    private bool _stopping;
 
     /// <summary>How many finished runs stay listed here; older ones are read from the history (1.6).</summary>
     private const int KeepFinished = 50;
@@ -112,9 +113,12 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         if (RunLauncher.Refusal(root, executor.Problem) is { } refused)
             return new(null, refused);
 
-        var run = new ServerRun(account.Name, root, prompt.Trim(), queue.Enqueue(root));
+        ServerRun run;
         lock (_gate)
         {
+            if (_stopping)
+                return new(null, "The service is stopping; start the run again when it is back.");
+            run = new ServerRun(account.Name, root, prompt.Trim(), queue.Enqueue(root));
             _runs.Add(run);
             var finished = _runs.Where(r => r.Ended.IsCompleted).ToList();
             foreach (var old in finished.Take(Math.Max(0, finished.Count - KeepFinished)))
@@ -217,6 +221,34 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         return null;
     }
 
+    /// <summary>
+    /// A planned stop of the service (ADR 0002 §6): no new runs, every run cancelled - the engine stops at its next step
+    /// boundary and its checkpoint is on disk, so the run is offered for resuming afterwards - and a bounded wait for
+    /// them to end. A run that does not end in time is left to the process's exit: the wait is bounded so that a run
+    /// stuck in a tool cannot keep the service from stopping, which Windows would then kill without a word.
+    /// </summary>
+    /// <returns>The runs that had not ended when the wait was up.</returns>
+    public async Task<int> StopAsync(TimeSpan wait)
+    {
+        List<ServerRun> going;
+        lock (_gate)
+        {
+            _stopping = true;
+            going = _runs.Where(r => !r.Ended.IsCompleted).ToList();
+        }
+        foreach (var run in going)
+        {
+            run.CancelledBy ??= "the service, stopping";
+            run.Cancellation.Cancel();
+        }
+        try { await Task.WhenAll(going.Select(r => r.Ended)).WaitAsync(wait); }
+        catch (TimeoutException) { }
+        var left = going.Count(r => !r.Ended.IsCompleted);
+        if (going.Count > 0)
+            log.LogInformation("Stopping: {Cancelled} run(s) cancelled, {Left} not ended in time.", going.Count, left);
+        return left;
+    }
+
     /// <summary>The account behind the request, when it still speaks for it and its role is enough; null otherwise.</summary>
     private Account? Allowed(ClaimsPrincipal user, Role needed)
         => ServerAuth.StillValid(users, user) is { } account && account.Role >= needed ? account : null;
@@ -249,4 +281,15 @@ internal sealed class EngineExecutor(ServerEngine engine) : IRunExecutor
         await using var composedRun = await RunComposer.ComposeAsync(composed, request, decisions, ct);
         await run.Session.DrainAsync(composedRun.Events(ct), ct);
     }
+}
+
+/// <summary>Stops the runs when the service stops - a planned stop, as RunControl.StopAsync says.</summary>
+internal sealed class RunsStopWithTheService(IRunControl control) : IHostedService
+{
+    /// <summary>Under the host's own shutdown timeout, so the runs' wait ends before the host gives up on it.</summary>
+    public static readonly TimeSpan Wait = TimeSpan.FromSeconds(20);
+
+    public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
+
+    public Task StopAsync(CancellationToken ct) => control is RunControl runs ? runs.StopAsync(Wait) : Task.CompletedTask;
 }

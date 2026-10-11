@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Enactive.Server.Tests" />
+    <InternalsVisibleTo Include="ServerHarness" />
   </ItemGroup>
 
   <ItemGroup>

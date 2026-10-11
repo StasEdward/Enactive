@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    The service for the browser tests (tests/server-e2e): the real Enactive.Server pipeline - Kestrel with HTTPS, the
+    network gate, sign-in, the pages, IRunControl, RunSession - over a scripted engine instead of a model, as
+    tests/RemoteHostHarness is for the panel. Test code in a test program, not a switch in the service: a service
+    that can be told to run a script instead of its engine is one setting away from doing it in production.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Enactive.Server\Enactive.Server.csproj" />
+  </ItemGroup>
+
+</Project>

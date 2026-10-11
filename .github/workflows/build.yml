@@ -39,6 +39,45 @@ jobs:
       - name: Test the window
         run: dotnet test tests/Enactive.App.Ui.Tests/Enactive.App.Ui.Tests.csproj --no-build --configuration Release --verbosity normal --logger "trx;LogFileName=ui.trx" --results-directory TestResults
 
+      # The service (ADR 0002): its settings, the network gate, accounts and sign-in, runs and pages - its real pipeline
+      # on a test server. Windows: its secrets are DPAPI's and its file guard is tested against a real junction.
+      - name: Test the service
+        run: dotnet test tests/Enactive.Server.Tests/Enactive.Server.Tests.csproj --no-build --configuration Release --verbosity normal --logger "trx;LogFileName=server.trx" --results-directory TestResults
+
+      - name: Test the service installer's settings
+        shell: pwsh
+        run: ./deploy/install-server.test.ps1
+
+      # The service's pages in a real browser, over the real pipeline (Kestrel, HTTPS, the gate, sign-in, the live
+      # connection) and a scripted engine (tests/ServerHarness). It found what the test server could not: a build
+      # served blazor.web.js empty, and a click before a live page connected was lost.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install the service's browser tests
+        working-directory: tests/server-e2e
+        run: |
+          npm ci
+          npx playwright install chromium
+
+      - name: Test the service in a browser
+        working-directory: tests/server-e2e
+        run: npx playwright test
+        env:
+          E2E_CONFIGURATION: Release
+          E2E_NO_BUILD: "1"
+
+      - name: Keep the service's browser test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-e2e-report-${{ github.sha }}
+          path: |
+            tests/server-e2e/playwright-report
+            tests/server-e2e/test-results
+          retention-days: 7
+
       - name: Test with external artifacts
         shell: pwsh
         run: dotnet test tests/Enactive.Engine.Tests/Enactive.Engine.Tests.csproj --configuration Release --artifacts-path "$env:RUNNER_TEMP/enactive-artifacts" --logger "trx;LogFileName=engine-external.trx" --results-directory TestResults
