@@ -72,3 +72,6 @@ input, textarea { font: inherit; background: var(--bg-card); color: var(--text);
 button.secondary { background: var(--bg-card); color: var(--text); border-color: var(--border); }
 .answers .cancel { align-self: center; }
 .body { white-space: pre-wrap; max-width: 760px; }
+form.inline { display: inline-flex; gap: 4px; margin: 2px 6px 2px 0; }
+th { text-align: left; color: var(--text-muted); font-weight: normal; }
+select { font: inherit; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px; }

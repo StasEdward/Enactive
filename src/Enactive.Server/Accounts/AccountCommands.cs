@@ -97,7 +97,7 @@ internal static class AccountCommands
                 return 64;
             }
             var name = args[at + 1];
-            if (role != Role.Admin && IsLastAdmin(users, name))
+            if (role != Role.Admin && users.IsLastAdmin(name))
                 return Done("That is the last administrator; make another one first.", "", name, "");
             return Done(users.SetRole(name, role), $"{name} is now {role}; its sessions are ended.", name, $"role set to {role}");
         }
@@ -105,7 +105,7 @@ internal static class AccountCommands
         if (Has("--disable-user"))
         {
             if (After("--disable-user") is not { } name) return Usage("--disable-user");
-            if (IsLastAdmin(users, name))
+            if (users.IsLastAdmin(name))
                 return Done("That is the last administrator; make another one first.", "", name, "");
             return Done(users.SetDisabled(name, true), $"{name} is disabled; its sessions are ended.", name, "account disabled");
         }
@@ -119,10 +119,6 @@ internal static class AccountCommands
         errors.WriteLine("No account command given.");
         return 64;
     }
-
-    private static bool IsLastAdmin(UserStore users, string name)
-        => users.All().Where(a => a is { Role: Role.Admin, Disabled: false }).Select(a => a.Name).ToList() is [var only]
-           && string.Equals(only, name, StringComparison.OrdinalIgnoreCase);
 
     private static string? NewPassword(Func<string, string> readPassword, TextWriter errors)
     {

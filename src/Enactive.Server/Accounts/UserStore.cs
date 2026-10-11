@@ -193,6 +193,14 @@ internal sealed class UserStore
         return (SignInVerdict.Ok, account);
     }
 
+    /// <summary>
+    /// The only administrator who can still act. Disabling or demoting that one locks the service out of its own
+    /// administration until somebody edits the database - refused from the console and the browser alike.
+    /// </summary>
+    public bool IsLastAdmin(string name)
+        => All().Where(a => a is { Role: Role.Admin, Disabled: false }).Select(a => a.Name).ToList() is [var only]
+           && string.Equals(only, name, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>A new password; ends the account's sessions and lifts a lockout. Why not, or null.</summary>
     public string? SetPassword(string name, string password)
         => PasswordProblem(password) ?? Change(name, "hash = $hash, failures = 0, locked_until = NULL", ("$hash", Hasher.HashPassword(name, password)));

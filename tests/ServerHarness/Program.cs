@@ -9,8 +9,8 @@ using Enactive.Server.Runs;
 
 // ServerHarness --data <folder> --port <n>
 //
-// The real service on https://localhost:<port>, answering 127.0.0.0/8, with three accounts (alice and bob Operators,
-// vera a Viewer, all with the password below) and a folder "project" in the data folder to run in. A run asks once
+// The real service on https://localhost:<port>, answering 127.0.0.0/8, with four accounts (ada the Admin, alice and bob
+// Operators, vera a Viewer, all with the password below) and a folder "project" in the data folder to run in. A run asks once
 // for write_file and ends when answered. Prints "ready" when it listens.
 
 const string Password = "e2e password 1234";
@@ -21,7 +21,7 @@ var port = int.Parse(Arg("--port"));
 Directory.CreateDirectory(Path.Combine(data, "project"));
 
 var users = new UserStore(data);
-foreach (var (name, role) in new[] { ("alice", Role.Operator), ("bob", Role.Operator), ("vera", Role.Viewer) })
+foreach (var (name, role) in new[] { ("ada", Role.Admin), ("alice", Role.Operator), ("bob", Role.Operator), ("vera", Role.Viewer) })
     if (users.Find(name) is null)
         users.Add(name, Password, role);
 

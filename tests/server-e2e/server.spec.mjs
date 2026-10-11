@@ -184,3 +184,35 @@ test('a past run is tried again from its page, and deleted after its question', 
   await context.close();
 });
 
+test('an admin adds an account on the accounts page, and it signs in', async ({ browser }) => {
+  const ada = await signedIn(browser, 'ada');
+  await ada.page.getByRole('link', { name: 'Accounts' }).click();
+  await expect(ada.page.getByText('trust each other')).toBeVisible();
+
+  const add = ada.page.locator('form.start');
+  await add.getByLabel('Name').fill('carl');
+  await add.getByLabel('Role').selectOption('Viewer');
+  await add.getByLabel('Password (12 characters or more)').fill(password);
+  await add.getByLabel('Again').fill(password);
+  await add.getByRole('button', { name: 'Add' }).click();
+  await expect(ada.page.getByText('Added carl (Viewer).')).toBeVisible();
+
+  const carl = await signedIn(browser, 'carl');
+  await expect(carl.page.getByRole('link', { name: 'Accounts' })).toHaveCount(0);
+  await carl.page.goto('/admin/users');
+  await expect(carl.page.getByRole('heading', { name: 'Accounts' })).toHaveCount(0);
+
+  await ada.page.getByRole('link', { name: 'Audit' }).click();
+  await expect(ada.page.getByText('account add').first()).toBeVisible();
+  await ada.context.close();
+  await carl.context.close();
+});
+
+test('an operator is offered no accounts page and is refused it', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'alice');
+  await expect(page.getByRole('link', { name: 'Accounts' })).toHaveCount(0);
+  await page.goto('/admin/users');
+  await expect(page.getByRole('heading', { name: 'Accounts' })).toHaveCount(0);
+  await context.close();
+});
+

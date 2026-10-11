@@ -83,6 +83,7 @@ internal static class ServerApp
             sp.GetRequiredService<ILogger<Runs.RunControl>>(), TimeSpan.FromMinutes(options.QuestionWaitMinutes)));
         builder.Services.AddSingleton<Runs.ServerHistory>();
         builder.Services.AddSingleton<Runs.ServerInbox>();
+        builder.Services.AddSingleton<AccountAdmin>();
         builder.Services.AddHostedService<Runs.RunsStopWithTheService>();
         // The schedules, every minute (ServerScheduler).
         builder.Services.AddSingleton<Runs.ServerScheduler>();
@@ -182,6 +183,18 @@ internal static class ServerApp
             return run is { } started
                 ? Results.LocalRedirect($"/runs/{started}")
                 : Results.LocalRedirect("/" + Components.Links.History(workspace) + "&said=" + Uri.EscapeDataString(said));
+        });
+
+        // The accounts page's changes: an Admin's, checked by AccountAdmin; the token here. Not at the page's own
+        // address: a page also takes form posts, and two endpoints on one address was a 500 (found by tests/server-e2e).
+        app.MapPost("/admin/users/act", async (HttpContext context, IAntiforgery antiforgery, AccountAdmin accounts) =>
+        {
+            if (!await antiforgery.IsRequestValidAsync(context))
+                return Results.BadRequest();
+            var form = await context.Request.ReadFormAsync();
+            var said = accounts.Do(context.User, form["act"].ToString(), form["name"].ToString().Trim(),
+                form["role"].ToString(), form["password"].ToString(), form["again"].ToString());
+            return Results.LocalRedirect("/admin/users?said=" + Uri.EscapeDataString(said));
         });
 
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();

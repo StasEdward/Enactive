@@ -9,6 +9,10 @@
                 <a href="/">Runs</a>
                 <a href="inbox">Inbox</a>
                 <a href="workspaces">Workspaces</a>
+                <AuthorizeView Policy="Admin" Context="admin">
+                    <a href="admin/users">Accounts</a>
+                    <a href="admin/audit">Audit</a>
+                </AuthorizeView>
             </nav>
             <span class="who">@context.User.Identity?.Name</span>
             <form method="post" action="/signout" class="signout">
