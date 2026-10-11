@@ -1,5 +1,6 @@
 namespace Enactive.App.Ui.ViewModels;
 
+using Enactive.Application;
 using Enactive.Agents;
 
 using System.Collections.ObjectModel;

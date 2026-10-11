@@ -1,6 +1,7 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
+using Enactive.Application;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.History;
 using Enactive.Core.Inbox;

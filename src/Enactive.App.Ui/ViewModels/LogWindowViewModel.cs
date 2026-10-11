@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Text;
 using Avalonia.Threading;
+using Enactive.Application;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Agents;
 using Enactive.Core.Diagnostics;

@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Enactive.Application</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    What a host does around a run that is neither the engine nor an interface: starting and stopping
+    runs, the background group, decisions and the inbox, schedules, saving settings (ADR 0002 §2).
+
+    It lives outside Enactive.App.Ui for the same reason Enactive.Settings does: App.Ui is a WinExe and
+    nothing else can reference it. While this code lived there, the only way a test could reach it was
+    to compile the window's source files into the test assembly one by one, and a second host (the
+    service, ADR 0002) could not reach it at all - it would have had to grow its own copy, and two copies
+    of the rules around a run drift exactly where nobody looks.
+
+    NO AVALONIA HERE, and nothing else that draws. Enactive.Engine.Tests checks the references of this
+    assembly (ApplicationLayerTests), so a convenience import of a UI package fails a test rather than
+    quietly making the service depend on a desktop toolkit.
+
+    The namespace is Enactive.Application, which hides Avalonia's Application type from any file that
+    imports Avalonia OUTSIDE its namespace declaration: walking out of Enactive.App.Ui, the compiler
+    finds the namespace Enactive.Application before it gets to the file's usings. The three places in
+    App.Ui that name that type write it as Avalonia.Application for that reason.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
+    <ProjectReference Include="..\Enactive.Agents\Enactive.Agents.csproj" />
+    <ProjectReference Include="..\Enactive.Settings\Enactive.Settings.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The types here are internal, as they were in the window; these are the assemblies that use them.
+         enactive-ui is App.Ui's AssemblyName, which is what InternalsVisibleTo matches, not the project name. -->
+    <InternalsVisibleTo Include="enactive-ui" />
+    <InternalsVisibleTo Include="Enactive.App.Ui.Tests" />
+    <InternalsVisibleTo Include="Enactive.Engine.Tests" />
+  </ItemGroup>
+</Project>

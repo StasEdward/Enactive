@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui;
+namespace Enactive.Application;
 
 using Enactive.Agents;
 using Enactive.Core.Inbox;

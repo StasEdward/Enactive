@@ -134,6 +134,7 @@ Include a focused regression test when fixing behavior, and update the relevant 
 | [`src/Enactive.Providers`](src/Enactive.Providers) | Model adapters |
 | [`src/Enactive.Tools`](src/Enactive.Tools) | Built-in tools and tool registry |
 | [`src/Enactive.Workspace`](src/Enactive.Workspace) | Workspace state, artifacts and persistence |
+| [`src/Enactive.Application`](src/Enactive.Application) | What hosts share around a run: background runs, decisions, schedules, settings save |
 | [`src/Enactive.App.Ui`](src/Enactive.App.Ui) / [`src/Enactive.App.Console`](src/Enactive.App.Console) | Desktop and console hosts |
 | [`src/Enactive.Remote.Gateway`](src/Enactive.Remote.Gateway) / [`src/Enactive.Remote.Host`](src/Enactive.Remote.Host) | Browser gateway and desktop connection |
 | [`tests`](tests) · [`Docs`](Docs) · [`brand`](brand) | Tests, documentation and visual identity |

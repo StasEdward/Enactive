@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui;
+namespace Enactive.Application;
 
 /// <summary>Owns local background work through recording, resource disposal and UI cleanup.</summary>
 internal sealed class BackgroundRunGroup

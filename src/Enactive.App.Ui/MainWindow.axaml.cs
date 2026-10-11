@@ -12,6 +12,7 @@ using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Enactive.Application;
 using Enactive.Agents;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Context;
@@ -631,7 +632,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
             // Shutdown is explicit now: the lifetime no longer ends with the main window, because the
             // main window comes and goes from the tray.
-            (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+            // Avalonia.Application in full: Enactive.Application is a namespace (see Enactive.Application.csproj).
+            (Avalonia.Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
         }
         finally { _exitRequested = false; }
     }

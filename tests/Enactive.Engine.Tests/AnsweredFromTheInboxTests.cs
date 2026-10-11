@@ -1,5 +1,6 @@
 namespace Enactive.Engine.Tests;
 
+using Enactive.Application;
 using Enactive.Agents;
 using Enactive.App.Ui;
 using Enactive.Core.Events;

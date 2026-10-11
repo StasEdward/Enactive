@@ -22,7 +22,7 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 
 ## Solution
 
-`Enactive.sln`, **12 product projects** (`net10.0`, pinned via `global.json`), plus three on the test side:
+`Enactive.sln`, **13 product projects** (`net10.0`, pinned via `global.json`), plus three on the test side:
 `tests/Enactive.Engine.Tests` (the engine's unit and scenario tests), `tests/Enactive.Remote.Gateway.Tests` (77, and they need a MySQL
 to run) and `tests/Enactive.Mcp.TestServer`.
 
@@ -45,6 +45,7 @@ tool need (`ToolArguments.ExpectedExitCodes`) lives in `Core.Tools`, not in `Too
 | `Enactive.Remote.Contracts` | The wire types remote access is spoken in — shared by the gateway and the host so one side cannot drift from the other. |
 | `Enactive.Remote.Gateway` | The server side of remote access: the panel, the cursor over a run's events, the schema. See `REMOTE_OPERATIONS.md`. |
 | `Enactive.Remote.Host` | The machine-side agent that a gateway talks to. Remote access is **off** unless it is turned on. |
+| `Enactive.Application` | What a host does around a run that is neither the engine nor drawing (ADR 0002 §2): the background run group, answering a parked decision from the inbox, the policy of scheduled runs, completing an inline decision once, the order of a settings save, log filtering. Shared by the window and the coming service; **no UI toolkit**, checked by `ApplicationLayerTests`. Phase 0 of the [server plan](../plans/server-web-ui-implementation-plan.md) moves the rest of the window's run control here. |
 | `Enactive.App.Ui` | Avalonia desktop UI: `.axaml` views over view models (`ViewModels/`), with a small hand-written MVVM base in `Mvvm/`, app-wide styling in `Styles/Controls.axaml` and the palette in `Brand.cs`. |
 
 ## Tools

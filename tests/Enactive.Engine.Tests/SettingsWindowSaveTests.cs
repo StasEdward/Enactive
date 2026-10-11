@@ -1,5 +1,6 @@
 namespace Enactive.Engine.Tests;
 
+using Enactive.Application;
 using Enactive.App.Ui;
 using Enactive.Settings;
 using Xunit;

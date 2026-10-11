@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui;
+namespace Enactive.Application;
 
 /// <summary>
 /// Whether the computer starts Enactive at login, as something that can be read and changed.
