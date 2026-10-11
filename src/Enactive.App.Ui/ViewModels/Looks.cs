@@ -16,9 +16,6 @@ internal enum CardTone { Pending, Running, Done, Failed, Skipped, Unverified, Ne
 /// <summary>What a line of a unified diff does to the file.</summary>
 internal enum DiffLineKind { Added, Removed, Context }
 
-/// <summary>Which model's pill is shown over the run: none yet, the coder working, or the reasoner reviewing.</summary>
-internal enum AgentKind { None, Coder, Reasoner }
-
 /// <summary>
 /// Where a staged change stands: waiting for a person, applied, rejected - or refused, when applying or rejecting it
 /// could not be done (the file changed after the proposal was made) and the person still has to decide.

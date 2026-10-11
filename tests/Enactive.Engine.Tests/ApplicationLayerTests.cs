@@ -75,6 +75,10 @@ public sealed class ApplicationLayerTests
     [InlineData(typeof(ModelWorkSplit))]
     [InlineData(typeof(UnfinishedChanges))]
     [InlineData(typeof(TokenCounts))]
+    [InlineData(typeof(LiveRuns))]
+    [InlineData(typeof(WorkInFlight))]
+    [InlineData(typeof(RunLauncher))]
+    [InlineData(typeof(RunActivity))]
     public void Moved_types_come_from_the_application_assembly(Type type)
         => Assert.Equal("Enactive.Application", type.Assembly.GetName().Name);
 }

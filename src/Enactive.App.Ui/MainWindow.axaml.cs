@@ -110,15 +110,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// <summary>What each workspace was left showing in the middle column. See OpenRunMemory.</summary>
     private readonly OpenRunMemory _openRuns = new();
 
-    /// <summary>
-    /// Runs in flight, and the workspace each belongs to.
-    ///
-    /// <para>Held here because nothing else knows: a run is written to the store when it ENDS, so
-    /// between Run and the end this list is the only record that it is happening at all. The
-    /// workspace is carried alongside because a background run keeps going after the workspace has
-    /// been switched, and it must not appear in another project's column.</para>
-    /// </summary>
-    private readonly Dictionary<Guid, (LiveRun Run, string Workspace)> _live = new();
+    /// <summary>Runs in flight, and the workspace each belongs to - see LiveRuns.</summary>
+    private readonly LiveRuns _liveRuns = new();
 
     /// <summary>The foreground run's row, so events can find it. Null when nothing is running.</summary>
     private Guid _liveRow;
@@ -147,7 +140,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// until it is replaced.</para>
     /// </summary>
     private readonly List<Action> _liveJournal = new();
-    private string? _liveAgent;
+    /// <summary>Who is working on the live run and what it is doing now (RunActivity).</summary>
+    private RunActivity _activity = new();
     private Guid _renderedRunId;
     private readonly BackgroundRunGroup _background = new();
     private bool _exitRequested;
@@ -532,9 +526,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// <summary>
     /// Work that must be cancelled and drained before this process exits.
     /// </summary>
-    private bool HasWorkInFlight()
-        => _vm.IsBusy || _pendingDecision is not null
-            || _background.Count > 0 || RemoteRunsInFlight > 0;
+    private bool HasWorkInFlight() => InFlight.Any;
+
+    private WorkInFlight InFlight => new(_vm.IsBusy, _pendingDecision is not null, _background.Count, RemoteRunsInFlight);
 
     /// <summary>
     /// Runs a phone started that are still going. They die with the process exactly as a background
@@ -543,26 +537,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private int RemoteRunsInFlight => _remote?.Running.Count ?? 0;
 
-    private string DescribeWorkInFlight()
-    {
-        var background = _background.Count;
-        var remote = RemoteRunsInFlight;
-
-        if (_pendingDecision is not null)
-            return "A run is waiting for your decision. Closing now cancels it.";
-
-        if (remote > 0)
-            return remote == 1
-                ? "A task started from your phone is still going. Closing now stops it where it is."
-                : $"{remote} tasks started from your phone are still going. Closing now stops them where they are.";
-        if (_vm.IsBusy && background > 0)
-            return $"A run is going, and {background} more in the background. Closing cancels them and waits for cleanup and recording.";
-        if (_vm.IsBusy)
-            return "A run is going. Closing cancels it and waits for cleanup and recording.";
-        return background == 1
-            ? "A background run is still going. Closing cancels it and waits for cleanup and recording."
-            : $"{background} background runs are still going. Closing cancels them and waits for cleanup and recording.";
-    }
+    private string DescribeWorkInFlight() => InFlight.Describe();
 
     /// <summary>
     /// False when this desktop has no system tray. Then the window has nowhere to hide and closing
@@ -843,23 +818,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (string.IsNullOrEmpty(workspacePath))
             return;
 
-        // The app used to create whatever path was in the box. That is how an empty workspace
-        // appeared beside the .exe on first start: a typo, or a default nobody chose, became a
-        // folder. A run happens in a folder that already exists, or it does not happen.
-        if (!Directory.Exists(workspacePath))
+        // A folder that is not there, or no model to run on - the checks every host makes (RunLauncher).
+        if (RunLauncher.Refusal(workspacePath, _engineProblem) is { } refused)
         {
             _vm.StatusPhase = "Error";
-            _vm.CurrentAction = $"No such folder: {workspacePath}. Pick another workspace, or create the folder yourself first.";
-            return;
-        }
-
-        // No model, no run - said here rather than discovered as a 404 from a provider. Before the
-        // model names came out of AppSettings this could not happen: an unconfigured machine was
-        // configured for whatever string was compiled in, and it ran.
-        if (_engineProblem is { Length: > 0 } notConfigured)
-        {
-            _vm.StatusPhase = "Error";
-            _vm.CurrentAction = notConfigured;
+            _vm.CurrentAction = refused;
             return;
         }
 
@@ -891,7 +854,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
             _vm.InputText = string.Empty;
             Live(() => _vm.TaskIntent = text);
-            SetLiveTitle(Summarise(text));
+            SetLiveTitle(RunLauncher.Title(text));
             _feed = new RunFeed(_liveTitle);
             Live(() => _vm.HasTask = true);
             Live(() => _vm.StatusPhase = "Running");
@@ -1030,37 +993,33 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 }
                 SyncFeed();
 
-                // What only the window shows: the routing panel, the agent pill, the line saying what is
-                // happening now, the counters, tokens and artifacts.
+                // The agent pill, the line saying what is happening now and the count of tool calls: folded by
+                // RunActivity, as any host shows them. Drawn here only where they changed - the pill in particular
+                // is redrawn on a change of hands, not on every token.
+                var changed = _activity.Apply(ev);
+                if (changed.HasFlag(RunActivity.Change.Agent))
+                {
+                    var (label, agent) = (_activity.AgentLabel, _activity.Agent);
+                    Live(() => _vm.SetAgent(label, agent));
+                }
+                if (changed.HasFlag(RunActivity.Change.ToolCalls))
+                {
+                    var calls = _activity.ToolCalls;
+                    Live(() => _vm.ToolCalls = calls);
+                }
+                if (changed.HasFlag(RunActivity.Change.Ended))
+                    Live(() => _vm.IsAgentVisible = false);
+                if (changed.HasFlag(RunActivity.Change.Action))
+                {
+                    var action = _activity.CurrentAction;
+                    Live(() => _vm.CurrentAction = action);
+                }
+
+                // What only the window shows: the routing panel, tokens and artifacts.
                 switch (ev.Kind)
                 {
                     case EventKind.Routed:
                         Live(() => _vm.Routing.Apply(ev.Summary, ev.PayloadJson));
-                        break;
-                    case EventKind.StepStarted:
-                        SetLiveAgent("Coder", AgentKind.Coder);
-                        Live(() => _vm.CurrentAction = ev.Summary);
-                        break;
-                    case EventKind.AssistantDelta:
-                        SetLiveAgent("Coder", AgentKind.Coder);
-                        break;
-                    case EventKind.ToolInvoked:
-                        SetLiveAgent("Coder", AgentKind.Coder);
-                        Live(() =>
-                        {
-                            _vm.ToolCalls++;
-                            _vm.CurrentAction = ev.Summary;
-                        });
-                        break;
-                    case EventKind.ReviewRequested:
-                    case EventKind.ReviewPassed:
-                    case EventKind.ReviewFailed:
-                        SetLiveAgent("Reasoner · review", AgentKind.Reasoner);
-                        Live(() => _vm.CurrentAction = ev.Summary);
-                        break;
-                    case EventKind.DecisionRequested:
-                    case EventKind.DecisionResolved:
-                        Live(() => _vm.CurrentAction = ev.Summary);
                         break;
                     case EventKind.UsageReported:
                         if (ev.Usage() is { } used)
@@ -1079,21 +1038,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     // offering to open or undo a file that is no longer the file they describe.
                     case EventKind.ArtifactReverted:
                         MarkRevertedArtifacts(ev.RevertedPaths() ?? []);
-                        break;
-                    case EventKind.TaskCompleted:
-                    case EventKind.TaskFailed:
-                        var outcome = ev.Outcome()
-                            ?? (ev.Kind == EventKind.TaskCompleted ? RunOutcomeKind.Completed : RunOutcomeKind.Failed);
-                        Live(() =>
-                        {
-                            _vm.IsAgentVisible = false;
-                            // Why it stopped belongs on screen, not only in the log. A completed run has a
-                            // reason only when something must be added to "done" - a check the engine ran
-                            // on the workspace and saw fail (RunOutcomeDecision.Settle) - and that is shown too.
-                            _vm.CurrentAction = outcome == RunOutcomeKind.Completed
-                                ? ev.OutcomeReason() ?? string.Empty
-                                : ev.OutcomeReason() ?? ev.Summary;
-                        });
                         break;
                 }
         }
@@ -1152,14 +1096,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     StepsDone = _feed.StepsDone,
                     StepsTotal = _feed.StepsTotal
                 });
-        }
-
-        /// <summary>A one-line title from a request that may be a paragraph. Held until the planner
-        /// produces a real title, which it almost always does.</summary>
-        private static string Summarise(string text)
-        {
-            var line = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
-            return line.Length <= 70 ? line : line[..70] + "…";
         }
 
         private static string FormatElapsed(TimeSpan span)
@@ -1349,47 +1285,29 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         /// </summary>
         private Guid BeginLive(string title, string workspace, bool headless)
         {
-            var row = Guid.NewGuid();
-            _live[row] = (new LiveRun(row, Guid.Empty, title, headless, 0, 0, DateTimeOffset.Now), workspace);
+            var row = _liveRuns.Begin(title, workspace, headless);
             RefreshLive();
             return row;
         }
 
-        /// <summary>Updates a live row, if it is still there. Silent when it is not: a run that has
-        /// ended while an event was in flight is not an error to report.</summary>
         private void UpdateLive(Guid row, Func<LiveRun, LiveRun> change)
         {
-            if (!_live.TryGetValue(row, out var held))
-                return;
-
-            _live[row] = (change(held.Run), held.Workspace);
-            RefreshLive();
+            if (_liveRuns.Update(row, change))
+                RefreshLive();
         }
 
         private void EndLive(Guid row)
         {
-            if (_live.Remove(row))
+            if (_liveRuns.End(row))
                 RefreshLive();
         }
 
         /// <summary>
-        /// Pushes the live rows for the CURRENT workspace into the column.
-        ///
-        /// <para>Filtered by workspace here rather than in RunColumn: which folder a run belongs to is
-        /// the window's business, and a background run started in one project keeps running after a
-        /// switch. Filtered against the history there, which is the rule that has a test.</para>
+        /// Pushes the live rows for the CURRENT workspace into the column: those of the folder on screen
+        /// (LiveRuns), filtered against the history (RunColumn), which are the two rules that have tests.
         /// </summary>
         private void RefreshLive()
-        {
-            var here = WorkspaceRegistry.Normalise(_vm.WorkspacePath);
-
-            _vm.Runs.ShowRunning(
-                RunColumn.Live(
-                    _live.Values
-                         .Where(e => string.Equals(e.Workspace, here, StringComparison.OrdinalIgnoreCase))
-                         .Select(e => e.Run),
-                    _vm.Runs.All));
-        }
+            => _vm.Runs.ShowRunning(RunColumn.Live(_liveRuns.In(_vm.WorkspacePath), _vm.Runs.All));
 
         /// <summary>
         /// Empties the middle column and the tiles beside it: the step feed, the artifacts, the tabs,
@@ -1415,7 +1333,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _shownProgress = default;
             _liveTitle = string.Empty;
             _liveJournal.Clear();
-            _liveAgent = null;
+            _activity = new RunActivity();
             _renderedRunId = Guid.Empty;
         }
 
@@ -1441,14 +1359,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _vm.StatusProgress = "—";
             _vm.StatusElapsed = "—";
             _vm.CurrentAction = string.Empty;
-        }
-
-        private void SetLiveAgent(string name, AgentKind kind)
-        {
-            // Keep only badge transitions, including while another workspace is visible.
-            if (_liveAgent == name) return;
-            _liveAgent = name;
-            Live(() => _vm.SetAgent(name, kind));
         }
 
         /// <summary>
@@ -1840,7 +1750,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _registry.Touch(fullPath);
             RefreshWorkspaces();
 
-            var title = Summarise(text);
+            var title = RunLauncher.Title(text);
             // A background launch has its own row; it must not overwrite the foreground header.
             if (!_vm.IsBusy)
             {
