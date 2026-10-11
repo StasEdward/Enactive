@@ -195,4 +195,27 @@ public sealed class ModelPerformanceTests
         Assert.Contains("_vm.Performance.ShowRun(ev.RunId);", render[at..(at + 1500)], StringComparison.Ordinal);
         Assert.Contains("This run · completed requests", File.ReadAllText(Path.Combine(ui, "MainWindow.axaml")), StringComparison.Ordinal);
     }
+
+    /// <summary>The panel opens folded to one line a model, and a click opens or folds it.</summary>
+    [Fact]
+    public void The_panel_starts_folded_and_a_click_toggles_it()
+    {
+        var vm = new ModelPerformance();
+        var changed = new List<string?>();
+        vm.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+        Assert.False(vm.IsExpanded);
+
+        vm.Toggle();
+        Assert.True(vm.IsExpanded);
+        vm.Toggle();
+        Assert.False(vm.IsExpanded);
+        Assert.Equal([nameof(ModelPerformance.IsExpanded), nameof(ModelPerformance.IsExpanded)], changed);
+
+        var ui = Path.Combine(TestRepository.Root, "src", "Enactive.App.Ui");
+        Assert.Contains("_vm.Performance.Toggle()", File.ReadAllText(Path.Combine(ui, "MainWindow.axaml.cs")), StringComparison.Ordinal);
+        var xaml = File.ReadAllText(Path.Combine(ui, "MainWindow.axaml"));
+        Assert.Contains("x:Name=\"PerformancePanel\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("IsVisible=\"{Binding Performance.IsExpanded}\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("IsVisible=\"{Binding !Performance.IsExpanded}\"", xaml, StringComparison.Ordinal);
+    }
 }

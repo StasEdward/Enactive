@@ -861,13 +861,35 @@
 
                     </StackPanel>
                 </ScrollViewer>
-                    <Border Grid.Row="1" Background="{DynamicResource Brand.CardFill}" CornerRadius="6" Padding="12">
+                    <!-- Folded to a line a model (name and speed) until clicked; a click opens every figure, the next
+                         folds it again. Opened, the panel took most of the column with two models. -->
+                    <Border x:Name="PerformancePanel" Grid.Row="1" Background="{DynamicResource Brand.CardFill}"
+                            CornerRadius="6" Padding="12" Cursor="Hand">
                         <StackPanel Spacing="8">
-                            <TextBlock Classes="panelHeader" Text="MODEL PERFORMANCE" Margin="0" />
-                            <TextBlock Classes="hint" Text="This run · completed requests" FontSize="11" />
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Classes="panelHeader" Text="MODEL PERFORMANCE" Margin="0" />
+                                <TextBlock Grid.Column="1" Classes="hint" Text="▸" FontSize="11" VerticalAlignment="Center"
+                                           IsVisible="{Binding !Performance.IsExpanded}" />
+                                <TextBlock Grid.Column="1" Classes="hint" Text="▾" FontSize="11" VerticalAlignment="Center"
+                                           IsVisible="{Binding Performance.IsExpanded}" />
+                            </Grid>
+                            <TextBlock Classes="hint" Text="This run · completed requests" FontSize="11"
+                                       IsVisible="{Binding Performance.IsExpanded}" />
                             <TextBlock Classes="hint" Text="Statistics appear after a model responds."
                                        TextWrapping="Wrap" IsVisible="{Binding !Performance.Rows.Count}" />
-                            <ScrollViewer MaxHeight="420" HorizontalScrollBarVisibility="Disabled">
+                            <ItemsControl ItemsSource="{Binding Performance.Rows}" IsVisible="{Binding !Performance.IsExpanded}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ModelPerformanceRow">
+                                        <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,0" ToolTip.Tip="{Binding Provider}">
+                                            <TextBlock Text="{Binding Model}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Speed}" FontSize="11.5" FontWeight="SemiBold"
+                                                       Margin="8,0,0,0" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <ScrollViewer MaxHeight="420" HorizontalScrollBarVisibility="Disabled"
+                                          IsVisible="{Binding Performance.IsExpanded}">
                                 <ItemsControl ItemsSource="{Binding Performance.Rows}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="vm:ModelPerformanceRow">
