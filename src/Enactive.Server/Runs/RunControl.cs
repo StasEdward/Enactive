@@ -132,8 +132,9 @@ internal interface IRunControl
 }
 
 /// <param name="parkQuestionsAfter">How long a question waits before the run stops at it for the inbox; null, never.</param>
+/// <param name="roots">Where runs from the browser may work; null for anywhere (a test's).</param>
 internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor executor, ILogger<RunControl> log,
-    TimeSpan? parkQuestionsAfter = null) : IRunControl
+    TimeSpan? parkQuestionsAfter = null, WorkspaceRoots? roots = null) : IRunControl
 {
     private readonly object _gate = new();
     private readonly List<ServerRun> _runs = new();
@@ -208,8 +209,9 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
             return new(null, "Name the folder the run is to work in.");
 
         var root = Workspace.WorkspaceRegistry.Normalise(workspace);
-        // The same checks every host makes before a run (RunLauncher): a folder that is there, an engine to run on.
-        if (RunLauncher.Refusal(root, executor.Problem) is { } refused)
+        // The same checks every host makes before a run (RunLauncher): a folder that is there, an engine to run on - and
+        // the service's own: a folder under its roots (WorkspaceRoots).
+        if ((RunLauncher.Refusal(root, executor.Problem) ?? roots?.Refusal(root)) is { } refused)
             return new(null, refused);
 
         ServerRun run;

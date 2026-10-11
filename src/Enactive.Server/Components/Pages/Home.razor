@@ -2,6 +2,7 @@
 @using Enactive.Server.Runs
 @using Microsoft.AspNetCore.Components.Authorization
 @inject IRunControl Runs
+@inject ServerHistory History
 @inject NavigationManager Navigation
 
 <PageTitle>Enactive</PageTitle>
@@ -15,7 +16,15 @@
 
 <AuthorizeView Policy="Operator">
     <EditForm Model="Input!" method="post" OnValidSubmit="StartAsync" FormName="start" class="start" Context="form">
-        <label>Folder on the server <InputText @bind-Value="Input!.Workspace" placeholder="D:\work\project" /></label>
+        <label>Workspace
+            <InputSelect @bind-Value="Input!.Workspace">
+                @foreach (var workspace in _workspaces)
+                {
+                    <option value="@workspace.RootPath">@workspace.Name - @workspace.RootPath</option>
+                }
+            </InputSelect>
+        </label>
+        <a href="workspaces/browse">Add a folder…</a>
         <label>Task <InputTextArea @bind-Value="Input!.Task" rows="3" /></label>
         <button type="submit">Run</button>
         @if (_said is not null)
@@ -50,6 +59,7 @@ else
 
     private string? _said;
     private IReadOnlyList<ServerRun> _runs = [];
+    private IReadOnlyList<Enactive.Workspace.WorkspaceEntry> _workspaces = [];
 
     private sealed class StartForm
     {
@@ -61,7 +71,12 @@ else
     {
         // Set here, not by an initializer: a form post sets it from the form, and an initializer would be overwritten.
         Input ??= new();
-        _runs = Runs.List((await Auth).User);
+        var user = (await Auth).User;
+        _runs = Runs.List(user);
+        // The folders the service knows; a new one is added by browsing its roots (WorkspaceRoots), not typed.
+        _workspaces = History.Workspaces(user);
+        if (Input.Workspace.Length == 0 && _workspaces.Count > 0)
+            Input.Workspace = _workspaces[0].RootPath;
     }
 
     private async Task StartAsync()

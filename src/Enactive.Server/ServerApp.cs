@@ -80,7 +80,9 @@ internal static class ServerApp
         builder.Services.AddSingleton<Runs.IRunExecutor>(sp => new Runs.EngineExecutor(sp.GetRequiredService<Runs.ServerEngine>()));
         builder.Services.AddSingleton<Runs.IRunControl>(sp => new Runs.RunControl(sp.GetRequiredService<UserStore>(),
             sp.GetRequiredService<Enactive.Application.RunQueue>(), sp.GetRequiredService<Runs.IRunExecutor>(),
-            sp.GetRequiredService<ILogger<Runs.RunControl>>(), TimeSpan.FromMinutes(options.QuestionWaitMinutes)));
+            sp.GetRequiredService<ILogger<Runs.RunControl>>(), TimeSpan.FromMinutes(options.QuestionWaitMinutes),
+            sp.GetRequiredService<Runs.WorkspaceRoots>()));
+        builder.Services.AddSingleton(new Runs.WorkspaceRoots(options.WorkspaceRoots));
         builder.Services.AddSingleton<Runs.ServerHistory>();
         builder.Services.AddSingleton<Runs.ServerInbox>();
         builder.Services.AddSingleton<AccountAdmin>();
@@ -195,6 +197,15 @@ internal static class ServerApp
             var said = accounts.Do(context.User, form["act"].ToString(), form["name"].ToString().Trim(),
                 form["role"].ToString(), form["password"].ToString(), form["again"].ToString());
             return Results.LocalRedirect("/admin/users?said=" + Uri.EscapeDataString(said));
+        });
+
+        app.MapPost("/workspaces/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerHistory history) =>
+        {
+            if (!await antiforgery.IsRequestValidAsync(context))
+                return Results.BadRequest();
+            var form = await context.Request.ReadFormAsync();
+            var said = history.AddWorkspace(context.User, form["folder"].ToString());
+            return Results.LocalRedirect("/workspaces?said=" + Uri.EscapeDataString(said));
         });
 
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();

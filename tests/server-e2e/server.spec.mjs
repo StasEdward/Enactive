@@ -23,7 +23,7 @@ async function signedIn(browser, name) {
 
 /** Starts a run from the Runs page and waits for its own page. */
 async function startRun(page, task) {
-  await page.getByLabel('Folder on the server').fill(folder());
+  await page.getByLabel('Workspace').selectOption(folder());
   await page.getByLabel('Task').fill(task);
   await page.getByRole('button', { name: 'Run' }).click();
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
@@ -213,6 +213,23 @@ test('an operator is offered no accounts page and is refused it', async ({ brows
   await expect(page.getByRole('link', { name: 'Accounts' })).toHaveCount(0);
   await page.goto('/admin/users');
   await expect(page.getByRole('heading', { name: 'Accounts' })).toHaveCount(0);
+  await context.close();
+});
+
+test('a folder under the roots is added as a workspace by browsing, and nothing outside is offered', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'alice');
+  await page.goto('/workspaces');
+  await page.getByRole('link', { name: 'Add a folder…' }).click();
+  await expect(page.getByRole('link', { name: process.env.E2E_DATA })).toBeVisible();
+  await page.getByRole('link', { name: process.env.E2E_DATA }).click();
+  await page.getByRole('link', { name: 'reports', exact: true }).click();
+  await page.getByRole('button', { name: 'Make this folder a workspace' }).click();
+  await expect(page.getByText('reports is a workspace of the service now.')).toBeVisible();
+
+  // Not under a root: refused, whatever the address says.
+  await page.goto('/workspaces/browse?path=' + encodeURIComponent('C:\Windows'));
+  await expect(page.getByText(/is not under the folders the service runs tasks in/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Make this folder a workspace' })).toHaveCount(0);
   await context.close();
 });
 

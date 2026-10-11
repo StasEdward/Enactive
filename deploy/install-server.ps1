@@ -14,7 +14,7 @@
 #
 # Example:
 #   .\deploy\install-server.ps1 -ServiceAccount ".\svc-enactive" -Port 8443 `
-#       -Subnets 10.20.0.0/16 -HostNames enactive.lab.local -CertificateThumbprint 3F2A...
+#       -Subnets 10.20.0.0/16 -HostNames enactive.lab.local -WorkspaceRoots D:\work -CertificateThumbprint 3F2A...
 #
 # Run from an elevated PowerShell. The account's password is asked for, never passed as an argument.
 
@@ -23,6 +23,8 @@ param(
     [Parameter(Mandatory)] [string] $ServiceAccount,
     [Parameter(Mandatory)] [string[]] $Subnets,
     [Parameter(Mandatory)] [string[]] $HostNames,
+    # The folders under which tasks are run from the browser; none, and no task is started from it.
+    [Parameter(Mandatory)] [string[]] $WorkspaceRoots,
     [int] $Port = 8443,
     # The address to listen on; every address of the machine by default. The subnets and the firewall rule decide
     # who reaches it.
@@ -43,10 +45,14 @@ $RuleName = "Enactive Server (HTTPS)"
 # ── the settings file: the part that is tested (install-server.test.ps1) ────────────────────────────────────────
 
 function New-ServerConfig {
-    param([string[]] $Listen, [string[]] $Subnets, [string[]] $HostNames, [string] $Thumbprint, [string] $Pfx)
+    param([string[]] $Listen, [string[]] $Subnets, [string[]] $HostNames, [string] $Thumbprint, [string] $Pfx,
+          [string[]] $Roots = @())
 
     if (-not $Thumbprint -and -not $Pfx) { throw "Name a certificate: -CertificateThumbprint or -PfxPath." }
     if ($Thumbprint -and $Pfx) { throw "Name one certificate, not both." }
+    foreach ($root in $Roots) {
+        if (-not [System.IO.Path]::IsPathFullyQualified($root)) { throw "'$root' is not a full path (D:\work)." }
+    }
     foreach ($subnet in $Subnets) {
         if ($subnet -notmatch '/\d+$') { throw "'$subnet' is not a subnet in CIDR (10.20.0.0/16)." }
     }
@@ -57,6 +63,7 @@ function New-ServerConfig {
         Listen         = @($Listen)
         AllowedSubnets = @($Subnets)
         HostNames      = @($HostNames)
+        WorkspaceRoots = @($Roots)
         Certificate    = $certificate
         MaxActiveRuns  = 2
     } | ConvertTo-Json -Depth 4
@@ -76,7 +83,7 @@ if ($ServiceAccount -match '^(NT AUTHORITY\\)?(SYSTEM|LocalSystem|LocalService|N
 }
 
 $config = New-ServerConfig -Listen "$($ListenAddress):$Port" -Subnets $Subnets -HostNames $HostNames `
-    -Thumbprint $CertificateThumbprint -Pfx $PfxPath
+    -Thumbprint $CertificateThumbprint -Pfx $PfxPath -Roots $WorkspaceRoots
 $credential = Get-Credential -UserName $ServiceAccount -Message "Password of the account the Enactive service runs as"
 
 # 1. publish

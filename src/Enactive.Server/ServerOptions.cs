@@ -37,6 +37,12 @@ internal sealed record ServerOptions
 
     public CertificateOptions? Certificate { get; init; }
 
+    /// <summary>
+    /// The folders under which tasks are run for the people in the browser (<c>D:\work</c>). None: no task is
+    /// started from the browser - a box to type any path into is every folder of the server one Run away from a shell.
+    /// </summary>
+    public IReadOnlyList<string> WorkspaceRoots { get; init; } = [];
+
     /// <summary>How many runs go at once; each run's own parallel steps are its own (ADR 0002 §9).</summary>
     public int MaxActiveRuns { get; init; } = 2;
 
@@ -107,6 +113,10 @@ internal sealed record ServerOptions
             problems.Add("Certificate names both a thumbprint and a .pfx file; name one, so it is clear which one the service presents.");
         else if (!string.IsNullOrEmpty(Certificate.Password) && !Secrets.Secret.IsProtected(Certificate.Password))
             problems.Add("Certificate.Password is written in the clear. Protect it for the service's account (Enactive.Server --protect).");
+
+        foreach (var folder in WorkspaceRoots)
+            if (!System.IO.Path.IsPathFullyQualified(folder))
+                problems.Add($"WorkspaceRoots: '{folder}' is not a full path (\"D:\\work\").");
 
         if (MaxActiveRuns < 1)
             problems.Add("MaxActiveRuns must be at least 1.");

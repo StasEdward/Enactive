@@ -26,7 +26,7 @@ internal sealed record PastRun(
 /// runs; a Viewer naming any folder on the server's disks would read whatever history and files sat under it, which
 /// is reading the server's disks. Checked here, with the role, at each call (ADR 0002 §5) - not by the pages.</para>
 /// </summary>
-internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunControl runs)
+internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunControl runs, WorkspaceRoots roots)
 {
     private readonly RunHistoryService _history = new(() => 0);
 
@@ -210,5 +210,31 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         => ServerAuth.StillValid(users, user) is not { } account ? "Your session has ended. Sign in again."
             : account.Role < Role.Operator ? "Your role does not include acting on runs."
             : "The service does not know that folder as a workspace.";
+
+    // ── adding a workspace (Operators) ──────────────────────────────────────
+
+    /// <summary>The roots, or the folders below one of them, for an Operator choosing a workspace; nothing for anybody else.</summary>
+    public (IReadOnlyList<string> Folders, string? Problem) Browse(ClaimsPrincipal user, string? folder)
+    {
+        if (ServerAuth.StillValid(users, user) is not { Role: >= Role.Operator })
+            return ([], "Your role does not include adding workspaces.");
+        if (string.IsNullOrWhiteSpace(folder))
+            return (roots.All, roots.All.Count == 0 ? roots.Refusal("") : null);
+        return roots.Refusal(folder) is { } refused ? ([], refused) : (roots.Below(folder), null);
+    }
+
+    /// <summary>Makes a folder under the roots one of the service's workspaces - where its runs, history and inbox are.</summary>
+    public string AddWorkspace(ClaimsPrincipal user, string folder)
+    {
+        if (ServerAuth.StillValid(users, user) is not { Role: >= Role.Operator } account)
+            return "Your role does not include adding workspaces.";
+        if (roots.Refusal(folder) is { } refused)
+            return refused;
+        if (!Directory.Exists(folder))
+            return $"No such folder: {folder}.";
+        var entry = engine.Workspaces.Touch(folder);
+        users.Audit(account.Name, "workspace added", entry.RootPath);
+        return $"{entry.Name} is a workspace of the service now.";
+    }
 }
 

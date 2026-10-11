@@ -426,7 +426,7 @@ public sealed class RunControlTests : IDisposable
     {
         var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
         engine.Workspaces.Touch(_workspace);
-        return new ServerHistory(_users, engine, _control);
+        return new ServerHistory(_users, engine, _control, new WorkspaceRoots([_root]));
     }
 
     private Enactive.Core.History.RunRecord Recorded(string request, params string[] artifacts)
@@ -546,4 +546,16 @@ public sealed class RunControlTests : IDisposable
         Assert.Empty(await scheduler.TickAsync(DateTimeOffset.Now, CancellationToken.None));
         Assert.Contains(_users.AuditTrail(), e => e is { Account: "(scheduler)", Action: "scheduled run started" });
     }
+
+    /// <summary>Checked at the action: a folder outside the service's roots is refused whatever page asked for it.</summary>
+    [Fact]
+    public void A_run_outside_the_service_s_roots_is_refused()
+    {
+        var elsewhere = Path.Combine(_root, "roots-only-here");
+        Directory.CreateDirectory(elsewhere);
+        var control = new RunControl(_users, new RunQueue(2), _engine, NullLogger<RunControl>.Instance, roots: new WorkspaceRoots([elsewhere]));
+
+        Assert.Contains("is not under", control.Start(As("alice"), _workspace, "write the digest").Refusal);
+    }
 }
+

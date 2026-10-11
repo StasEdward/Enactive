@@ -19,6 +19,7 @@ string Arg(string name) => args[Array.IndexOf(args, name) + 1];
 var data = Path.GetFullPath(Arg("--data"));
 var port = int.Parse(Arg("--port"));
 Directory.CreateDirectory(Path.Combine(data, "project"));
+Directory.CreateDirectory(Path.Combine(data, "reports"));
 
 var users = new UserStore(data);
 foreach (var (name, role) in new[] { ("ada", Role.Admin), ("alice", Role.Operator), ("bob", Role.Operator), ("vera", Role.Viewer) })
@@ -39,6 +40,7 @@ var options = new ServerOptions
     Listen = [$"127.0.0.1:{port}"],
     AllowedSubnets = ["127.0.0.0/8"],
     HostNames = ["localhost"],
+    WorkspaceRoots = [data],
     Certificate = new CertificateOptions(Path: "in-memory"),
     MaxActiveRuns = 2
 };

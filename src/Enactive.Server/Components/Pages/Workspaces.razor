@@ -6,9 +6,16 @@
 <PageTitle>Workspaces - Enactive</PageTitle>
 
 <h1>Workspaces</h1>
+@if (Said is { Length: > 0 })
+{
+    <p class="said" role="alert">@Said</p>
+}
+<AuthorizeView Policy="Operator">
+    <Authorized><p><a href="workspaces/browse">Add a folder…</a></p></Authorized>
+</AuthorizeView>
 @if (_workspaces.Count == 0)
 {
-    <p>The service has not run in any folder yet. A run started from the Runs page adds its folder here.</p>
+    <p>The service has no workspace yet. An Operator adds one with “Add a folder…”, from under the service's roots.</p>
 }
 else
 {
@@ -25,6 +32,7 @@ else
 
 @code {
     [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+    [SupplyParameterFromQuery] private string? Said { get; set; }
     private IReadOnlyList<Enactive.Workspace.WorkspaceEntry> _workspaces = [];
 
     protected override async Task OnInitializedAsync() => _workspaces = History.Workspaces((await Auth).User);
