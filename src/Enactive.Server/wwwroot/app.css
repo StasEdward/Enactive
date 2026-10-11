@@ -79,3 +79,5 @@ fieldset.card { display: grid; gap: 6px; max-width: 720px; }
 main > label, fieldset label { display: block; margin: 4px 0; }
 main > label input:not([type="checkbox"]), main > label select, main > label textarea,
 fieldset label input:not([type="checkbox"]), fieldset label select, fieldset label textarea { display: block; width: 100%; max-width: 720px; }
+.start.wide { max-width: 960px; }
+.start.wide textarea { font-family: var(--font-mono); font-size: 0.85rem; }

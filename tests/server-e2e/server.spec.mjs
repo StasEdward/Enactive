@@ -256,3 +256,27 @@ test('an admin adds a provider with its key on the settings page, and the key ne
   await context.close();
 });
 
+test('an operator writes a template and schedules it, and the schedule says when it runs next', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'alice');
+  await page.goto('/workspaces');
+  await page.locator('li', { hasText: 'project' }).getByRole('link', { name: 'templates and schedules' }).click();
+
+  await page.getByRole('link', { name: 'New template…' }).click();
+  await page.getByLabel('The template, as JSON').fill(JSON.stringify({
+    id: 'digest', name: 'Digest', goal: 'Write the digest of {topic}.',
+    parameters: [{ id: 'topic', name: 'Topic', type: 'Text', required: true }]
+  }));
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText("Saved 'Digest' to the workspace's library.")).toBeVisible();
+
+  await page.getByRole('link', { name: 'New schedule…' }).click();
+  await page.getByLabel('Name', { exact: true }).fill('morning digest');
+  await page.getByLabel('Runs').selectOption({ label: 'Template · Digest' });
+  await page.getByLabel(/Parameters for a template/).fill('topic=the inbox');
+  await page.getByLabel('At', { exact: true }).fill('07:30');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText(/Saved 'morning digest'. Next run: /)).toBeVisible();
+  await expect(page.locator('li', { hasText: 'morning digest' }).getByRole('button', { name: 'Switch off' })).toBeVisible();
+  await context.close();
+});
+

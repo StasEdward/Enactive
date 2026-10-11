@@ -24,6 +24,7 @@ else
         {
             <li>
                 <a href="@Links.History(workspace.RootPath)">@workspace.Name</a>
+                <a class="where" href="@Links.Library(workspace.RootPath)">templates and schedules</a>
                 <span class="where">@workspace.RootPath · last used @workspace.LastOpenedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
             </li>
         }

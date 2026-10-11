@@ -301,8 +301,12 @@ at most ten times a second from the session's fold, and the lists are short; it 
 roots); 3.4 the settings page (providers with their keys, model bindings, workers, the shell rule, mail, web
 search). *Done differently:* the settings "version" is the file's content hash compared at save, not a field in the
 file - nothing for the desktop or older builds to read differently, and a change made at the desktop is seen too.
-Left: MCP servers and the engine's switches on the settings page (kept as they are in the file meanwhile),
-templates and schedules editors, the log page and its analysis, notices by mail, persistent staging.
+3.5 templates and schedules (`ServerLibrary`): schedules by a form checked by `ScheduleDrafts` - the scheduler's own
+resolution - with the settings' shell rule on top (`SchedulePolicy`); *done differently:* a template is edited as
+its file's JSON (TemplateStore's own format, `TemplateValidator` before writing) rather than a form of fields - every
+field a template has is reachable at once; a field-by-field editor can come later.
+Left: MCP servers and the engine's switches on the settings page (kept as they are in the file meanwhile), the log
+page and its analysis, notices by mail, persistent staging.
 
 ## Phase 4 - desktop as a client (optional)
 

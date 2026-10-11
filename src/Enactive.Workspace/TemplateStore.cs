@@ -141,6 +141,24 @@ public sealed class TemplateStore
             .ToArray();
     }
 
+    /// <summary>A template as its file holds it - for an editor that shows the file, so what it shows is what is stored.</summary>
+    public static string ToJson(TaskTemplate template) => JsonSerializer.Serialize(template, Json);
+
+    /// <summary>A template read from text as a file would be, or null and why it cannot be read.</summary>
+    public static TaskTemplate? FromJson(string text, out string? problem)
+    {
+        problem = null;
+        try
+        {
+            return JsonSerializer.Deserialize<TaskTemplate>(text, Json) ?? throw new JsonException("It is empty.");
+        }
+        catch (JsonException ex)
+        {
+            problem = "It is not a template as JSON: " + ex.Message;
+            return null;
+        }
+    }
+
     public TaskTemplate? Find(string id)
         => Load().FirstOrDefault(t => string.Equals(t.Id, id, StringComparison.OrdinalIgnoreCase));
 

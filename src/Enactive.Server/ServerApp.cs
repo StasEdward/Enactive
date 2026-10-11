@@ -87,6 +87,7 @@ internal static class ServerApp
         builder.Services.AddSingleton<Runs.ServerInbox>();
         builder.Services.AddSingleton<AccountAdmin>();
         builder.Services.AddSingleton<Runs.ServerSettings>();
+        builder.Services.AddSingleton<Runs.ServerLibrary>();
         builder.Services.AddHostedService<Runs.RunsStopWithTheService>();
         // The schedules, every minute (ServerScheduler).
         builder.Services.AddSingleton<Runs.ServerScheduler>();
@@ -207,6 +208,38 @@ internal static class ServerApp
             var form = await context.Request.ReadFormAsync();
             var said = history.AddWorkspace(context.User, form["folder"].ToString());
             return Results.LocalRedirect("/workspaces?said=" + Uri.EscapeDataString(said));
+        });
+
+        // A workspace's templates and schedules (ServerLibrary checks the role and the rules), each back to its page.
+        app.MapPost("/library/template/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerLibrary library) =>
+        {
+            if (!await antiforgery.IsRequestValidAsync(context))
+                return Results.BadRequest();
+            var form = await context.Request.ReadFormAsync();
+            var workspace = form["ws"].ToString();
+            var scope = Enum.TryParse<Enactive.Workspace.TemplateScope>(form["scope"], out var s) ? s : Enactive.Workspace.TemplateScope.Workspace;
+            var said = form["act"] == "delete"
+                ? library.DeleteTemplate(context.User, workspace, form["id"].ToString(), scope)
+                : library.SaveTemplate(context.User, workspace, form["json"].ToString(), scope).Said;
+            return Results.LocalRedirect("/" + Components.Links.Library(workspace) + "&said=" + Uri.EscapeDataString(said));
+        });
+        app.MapPost("/library/schedule/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerLibrary library) =>
+        {
+            if (!await antiforgery.IsRequestValidAsync(context))
+                return Results.BadRequest();
+            var form = await context.Request.ReadFormAsync();
+            var workspace = form["ws"].ToString();
+            Guid? id = Guid.TryParse(form["id"], out var parsed) ? parsed : null;
+            var said = form["act"].ToString() switch
+            {
+                "on" => library.SwitchSchedule(context.User, workspace, id ?? Guid.Empty, on: true),
+                "off" => library.SwitchSchedule(context.User, workspace, id ?? Guid.Empty, on: false),
+                "delete" => library.DeleteSchedule(context.User, workspace, id ?? Guid.Empty),
+                _ => library.SaveSchedule(context.User, workspace, new Runs.ScheduleForm(id, form["name"].ToString(),
+                    form["work"].ToString(), form["repeat"].ToString(), form["time"].ToString(), form["day"].ToString(),
+                    form["date"].ToString(), form["tier"].ToString(), form["runLate"] == "true", form["parameters"].ToString())).Said
+            };
+            return Results.LocalRedirect("/" + Components.Links.Library(workspace) + "&said=" + Uri.EscapeDataString(said));
         });
 
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();

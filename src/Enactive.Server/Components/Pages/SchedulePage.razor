@@ -1,0 +1,94 @@
+@page "/library/schedule"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = "Operator")]
+@using Enactive.Core.Schedules
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerLibrary Library
+
+<PageTitle>Schedule - Enactive</PageTitle>
+
+<p><a href="@Links.Library(Ws ?? "")">← templates and schedules</a></p>
+<h1>@(_editing?.Name ?? "New schedule")</h1>
+<p class="where">The time is the service's clock. Checked as the scheduler will check it at its hour: a template whose
+    parameters it cannot fill, or work its permissions do not allow, is refused here, not at three in the morning.</p>
+
+<form method="post" action="/library/schedule/act" class="start">
+    <AntiforgeryToken />
+    <input type="hidden" name="ws" value="@Ws" />
+    <input type="hidden" name="act" value="save" />
+    <input type="hidden" name="id" value="@_editing?.Id" />
+    <label>Name <input name="name" value="@_editing?.Name" /></label>
+    <label>Runs
+        <select name="work">
+            @foreach (var template in _templates)
+            {
+                <option value="@($"template:{template.Template.Id}")" selected="@(_editing?.Work.TemplateId == template.Template.Id)">Template · @template.Template.Name</option>
+            }
+            @foreach (var run in _repeatable)
+            {
+                <option value="@($"run:{run.RunId}")">Past run · @run.Title (@run.StartedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm"))</option>
+            }
+        </select>
+    </label>
+    <label>Parameters for a template, one name=value per line <textarea name="parameters" rows="3">@ParametersText</textarea></label>
+    <label>Repeats
+        <select name="repeat">
+            <option value="daily" selected="@(_editing?.Timing.Repeat is null or ScheduleRepeat.Daily)">every day</option>
+            <option value="weekly" selected="@(_editing?.Timing.Repeat == ScheduleRepeat.Weekly)">every week, on the day below</option>
+            <option value="once" selected="@(_editing?.Timing.Repeat == ScheduleRepeat.Once)">once, on the date below</option>
+        </select>
+    </label>
+    <label>At <input name="time" type="time" value="@(_editing?.Timing.AtLocal.ToString("HH:mm") ?? "07:00")" /></label>
+    <label>Day (weekly)
+        <select name="day">
+            @foreach (var day in Enum.GetValues<DayOfWeek>())
+            {
+                <option value="@day" selected="@(_editing?.Timing.OnDay == day)">@day</option>
+            }
+        </select>
+    </label>
+    <label>Date (once) <input name="date" type="date" value="@(_editing?.Timing.OnceAt?.ToString("yyyy-MM-dd") ?? DateTime.Today.AddDays(1).ToString("yyyy-MM-dd"))" /></label>
+    <label>May do
+        <select name="tier">
+            @foreach (var tier in Enactive.Agents.AutonomyTiers.Names)
+            {
+                <option value="@tier" selected="@(tier == (_editing is null ? "execute" : TierOf(_editing)))">@tier</option>
+            }
+        </select>
+    </label>
+    <label><input type="checkbox" name="runLate" value="true" checked="@(_editing?.Missed == MissedRun.RunLate)" /> If the service was down at the hour, run it late, once</label>
+    <button type="submit">Save</button>
+</form>
+
+@code {
+    [SupplyParameterFromQuery] private string? Ws { get; set; }
+    [SupplyParameterFromQuery] private Guid? Id { get; set; }
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    private Schedule? _editing;
+    private IReadOnlyList<Enactive.Workspace.StoredTemplate> _templates = [];
+    private IReadOnlyList<Enactive.Core.History.RunSummary> _repeatable = [];
+
+    private string ParametersText => _editing?.Work.Parameters is { Count: > 0 } values
+        ? string.Join("\n", values.Select(v => $"{v.Key}={v.Value}"))
+        : "";
+
+    /// <summary>Which tier a saved policy came from, by its level - as the window's form reads it back.</summary>
+    private static string TierOf(Schedule schedule) => schedule.Permissions.Level switch
+    {
+        Enactive.Core.Permissions.PermissionLevel.Observe => "observe",
+        Enactive.Core.Permissions.PermissionLevel.Suggest => "suggest",
+        Enactive.Core.Permissions.PermissionLevel.Autonomous => "autonomous",
+        _ => "execute"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await Auth).User;
+        (_templates, _) = Library.Templates(user, Ws ?? "");
+        _repeatable = await Library.RepeatableAsync(user, Ws ?? "", CancellationToken.None);
+        if (Id is { } id)
+            _editing = (await Library.SchedulesAsync(user, Ws ?? "", CancellationToken.None)).Schedules
+                .FirstOrDefault(s => s.Schedule.Id == id)?.Schedule;
+    }
+}

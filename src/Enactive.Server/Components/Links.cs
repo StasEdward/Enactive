@@ -11,6 +11,14 @@ internal static class Links
         => $"history/confirm?ws={Uri.EscapeDataString(workspace)}&what={what}&id={id}"
            + (path is null ? "" : "&path=" + Uri.EscapeDataString(path));
 
+    public static string Library(string workspace) => "library?ws=" + Uri.EscapeDataString(workspace);
+
+    public static string Template(string workspace, string? id)
+        => $"library/template?ws={Uri.EscapeDataString(workspace)}" + (id is null ? "" : "&id=" + Uri.EscapeDataString(id));
+
+    public static string Schedule(string workspace, Guid? id)
+        => $"library/schedule?ws={Uri.EscapeDataString(workspace)}" + (id is null ? "" : $"&id={id}");
+
     public static string File(string workspace, string path)
         => $"file?ws={Uri.EscapeDataString(workspace)}&path={Uri.EscapeDataString(path)}";
 }
