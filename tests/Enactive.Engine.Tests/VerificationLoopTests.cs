@@ -41,9 +41,11 @@ public sealed class VerificationLoopTests
     private static SuccessCriterionDefinition Always(int exitCode, string name = "Builds", bool required = true)
         => new(name, OperatingSystem.IsWindows() ? $"cmd /c exit {exitCode}" : $"exit {exitCode}", 0, required);
 
-    /// <summary>A role that carries every tool that writes file content, so a policy alone decides which it may use.</summary>
+    /// <summary>A role that carries every tool that writes file content, so a policy alone decides which it may use -
+    /// restore_file too, as the shipped Developer role does: a policy that names the writers it denies did not know of
+    /// it, and with it left out the run was taken for one that may still write (run d26fb24f, 2026-10-11).</summary>
     private static Worker Writer
-        => EngineFixture.WorkerWith("write_file", "edit_file", "create_directory", "read_file", "list_dir", "run_command");
+        => EngineFixture.WorkerWith("write_file", "edit_file", "create_directory", "restore_file", "read_file", "list_dir", "run_command");
 
     private static int Checks(List<WorkEvent> events)
         => events.Count(e => e.IsCheck());
@@ -321,6 +323,35 @@ public sealed class VerificationLoopTests
         Assert.Equal(RunOutcomeKind.Failed, Terminal(events).Outcome());
         Assert.Equal(2, Checks(events));
         Assert.DoesNotContain(events, e => (e.Summary ?? "").Contains("No attempt to fix them"));
+    }
+
+    /// <summary>
+    /// The repair's model calls are the run's, as every other call of it is. Run d26fb24f (2026-10-11): the repair
+    /// ran outside the run's log scope, so its prompts and tool calls were logged under no run, and the call figures -
+    /// which take their run from that scope - left its six calls out of the run's model performance.
+    /// </summary>
+    [Fact]
+    public async Task A_repair_s_model_calls_are_made_in_the_run_s_scope()
+    {
+        using var fx = new EngineFixture();
+
+        var scopes = new List<Guid?>();
+        var provider = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"do the thing"}"""),
+            Turn.Says("All done."))
+        {
+            WhenExhausted = Turn.Says("I tried."),
+            Answering = _ => { scopes.Add(Enactive.Core.Diagnostics.LogScope.Current?.Run); return null; }
+        };
+
+        var events = await fx.RunAsync(
+            fx.Build(provider, worker: Writer, successCriteria: new[] { Always(1) }, successRetries: 1),
+            "do the thing");
+
+        Assert.Contains(events, e => (e.Summary ?? "").Contains("attempt 1 of 1 to fix"));
+        var run = Terminal(events).RunId;
+        Assert.True(scopes.Count >= 3, $"expected a repair call after planning and the action, got {scopes.Count} call(s)");
+        Assert.All(scopes, s => Assert.Equal(run, s));
     }
 
     /// <summary>
