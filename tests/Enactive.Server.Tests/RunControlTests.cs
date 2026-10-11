@@ -419,4 +419,97 @@ public sealed class RunControlTests : IDisposable
         Assert.Contains("may be done twice", warning);
         Assert.Contains("2 step(s) are left", warning);
     }
+
+    // ── acting on the history (phase 2: everything the window does around a run) ─
+
+    private ServerHistory HistoryOf()
+    {
+        var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        engine.Workspaces.Touch(_workspace);
+        return new ServerHistory(_users, engine, _control);
+    }
+
+    private Enactive.Core.History.RunRecord Recorded(string request, params string[] artifacts)
+    {
+        var at = DateTimeOffset.Now;
+        var record = new Enactive.Core.History.RunRecord(Guid.NewGuid(), Guid.NewGuid(), request, "qwen", at, at.AddSeconds(3), "Completed",
+            [new Enactive.Core.History.RunEventRecord(at, nameof(EventKind.IntentReceived), "Intent",
+                Payload: WorkEventPayload.RequestPayload(request))], artifacts, []);
+        Enactive.Workspace.RunStoreFactory.Create(Enactive.Core.Context.WorkspaceInfo.For(_workspace))
+            .SaveAsync(record, CancellationToken.None).GetAwaiter().GetResult();
+        return record;
+    }
+
+    /// <summary>Try again: the same request, as another attempt at the same task, a run of whoever asked.</summary>
+    [Fact]
+    public async Task A_past_run_is_tried_again_as_the_same_task()
+    {
+        var past = Recorded("summarise the inbox");
+
+        var (said, started) = await HistoryOf().DoAsync(As("bob"), _workspace, ServerHistory.Act.Retry, past.RunId, null, null, CancellationToken.None);
+
+        var run = _control.Find(As("bob"), started!.Value)!;
+        Assert.Equal("", said);
+        Assert.Equal(("summarise the inbox", past.TaskId, "bob"), (run.Prompt, run.TaskId!.Value, run.Owner));
+        Assert.Contains(_users.AuditTrail(), e => e is { Account: "bob", Action: "run tried again" });
+        await _engine.ReleaseNextAsync();
+    }
+
+    /// <summary>Deleting asks first, in the window's words, and says the files stay; then the record goes and is audited.</summary>
+    [Fact]
+    public async Task A_run_is_deleted_after_its_question_and_its_files_stay()
+    {
+        File.WriteAllText(Path.Combine(_workspace, "digest.md"), "work");
+        var past = Recorded("write the digest", "digest.md");
+        var history = HistoryOf();
+
+        var (question, _) = await history.AskAsync(As("alice"), _workspace, ServerHistory.Act.DeleteRun, past.RunId, null, CancellationToken.None);
+        Assert.Contains("stay in your workspace", question!.Body);
+
+        await history.DoAsync(As("alice"), _workspace, ServerHistory.Act.DeleteRun, past.RunId, null, "confirm", CancellationToken.None);
+
+        Assert.Empty((await history.ListAsync(As("alice"), _workspace, CancellationToken.None)).List!.Runs);
+        Assert.True(File.Exists(Path.Combine(_workspace, "digest.md")));
+        Assert.Contains(_users.AuditTrail(), e => e is { Account: "alice", Action: "run deleted" });
+    }
+
+    [Fact]
+    public async Task A_viewer_can_neither_ask_nor_act()
+    {
+        var past = Recorded("write the digest");
+        var history = HistoryOf();
+
+        Assert.Contains("role does not include", (await history.AskAsync(As("vera"), _workspace, ServerHistory.Act.DeleteRun, past.RunId, null, CancellationToken.None)).Problem);
+        Assert.Contains("role does not include", (await history.DoAsync(As("vera"), _workspace, ServerHistory.Act.DeleteRun, past.RunId, null, "confirm", CancellationToken.None)).Said);
+        Assert.Single((await history.ListAsync(As("vera"), _workspace, CancellationToken.None)).List!.Runs);
+    }
+
+    [Fact]
+    public async Task An_unfinished_run_is_forgotten_and_its_offer_to_resume_goes()
+    {
+        var checkpoint = Interrupted("Done", "Running");
+        var history = HistoryOf();
+
+        var (question, _) = await history.AskAsync(As("alice"), _workspace, ServerHistory.Act.Forget, checkpoint.RunId, null, CancellationToken.None);
+        Assert.Contains("can no longer be resumed", question!.Body);
+        await history.DoAsync(As("alice"), _workspace, ServerHistory.Act.Forget, checkpoint.RunId, null, "confirm", CancellationToken.None);
+
+        Assert.Empty((await history.ListAsync(As("alice"), _workspace, CancellationToken.None)).List!.Resumable);
+    }
+
+    /// <summary>A file is deleted only from inside the workspace, whatever path the post names.</summary>
+    [Fact]
+    public async Task A_file_is_deleted_from_the_workspace_and_nowhere_else()
+    {
+        File.WriteAllText(Path.Combine(_workspace, "draft.md"), "x");
+        File.WriteAllText(Path.Combine(_root, "outside.md"), "not the workspace's");
+        var history = HistoryOf();
+
+        await history.DoAsync(As("alice"), _workspace, ServerHistory.Act.DeleteFile, Guid.Empty, "draft.md", "confirm", CancellationToken.None);
+        var (said, _) = await history.DoAsync(As("alice"), _workspace, ServerHistory.Act.DeleteFile, Guid.Empty, "..\\outside.md", "confirm", CancellationToken.None);
+
+        Assert.False(File.Exists(Path.Combine(_workspace, "draft.md")));
+        Assert.True(File.Exists(Path.Combine(_root, "outside.md")));
+        Assert.Contains("not in this workspace", said);
+    }
 }

@@ -1,0 +1,57 @@
+@page "/history/confirm"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = "Operator")]
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerHistory History
+
+<PageTitle>Are you sure? - Enactive</PageTitle>
+
+@* The window asks these in a dialog; here a page asks them, in the same words (RunHistoryService), before a post that
+   cannot be taken back. *@
+@if (_problem is not null)
+{
+    <p class="said">@_problem</p>
+    <p><a href="@Links.History(Ws ?? "")">Back</a></p>
+}
+else if (_question is { } question)
+{
+    <h1>@question.Headline</h1>
+    <p class="body">@question.Body</p>
+    <div class="answers">
+        <form method="post" action="/history/act">
+            <AntiforgeryToken />
+            <input type="hidden" name="ws" value="@Ws" />
+            <input type="hidden" name="act" value="@What" />
+            <input type="hidden" name="id" value="@Id" />
+            <input type="hidden" name="path" value="@FilePath" />
+            <input type="hidden" name="choice" value="confirm" />
+            <button type="submit">@question.Confirm</button>
+        </form>
+        @if (question.Alternative is { } alternative)
+        {
+            <form method="post" action="/history/act">
+                <AntiforgeryToken />
+                <input type="hidden" name="ws" value="@Ws" />
+                <input type="hidden" name="act" value="@What" />
+                <input type="hidden" name="id" value="@Id" />
+                <input type="hidden" name="choice" value="alternative" />
+                <button type="submit" class="secondary">@alternative</button>
+            </form>
+        }
+        <a class="cancel" href="@Links.History(Ws ?? "")">@question.Cancel</a>
+    </div>
+}
+
+@code {
+    [SupplyParameterFromQuery] private string? Ws { get; set; }
+    [SupplyParameterFromQuery] private string? What { get; set; }
+    [SupplyParameterFromQuery] private Guid Id { get; set; }
+    [SupplyParameterFromQuery(Name = "path")] private string? FilePath { get; set; }
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    private Enactive.Application.Question? _question;
+    private string? _problem;
+
+    protected override async Task OnInitializedAsync()
+        => (_question, _problem) = await History.AskAsync((await Auth).User, Ws ?? "", What ?? "", Id, FilePath, CancellationToken.None);
+}

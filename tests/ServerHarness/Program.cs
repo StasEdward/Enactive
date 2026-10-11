@@ -45,6 +45,9 @@ var options = new ServerOptions
 
 var app = ServerApp.Build([], options, data, certificate,
     b => b.Services.AddSingleton<IRunExecutor>(new AskingOnce(new ApprovalStore(Path.Combine(data, "permissions.json")))));
+// The folder is one the service has run in, as the engine's executor would have recorded it on a first run: the
+// workspace and history pages list it.
+app.Services.GetRequiredService<ServerEngine>().Workspaces.Touch(Path.Combine(data, "project"));
 await app.StartAsync();
 Console.WriteLine("ready");
 await app.WaitForShutdownAsync();
@@ -74,6 +77,13 @@ internal sealed class AskingOnce(ApprovalStore approvals) : IRunExecutor
                 Action: new(runId, Guid.NewGuid().ToString(), "write_file", """{"path":"digest.md"}""", run.Workspace)), ct);
             events.Writer.TryWrite(Ev(EventKind.DecisionResolved, "write_file: " + answer.OptionId));
             events.Writer.TryWrite(Ev(EventKind.TaskCompleted, "Completed", WorkEventPayload.OutcomePayload(RunOutcomeKind.Completed)));
+
+            // Into the folder's history, as the engine's recorder would: the history pages have something to read.
+            var at = DateTimeOffset.Now;
+            await Enactive.Workspace.RunStoreFactory.Create(Enactive.Core.Context.WorkspaceInfo.For(run.Workspace)).SaveAsync(
+                new Enactive.Core.History.RunRecord(runId, run.TaskId ?? Guid.NewGuid(), run.Prompt, "scripted", at, at, "Completed",
+                    [new Enactive.Core.History.RunEventRecord(at, nameof(EventKind.IntentReceived), "Intent",
+                        Payload: WorkEventPayload.RequestPayload(run.Prompt))], [], []), CancellationToken.None);
         }
         finally
         {

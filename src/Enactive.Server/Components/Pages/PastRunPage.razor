@@ -11,6 +11,10 @@
 }
 else if (_run is { } run)
 {
+    @if (Said is { Length: > 0 })
+    {
+        <p class="said" role="alert">@Said</p>
+    }
     var d = run.Digest;
     <p><a href="@Links.History(Ws!)">← @Ws</a></p>
     <h1>@d.Title</h1>
@@ -32,6 +36,34 @@ else if (_run is { } run)
     {
         <p class="where">Ran at @d.AutonomyText · @d.WorkerText · @d.StagingText</p>
     }
+
+    <AuthorizeView Policy="Operator">
+        <Authorized>
+            <div class="answers">
+                @if (d.CanRetry)
+                {
+                    <form method="post" action="/history/act">
+                        <AntiforgeryToken />
+                        <input type="hidden" name="ws" value="@Ws" />
+                        <input type="hidden" name="act" value="@ServerHistory.Act.Retry" />
+                        <input type="hidden" name="id" value="@Id" />
+                        <button type="submit" title="The same run again, exactly as it was, as another attempt at its task.">Try again</button>
+                    </form>
+                }
+                @if (run.FromTemplate)
+                {
+                    <form method="post" action="/history/act">
+                        <AntiforgeryToken />
+                        <input type="hidden" name="ws" value="@Ws" />
+                        <input type="hidden" name="act" value="@ServerHistory.Act.RunAgain" />
+                        <input type="hidden" name="id" value="@Id" />
+                        <button type="submit" class="secondary" title="Its template as it stands now, with the answers this run used.">Run the template again</button>
+                    </form>
+                }
+                <a class="cancel" href="@Links.Confirm(Ws!, ServerHistory.Act.DeleteRun, Id)">Delete this run</a>
+            </div>
+        </Authorized>
+    </AuthorizeView>
 
     @if (run.Routing.Count > 0)
     {
@@ -91,7 +123,10 @@ else if (_run is { } run)
         <ul class="list">
             @foreach (var path in d.Artifacts)
             {
-                <li><a href="@Links.File(Ws!, path)">@path</a></li>
+                <li>
+                    <a href="@Links.File(Ws!, path)">@path</a>
+                    <AuthorizeView Policy="Operator"><Authorized><a class="where" href="@Links.Confirm(Ws!, ServerHistory.Act.DeleteFile, Id, path)">delete</a></Authorized></AuthorizeView>
+                </li>
             }
         </ul>
     }
@@ -119,6 +154,7 @@ else if (_run is { } run)
 @code {
     [SupplyParameterFromQuery] private string? Ws { get; set; }
     [SupplyParameterFromQuery] private Guid Id { get; set; }
+    [SupplyParameterFromQuery] private string? Said { get; set; }
     [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
 
     private PastRun? _run;

@@ -69,3 +69,6 @@ input, textarea { font: inherit; background: var(--bg-card); color: var(--text);
 .warning { color: var(--warning); margin: 4px 0; }
 .inbox li.unread strong::before { content: "● "; color: var(--accent); }
 .inbox .answers form { margin: 0; }
+button.secondary { background: var(--bg-card); color: var(--text); border-color: var(--border); }
+.answers .cancel { align-self: center; }
+.body { white-space: pre-wrap; max-width: 760px; }

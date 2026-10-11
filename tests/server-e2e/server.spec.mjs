@@ -37,10 +37,19 @@ function setRole(name, role) {
   if (done.status !== 0) throw new Error(`--set-role failed: ${done.stderr}`);
 }
 
-/** Ends any run a test left waiting, so the next one finds its folder free. */
+/**
+ * Ends the run a test left waiting, so the next one finds its folder free. Waits for the question: the run page is
+ * live and drawn only once connected, and a check made at once found no button and left the run holding the folder.
+ */
 async function answerWhateverWaits(page) {
   const deny = page.getByRole('button', { name: 'Deny' });
-  if (await deny.isVisible().catch(() => false)) await deny.click();
+  try {
+    await deny.waitFor({ timeout: 10_000 });
+    await deny.click();
+    await expect(page.getByRole('button', { name: 'Cancel the run' })).toBeHidden();
+  } catch {
+    // Nothing was waiting.
+  }
 }
 
 test('a run outlives its page, and its question waits for whoever comes back', async ({ browser }) => {
@@ -147,3 +156,31 @@ test('a role lowered while its page is open cannot act from that page', async ({
   await context.close();
   await again.context.close();
 });
+
+test('a past run is tried again from its page, and deleted after its question', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'alice');
+  await startRun(page, 'kept in the history');
+  await page.getByRole('button', { name: 'Allow', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Cancel the run' })).toBeHidden();
+
+  await page.getByRole('link', { name: 'Workspaces' }).click();
+  await page.getByRole('link', { name: 'project' }).click();
+  await page.getByRole('link', { name: 'kept in the history' }).first().click();
+  await expect(page.getByRole('heading', { name: 'kept in the history' })).toBeVisible();
+  const past = page.url();
+
+  // Try again: a run of the same task starts, and asks its question again.
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
+  await page.getByRole('button', { name: 'Deny' }).click();
+  await expect(page.getByRole('button', { name: 'Cancel the run' })).toBeHidden();
+
+  // Delete: the window's question, on a page, then the record goes.
+  await page.goto(past);
+  await page.getByRole('link', { name: 'Delete this run' }).click();
+  await expect(page.getByRole('heading', { name: /Delete the run/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(page.getByText(/record is deleted/)).toBeVisible();
+  await context.close();
+});
+

@@ -165,6 +165,22 @@ internal static class ServerApp
                 : Results.LocalRedirect("/" + Components.Links.History(workspace) + "&said=" + Uri.EscapeDataString(refusal ?? ""));
         });
 
+        // The history's actions - try again, run again, delete a run or a file, forget an unfinished run - after the
+        // confirmation page asked its question where one is due.
+        app.MapPost("/history/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerHistory history) =>
+        {
+            if (!await antiforgery.IsRequestValidAsync(context))
+                return Results.BadRequest();
+            var form = await context.Request.ReadFormAsync();
+            var workspace = form["ws"].ToString();
+            var (said, run) = await history.DoAsync(context.User, workspace, form["act"].ToString(),
+                Guid.TryParse(form["id"], out var id) ? id : Guid.Empty, form["path"].ToString(), form["choice"].ToString(),
+                context.RequestAborted);
+            return run is { } started
+                ? Results.LocalRedirect($"/runs/{started}")
+                : Results.LocalRedirect("/" + Components.Links.History(workspace) + "&said=" + Uri.EscapeDataString(said));
+        });
+
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
         return app;
     }

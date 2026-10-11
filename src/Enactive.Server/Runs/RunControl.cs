@@ -18,10 +18,11 @@ internal sealed class ServerRun
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public ServerRun(string owner, string workspace, string prompt, RunQueue.Ticket ticket, Guid? taskId = null,
-        RunCheckpoint? resume = null)
+        RunCheckpoint? resume = null, Core.Templates.ResolvedTaskSpec? spec = null)
     {
         TaskId = taskId;
         Resume = resume;
+        Spec = spec;
         Owner = owner;
         Workspace = workspace;
         Prompt = prompt;
@@ -37,6 +38,9 @@ internal sealed class ServerRun
 
     /// <summary>The step boundary it carries on from, when it has one.</summary>
     public RunCheckpoint? Resume { get; }
+
+    /// <summary>The saved task it is, with its permissions, checks, limits and role - a run tried again from one.</summary>
+    public Core.Templates.ResolvedTaskSpec? Spec { get; }
     public string Owner { get; }
     public string Workspace { get; }
     public string Prompt { get; }
@@ -104,6 +108,12 @@ internal interface IRunControl
     /// </summary>
     Task<StartResult> ResumeAsync(ClaimsPrincipal user, string workspace, Guid runId);
 
+    /// <summary>
+    /// A past run again - the same run as it was (Retry) or its template as it stands now (Run again) - as an attempt at
+    /// the same task (RunHistoryService.Retry/RunAgain).
+    /// </summary>
+    StartResult Again(ClaimsPrincipal user, string workspace, Application.Rerun again, string action);
+
     /// <summary>Carries on a run that stopped at a question, now answered in the inbox: under the same task, as a new run.</summary>
     Task<StartResult> ContinueAsync(ClaimsPrincipal user, string workspace, Agents.ParkedDecision parked, string title);
     IReadOnlyList<ServerRun> List(ClaimsPrincipal user);
@@ -125,6 +135,9 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
 
     public StartResult Start(ClaimsPrincipal user, string workspace, string prompt)
         => StartRun(user, workspace, prompt, null, null, "run started");
+
+    public StartResult Again(ClaimsPrincipal user, string workspace, Application.Rerun again, string action)
+        => StartRun(user, workspace, again.Goal, again.TaskId, null, action, again.Spec);
 
     public async Task<StartResult> ResumeAsync(ClaimsPrincipal user, string workspace, Guid runId)
     {
@@ -148,7 +161,8 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         return StartRun(user, root, checkpoint?.Request ?? title, parked.TaskId, checkpoint, "run carried on");
     }
 
-    private StartResult StartRun(ClaimsPrincipal user, string workspace, string prompt, Guid? taskId, RunCheckpoint? resume, string action)
+    private StartResult StartRun(ClaimsPrincipal user, string workspace, string prompt, Guid? taskId, RunCheckpoint? resume, string action,
+        Core.Templates.ResolvedTaskSpec? spec = null)
     {
         if (Allowed(user, Role.Operator) is not { } account)
             return new(null, NotAllowed(user, "start a run"));
@@ -167,7 +181,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         {
             if (_stopping)
                 return new(null, "The service is stopping; start the run again when it is back.");
-            run = new ServerRun(account.Name, root, prompt.Trim(), queue.Enqueue(root), taskId, resume);
+            run = new ServerRun(account.Name, root, prompt.Trim(), queue.Enqueue(root), taskId, resume, spec);
             _runs.Add(run);
             var finished = _runs.Where(r => r.Ended.IsCompleted).ToList();
             foreach (var old in finished.Take(Math.Max(0, finished.Count - KeepFinished)))
@@ -323,7 +337,7 @@ internal sealed class EngineExecutor(ServerEngine engine) : IRunExecutor
 
         // A run from the browser (IntentSource.Web): attended, with the shell when the folder's level allows it, and
         // the person who started it named - whose remembered approvals answer for it (RunComposer, ApprovalStore rule 5).
-        var request = new RunRequest(workspace, run.Prompt, IntentSource.Web, run.TaskId, run.Resume,
+        var request = new RunRequest(workspace, run.Prompt, IntentSource.Web, run.TaskId, run.Resume, run.Spec,
             Stage: saved.StageChanges, Principal: run.Owner)
         {
             Defaults = saved.Defaults

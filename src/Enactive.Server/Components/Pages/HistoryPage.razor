@@ -39,6 +39,7 @@ else if (_list is not null)
                                     <input type="hidden" name="run" value="@checkpoint.RunId" />
                                     <button type="submit">Resume</button>
                                 </form>
+                                <a href="@Links.Confirm(Ws!, ServerHistory.Act.Forget, checkpoint.RunId)">Forget it</a>
                             </Authorized>
                         </AuthorizeView>
                     }

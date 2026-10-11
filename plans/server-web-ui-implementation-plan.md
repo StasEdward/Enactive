@@ -274,6 +274,13 @@ slice showed about the rest:
 
 **Done when:** everything the desktop can do around a run except staging works from another machine. ~1 week.
 
+*Status 2026-10-12:* done in code. A question waits `QuestionWaitMinutes` (30) and then parks to the inbox; the
+inbox page answers it and carries the run on as the answerer's run under the same task; unfinished runs offer
+Resume (owner or any Operator) after `RunRecovery`'s warning, and Forget (with or without putting files back);
+a past run's page offers Try again, Run the template again, Delete, and deleting a file it wrote - each after the
+window's own question on a confirmation page, each audited. `<Virtualize>` was not needed yet: the run page redraws
+at most ten times a second from the session's fold, and the lists are short; it is for when they are not.
+
 ## Phase 3 - configuration and persistent staging
 
 - Scheduler `BackgroundService` over `ScheduleTick` with the workspace lease; docs note to remove Task Scheduler
