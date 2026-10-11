@@ -43,6 +43,12 @@ internal sealed record ServerOptions
     /// </summary>
     public IReadOnlyList<string> WorkspaceRoots { get; init; } = [];
 
+    /// <summary>
+    /// Who is mailed what arrives in the inbox - a run nobody watched finished, a schedule could not start, a question
+    /// waits (MailNotices); through the mail account the settings configure. None, no notices.
+    /// </summary>
+    public IReadOnlyList<string> NoticeRecipients { get; init; } = [];
+
     /// <summary>How many runs go at once; each run's own parallel steps are its own (ADR 0002 §9).</summary>
     public int MaxActiveRuns { get; init; } = 2;
 
@@ -117,6 +123,10 @@ internal sealed record ServerOptions
         foreach (var folder in WorkspaceRoots)
             if (!System.IO.Path.IsPathFullyQualified(folder))
                 problems.Add($"WorkspaceRoots: '{folder}' is not a full path (\"D:\\work\").");
+
+        foreach (var to in NoticeRecipients)
+            if (!MimeKit.MailboxAddress.TryParse(to, out _))
+                problems.Add($"NoticeRecipients: '{to}' is not a mail address.");
 
         if (MaxActiveRuns < 1)
             problems.Add("MaxActiveRuns must be at least 1.");

@@ -101,6 +101,9 @@ internal static class ServerApp
         // The schedules, every minute (ServerScheduler).
         builder.Services.AddSingleton<Runs.ServerScheduler>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Runs.ServerScheduler>());
+        // What arrives in the inbox, by mail, when server.json names who to tell (MailNotices).
+        builder.Services.AddHostedService(sp => new Runs.MailNotices(sp.GetRequiredService<Runs.ServerEngine>(), options,
+            sp.GetRequiredService<ServerFolders>(), sp.GetRequiredService<ILogger<Runs.MailNotices>>()));
         builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(30));
 
         builder.Services.AddSingleton(sp => new NetworkGate(options.Subnets(), options.HostNames, sp.GetRequiredService<ILogger<NetworkGate>>()));

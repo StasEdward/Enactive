@@ -25,6 +25,8 @@ param(
     [Parameter(Mandatory)] [string[]] $HostNames,
     # The folders under which tasks are run from the browser; none, and no task is started from it.
     [Parameter(Mandatory)] [string[]] $WorkspaceRoots,
+    # Who is mailed what arrives in the inbox (through the mail server the settings name); none, no mail.
+    [string[]] $NoticeRecipients = @(),
     [int] $Port = 8443,
     # The address to listen on; every address of the machine by default. The subnets and the firewall rule decide
     # who reaches it.
@@ -46,7 +48,7 @@ $RuleName = "Enactive Server (HTTPS)"
 
 function New-ServerConfig {
     param([string[]] $Listen, [string[]] $Subnets, [string[]] $HostNames, [string] $Thumbprint, [string] $Pfx,
-          [string[]] $Roots = @())
+          [string[]] $Roots = @(), [string[]] $Notices = @())
 
     if (-not $Thumbprint -and -not $Pfx) { throw "Name a certificate: -CertificateThumbprint or -PfxPath." }
     if ($Thumbprint -and $Pfx) { throw "Name one certificate, not both." }
@@ -64,6 +66,7 @@ function New-ServerConfig {
         AllowedSubnets = @($Subnets)
         HostNames      = @($HostNames)
         WorkspaceRoots = @($Roots)
+        NoticeRecipients = @($Notices)
         Certificate    = $certificate
         MaxActiveRuns  = 2
     } | ConvertTo-Json -Depth 4
@@ -83,7 +86,7 @@ if ($ServiceAccount -match '^(NT AUTHORITY\\)?(SYSTEM|LocalSystem|LocalService|N
 }
 
 $config = New-ServerConfig -Listen "$($ListenAddress):$Port" -Subnets $Subnets -HostNames $HostNames `
-    -Thumbprint $CertificateThumbprint -Pfx $PfxPath -Roots $WorkspaceRoots
+    -Thumbprint $CertificateThumbprint -Pfx $PfxPath -Roots $WorkspaceRoots -Notices $NoticeRecipients
 $credential = Get-Credential -UserName $ServiceAccount -Message "Password of the account the Enactive service runs as"
 
 # 1. publish

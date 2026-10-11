@@ -308,8 +308,11 @@ field a template has is reachable at once; a field-by-field editor can come late
 3.6 the log page: the service's own lines and the engine's in one `LogHub`, read by anybody signed in with the
 window's filter, analysed by an Operator with the review model; the line format and the export are `LogText`,
 shared with the window's log.
-Left: MCP servers and the engine's switches on the settings page (kept as they are in the file meanwhile), notices
-by mail, persistent staging.
+3.7 notices by mail (`MailNotices`): what arrived in the inbox since the last mail, in one message a minute at
+most, to `NoticeRecipients` in server.json (none: none) through the settings' mail server; the SMTP send is
+`MailSending`, shared with the send_email tool.
+Left: MCP servers and the engine's switches on the settings page (kept as they are in the file meanwhile),
+persistent staging.
 
 ## Phase 4 - desktop as a client (optional)
 
