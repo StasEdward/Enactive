@@ -7,6 +7,7 @@ using Enactive.Core.History;
 using Enactive.Core.Intents;
 using Enactive.Core.Orchestration;
 using Enactive.Core.Permissions;
+using Enactive.Core.Storage;
 using Enactive.Core.Templates;
 using Enactive.Core.Workers;
 using Enactive.Mcp.TestServer;
@@ -519,6 +520,40 @@ public sealed class RunComposerTests
         await RunAsync(engine, request, new ScriptedDecisionHandler("allow"));
 
         Assert.Equal(ran, fx.Exists("made.txt"));
+    }
+
+    // ── one process in a workspace ──────────────────────────────────────────
+
+    /// <summary>
+    /// Refused in the composer, so no host can start a run in a folder another process is running in - the window,
+    /// the console and the service each kept only their own runs apart.
+    /// </summary>
+    [Fact]
+    public async Task A_run_is_refused_in_a_workspace_another_process_is_running_in()
+    {
+        using var fx = new EngineFixture();
+        using var other = WorkspaceLeaseTests.ForeignHolder(fx.Root, host: "enactive");
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
+
+        var refused = await Assert.ThrowsAsync<WorkspaceInUseException>(
+            () => RunComposer.ComposeAsync(engine, Request(fx, "answer", IntentSource.CommandBar), fx.Decisions, CancellationToken.None));
+
+        Assert.Equal("enactive", refused.Holder?.Host);
+    }
+
+    /// <summary>Held from composing until the run is disposed - by whichever host disposes it - and let go then.</summary>
+    [Fact]
+    public async Task A_run_holds_its_workspace_until_it_is_disposed()
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer), Turn.Says("done")), TempApprovals(), EngineFixture.WorkerWith());
+        var lease = WorkspaceLease.PathFor(fx.Root);
+
+        var composed = await RunComposer.ComposeAsync(engine, Request(fx, "answer", IntentSource.CommandBar), fx.Decisions, default);
+        Assert.Throws<IOException>(() => new FileStream(lease, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete).Dispose());
+
+        await composed.Resources.DisposeAsync();
+        Assert.False(File.Exists(lease));
     }
 
     // ── tools ───────────────────────────────────────────────────────────────

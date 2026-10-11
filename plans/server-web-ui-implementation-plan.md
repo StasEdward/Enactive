@@ -138,6 +138,13 @@ Only the tests the step touches are run.
   lease per run), the console (both, per invocation) and later the server. Refusal message names the holder.
 - Tests: two leases on one workspace → second refused with the holder; lease released on run end and on crash
   (`DeleteOnClose`); console `--due` on a leased workspace defers.
+- *Done differently (decided 2026-10-11):* the settings-folder lock is taken **by the service only** - a
+  window and a `--due` console of one account share `%APPDATA%\Enactive` today, and an exclusive lock there
+  would stop schedules while the window is open. It is written with the service (1.1). The workspace lease
+  is `Core/ProcessLease` (not `FileLock`: held for a run, refused rather than waited for, the holder readable
+  by others), counted within a process so the window's foreground and background runs still share a folder,
+  and taken in `RunComposer.ComposeAsync` - every host, with nothing to forget. `--due` takes the schedule
+  and the lease together before marking the occurrence fired (`ScheduledStart`), so a busy folder defers.
 
 **0.5 Run control out of `RunAsync`** - the largest step; two PRs if needed.
 - `RunLauncher`: the checks (folder exists, model configured), building `RunRequest`, `RunComposer.ComposeAsync`,
@@ -167,7 +174,7 @@ Reordered per the review: prove the architecture on one end-to-end scenario befo
 
 **1.1 Host skeleton** - `src/Enactive.Server` (Web SDK), `UseWindowsService`, Blazor Interactive Server;
 Kestrel HTTPS only from `server.json` (certificate by file or thumbprint; no certificate → refuse to start);
-`SettingsFolderLock`; Event Log + rolling file; `/health`.
+`SettingsFolderLock` (the service only, over `ProcessLease`; see 0.4); Event Log + rolling file; `/health`.
 
 **1.2 Network and origin** - subnet middleware before routing (also `/_blazor`); hub `AllowedOrigins` = the
 configured host names; `deploy/install-server.ps1` (service under a named account, firewall rule for

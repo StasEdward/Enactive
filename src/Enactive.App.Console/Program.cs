@@ -8,6 +8,7 @@ using Enactive.Core.Intents;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
 using Enactive.Core.Schedules;
+using Enactive.Core.Storage;
 using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
@@ -351,13 +352,13 @@ if (dueAll || args.Contains("--due", StringComparer.OrdinalIgnoreCase))
 
     var chosen = due[0];
 
-    // Claimed BEFORE anything else, so a second tick that overlaps this one sees it as busy. Null
-    // means somebody claimed it between the decision and here, which is not an error - it is the
-    // overlap rule working.
-    scheduleClaim = RunMarkers.Default.Claim(chosen.Schedule.Id);
+    // Claimed BEFORE anything else, so a second tick that overlaps this one sees it as busy - the schedule
+    // and its workspace both, before the occurrence is marked fired below (ScheduledStart). The composer's
+    // own take of the workspace then only counts this one (ProcessLease).
+    scheduleClaim = ScheduledStart.TryBegin(RunMarkers.Default, chosen.Schedule.Id, workspaceRoot, out var busy);
     if (scheduleClaim is null)
     {
-        Console.WriteLine($"  [Busy] {chosen.Schedule.Name}: claimed by another run just now");
+        Console.WriteLine($"  [Busy] {chosen.Schedule.Name}: {busy}");
         return 0;
     }
 
@@ -624,6 +625,14 @@ catch (HttpRequestException ex)
 
     await FileScheduledOutcome();
     return 1;
+}
+catch (WorkspaceInUseException ex)
+{
+    // Not a failure of the task, and not the generic backstop's "check the provider settings": another
+    // Enactive is working in this folder. EX_TEMPFAIL, so a script can tell "try later" from "broken".
+    Console.Error.WriteLine($"x {ex.Message}");
+    await FileScheduledOutcome();
+    return 75;
 }
 catch (OperationCanceledException)
 {

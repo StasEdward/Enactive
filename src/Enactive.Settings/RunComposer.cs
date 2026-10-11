@@ -9,6 +9,7 @@ using Enactive.Core.Intents;
 using Enactive.Core.Orchestration;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
+using Enactive.Core.Storage;
 using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
@@ -80,8 +81,9 @@ public sealed record RunRequest(
 /// <param name="Engine">The orchestrator with the run recorder and the log tap already around it.</param>
 /// <param name="Artifacts">Where the run's changes go - staged for somebody to apply, or straight to disk.</param>
 /// <param name="Resources">
-/// The MCP tool servers this run connected to. They are child processes, and a caller that forgets
-/// them leaves one set per run running until the application is closed.
+/// The MCP tool servers this run connected to, and its hold on the workspace (WorkspaceLease). The servers
+/// are child processes, and a caller that forgets them leaves one set per run running until the application
+/// is closed - and the workspace refused to every other host until then.
 /// </param>
 public sealed record ComposedRun(
     IOrchestrator Engine,
@@ -179,6 +181,7 @@ public static class RunComposer
     /// <param name="engine">The host's current engine, built by <see cref="EngineComposition.Build"/> - nothing a host assembles.</param>
     /// <param name="decisions">Who answers this host's permission requests - the one part each host supplies.</param>
     /// <exception cref="InvalidOperationException">The request is refused - see <see cref="Refusal"/>.</exception>
+    /// <exception cref="WorkspaceInUseException">Another process is running in the workspace.</exception>
     public static async Task<ComposedRun> ComposeAsync(
         ComposedEngine engine, RunRequest request, IDecisionHandler decisions, CancellationToken ct)
     {
@@ -187,9 +190,23 @@ public static class RunComposer
 
         var workspace = request.Workspace;
         var spec = request.Spec;
+
+        // The workspace for this process before anything is connected, held until the run is disposed: a
+        // second host in the same folder is two agents editing the same files (WorkspaceLease). Here, so no
+        // host can forget it.
+        var lease = WorkspaceLease.Take(workspace.RootPath);
+        McpRunTools tools;
+        try
+        {
+            tools = await McpRunTools.ConnectAsync(engine.BuiltInTools, engine.McpServers, workspace.RootPath, ct);
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
+
         var memory = MemoryStoreFactory.Create(workspace);
-        var tools = await McpRunTools.ConnectAsync(
-            engine.BuiltInTools, engine.McpServers, workspace.RootPath, ct);
 
         // Said once per run, whether or not anything calls them: starting a server is a cost the run has
         // already paid, and a scheduled run is where it costs most and shows least.
@@ -268,14 +285,29 @@ public static class RunComposer
                     context, DateTimeOffset.UtcNow, workerId),
                 artifacts,
                 request.Resume,
-                tools);
+                new Holding(tools, lease));
         }
         catch
         {
             // The connections were made before the thing that threw. Nobody else has been handed them
             // yet, so this is the only place that can close them.
             await tools.DisposeAsync();
+            lease.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>
+    /// What a composed run holds until it is disposed: its tool servers, then the workspace. In one disposable
+    /// because hosts pass <see cref="ComposedRun.Resources"/> on (the remote runner does) and must not have to
+    /// know there are two.
+    /// </summary>
+    private sealed class Holding(IAsyncDisposable tools, ProcessLease lease) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            try { await tools.DisposeAsync(); }
+            finally { lease.Dispose(); }
         }
     }
 
