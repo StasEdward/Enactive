@@ -12,3 +12,15 @@ main { padding: 16px; }
 .signin label { display: block; margin: 8px 0; }
 .signin input { display: block; width: 100%; }
 .said { color: var(--accent); }
+.start { display: grid; gap: 8px; max-width: 640px; margin-bottom: 24px; }
+.start input, .start textarea { display: block; width: 100%; font: inherit; }
+.runs { list-style: none; padding: 0; }
+.runs li { padding: 6px 0; border-bottom: 1px solid color-mix(in srgb, var(--text) 15%, transparent); }
+.state, .where { margin-left: 8px; opacity: 0.8; }
+.question { border: 2px solid var(--accent); padding: 12px; margin: 12px 0; }
+.question pre { white-space: pre-wrap; max-height: 320px; overflow: auto; }
+.answers { display: flex; gap: 8px; flex-wrap: wrap; }
+.cards { padding-left: 20px; }
+.card { margin: 8px 0; }
+.card-status { opacity: 0.7; margin-left: 6px; }
+.card.failed .card-status { color: var(--accent); }

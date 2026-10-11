@@ -214,6 +214,24 @@ public sealed partial class SignInTests : IAsyncLifetime
         Assert.Equal("/", response.Headers.Location!.OriginalString.Replace("https://localhost", ""));
     }
 
+    /// <summary>A live page's connection (the browser hub) is for somebody signed in; it was handed to anybody who asked.</summary>
+    [Fact]
+    public async Task The_browser_hub_is_only_for_somebody_signed_in()
+    {
+        HttpRequestMessage Negotiate()
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, "/_blazor/negotiate?negotiateVersion=1");
+            request.Headers.Add("Origin", "https://localhost");
+            return request;
+        }
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await NewBrowser().SendAsync(Negotiate())).StatusCode);
+
+        var browser = NewBrowser();
+        await SignInAsync(browser, "alice", Password);
+        Assert.Equal(HttpStatusCode.OK, (await browser.SendAsync(Negotiate())).StatusCode);
+    }
+
     [Fact]
     public async Task Health_answers_without_signing_in()
         => Assert.Equal(HttpStatusCode.OK, (await NewBrowser().GetAsync("/health")).StatusCode);

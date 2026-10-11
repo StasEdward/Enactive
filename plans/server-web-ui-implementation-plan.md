@@ -222,6 +222,12 @@ permission answered in the browser (`WebDecisionPresenter`); cancel. The run pag
 **Done when** the review's scenario passes: an Operator starts a task, closes the browser, comes back, sees
 the state, answers the waiting permission; a second run in that workspace queued correctly.
 
+*Status 2026-10-11:* 1.1-1.5 done in code on `feature/application-layer`. `IRunControl` (deferred from 0.6)
+is here: start, list, find, cancel, answer, each checking the account at the action. Only the run's owner may
+answer with an approval to remember. The orphaned-question timeout (park into the inbox) is phase 2's, with the
+inbox page. The slice was checked against Kestrel by script (sign-in, the hub's origin and sign-in checks); a
+browser run of the pages and a run on a real model are the user's to do.
+
 **1.6 Reading pages** - shell with the brand (link the gateway's `wwwroot/brand/**`; palette → CSS variables),
 workspaces, history, run page (timeline, cards, routing, performance, work split, artifacts), artifact/diff view
 with the path guard (canonicalise, inside the workspace, no junction escape, size cap).

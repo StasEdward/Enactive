@@ -1,7 +1,63 @@
 @page "/"
+@rendermode InteractiveServer
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IRunControl Runs
+@inject NavigationManager Navigation
 
 <PageTitle>Enactive</PageTitle>
 
-@* The skeleton's page (server plan 1.1). Signing in, the runs and the rest arrive with the steps after it. *@
-<h1>Enactive</h1>
-<p>The service is running.</p>
+<h1>Runs</h1>
+
+<AuthorizeView Policy="Operator">
+    <form class="start" @onsubmit="StartAsync">
+        <label>Folder on the server <input @bind="_workspace" placeholder="D:\work\project" /></label>
+        <label>Task <textarea @bind="_prompt" rows="3"></textarea></label>
+        <button type="submit">Run</button>
+        @if (_said is not null)
+        {
+            <p class="said" role="alert">@_said</p>
+        }
+    </form>
+</AuthorizeView>
+
+@if (_runs.Count == 0)
+{
+    <p>No runs yet.</p>
+}
+else
+{
+    <ul class="runs">
+        @foreach (var run in _runs)
+        {
+            <li>
+                <a href="@($"runs/{run.Id}")">@RunState.Title(run)</a>
+                <span class="state">@RunState.Of(run)</span>
+                <span class="where">@run.Workspace · @run.Owner · @run.StartedAt.ToString("HH:mm")</span>
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    private string _workspace = "";
+    private string _prompt = "";
+    private string? _said;
+    private IReadOnlyList<ServerRun> _runs = [];
+
+    protected override async Task OnInitializedAsync()
+        => _runs = Runs.List((await Auth).User);
+
+    private async Task StartAsync()
+    {
+        var (run, refusal) = Runs.Start((await Auth).User, _workspace, _prompt);
+        if (run is null)
+        {
+            _said = refusal;
+            return;
+        }
+        Navigation.NavigateTo($"runs/{run.Id}");
+    }
+}

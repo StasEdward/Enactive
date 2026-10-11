@@ -67,6 +67,13 @@ internal static class ServerApp
         // The accounts and the audit log (server.db), signing in, the roles (ServerAuth).
         ServerAuth.Add(builder.Services, new UserStore(dataFolder));
 
+        // Runs: the engine (built when first asked for, from the service account's settings), the line of runs, and
+        // the one interface every action on a run goes through (IRunControl) - which checks who is asking.
+        builder.Services.AddSingleton(sp => new Runs.ServerEngine(dataFolder, sp.GetRequiredService<FileLogSink>()));
+        builder.Services.AddSingleton(new Enactive.Application.RunQueue(options.MaxActiveRuns));
+        builder.Services.AddSingleton<Runs.IRunExecutor>(sp => new Runs.EngineExecutor(sp.GetRequiredService<Runs.ServerEngine>()));
+        builder.Services.AddSingleton<Runs.IRunControl, Runs.RunControl>();
+
         builder.Services.AddSingleton(sp => new NetworkGate(options.Subnets(), options.HostNames, sp.GetRequiredService<ILogger<NetworkGate>>()));
 
         // Only the names the service is reached by, in the Host header. A name anyone can point at the service's
@@ -89,6 +96,18 @@ internal static class ServerApp
         // Browsers are told to come back over HTTPS only, for a year; the service never answers plain HTTP anyway.
         app.UseHsts();
         app.UseAuthentication();
+        // The browser hub only for somebody signed in. Its pages check their own authorization, but the hub negotiated
+        // a connection with anybody who asked (seen against Kestrel), and a circuit is not something to hand out before
+        // sign-in. The sign-in page is rendered statically and opens none.
+        app.Use((context, next) =>
+        {
+            if (context.Request.Path.StartsWithSegments("/_blazor") && context.User.Identity?.IsAuthenticated != true)
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return Task.CompletedTask;
+            }
+            return next(context);
+        });
         app.UseAuthorization();
         app.UseAntiforgery();
         app.MapStaticAssets();
