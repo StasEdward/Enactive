@@ -156,6 +156,13 @@ Only the tests the step touches are run.
   agent). The window keeps `RenderEvent`'s drawing, `RunEventPump` and the `Live()` journal.
 - `WorkInFlight`: `HasWorkInFlight` / `DescribeWorkInFlight`.
 - Tests: launcher refusals; queue ordering and per-workspace exclusivity; `LiveRuns` filtering.
+- *Done differently:* `RunLauncher` is the checks and the provisional title only; `RunHandle` is left to
+  `RunSession` (1.4), the one consumer that needs that shape - building it now would be guessing at it.
+  `RunView` became `Projections/RunActivity` (agent, current action, tool calls, why it ended); phase,
+  progress and title already come from `RunFeed`, and live artifacts stay with the window that draws
+  them. `RunQueue` is **not** used by the desktop: its foreground run and background group are one
+  person's, and a pass-through queue there would only be code to read. It starts the earliest waiter
+  that can start, so a run for a free folder is not held behind one waiting for a busy folder.
 
 **0.6 History, settings, decisions**
 - `RunHistoryService`: open/build past run, retry, run again, delete, trim, forget unfinished, artifact undo /
