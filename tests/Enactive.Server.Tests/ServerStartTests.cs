@@ -202,13 +202,13 @@ public sealed class ServerStartTests : IDisposable
     }
 
     [Fact]
-    public async Task The_page_is_served()
+    public async Task The_sign_in_page_is_served_with_the_app_s_script()
     {
         await using var app = await StartedAsync();
 
-        var page = await app.GetTestClient().GetStringAsync("/");
+        var page = await app.GetTestClient().GetStringAsync("/signin");
 
-        Assert.Contains("<title>Enactive</title>", page);
+        Assert.Contains("<title>Sign in - Enactive</title>", page);
         Assert.Contains("blazor.web.js", page);
     }
 }

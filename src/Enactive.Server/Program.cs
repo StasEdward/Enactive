@@ -1,6 +1,7 @@
 using Enactive.Core.Storage;
 using Enactive.Secrets;
 using Enactive.Server;
+using Enactive.Server.Accounts;
 
 // Enactive as a Windows service on the local network (ADR 0002).
 //
@@ -8,6 +9,8 @@ using Enactive.Server;
 //   Enactive.Server --config <file>     another server.json than the account's %APPDATA%\Enactive\server.json
 //   Enactive.Server --data <folder>     another data folder (its lock, its log) - to try a build without the account's
 //   Enactive.Server --protect           protect a secret (the .pfx password) for THIS account, for server.json
+//   Enactive.Server --add-user <name> [--role Admin|Operator|Viewer], --reset-password, --set-role, --disable-user,
+//                   --enable-user, --list-users     the accounts, on this machine only (AccountCommands)
 //
 // Everything that keeps it from starting safely is said and it exits: no settings, a setting that would open it to
 // more than it should answer, no certificate it can use, another service on the same data folder.
@@ -19,6 +22,10 @@ if (args.Contains("--protect", StringComparer.OrdinalIgnoreCase))
     return ProtectSecret();
 
 var dataFolder = ArgumentAfter("--data") is { } data ? Path.GetFullPath(data) : ServerFolders.Default();
+// The accounts are managed here, on the server, and need no settings or certificate to be.
+if (AccountCommands.Verbs.Any(v => args.Contains(v, StringComparer.OrdinalIgnoreCase)))
+    return AccountCommands.Run(args, new UserStore(dataFolder), AccountCommands.ReadHidden, Console.Out, Console.Error);
+
 var configPath = ArgumentAfter("--config") ?? Path.Combine(dataFolder, "server.json");
 
 var options = ServerOptions.Load(configPath, out var unreadable);
@@ -67,16 +74,6 @@ int Refuse(string why, int code)
 // Read from the keyboard, never from an argument: an argument stays in the shell's history and the process list.
 static int ProtectSecret()
 {
-    Console.Error.Write("Secret to protect for this account (not shown): ");
-    var secret = new System.Text.StringBuilder();
-    while (true)
-    {
-        var key = Console.ReadKey(intercept: true);
-        if (key.Key == ConsoleKey.Enter) break;
-        if (key.Key == ConsoleKey.Backspace) { if (secret.Length > 0) secret.Length--; continue; }
-        secret.Append(key.KeyChar);
-    }
-    Console.Error.WriteLine();
-    Console.WriteLine(Secret.Protect(secret.ToString()));
+    Console.WriteLine(Secret.Protect(AccountCommands.ReadHidden("Secret to protect for this account (not shown): ")));
     return 0;
 }

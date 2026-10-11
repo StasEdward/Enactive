@@ -1,7 +1,17 @@
 @inherits LayoutComponentBase
+@using Microsoft.AspNetCore.Components.Authorization
 
 <header class="top">
     <span class="mark">Enactive</span>
+    <AuthorizeView>
+        <Authorized>
+            <span class="who">@context.User.Identity?.Name</span>
+            <form method="post" action="/signout" class="signout">
+                <AntiforgeryToken />
+                <button type="submit">Sign out</button>
+            </form>
+        </Authorized>
+    </AuthorizeView>
 </header>
 <main>
     @Body

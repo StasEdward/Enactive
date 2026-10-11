@@ -1,0 +1,74 @@
+@page "/signin"
+@attribute [AllowAnonymous]
+@using Microsoft.AspNetCore.Authentication
+@using Microsoft.AspNetCore.Authentication.Cookies
+@using Enactive.Server.Accounts
+@inject UserStore Users
+@inject NavigationManager Navigation
+
+<PageTitle>Sign in - Enactive</PageTitle>
+
+@* Rendered on the server and posted as a plain form (static rendering): signing in sets a cookie, which only a real
+   response can do - and a page with no circuit is a page with nothing to attack before sign-in. *@
+<section class="signin">
+    <h1>Sign in</h1>
+    @if (_said is not null)
+    {
+        <p class="said" role="alert">@_said</p>
+    }
+    <EditForm Model="Input!" method="post" OnValidSubmit="SignInAsync" FormName="signin">
+        <label>Name <InputText @bind-Value="Input!.Name" autocomplete="username" /></label>
+        <label>Password <InputText type="password" @bind-Value="Input!.Password" autocomplete="current-password" /></label>
+        <button type="submit">Sign in</button>
+    </EditForm>
+</section>
+
+@code {
+    [CascadingParameter] private HttpContext HttpContext { get; set; } = default!;
+
+    [SupplyParameterFromForm] private Credentials? Input { get; set; }
+
+    // Set here, not by an initializer: a form post sets it from the form, and an initializer would be overwritten.
+    protected override void OnInitialized() => Input ??= new();
+
+    [SupplyParameterFromQuery] private string? ReturnUrl { get; set; }
+
+    private string? _said;
+
+    private sealed class Credentials
+    {
+        public string Name { get; set; } = "";
+        public string Password { get; set; } = "";
+    }
+
+    private async Task SignInAsync()
+    {
+        var remote = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var typed = Input!.Name.Length > 64 ? Input.Name[..64] : Input.Name;
+        var (verdict, account) = Users.SignIn(Input.Name, Input.Password);
+
+        switch (verdict)
+        {
+            case SignInVerdict.Ok:
+                Users.Audit(account!.Name, "signed in", null, remote);
+                await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, ServerAuth.PrincipalOf(account));
+                Navigation.NavigateTo(Local(ReturnUrl));
+                return;
+            case SignInVerdict.Locked:
+                Users.Audit(typed, "sign-in refused: locked", null, remote);
+                // Said, because the person waiting needs to know to wait; it names no account, so it tells a guesser
+                // only what the guesser did.
+                _said = $"Too many wrong passwords. Try again in {(int)UserStore.LockoutFor.TotalMinutes} minutes.";
+                return;
+            default:
+                Users.Audit(typed, verdict == SignInVerdict.Disabled ? "sign-in refused: disabled" : "sign-in failed", null, remote);
+                // One sentence for a wrong name, a wrong password and a disabled account: which one it was is for the log.
+                _said = "Not signed in: the name or the password is not right.";
+                return;
+        }
+    }
+
+    /// <summary>Back where the person was going - on this site only, never to an address a link put in the query.</summary>
+    private static string Local(string? returnUrl)
+        => returnUrl is { Length: > 0 } url && url.StartsWith('/') && !url.StartsWith("//") && !url.StartsWith("/\\") ? url : "/";
+}

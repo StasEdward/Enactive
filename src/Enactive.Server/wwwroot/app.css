@@ -5,3 +5,10 @@ body { margin: 0; font-family: system-ui, sans-serif; background: var(--page); c
 .top { padding: 12px 16px; border-bottom: 2px solid var(--accent); }
 .mark { font-weight: 700; }
 main { padding: 16px; }
+.top { display: flex; gap: 12px; align-items: center; }
+.who { margin-left: auto; }
+.signout { margin: 0; }
+.signin { max-width: 320px; }
+.signin label { display: block; margin: 8px 0; }
+.signin input { display: block; width: 100%; }
+.said { color: var(--accent); }

@@ -16,6 +16,8 @@
   -->
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.7" />
+    <!-- server.db: the accounts and the audit log. The version the workspace stores already use. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <ProjectReference Include="..\Enactive.Application\Enactive.Application.csproj" />
     <ProjectReference Include="..\Enactive.Secrets\Enactive.Secrets.csproj" />
   </ItemGroup>

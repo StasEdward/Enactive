@@ -1,0 +1,4 @@
+@using Microsoft.AspNetCore.Authorization
+@* Every page is a signed-in Viewer's at least, unless it says otherwise: a page that forgets its attribute is closed,
+   not open. Pages that need more say [Authorize(Policy = "Operator")] / "Admin" themselves. *@
+@attribute [Authorize(Policy = "Viewer")]

@@ -1,7 +1,10 @@
 namespace Enactive.Server;
 
 using System.Security.Cryptography.X509Certificates;
+using Enactive.Server.Accounts;
 using Enactive.Server.Components;
+using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authentication;
 using Enactive.Workspace;
 using Microsoft.AspNetCore.DataProtection;
 
@@ -61,6 +64,9 @@ internal static class ServerApp
 
         builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 
+        // The accounts and the audit log (server.db), signing in, the roles (ServerAuth).
+        ServerAuth.Add(builder.Services, new UserStore(dataFolder));
+
         builder.Services.AddSingleton(sp => new NetworkGate(options.Subnets(), options.HostNames, sp.GetRequiredService<ILogger<NetworkGate>>()));
 
         // Only the names the service is reached by, in the Host header. A name anyone can point at the service's
@@ -82,11 +88,27 @@ internal static class ServerApp
 
         // Browsers are told to come back over HTTPS only, for a year; the service never answers plain HTTP anyway.
         app.UseHsts();
+        app.UseAuthentication();
+        app.UseAuthorization();
         app.UseAntiforgery();
         app.MapStaticAssets();
 
         // For the installer and a monitor: up, and which build. Says nothing else - it answers before anyone signs in.
         app.MapGet("/health", () => Results.Json(new { status = "ok", version = BuildVersion() }));
+
+        // A form post from the page's own header, with its antiforgery token; SameSite=Strict already keeps other
+        // sites from sending the cookie, this keeps a page of this site that was not the header from doing it either.
+        app.MapPost("/signout", async (HttpContext context, UserStore users, IAntiforgery antiforgery) =>
+            {
+                // Checked here: for an endpoint that binds no form, the antiforgery middleware only RECORDS a failed
+                // check, and the post went through without its token (found by SignInTests).
+                if (!await antiforgery.IsRequestValidAsync(context))
+                    return Results.BadRequest();
+                if (context.User.Identity?.Name is { } name)
+                    users.Audit(name, "signed out", null, context.Connection.RemoteIpAddress?.ToString());
+                await context.SignOutAsync();
+                return Results.LocalRedirect("/signin");
+            });
 
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
         return app;
