@@ -44,5 +44,7 @@
     <InternalsVisibleTo Include="enactive-ui" />
     <InternalsVisibleTo Include="Enactive.App.Ui.Tests" />
     <InternalsVisibleTo Include="Enactive.Engine.Tests" />
+    <InternalsVisibleTo Include="Enactive.Server" />
+    <InternalsVisibleTo Include="Enactive.Server.Tests" />
   </ItemGroup>
 </Project>
