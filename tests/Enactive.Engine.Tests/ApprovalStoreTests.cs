@@ -212,4 +212,107 @@ public sealed class ApprovalStoreTests : IDisposable
         Assert.True(_store.Approves(granted, "send_email"));
         Assert.False(_store.Approves(granted, "send_email", unwatched: true));
     }
+
+    // ── Rule 5: an approval is the approving person's ───────────────────────
+
+    /// <summary>
+    /// The service is one account serving several people. "Allow (workspace)" given by one of them in the browser was
+    /// a standing yes for everybody signed in - and the account's own approvals, given at that machine's desktop,
+    /// answered for all of them too.
+    /// </summary>
+    [Fact]
+    public void A_person_s_approval_answers_only_that_person()
+    {
+        var granted = Workspace("granted");
+
+        _store.Approve(granted, "send_email", principal: "alice");
+
+        Assert.True(_store.Approves(granted, "send_email", principal: "alice"));
+        Assert.False(_store.Approves(granted, "send_email", principal: "bob"), "One person's approval answered another.");
+        Assert.False(_store.Approves(granted, "send_email"), "A person's approval answered for the account.");
+    }
+
+    [Fact]
+    public void The_account_s_own_approval_does_not_answer_a_person_signed_in_to_the_service()
+    {
+        var granted = Workspace("granted");
+
+        _store.Approve(granted, "send_email", unwatched: true);
+
+        Assert.True(_store.Approves(granted, "send_email"));
+        Assert.False(_store.Approves(granted, "send_email", principal: "alice"));
+        Assert.False(_store.Approves(granted, "send_email", unwatched: true, principal: "alice"));
+    }
+
+    /// <summary>
+    /// Every approval written before people had a key of their own was given at the desktop, by the account whose
+    /// profile holds the file: it stays the account's, and becomes nobody else's.
+    /// </summary>
+    [Fact]
+    public void An_approval_recorded_before_people_were_told_apart_stays_the_account_s()
+    {
+        var granted = Workspace("granted");
+        File.WriteAllText(Path.Combine(_root, "permissions.json"),
+            $$"""{"{{WorkspaceInfo.IdFor(granted):N}}":["send_email"],"{{WorkspaceInfo.IdFor(granted):N}}+unwatched":["read_file"]}""");
+
+        Assert.True(_store.Approves(granted, "send_email"));
+        Assert.True(_store.Approves(granted, "read_file", unwatched: true));
+        Assert.False(_store.Approves(granted, "send_email", principal: "alice"));
+        Assert.False(_store.Approves(granted, "read_file", unwatched: true, principal: "alice"));
+    }
+
+    /// <summary>The scope rule holds per person: a person's plain approval is not one for their unwatched runs.</summary>
+    [Fact]
+    public void A_person_s_plain_approval_does_not_answer_for_their_runs_nobody_is_watching()
+    {
+        var granted = Workspace("granted");
+
+        _store.Approve(granted, "send_email", principal: "alice");
+
+        Assert.False(_store.Approves(granted, "send_email", unwatched: true, principal: "alice"));
+    }
+
+    /// <summary>
+    /// A name is part of a key, and a name may hold anything an account name can. Unescaped, "bob+unwatched" giving a
+    /// plain approval wrote it where bob's approvals for unwatched runs are kept.
+    /// </summary>
+    [Fact]
+    public void A_name_cannot_reach_into_another_person_s_approvals()
+    {
+        var granted = Workspace("granted");
+
+        _store.Approve(granted, "send_email", principal: "bob+unwatched");
+
+        Assert.False(_store.Approves(granted, "send_email", unwatched: true, principal: "bob"));
+        Assert.False(_store.Approves(granted, "send_email", principal: "bob"));
+    }
+
+    /// <summary>The same account, however its name was typed at sign-in.</summary>
+    [Fact]
+    public void A_name_is_the_same_person_in_any_case()
+    {
+        var granted = Workspace("granted");
+
+        _store.Approve(granted, "send_email", principal: "Alice");
+
+        Assert.True(_store.Approves(granted, "send_email", principal: " alice "));
+    }
+
+    /// <summary>
+    /// An empty name is not "no name": a host that lost track of who is signed in would otherwise be handed the
+    /// account's own approvals - and could write into them.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void An_empty_name_is_answered_nothing_and_records_nothing(string empty)
+    {
+        var granted = Workspace("granted");
+        _store.Approve(granted, "send_email");
+
+        _store.Approve(granted, "read_file", principal: empty);
+
+        Assert.False(_store.Approves(granted, "send_email", principal: empty));
+        Assert.False(_store.Approves(granted, "read_file"), "An empty name wrote into the account's approvals.");
+    }
 }

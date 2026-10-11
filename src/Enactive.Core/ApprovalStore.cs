@@ -44,6 +44,13 @@ using Enactive.Core.Tools;
 /// background and scheduled runs use the tool, a widening nobody had agreed to. The approvals for
 /// unwatched runs are filed under a key of their own (<see cref="UnwatchedKeyFor"/>), which an older
 /// build reads as a workspace it has never seen - honouring nothing, and keeping it when it saves.</item>
+/// <item><b>An approval is the approving person's.</b> The file sits in one Windows account's profile, so on the desktop
+/// and the console every approval is that account's, and is filed as it always was (no principal). The service
+/// (ADR 0002) is one account serving several people signed in to its browser interface; there, "Allow (workspace)"
+/// given by one of them was a standing yes for every other in that folder. A principal names the person; their
+/// approvals are filed under a key of their own (<see cref="KeyFor"/>) and answer only them - not the account's,
+/// nor anyone else's. An empty principal is refused rather than read as "no principal": a host that lost track of
+/// who is signed in must not be handed the account's own approvals.</item>
 /// </list>
 ///
 /// <para><see cref="WorkspaceGuard"/> separately refuses to let tools write under
@@ -78,14 +85,17 @@ public sealed class ApprovalStore
     /// Whether this workspace has a standing approval for the tool - for a run somebody is watching, any; for one nobody
     /// is (<paramref name="unwatched"/>), only one given for unwatched runs too (rule 4).
     /// </summary>
+    /// <param name="principal">Whose approval is asked about: null for this account's own, a name for one person signed
+    /// in to the service (rule 5).</param>
     /// <param name="workspaceRoot">
     /// The FOLDER, not an id. Rule 1 lives in that choice: handed an id, this method would honour
     /// whichever id the caller worked out, and the id a workspace carries is read from a file
     /// inside it. Handed a path, there is nothing to get wrong.
     /// </param>
-    public bool Approves(string workspaceRoot, string tool, bool unwatched = false)
+    public bool Approves(string workspaceRoot, string tool, bool unwatched = false, string? principal = null)
     {
-        if (string.IsNullOrWhiteSpace(workspaceRoot) || string.IsNullOrEmpty(tool) || ShellTools.IsShell(tool))
+        if (string.IsNullOrWhiteSpace(workspaceRoot) || string.IsNullOrEmpty(tool) || ShellTools.IsShell(tool)
+            || !IsPrincipal(principal))
             return false;
 
         // NOTHING reads the workspace's own .enactive/permissions.json - see rule 3 in the summary.
@@ -93,20 +103,22 @@ public sealed class ApprovalStore
         // asserts it grants nothing rather than asserting on any code path here.
         var all = Load();
         bool Under(string key) => all.TryGetValue(key, out var tools) && tools.Contains(tool, StringComparer.OrdinalIgnoreCase);
-        return Under(UnwatchedKeyFor(workspaceRoot)) || (!unwatched && Under(KeyFor(workspaceRoot)));
+        return Under(UnwatchedKeyFor(workspaceRoot, principal)) || (!unwatched && Under(KeyFor(workspaceRoot, principal)));
     }
 
     /// <summary>Records an approval. Only ever called from a click on the decision card.</summary>
     /// <param name="unwatched">Given for runs nobody is watching too - the card's own button for it (rule 4).</param>
-    public void Approve(string workspaceRoot, string tool, bool unwatched = false)
+    /// <param name="principal">Who gave it: null for this account's own, a name for one person signed in to the service (rule 5).</param>
+    public void Approve(string workspaceRoot, string tool, bool unwatched = false, string? principal = null)
     {
-        if (string.IsNullOrWhiteSpace(workspaceRoot) || string.IsNullOrEmpty(tool) || ShellTools.IsShell(tool))
+        if (string.IsNullOrWhiteSpace(workspaceRoot) || string.IsNullOrEmpty(tool) || ShellTools.IsShell(tool)
+            || !IsPrincipal(principal))
             return;
 
         lock (_gate)
         {
             var all = Load();
-            var key = unwatched ? UnwatchedKeyFor(workspaceRoot) : KeyFor(workspaceRoot);
+            var key = unwatched ? UnwatchedKeyFor(workspaceRoot, principal) : KeyFor(workspaceRoot, principal);
             if (!all.TryGetValue(key, out var tools))
                 all[key] = tools = new List<string>();
 
@@ -127,13 +139,23 @@ public sealed class ApprovalStore
         && File.Exists(Path.Combine(workspaceRoot, WorkspaceGuard.ReservedFolder, "permissions.json"));
 
     /// <summary>
-    /// The key an approval is filed under: the id the PATH gives, never the one the folder carries.
+    /// The key an approval is filed under: the id the PATH gives, never the one the folder carries - and, for a person
+    /// signed in to the service, their name after it (rule 5). Without a principal the key is what it always was, so
+    /// the approvals every earlier build wrote stay this account's; a key with one is a workspace an older build has
+    /// never seen, which it honours nothing for and keeps when it saves.
+    ///
+    /// <para>The name is escaped: an account called <c>bob+unwatched</c> would otherwise give a plain approval under
+    /// the key of bob's approvals for unwatched runs.</para>
     /// </summary>
-    private static string KeyFor(string workspaceRoot)
-        => WorkspaceInfo.IdFor(workspaceRoot).ToString("N");
+    private static string KeyFor(string workspaceRoot, string? principal)
+        => WorkspaceInfo.IdFor(workspaceRoot).ToString("N")
+           + (principal is null ? "" : "@" + Uri.EscapeDataString(principal.Trim().ToLowerInvariant()));
 
     /// <summary>The key the approvals for unwatched runs are filed under - see rule 4.</summary>
-    private static string UnwatchedKeyFor(string workspaceRoot) => KeyFor(workspaceRoot) + "+unwatched";
+    private static string UnwatchedKeyFor(string workspaceRoot, string? principal) => KeyFor(workspaceRoot, principal) + "+unwatched";
+
+    /// <summary>No principal (this account), or a name; an empty one is neither - see rule 5.</summary>
+    private static bool IsPrincipal(string? principal) => principal is null || !string.IsNullOrWhiteSpace(principal);
 
     private Dictionary<string, List<string>> Load()
     {

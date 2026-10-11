@@ -25,6 +25,28 @@ public sealed class DecisionIsolationTests
         Assert.False(approvals.Approves(remote with { RequiresExplicitAnswer = false }));
     }
 
+    /// <summary>
+    /// One engine's session approvals serve every run of the process - in the service, several people at once.
+    /// "Allow for this session" from one of them was a yes for all, and the account's own for every one of them.
+    /// </summary>
+    [Fact]
+    public void Remembered_approval_for_the_session_is_the_remembering_person_s()
+    {
+        using var fx = new EngineFixture();
+        var approvals = new SessionApprovals();
+        var ask = Ask(fx.PathOf("one"));
+
+        approvals.Remember(ask, principal: "alice");
+        approvals.Remember(Ask(fx.PathOf("two")));
+
+        Assert.True(approvals.Approves(ask, "ALICE"));
+        Assert.True(approvals.Approves(fx.PathOf("one"), "write_file", "alice"));
+        Assert.False(approvals.Approves(ask, "bob"));
+        Assert.False(approvals.Approves(ask), "A person's answer held for the account.");
+        Assert.False(approvals.Approves(Ask(fx.PathOf("two")), "alice"), "The account's answer held for a person.");
+        Assert.False(approvals.Approves(ask, " "), "An empty name was taken for the account.");
+    }
+
     [Fact]
     public async Task Cancelling_a_queued_request_does_not_replace_or_cancel_the_visible_one()
     {

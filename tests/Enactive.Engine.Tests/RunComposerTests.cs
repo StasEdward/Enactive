@@ -426,6 +426,101 @@ public sealed class RunComposerTests
         Assert.False(fx.Exists("digest.md"));
     }
 
+    // ── runs from the browser ───────────────────────────────────────────────
+
+    private static RunRequest FromBrowser(EngineFixture fx, string prompt, string? principal, int autonomy = 0, bool stage = false)
+        => new(fx.Workspace, prompt, IntentSource.Web, Stage: stage, Principal: principal) { Defaults = new(autonomy) };
+
+    /// <summary>
+    /// The service runs as one account for everybody signed in to it. A run from the browser is answered by what ITS
+    /// person allowed for good - not by another person's approval, nor by the account's own from the desktop.
+    /// </summary>
+    [Theory]
+    [InlineData("alice", false)]
+    [InlineData("bob", true)]
+    public async Task A_run_from_the_browser_is_answered_only_by_its_own_person_s_approvals(string principal, bool asked)
+    {
+        using var fx = new EngineFixture();
+        var approvals = TempApprovals();
+        approvals.Approve(fx.Root, "write_file", principal: "alice");
+        approvals.Approve(fx.Root, "write_file", unwatched: true);
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
+            Turn.Calls1("write_file", """{"path":"digest.md","content":"mail"}"""), Turn.Says("done")),
+            approvals, EngineFixture.WorkerWith("write_file"));
+        var person = new ScriptedDecisionHandler("deny");
+
+        await RunAsync(engine, FromBrowser(fx, "write the digest", principal), person);
+
+        Assert.Equal(asked, person.Requests.Any(r => r.Subject == "write_file"));
+        Assert.Equal(!asked, fx.Exists("digest.md"));
+    }
+
+    /// <summary>
+    /// A person in the browser is at a screen: their plain "Allow (workspace)" answers their run, as it does at the
+    /// command bar. Composed as a run nobody watches, it used only approvals for unwatched runs.
+    /// </summary>
+    [Fact]
+    public async Task A_run_from_the_browser_is_one_somebody_is_watching()
+    {
+        using var fx = new EngineFixture();
+        var approvals = TempApprovals();
+        approvals.Approve(fx.Root, "write_file", principal: "alice");
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
+            Turn.Calls1("write_file", """{"path":"digest.md","content":"mail"}"""), Turn.Says("done")),
+            approvals, EngineFixture.WorkerWith("write_file"));
+
+        await RunAsync(engine, FromBrowser(fx, "write the digest", "alice"), new ScriptedDecisionHandler("deny"));
+
+        Assert.True(fx.Exists("digest.md"));
+    }
+
+    /// <summary>Without a name, the run would be answered by the account's own approvals for whoever is signed in.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public async Task A_run_from_the_browser_that_names_nobody_is_refused_before_anything_starts(string? principal)
+    {
+        using var fx = new EngineFixture();
+        var request = FromBrowser(fx, "answer", principal);
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
+
+        Assert.Contains("must name who started it", RunComposer.Refusal(request));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => RunComposer.ComposeAsync(engine, request, fx.Decisions, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Watched, but its proposals would be kept in the service's memory: a closed tab leaves nobody to apply them and
+    /// a restart loses them, while the history says the changes were staged.
+    /// </summary>
+    [Fact]
+    public void A_run_from_the_browser_cannot_stage_yet()
+    {
+        using var fx = new EngineFixture();
+        Assert.Contains("cannot stage yet", RunComposer.Refusal(FromBrowser(fx, "answer", "alice", stage: true)));
+    }
+
+    /// <summary>
+    /// The browser on the local network is an operator of the machine and may run a shell when allowed to; a phone
+    /// never may (RemotePolicy). Folding the two into one source would take the shell from one or give it to the other.
+    /// </summary>
+    [Theory]
+    [InlineData(IntentSource.Web, true)]
+    [InlineData(IntentSource.Remote, false)]
+    public async Task A_run_from_the_browser_may_run_a_shell_and_one_from_a_phone_may_not(IntentSource source, bool ran)
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
+            Turn.Calls1("run_command", """{"command":"echo made> made.txt"}"""), Turn.Says("done")),
+            TempApprovals(), EngineFixture.WorkerWith("run_command"));
+        var request = new RunRequest(fx.Workspace, "make the file", source, Principal: "alice") { Defaults = new(2) };
+
+        await RunAsync(engine, request, new ScriptedDecisionHandler("allow"));
+
+        Assert.Equal(ran, fx.Exists("made.txt"));
+    }
+
     // ── tools ───────────────────────────────────────────────────────────────
 
     /// <summary>The console connected no MCP servers, so a role that reached one in the window reached nothing there.</summary>

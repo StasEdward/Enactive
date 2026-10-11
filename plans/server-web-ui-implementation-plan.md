@@ -127,6 +127,11 @@ Only the tests the step touches are run.
   `Enactive.Engine.Tests` for the composer: Web attended, shell allowed; Remote unchanged.
 - `ApprovalStore` gets `principal`; `RunRequest` gets `Principal` (desktop fills the Windows user name).
   Migration test: a pre-existing row is read as the desktop user's.
+  *Done differently:* the desktop and the console pass **no** principal - the file is in one Windows
+  account's profile, so its unnamed rows already are that account's and need no migration, and an older
+  build keeps reading them. A named principal gets its own escaped key; an empty one is refused, never
+  taken for the account. `SessionApprovals` got the same dimension (one engine serves every person of
+  the service). A `Web` run must name its principal, and `Stage` is refused for it until phase 3.
 
 **0.4 Leases** (A5)
 - `SettingsFolderLock` and `WorkspaceLease` over `Core/FileLock`. Taken by the window (settings lock at start,
