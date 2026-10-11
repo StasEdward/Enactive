@@ -1,0 +1,7 @@
+/* The skeleton's look. The brand palette (the gateway's wwwroot/brand) comes with the reading pages (plan 1.6). */
+:root { color-scheme: light dark; --page: #FAF8F5; --text: #101216; --accent: #FF5F26; }
+@media (prefers-color-scheme: dark) { :root { --page: #101216; --text: #F2F4F7; } }
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--page); color: var(--text); }
+.top { padding: 12px 16px; border-bottom: 2px solid var(--accent); }
+.mark { font-weight: 700; }
+main { padding: 16px; }

@@ -22,9 +22,9 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 
 ## Solution
 
-`Enactive.sln`, **13 product projects** (`net10.0`, pinned via `global.json`), plus three on the test side:
+`Enactive.sln`, **14 product projects** (`net10.0`, pinned via `global.json`), plus four on the test side:
 `tests/Enactive.Engine.Tests` (the engine's unit and scenario tests), `tests/Enactive.Remote.Gateway.Tests` (77, and they need a MySQL
-to run) and `tests/Enactive.Mcp.TestServer`.
+to run), `tests/Enactive.Server.Tests` (the service, on a test server) and `tests/Enactive.Mcp.TestServer`.
 
 The engine is dependency-light: `Core`/`Providers`/`Agents`/`App.Console` use **no external NuGet package the
 engine itself needs**; only `Workspace` (Microsoft.Data.Sqlite, SQLitePCLRaw, MySqlConnector), `Secrets`
@@ -46,6 +46,7 @@ tool need (`ToolArguments.ExpectedExitCodes`) lives in `Core.Tools`, not in `Too
 | `Enactive.Remote.Gateway` | The server side of remote access: the panel, the cursor over a run's events, the schema. See `REMOTE_OPERATIONS.md`. |
 | `Enactive.Remote.Host` | The machine-side agent that a gateway talks to. Remote access is **off** unless it is turned on. |
 | `Enactive.Application` | What a host does around a run that is neither the engine nor drawing (ADR 0002 §2): the background run group, answering a parked decision from the inbox, the policy of scheduled runs, completing an inline decision once, the order of a settings save, log filtering; and in `Projections/` what is computed from a run to show it (timeline, routing, model performance and work split, unfinished changes) with the small MVVM base they stand on. Shared by the window and the coming service; **no UI toolkit**, checked by `ApplicationLayerTests`. Phase 0 of the [server plan](../plans/server-web-ui-implementation-plan.md) moves the rest of the window's run control here. |
+| `Enactive.Server` | Enactive as a Windows service on the local network with a Blazor web UI (ADR 0002). HTTPS only, from `server.json` (listen addresses, subnets, host names, certificate - none defaulting open); one service per data folder. Under construction per the [server plan](../plans/server-web-ui-implementation-plan.md); tested in `tests/Enactive.Server.Tests`. |
 | `Enactive.App.Ui` | Avalonia desktop UI: `.axaml` views over view models (`ViewModels/`), with a small hand-written MVVM base in `Mvvm/`, app-wide styling in `Styles/Controls.axaml` and the palette in `Brand.cs`. |
 
 ## Tools
