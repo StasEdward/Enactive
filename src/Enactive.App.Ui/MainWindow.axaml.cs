@@ -39,7 +39,7 @@ namespace Enactive.App.Ui;
 
 /// <summary>Three-panel Enactive shell: Workspace + autonomy (left) · plan-step feed (center) ·
 /// AI status + decision card + artifacts (right). Reuses the engine unchanged.</summary>
-public sealed partial class MainWindow : Window, IDecisionHandler
+public sealed partial class MainWindow : Window, IDecisionPresenter
 {
     // ── Reusable singletons ──────────────────────────────────────────────────
     private readonly HttpClient _http = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
@@ -83,9 +83,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     // ── Run state ────────────────────────────────────────────────────────────
     private readonly ForegroundRunSlot _foreground = new();
-    private DecisionCompletion? _pendingDecision;
     private readonly SessionApprovals _sessionApprovals = new();
-    private readonly DecisionQueue _decisionQueue = new();
+    /// <summary>Asks this window's person what runs need answered, through the card (DecisionRouter).</summary>
+    private readonly DecisionRouter _decisions;
+    /// <summary>The question the card is showing, so a late "take it down" leaves a newer one alone.</summary>
+    private Guid? _shownDecision;
     // The live run's step cards, title, phase and step count - the same fold a run reopened from the history
     // is drawn from (RunFeed) - and the card views drawn from it.
     private RunFeed _feed = new();
@@ -157,6 +159,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         _log = new LogHub(minLevel: LogLevel.Debug, downstream: new ILogSink[] { _logFile });
         _settings = AppSettings.Load();
+        // The desktop's questions are its account's own: no principal (ApprovalStore, rule 5).
+        _decisions = new DecisionRouter(this, _sessionApprovals, ApprovalStore.Default);
 
         // A settings file the app cannot build from must not make the app unlaunchable. Saving is
         // validated now, but a file edited by hand — or written by an older build — can still be
@@ -362,7 +366,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             () => _registry.Entries,
             // The desktop's own handler. RemoteRunner wraps it rather than replacing it, so a
             // permission question from a remote run shows here as well as on the phone.
-            this,
+            _decisions,
             RemoteDatabasePath());
 
         // The service this handler belongs to, not whatever _remote is when the post runs. A restart sets _remote
@@ -528,7 +532,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private bool HasWorkInFlight() => InFlight.Any;
 
-    private WorkInFlight InFlight => new(_vm.IsBusy, _pendingDecision is not null, _background.Count, RemoteRunsInFlight);
+    private WorkInFlight InFlight => new(_vm.IsBusy, _decisions.IsPending, _background.Count, RemoteRunsInFlight);
 
     /// <summary>
     /// Runs a phone started that are still going. They die with the process exactly as a background
@@ -805,7 +809,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private async Task RunAsync(
         bool background, ResolvedTaskSpec? spec = null, Guid? taskId = null, RunCheckpoint? resume = null)
     {
-        if (_shuttingDown || (!background && _vm.IsBusy) || _pendingDecision is not null)
+        if (_shuttingDown || (!background && _vm.IsBusy) || _decisions.IsPending)
             return;
 
         // A resumed run's request comes from the checkpoint. The command bar is empty by then - the
@@ -899,7 +903,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     CurrentEngine(),
                     new RunRequest(workspace, text, IntentSource.CommandBar, taskId, resume, spec, Stage: _vm.StageChanges)
                         { Defaults = DefaultsOnScreen() },
-                    this, runCancellation.Token);
+                    _decisions, runCancellation.Token);
 
                 _staging = composed.Artifacts as StagingArtifactStore;
                 _disk = composed.Artifacts as DiskArtifactStore;
@@ -1352,7 +1356,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _vm.ResetUsage();
             _vm.Routing.Clear();
             _vm.SelectedTab = 0;
-            if (_pendingDecision is null) _vm.IsDecisionVisible = false;
+            if (!_decisions.IsPending) _vm.IsDecisionVisible = false;
             _vm.IsAgentVisible = false;
 
             _vm.StatusPhase = "Idle";
@@ -2383,109 +2387,49 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         ShowViewer("Project Memory", ProjectMemory.Render(runs, entries, workspace.RootPath));
     }
 
-    // ── IDecisionHandler: inline approval card ───────────────────────────────
-    public Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
-        => _decisionQueue.RequestAsync(request, ct, ShowDecisionAsync);
+    // ── IDecisionPresenter: the inline approval card ─────────────────────────
+    // Which answers are offered, what each remembers, one question at a time and a cancelled question never answered
+    // are the DecisionRouter's (Enactive.Application), where they are tested. The card only draws them.
 
-    private async Task<DecisionOutcome> ShowDecisionAsync(DecisionRequest request, CancellationToken ct)
-    {
-        var root = request.Action?.WorkingDirectory;
-        // What was already approved for this session or this workspace never reaches this card: every run
-        // is composed behind RememberedApprovals, which answers it for watched and unwatched runs alike.
-
-        var tcs = new DecisionCompletion();
-
-        // Cancelling used to complete the task and stop there: the card stayed on screen and
-        // _pendingDecision stayed set, so the NEXT run returned immediately from RunAsync because
-        // "a decision is pending" — a decision belonging to a task that had already been stopped.
-        // The lifetime of the card is now tied to the lifetime of the request, in one place.
-        using var registration = ct.Register(() => tcs.Cancel(ct));
-        try
+    Task IDecisionPresenter.ShowAsync(DecisionRequest request, IReadOnlyList<DecisionChoice> choices, Func<DecisionChoice, bool> answer)
+        => Dispatcher.UIThread.InvokeAsync(() =>
         {
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            _shownDecision = request.Id;
+            var root = request.Action?.WorkingDirectory;
+            _vm.DecisionText = root is null ? request.Topic : $"{request.Topic} — {root} (run {request.Action!.RunId})";
+            // The full action, not the summary: this is what the click authorises.
+            _vm.DecisionDetail = request.FullText;
+            _vm.DecisionOptions.Clear();
+            foreach (var choice in choices)
             {
-                // Cancelled before the post ran: do not put a card on screen for a dead request.
-                if (tcs.Task.IsCompleted)
-                    return;
-
-                _pendingDecision = tcs;
-
-                // Each button belongs to this request, independently of the selected workspace.
-                var options = new List<DecisionOptionViewModel>();
-                foreach (var option in request.Options)
+                var chosen = choice;
+                // Taken down at the click, not when the run gets round to it.
+                _vm.DecisionOptions.Add(new DecisionOptionViewModel(chosen.Label, () =>
                 {
-                    var captured = option;
-                    options.Add(new DecisionOptionViewModel(captured.Label, () => ResolveDecision(tcs, captured.Id)));
-                }
-
-                // Remember-this-approval shortcuts, so the user is not clicking Allow for every command.
-                // Only for a request an approval can answer: one that names its tool and has an "allow" to give.
-                if (!request.RequiresExplicitAnswer && !string.IsNullOrEmpty(request.Subject) && root is not null
-                    && request.Options.Any(o => o.Id == RememberedApprovals.AllowOptionId))
-                {
-                    var subject = request.Subject;
-                    const string allowId = RememberedApprovals.AllowOptionId;
-                    options.Add(new DecisionOptionViewModel(
-                        "Allow (session)", () => ResolveDecision(tcs, allowId, () => _sessionApprovals.Remember(request))));
-
-                    // Not offered for a shell: that approval would outlive the process, and what it
-                    // grants is arbitrary command execution rather than one named action.
-                    // Two, because they grant two different things: the first holds while somebody is at the
-                    // screen, the second lets runs in the background and on a schedule use the tool too - said on
-                    // its button, so nobody gives it by clicking the first (ApprovalStore, rule 4).
-                    if (request.MayBeRemembered)
-                    {
-                        options.Add(new DecisionOptionViewModel(
-                            "Allow (workspace)", () => ResolveDecision(tcs, allowId, () => ApprovalStore.Default.Approve(root, subject))));
-                        options.Add(new DecisionOptionViewModel(
-                            "Allow (workspace, unwatched runs too)",
-                            () => ResolveDecision(tcs, allowId, () => ApprovalStore.Default.Approve(root, subject, unwatched: true))));
-                    }
-                }
-
-                {
-                    _vm.DecisionText = root is null ? request.Topic : $"{request.Topic} — {root} (run {request.Action!.RunId})";
-                    // The full action, not the summary: this is what the click authorises.
-                    _vm.DecisionDetail = request.FullText;
-                    _vm.DecisionOptions.Clear();
-                    foreach (var option in options)
-                        _vm.DecisionOptions.Add(option);
-                    _vm.IsDecisionVisible = true;
-                }
-
-            });
-
-            return await tcs.Task.ConfigureAwait(false);
+                    if (answer(chosen)) ClearDecisionCard(request.Id);
+                }));
             }
-            finally { await Dispatcher.UIThread.InvokeAsync(() => ClearDecision(tcs)); }
-        }
+            _vm.IsDecisionVisible = true;
+        }).GetTask();
 
-        private void ResolveDecision(DecisionCompletion tcs, string optionId, Action? remember = null)
-        {
-            if (!ReferenceEquals(_pendingDecision, tcs)) return;
-            tcs.Resolve(optionId, remember);
-            ClearDecision(tcs);
-        }
+    Task IDecisionPresenter.ClearAsync(DecisionRequest request)
+        => Dispatcher.UIThread.InvokeAsync(() => ClearDecisionCard(request.Id)).GetTask();
 
         /// <summary>
         /// Takes THIS request's card off screen. Checking which request it belongs to matters: by the
         /// time a cancellation is dispatched, a later run may already have put its own card up, and
         /// clearing that one would leave the new run waiting on something the user can no longer answer.
         /// </summary>
-        private void ClearDecision(DecisionCompletion? tcs)
+        private void ClearDecisionCard(Guid request)
         {
-            if (tcs is not null && !ReferenceEquals(_pendingDecision, tcs))
+            if (_shownDecision != request)
                 return;
 
-            _pendingDecision = null;
-
-
-            {
-                _vm.IsDecisionVisible = false;
-                _vm.DecisionOptions.Clear();
-                _vm.DecisionText = string.Empty;
-                _vm.DecisionDetail = string.Empty;
-            }
+            _shownDecision = null;
+            _vm.IsDecisionVisible = false;
+            _vm.DecisionOptions.Clear();
+            _vm.DecisionText = string.Empty;
+            _vm.DecisionDetail = string.Empty;
         }
 
         // Workspace-scoped approvals live OUTSIDE the workspace — see ApprovalStore in Core, which is
