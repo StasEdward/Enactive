@@ -34,7 +34,7 @@ internal sealed class WebQuestions : IDecisionPresenter
     /// </summary>
     public AnsweredQuestion? LastAnswered => _answered;
 
-    /// <summary>A question went up or came down, or was answered. Raised on the run's thread; a page marshals it to its own.</summary>
+    /// <summary>A question went up or came down, or was answered. Raised on the run's thread, or on the answering caller's (Answered); a page marshals it to its own.</summary>
     public event Action? Changed;
 
     /// <summary>Records who answered a question, once the run has taken the answer (RunControl.Answer).</summary>

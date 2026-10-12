@@ -182,7 +182,8 @@ test('two people answer one question at once and the second is told it was answe
   const [taken, other] = (await told(alice.page).count()) === 1 ? ['bob', alice.page] : ['alice', bob.page];
   await expect(told(other)).toHaveText(`Answered by ${taken}: Allow.`);
 
-  // And the run went on once: it ended, and its step says the question was answered once.
+  // And the run ended with the one answer. The scripted engine waits on one decision however many answers are taken, so
+  // this shows the run ended once; that only one answer was taken is shown by exactly one page being told, above.
   await expect(stop(alice.page)).toBeDisabled();
   const step = alice.page.getByRole('tabpanel').locator('li.step').filter({ hasText: 'write the digest' });
   await step.locator('button[aria-expanded]').click();
