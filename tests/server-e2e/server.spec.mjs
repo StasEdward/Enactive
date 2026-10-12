@@ -271,23 +271,52 @@ test('a question in the runs column holds the keyboard until it is answered, the
 test('an admin adds an account on the accounts page, and it signs in', async ({ browser }) => {
   const ada = await signedIn(browser, 'ada');
   await ada.page.getByRole('link', { name: 'Accounts' }).click();
+  await expect(ada.page).toHaveURL(/\/accounts$/);
   await expect(ada.page.getByText('trust each other')).toBeVisible();
 
-  const add = ada.page.locator('form.start');
-  await add.getByLabel('Name').fill('carl');
-  await add.getByLabel('Role').selectOption('Viewer');
-  await add.getByLabel('Password (12 characters or more)').fill(password);
-  await add.getByLabel('Again').fill(password);
-  await add.getByRole('button', { name: 'Add' }).click();
-  await expect(ada.page.getByText('Added carl (Viewer).')).toBeVisible();
+  // The last administrator: Disable is offered, and the service refuses it.
+  await ada.page.getByRole('button', { name: 'Edit ada' }).click();
+  let dialog = ada.page.getByRole('dialog', { name: 'ada' });
+  await dialog.getByRole('button', { name: 'Disable' }).click();
+  await expect(dialog.getByRole('alert')).toHaveText('That is the last administrator; make another one first.');
+  await dialog.getByRole('button', { name: 'Close' }).click();
+  await expect(dialog).toBeHidden();
+
+  await ada.page.getByRole('button', { name: 'Add', exact: true }).click();
+  dialog = ada.page.getByRole('dialog', { name: 'Add an account' });
+  await dialog.getByLabel('Name').fill('carl');
+  await dialog.getByLabel('Role').selectOption('Viewer');
+  const first = dialog.getByLabel('Password (12 characters or more)');
+  const again = dialog.getByLabel('Again');
+  // Typed differently: refused, and both boxes are empty again - the name and the role stay for the next try.
+  await first.fill(password);
+  await again.fill(password + '!');
+  await dialog.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toHaveText('The two passwords did not match; nothing was changed.');
+  await expect(first).toHaveValue('');
+  await expect(again).toHaveValue('');
+  await expect(dialog.getByLabel('Name')).toHaveValue('carl');
+  await expect(first).toHaveAttribute('autocomplete', 'new-password');
+
+  await first.fill(password);
+  await again.fill(password);
+  await dialog.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(ada.page.getByRole('main').getByRole('status')).toHaveText('Added carl (Viewer).');
+  await expect(dialog).toBeHidden();
+  await expect(ada.page.getByRole('list', { name: 'Accounts' }).getByText('carl', { exact: true })).toBeVisible();
 
   const carl = await signedIn(browser, 'carl');
   await expect(carl.page.getByRole('link', { name: 'Accounts' })).toHaveCount(0);
+  // The old address leads to the new one, which refuses a Viewer as every Admin page does.
   await carl.page.goto('/admin/users');
+  await expect(carl.page).toHaveURL(/\/denied\?ReturnUrl=%2Faccounts$/);
+  await expect(carl.page.getByText("Your account's role does not include this page.")).toBeVisible();
   await expect(carl.page.getByRole('heading', { name: 'Accounts' })).toHaveCount(0);
 
   await ada.page.getByRole('link', { name: 'Audit' }).click();
-  await expect(ada.page.getByText('account add').first()).toBeVisible();
+  await expect(ada.page).toHaveURL(/\/audit$/);
+  const added = ada.page.getByRole('row').filter({ hasText: 'account add' }).first();
+  await expect(added.getByRole('cell', { name: 'carl (Viewer)' })).toBeVisible();
   await ada.context.close();
   await carl.context.close();
 });
@@ -295,8 +324,12 @@ test('an admin adds an account on the accounts page, and it signs in', async ({ 
 test('an operator is offered no accounts page and is refused it', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
   await expect(page.getByRole('link', { name: 'Accounts' })).toHaveCount(0);
-  await page.goto('/admin/users');
-  await expect(page.getByRole('heading', { name: 'Accounts' })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Audit' })).toHaveCount(0);
+  for (const address of ['/accounts', '/admin/users', '/audit', '/admin/audit']) {
+    await page.goto(address);
+    await expect(page.getByText("Your account's role does not include this page.")).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^(Accounts|Audit)$/ })).toHaveCount(0);
+  }
   await context.close();
 });
 
