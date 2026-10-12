@@ -27,9 +27,10 @@ internal sealed record TemplateDraft(TaskTemplate Template, bool IdEditable, IRe
 /// (SchedulePolicy), asked of the settings as they are now. A form with its own idea of valid accepts schedules the
 /// scheduler then refuses at three in the morning.</para>
 ///
-/// <para>Only the workspaces the service knows; the role checked at each call; every change audited.</para>
+/// <para>Only the workspaces the service knows under its roots (KnownWorkspaces); the role checked at each call; every
+/// change audited.</para>
 /// </summary>
-internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunControl runs)
+internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunControl runs, KnownWorkspaces workspaces)
 {
     /// <summary>
     /// The library as the window shows it (TemplatesViewModel): this workspace's templates, the service account's global
@@ -209,10 +210,10 @@ internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunCo
     private const string CouldNotWrite = "The service could not write its schedules file, so nothing was changed. Try again in a moment.";
 
     private WorkspaceEntry? Reading(ClaimsPrincipal user, string root)
-        => ServerAuth.StillValid(users, user) is { Role: >= Role.Viewer } ? engine.Workspaces.Find(root) : null;
+        => ServerAuth.StillValid(users, user) is { Role: >= Role.Viewer } ? workspaces.Find(root) : null;
 
     private WorkspaceEntry? Writing(ClaimsPrincipal user, string root)
-        => ServerAuth.StillValid(users, user) is { Role: >= Role.Operator } ? engine.Workspaces.Find(root) : null;
+        => ServerAuth.StillValid(users, user) is { Role: >= Role.Operator } ? workspaces.Find(root) : null;
 
     private string Who(ClaimsPrincipal user) => user.Identity?.Name ?? "?";
 

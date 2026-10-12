@@ -21,10 +21,10 @@ internal sealed record InboxEntry(string Workspace, InboxItem Item, ParkedDecisi
 /// background runs, and questions a run stopped at because nobody answered in time. A question is answered here by the
 /// run's owner or any Operator, and the run carries on under the same task (InboxDecisions, as the window's inbox).
 ///
-/// <para>Only the workspaces the service knows, with the role checked at each call - as for the history. A Viewer reads;
+/// <para>Only the workspaces the service knows under its roots (KnownWorkspaces), with the role checked at each call - as for the history. A Viewer reads;
 /// what is read and what is not is the service's, the same for everybody, so only an Operator changes it.</para>
 /// </summary>
-internal sealed class ServerInbox(UserStore users, ServerEngine engine, IRunControl runs)
+internal sealed class ServerInbox(UserStore users, KnownWorkspaces workspaces, IRunControl runs)
 {
     /// <summary>
     /// Something read, marked read or answered: the unread count is no longer what it was. The rail's badge listens, as the
@@ -40,7 +40,7 @@ internal sealed class ServerInbox(UserStore users, ServerEngine engine, IRunCont
             return [];
 
         var all = new List<InboxEntry>();
-        foreach (var workspace in engine.Workspaces.Entries)
+        foreach (var workspace in workspaces.All)
         {
             IReadOnlyList<InboxItem> items;
             IReadOnlyList<RunSummary> summaries;
@@ -73,7 +73,7 @@ internal sealed class ServerInbox(UserStore users, ServerEngine engine, IRunCont
     /// </summary>
     public async Task<IReadOnlyList<RunEventViewModel>?> TimelineAsync(ClaimsPrincipal user, string workspace, Guid runId, CancellationToken ct)
     {
-        if (ServerAuth.StillValid(users, user) is null || engine.Workspaces.Find(workspace) is not { } known)
+        if (ServerAuth.StillValid(users, user) is null || workspaces.Find(workspace) is not { } known)
             return null;
         RunRecord? run;
         try { run = await RunStoreFactory.Create(WorkspaceInfo.For(known.RootPath)).LoadAsync(runId, ct); }
@@ -86,7 +86,7 @@ internal sealed class ServerInbox(UserStore users, ServerEngine engine, IRunCont
     {
         if (MayChange(user) is { } refused)
             return refused;
-        if (engine.Workspaces.Find(workspace) is not { } known)
+        if (workspaces.Find(workspace) is not { } known)
             return "The service does not know that folder as a workspace.";
         await InboxStoreFactory.Create(WorkspaceInfo.For(known.RootPath)).MarkReadAsync(itemId, ct);
         Changed?.Invoke();
@@ -102,7 +102,7 @@ internal sealed class ServerInbox(UserStore users, ServerEngine engine, IRunCont
     {
         if (MayChange(user) is { } refused)
             return refused;
-        foreach (var workspace in engine.Workspaces.Entries)
+        foreach (var workspace in workspaces.All)
         {
             try { await InboxStoreFactory.Create(WorkspaceInfo.For(workspace.RootPath)).MarkAllReadAsync(ct); }
             catch (Exception) when (!ct.IsCancellationRequested) { /* see above */ }
@@ -121,7 +121,7 @@ internal sealed class ServerInbox(UserStore users, ServerEngine engine, IRunCont
             return ("Your session has ended. Sign in again.", null);
         if (account.Role < Role.Operator)
             return ("Your role does not include the right to answer a run's question.", null);
-        if (engine.Workspaces.Find(workspace) is not { } known)
+        if (workspaces.Find(workspace) is not { } known)
             return ("The service does not know that folder as a workspace.", null);
         if ((await ListAsync(user, ct)).FirstOrDefault(e => e.Item.Id == itemId && e.Workspace == known.RootPath) is not { Waiting: { } waiting } entry)
             return ("This question is no longer waiting - it was answered already, or its run has ended.", null);

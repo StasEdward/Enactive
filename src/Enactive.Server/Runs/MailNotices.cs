@@ -24,6 +24,12 @@ internal sealed class MailNotices(ServerEngine engine, ServerOptions options, Se
     public static readonly TimeSpan Every = TimeSpan.FromMinutes(1);
 
     private readonly Func<Core.Mail.MailAccount, MimeMessage, CancellationToken, Task> _send = send ?? Tools.MailSending.SendAsync;
+
+    /// <summary>
+    /// The workspaces whose news is mailed: those the browser may see (KnownWorkspaces). The registry alone also holds
+    /// folders outside the roots - a desktop's under the same account - whose inbox nobody on the service may read.
+    /// </summary>
+    private readonly KnownWorkspaces _workspaces = new(engine, new WorkspaceRoots(options.WorkspaceRoots));
     private string StateFile => Path.Combine(folders.Data, "notices.json");
 
     /// <summary>
@@ -73,7 +79,7 @@ internal sealed class MailNotices(ServerEngine engine, ServerOptions options, Se
         var state = ReadState();
         var mailed = state.Mailed ?? [];
         var fresh = new List<(string Workspace, InboxItem Item)>();
-        foreach (var workspace in engine.Workspaces.Entries)
+        foreach (var workspace in _workspaces.All)
         {
             try
             {

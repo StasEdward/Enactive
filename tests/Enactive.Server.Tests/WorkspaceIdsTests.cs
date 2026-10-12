@@ -19,7 +19,7 @@ public sealed class WorkspaceIdsTests : IDisposable
     {
         Directory.CreateDirectory(_root);
         _engine = new ServerEngine(_root, new FileLogSink(Path.Combine(_root, "logs")));
-        _ids = new WorkspaceIds(_engine);
+        _ids = new WorkspaceIds(new KnownWorkspaces(_engine, new WorkspaceRoots([_root])));
     }
 
     public void Dispose()

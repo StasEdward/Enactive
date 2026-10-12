@@ -28,21 +28,22 @@ internal sealed record PastRun(
 /// <summary>
 /// Reading the history of the service's workspaces (server plan 1.6), for anybody signed in.
 ///
-/// <para><b>Only the workspaces the service knows</b> - the folders it has run in, its workspace list. A Viewer reads
-/// runs; a Viewer naming any folder on the server's disks would read whatever history and files sat under it, which
-/// is reading the server's disks. Checked here, with the role, at each call (ADR 0002 §5) - not by the pages.</para>
+/// <para><b>Only the workspaces the service knows, under its roots</b> (KnownWorkspaces) - the folders it has run in, its
+/// workspace list. A Viewer reads runs; a Viewer naming any folder on the server's disks would read whatever history and
+/// files sat under it, which is reading the server's disks. Checked here, with the role, at each call (ADR 0002 §5) - not
+/// by the pages.</para>
 /// </summary>
-internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunControl runs, WorkspaceRoots roots)
+internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunControl runs, KnownWorkspaces workspaces)
 {
     private readonly RunHistoryService _history = new(() => 0);
 
     /// <summary>The workspaces the service has run in, newest first.</summary>
     public IReadOnlyList<WorkspaceEntry> Workspaces(ClaimsPrincipal user)
-        => CanRead(user) ? engine.Workspaces.Entries.OrderByDescending(e => e.LastOpenedAt).ToList() : [];
+        => CanRead(user) ? workspaces.All.OrderByDescending(e => e.LastOpenedAt).ToList() : [];
 
     /// <summary>The workspace as the service knows it, or null - for somebody who may read, a folder it knows.</summary>
     public WorkspaceEntry? Workspace(ClaimsPrincipal user, string root)
-        => CanRead(user) ? engine.Workspaces.Find(root) : null;
+        => CanRead(user) ? workspaces.Find(root) : null;
 
     public async Task<(HistoryList? List, string? Problem)> ListAsync(ClaimsPrincipal user, string root, CancellationToken ct)
     {
@@ -279,7 +280,7 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
 
     /// <summary>A known workspace, for an Operator whose account still speaks for them; null otherwise.</summary>
     private WorkspaceEntry? Operating(ClaimsPrincipal user, string root)
-        => ServerAuth.StillValid(users, user) is { Role: >= Role.Operator } ? engine.Workspaces.Find(root) : null;
+        => ServerAuth.StillValid(users, user) is { Role: >= Role.Operator } ? workspaces.Find(root) : null;
 
     private string NotOperating(ClaimsPrincipal user)
         => ServerAuth.StillValid(users, user) is not { } account ? "Your session has ended. Sign in again."
@@ -313,7 +314,7 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
 
         // Before the registry is asked: its SaveSettings lists any folder it is given, so a post naming a path on the
         // server's disks would have made it one of the workspaces the service shows (and reads) to everybody.
-        if (engine.Workspaces.Find(root) is not { } known)
+        if (workspaces.Find(root) is not { } known)
             return "The service does not know that folder as a workspace.";
 
         // A level the slider has no position for is refused, not clamped: the window cannot send one, so a page that does
@@ -347,8 +348,8 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         if (ServerAuth.StillValid(users, user) is not { Role: >= Role.Operator })
             return ([], "Your role does not include adding workspaces.");
         if (string.IsNullOrWhiteSpace(folder))
-            return (roots.All, roots.All.Count == 0 ? roots.Refusal("") : null);
-        return roots.Refusal(folder) is { } refused ? ([], refused) : (roots.Below(folder), null);
+            return (workspaces.Roots.All, workspaces.Roots.All.Count == 0 ? workspaces.Roots.Refusal("") : null);
+        return workspaces.Roots.Refusal(folder) is { } refused ? ([], refused) : (workspaces.Roots.Below(folder), null);
     }
 
     /// <summary>Makes a folder under the roots one of the service's workspaces - where its runs, history and inbox are.</summary>
@@ -356,7 +357,7 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
     {
         if (ServerAuth.StillValid(users, user) is not { Role: >= Role.Operator } account)
             return "Your role does not include adding workspaces.";
-        if (roots.Refusal(folder) is { } refused)
+        if (workspaces.Roots.Refusal(folder) is { } refused)
             return refused;
         if (!Directory.Exists(folder))
             return $"No such folder: {folder}.";

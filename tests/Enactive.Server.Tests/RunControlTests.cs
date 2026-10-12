@@ -415,7 +415,7 @@ public sealed class RunControlTests : IDisposable
     {
         var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
         engine.Workspaces.Touch(_workspace);
-        return new ServerInbox(_users, engine, control);
+        return new ServerInbox(_users, new KnownWorkspaces(engine, new WorkspaceRoots([_root])), control);
     }
 
     /// <summary>
@@ -476,7 +476,7 @@ public sealed class RunControlTests : IDisposable
         var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
         engine.Workspaces.Touch(_workspace);
         engine.Workspaces.Touch(other);
-        var inbox = new ServerInbox(_users, engine, _control);
+        var inbox = new ServerInbox(_users, new KnownWorkspaces(engine, new WorkspaceRoots([_root])), _control);
         await FiledAsync(_workspace);
         await FiledAsync(other);
         await FiledAsync(other);
@@ -598,7 +598,7 @@ public sealed class RunControlTests : IDisposable
         }
         engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
         engine.Workspaces.Touch(_workspace);
-        return new ServerHistory(_users, engine, _control, new WorkspaceRoots([_root]));
+        return new ServerHistory(_users, engine, _control, new KnownWorkspaces(engine, new WorkspaceRoots([_root])));
     }
 
     private Enactive.Core.History.RunRecord Recorded(string request, params string[] artifacts)
@@ -1020,7 +1020,7 @@ public sealed class RunControlTests : IDisposable
         var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
         engine.Workspaces.Touch(_workspace);
         engine.Workspaces.SaveSettings(_workspace, 2, null, true);
-        var executor = new EngineExecutor(engine, new ServerStaging(_users, engine));
+        var executor = new EngineExecutor(engine, new ServerStaging(_users, new KnownWorkspaces(engine, new WorkspaceRoots([_root]))));
 
         var refusal = executor.BackgroundRefusal(_workspace, "alice");
 

@@ -39,7 +39,7 @@ public sealed class MailNoticesTests : IDisposable
     }
 
     private MailNotices Notices(params string[] to) => new(_engine,
-        new ServerOptions { NoticeRecipients = to, HostNames = ["enactive.lab.local"], Listen = ["0.0.0.0:8443"] },
+        new ServerOptions { WorkspaceRoots = [_root], NoticeRecipients = to, HostNames = ["enactive.lab.local"], Listen = ["0.0.0.0:8443"] },
         new ServerFolders(_root), NullLogger<MailNotices>.Instance,
         (_, message, _) => { _sent.Add(message); return Task.CompletedTask; });
 

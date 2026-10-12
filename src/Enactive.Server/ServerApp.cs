@@ -156,6 +156,8 @@ internal static class ServerApp
             sp.GetRequiredService<ILogger<Runs.RunControl>>(), TimeSpan.FromMinutes(options.QuestionWaitMinutes),
             sp.GetRequiredService<Runs.WorkspaceRoots>()));
         services.AddSingleton(new Runs.WorkspaceRoots(options.WorkspaceRoots));
+        // Every page's lookup of a workspace: known to the service and under the roots.
+        services.AddSingleton<Runs.KnownWorkspaces>();
         services.AddSingleton<Runs.ServerHistory>();
         services.AddSingleton<Runs.WorkspaceIds>();
         services.AddSingleton<Runs.ServerInbox>();

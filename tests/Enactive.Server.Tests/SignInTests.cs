@@ -36,7 +36,9 @@ public sealed partial class SignInTests : IAsyncLifetime
         var options = new ServerOptions
         {
             Listen = ["0.0.0.0:8443"], AllowedSubnets = ["10.20.0.0/16"], HostNames = ["localhost"],
-            Certificate = new CertificateOptions(Path: "server.pfx")
+            Certificate = new CertificateOptions(Path: "server.pfx"),
+            // The workspaces the old addresses name are made under the test's folder: the browser's are only those under the roots.
+            WorkspaceRoots = [_root]
         };
         _app = ServerApp.Build([], options, _root, certificate: null, b =>
         {
@@ -309,6 +311,34 @@ public sealed partial class SignInTests : IAsyncLifetime
         var unknown = await browser.GetAsync("/history?ws=" + Uri.EscapeDataString(Path.Combine(_root, "elsewhere")));
         Assert.Equal("/", unknown.Headers.Location!.OriginalString);
         Assert.Equal("/", (await browser.GetAsync("/workspaces")).Headers.Location!.OriginalString);
+    }
+
+    /// <summary>
+    /// A folder the service's registry knows but that is not under its roots - a desktop's under the same account, or one
+    /// left after the roots were narrowed - is not the browser's: an old address naming it carries no workspace on, and
+    /// lands where a folder the service never knew does.
+    /// </summary>
+    [Fact]
+    public async Task An_old_address_naming_a_known_folder_outside_the_roots_names_no_workspace()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "enactive-signin-outside", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        try
+        {
+            _app.Services.GetRequiredService<Runs.ServerEngine>().Workspaces.Touch(outside);
+            var browser = NewBrowser();
+            await SignInAsync(browser, "alice", Password);
+
+            var ws = Uri.EscapeDataString(outside);
+            Assert.Equal("/", (await browser.GetAsync($"/history?ws={ws}")).Headers.Location!.OriginalString);
+            Assert.Equal("/", (await browser.GetAsync($"/history/run?ws={ws}&id={Guid.NewGuid()}")).Headers.Location!.OriginalString);
+            Assert.Equal("/proposals", (await browser.GetAsync($"/proposals/view?ws={ws}&set={Guid.NewGuid():N}")).Headers.Location!.OriginalString);
+            Assert.Equal("/templates", (await browser.GetAsync($"/library/template?ws={ws}&id=digest")).Headers.Location!.OriginalString);
+        }
+        finally
+        {
+            try { Directory.Delete(outside, recursive: true); } catch { /* a temp folder */ }
+        }
     }
 
     /// <summary>

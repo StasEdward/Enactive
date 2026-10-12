@@ -43,7 +43,7 @@ public sealed class ServerLibraryTests : IDisposable
         // The runs' real door (RunControl checks the role and the folder), over an engine that ends a run at once.
         _runs = new RunControl(_users, new RunQueue(maxActive: 2), new EndsAtOnce(Path.Combine(_root, "permissions.json")),
             NullLogger<RunControl>.Instance);
-        _library = new ServerLibrary(_users, _engine, _runs);
+        _library = new ServerLibrary(_users, _engine, _runs, new KnownWorkspaces(_engine, new WorkspaceRoots([_root])));
     }
 
     public void Dispose()

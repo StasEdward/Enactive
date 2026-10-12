@@ -33,7 +33,10 @@ public abstract class ComponentHost : BunitContext
         Users.Add("alice", Password, Role.Operator);
         Users.Add("vera", Password, Role.Viewer);
 
-        ServerApp.AddServices(Services, new ServerOptions(), data);
+        // The service's workspaces are only those under its roots (KnownWorkspaces). Every test's folders are made under
+        // the temp folder, so that is the root unless a test names its own (registered after, it wins); with none, no
+        // page would have a workspace to show.
+        ServerApp.AddServices(Services, new ServerOptions { WorkspaceRoots = [Path.GetTempPath()] }, data);
         // Registered after the server's, so these win: a run that ends at once instead of the engine (which would
         // compose a model from settings nobody wrote here), and a fixed signed-in person instead of the circuit's.
         Services.AddSingleton<IRunExecutor>(new EndsAtOnce(new ApprovalStore(Path.Combine(data, "permissions.json"))));

@@ -28,7 +28,7 @@ public sealed class ServerReportsTests : IDisposable
         _users.Add("vera", "correct horse battery", Role.Viewer);
         _engine = new ServerEngine(_root, new FileLogSink(Path.Combine(_root, "logs")));
         _engine.Workspaces.Touch(_workspace);
-        _reports = new ServerReports(_users, _engine, Probe);
+        _reports = new ServerReports(_users, new KnownWorkspaces(_engine, new WorkspaceRoots([_root])), Probe);
     }
 
     public void Dispose()

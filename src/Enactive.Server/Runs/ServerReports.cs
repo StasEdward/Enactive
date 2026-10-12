@@ -8,12 +8,12 @@ using Enactive.Server.Accounts;
 /// The two reports the window shows a workspace as in its viewer - the Timeline (its project memory) and the Environment
 /// (the machine it runs on) - for anybody signed in, as the rail offers them; in the window's words (WorkspaceReports).
 ///
-/// <para><b>Only the workspaces the service knows</b>, as the history is read (ServerHistory): a Viewer naming any folder
+/// <para><b>Only the workspaces the service knows, under its roots</b> (KnownWorkspaces), as the history is read (ServerHistory): a Viewer naming any folder
 /// would read whatever memory sat under it, and probe git in it. The environment is the service's own machine, probed now
 /// - a read, but one that runs short commands (git, docker, wsl), so a page asks for it once per workspace, not on every
 /// redraw.</para>
 /// </summary>
-internal sealed class ServerReports(UserStore users, ServerEngine engine, ProbeEnvironment probe)
+internal sealed class ServerReports(UserStore users, KnownWorkspaces workspaces, ProbeEnvironment probe)
 {
     /// <summary>The workspace's project memory, or why it is not shown.</summary>
     public async Task<(string? Text, string? Problem)> TimelineAsync(ClaimsPrincipal user, string root, CancellationToken ct)
@@ -28,7 +28,7 @@ internal sealed class ServerReports(UserStore users, ServerEngine engine, ProbeE
             : (null, Why(user));
 
     private string? Known(ClaimsPrincipal user, string root)
-        => ServerAuth.StillValid(users, user) is { Role: >= Role.Viewer } ? engine.Workspaces.Find(root)?.RootPath : null;
+        => ServerAuth.StillValid(users, user) is { Role: >= Role.Viewer } ? workspaces.Find(root)?.RootPath : null;
 
     private string Why(ClaimsPrincipal user)
         => ServerAuth.StillValid(users, user) is null

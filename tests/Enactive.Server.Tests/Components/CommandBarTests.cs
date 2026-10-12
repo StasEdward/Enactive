@@ -235,7 +235,7 @@ public sealed class CommandBarTests : ComponentHost
     public void Run_in_background_in_a_folder_that_stages_is_refused_under_the_bar()
     {
         var workspace = Known("project", stage: true);
-        var composer = new EngineExecutor(Engine, new ServerStaging(Users, Engine));
+        var composer = new EngineExecutor(Engine, new ServerStaging(Users, Services.GetRequiredService<KnownWorkspaces>()));
         _executor.RefuseBackground = root => composer.BackgroundRefusal(root, "alice");
         var bar = Bar("alice", workspace);
 

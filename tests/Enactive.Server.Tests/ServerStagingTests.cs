@@ -31,7 +31,7 @@ public sealed class ServerStagingTests : IDisposable
         _users.Add("vera", "correct horse battery", Role.Viewer);
         _engine = new ServerEngine(_root, new FileLogSink(Path.Combine(_root, "logs")));
         _engine.Workspaces.Touch(_workspace);
-        _staging = new ServerStaging(_users, _engine);
+        _staging = new ServerStaging(_users, new KnownWorkspaces(_engine, new WorkspaceRoots([_root])));
     }
 
     public void Dispose()
@@ -97,8 +97,8 @@ public sealed class ServerStagingTests : IDisposable
     [Fact]
     public async Task Proposals_outlive_the_process_that_kept_them()
     {
-        var folder = await StagedAsync(new ServerStaging(_users, _engine));
-        var afterRestart = new ServerStaging(_users, _engine);
+        var folder = await StagedAsync(new ServerStaging(_users, new KnownWorkspaces(_engine, new WorkspaceRoots([_root]))));
+        var afterRestart = new ServerStaging(_users, new KnownWorkspaces(_engine, new WorkspaceRoots([_root])));
         var id = Path.GetFileName(folder);
 
         var change = afterRestart.Open(As("alice"), _workspace, id).Files.Single().Id;

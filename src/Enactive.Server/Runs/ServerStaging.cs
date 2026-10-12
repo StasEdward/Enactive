@@ -27,7 +27,7 @@ public sealed record StagedFile(Guid Id, string Path, bool IsNew, bool Applied, 
 /// first, the file as it was when proposed, later proposals rejected before the ones they build on - are the store's
 /// own (StagingArtifactStore.Reopen), not a copy here.</para>
 /// </summary>
-internal sealed class ServerStaging(UserStore users, ServerEngine engine)
+internal sealed class ServerStaging(UserStore users, KnownWorkspaces workspaces)
 {
     private const string HeaderName = "run.json";
 
@@ -87,7 +87,7 @@ internal sealed class ServerStaging(UserStore users, ServerEngine engine)
         if (ServerAuth.StillValid(users, user) is null)
             return [];
         var sets = new List<StagedSet>();
-        foreach (var workspace in engine.Workspaces.Entries)
+        foreach (var workspace in workspaces.All)
         {
             var root = Root(workspace.RootPath);
             if (!Directory.Exists(root))
@@ -198,7 +198,7 @@ internal sealed class ServerStaging(UserStore users, ServerEngine engine)
     public async Task<int> ExpireAsync(DateTimeOffset now, TimeSpan keptFor, CancellationToken ct)
     {
         var dropped = 0;
-        foreach (var workspace in engine.Workspaces.Entries)
+        foreach (var workspace in workspaces.All)
         {
             var root = Root(workspace.RootPath);
             if (!Directory.Exists(root))
@@ -242,7 +242,7 @@ internal sealed class ServerStaging(UserStore users, ServerEngine engine)
     /// <summary>A known workspace's proposal folder by its id - only a run id, so no name walks out of the folder.</summary>
     private (string Root, string Folder, string Name)? Locate(string workspace, string id)
     {
-        if (!Guid.TryParseExact(id, "N", out _) || engine.Workspaces.Find(workspace) is not { } known)
+        if (!Guid.TryParseExact(id, "N", out _) || workspaces.Find(workspace) is not { } known)
             return null;
         var folder = Path.Combine(Root(known.RootPath), id);
         return Directory.Exists(folder) ? (known.RootPath, folder, known.Name) : null;
