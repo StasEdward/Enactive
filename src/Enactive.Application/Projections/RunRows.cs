@@ -9,6 +9,17 @@ using Enactive.Core.History;
 /// </summary>
 internal static class RunRows
 {
+    /// <summary>
+    /// The filter's names, in the order of <see cref="RunFilter"/> - indexed by it, by the window's combo box and the
+    /// Runs screen's select alike.
+    /// </summary>
+    public static readonly IReadOnlyList<string> FilterNames = ["All runs", "Unfinished", "Completed", "Older than a week"];
+
+    /// <summary>
+    /// Named with the COUNT, so the button says how much it destroys before it is pressed rather than in a dialog after it.
+    /// </summary>
+    public static string DeleteShown(int count) => $"Delete these {count}";
+
     /// <summary>A finished run's second line: when, and what came of it.</summary>
     public static string Meta(RunSummary record) => $"{Ago(record.StartedAt)} · {Outcome(record)}";
 

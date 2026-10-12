@@ -8,17 +8,16 @@ using Enactive.Server.Accounts;
 using Enactive.Server.Runs;
 using Enactive.Workspace;
 
-/// <summary>Which of the switcher's rows this is: the one you are in, another one, or one whose folder is gone.</summary>
-/// <remarks>Public, as <see cref="SwitcherRow"/>: a component's parameters are public, and so must their types be.</remarks>
-public enum WorkspacePlace { Current, Other, Missing }
-
 /// <summary>A workspace in the switcher, named in an address by its id.</summary>
+/// <remarks>
+/// Public, as a component's parameter type must be; <see cref="Place"/> is internal, as WorkspacePlace is (the window's
+/// and the service's one rule, in Enactive.Application).
+/// </remarks>
 public sealed record SwitcherRow(WorkspaceEntry Entry, Guid Id, bool Exists, bool IsCurrent)
 {
-    /// <summary>A missing folder outranks being current, as in the window (WorkspaceItemViewModel.Place).</summary>
-    public WorkspacePlace Place => !Exists ? WorkspacePlace.Missing : IsCurrent ? WorkspacePlace.Current : WorkspacePlace.Other;
+    internal WorkspacePlace Place => WorkspaceRows.Place(Exists, IsCurrent);
 
-    public string Detail => Exists ? Entry.RootPath : "Folder not found · " + Entry.RootPath;
+    public string Detail => WorkspaceRows.Detail(Entry, Exists);
 }
 
 /// <summary>A run going now, in any workspace: its title, and what it is doing (RunColumn.Meta) and where.</summary>
@@ -34,9 +33,6 @@ internal sealed class WorkspaceColumnState(ServerHistory history, IRunControl ru
 {
     private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
     private RunFilter _filter = RunFilter.All;
-
-    /// <summary>The filter's names, in the order of <see cref="RunFilter"/> - the window's combo box.</summary>
-    public static readonly IReadOnlyList<string> FilterNames = ["All runs", "Unfinished", "Completed", "Older than a week"];
 
     public IReadOnlyList<SwitcherRow> Workspaces { get; private set; } = [];
 
@@ -88,8 +84,8 @@ internal sealed class WorkspaceColumnState(ServerHistory history, IRunControl ru
         }
     }
 
-    /// <summary>With the count, so the button says how much it destroys before it is pressed (RunsViewModel.DeleteShownLabel).</summary>
-    public string DeleteLabel => $"Delete these {Shown.Count}";
+    /// <summary>With the count, as the window's (RunRows.DeleteShown).</summary>
+    public string DeleteLabel => RunRows.DeleteShown(Shown.Count);
 
     public bool CanDelete => Shown.Count > 0;
 

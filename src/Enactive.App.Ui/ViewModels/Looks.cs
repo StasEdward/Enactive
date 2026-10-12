@@ -22,9 +22,6 @@ internal enum DiffLineKind { Added, Removed, Context }
 /// </summary>
 internal enum ChangeState { Staged, Applied, Rejected, Refused }
 
-/// <summary>Which of the switcher's rows this is: the one you are in, another one, or one whose folder is gone.</summary>
-internal enum WorkspacePlace { Current, Other, Missing }
-
 /// <summary>Whether a schedule will run: off, on but with no time it can ever be run at, or on with a next run.</summary>
 internal enum ScheduleState { Off, Untimed, Scheduled }
 

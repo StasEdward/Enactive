@@ -73,7 +73,7 @@
         <select class="filter" aria-label="Which runs the list shows" title="Which runs the list shows" @onchange="FilterChanged">
             @foreach (var filter in Enum.GetValues<RunFilter>())
             {
-                <option value="@filter" selected="@(filter == State.Filter)">@WorkspaceColumnState.FilterNames[(int)filter]</option>
+                <option value="@filter" selected="@(filter == State.Filter)">@RunRows.FilterNames[(int)filter]</option>
             }
         </select>
         @if (State.CanOperate)

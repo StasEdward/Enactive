@@ -484,17 +484,13 @@ internal sealed class RunsViewModel : ObservableObject
         }
     }
 
-    public IReadOnlyList<string> FilterNames { get; } =
-        ["All runs", "Unfinished", "Completed", "Older than a week"];
+    public IReadOnlyList<string> FilterNames { get; } = RunRows.FilterNames;
 
     /// <summary>What a "delete these" would act on: exactly the rows on screen.</summary>
     public IReadOnlyList<RunSummary> Shown { get; private set; } = Array.Empty<RunSummary>();
 
-    /// <summary>
-    /// Named with the COUNT, so the button says how much it destroys before it is pressed rather
-    /// than in a dialog after it.
-    /// </summary>
-    public string DeleteShownLabel => $"Delete these {Shown.Count}";
+    /// <summary>Named with the count (RunRows.DeleteShown, which the service's Runs screen says too).</summary>
+    public string DeleteShownLabel => RunRows.DeleteShown(Shown.Count);
 
     public bool CanDeleteShown => Shown.Count > 0;
 
