@@ -51,16 +51,28 @@ function setRole(name, role) {
   if (done.status !== 0) throw new Error(`--set-role failed: ${done.stderr}`);
 }
 
+/** The question the open run waits on: the status column's USER DECISION REQUIRED card. */
+const question = (page) => page.getByRole('region', { name: 'User decision required' });
+
+/** The command bar's Stop, which is the open run's: offered while it goes, greyed once it has ended. */
+const stop = (page) => page.getByRole('button', { name: 'Stop', exact: true });
+
+/** Opens a run going now from the Runs column's RUNNING list, by what it was asked to do. */
+async function openRunning(page, task) {
+  await page.getByRole('complementary', { name: 'Runs column' }).getByRole('listitem').filter({ hasText: task })
+    .getByRole('link', { name: 'Open' }).first().click();
+}
+
 /**
- * Ends the run a test left waiting, so the next one finds its folder free. Waits for the question: the run page is
- * live and drawn only once connected, and a check made at once found no button and left the run holding the folder.
+ * Ends the run a test left waiting, so the next one finds its folder free. Waits for the question: the run is live and
+ * drawn only once connected, and a check made at once found no button and left the run holding the folder.
  */
 async function answerWhateverWaits(page) {
-  const deny = page.getByRole('button', { name: 'Deny' });
+  const deny = question(page).getByRole('button', { name: 'Deny' });
   try {
     await deny.waitFor({ timeout: 10_000 });
     await deny.click();
-    await expect(page.getByRole('button', { name: 'Cancel the run' })).toBeHidden();
+    await expect(stop(page)).toBeDisabled();
   } catch {
     // Nothing was waiting.
   }
@@ -69,20 +81,20 @@ async function answerWhateverWaits(page) {
 test('a run outlives its page, and its question waits for whoever comes back', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
   const run = await startRun(page, 'write the digest');
-  await expect(page.getByRole('heading', { name: 'Approve write_file' })).toBeVisible();
+  await expect(question(page)).toContainText('Approve write_file');
 
   // The browser tab is closed. The run is the service's: it goes on waiting.
   await page.close();
 
   const back = await context.newPage();
   await back.goto('/');
-  await back.getByRole('link', { name: /write the digest/i }).first().click();
+  await openRunning(back, 'write the digest');
   await expect(back).toHaveURL(run);
   await expect(back.getByText('Waiting for an answer')).toBeVisible();
 
-  await back.getByRole('button', { name: 'Allow', exact: true }).click();
-  await expect(back.getByRole('heading', { name: 'Approve write_file' })).toBeHidden();
-  await expect(back.getByRole('button', { name: 'Cancel the run' })).toBeHidden();
+  await question(back).getByRole('button', { name: 'Allow', exact: true }).click();
+  await expect(question(back)).toBeHidden();
+  await expect(stop(back)).toBeDisabled();
   await context.close();
 });
 
@@ -91,27 +103,30 @@ test('two pages on one run see one question, and an answer in one takes it from 
   const run = await startRun(page, 'two tabs');
   const second = await context.newPage();
   await second.goto(run);
-  await expect(page.getByRole('heading', { name: 'Approve write_file' })).toBeVisible();
-  await expect(second.getByRole('heading', { name: 'Approve write_file' })).toBeVisible();
+  await expect(question(page)).toContainText('Approve write_file');
+  await expect(question(second)).toContainText('Approve write_file');
 
-  await second.getByRole('button', { name: 'Deny' }).click();
+  await question(second).getByRole('button', { name: 'Deny' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Approve write_file' })).toBeHidden();
+  await expect(question(page)).toBeHidden();
   await context.close();
 });
 
-test('another operator answers a run, but cannot leave an approval in its owner\'s name', async ({ browser }) => {
+test('another operator answers a run, and is offered no approval to leave in its owner\'s name', async ({ browser }) => {
   const alice = await signedIn(browser, 'alice');
   const run = await startRun(alice.page, 'answered by bob');
   const bob = await signedIn(browser, 'bob');
   await bob.page.goto(run);
-  await expect(bob.page.getByRole('heading', { name: 'Approve write_file' })).toBeVisible();
+  await expect(question(bob.page)).toContainText('Approve write_file');
+  // Who else has the run open, named on each page.
+  await expect(alice.page.getByText('also watching: bob')).toBeVisible();
 
-  await bob.page.getByRole('button', { name: 'Allow (workspace)', exact: true }).click();
-  await expect(bob.page.getByText('Only alice, who started the run')).toBeVisible();
+  // What is remembered binds the person it is remembered for: only the owner is offered it.
+  await expect(question(alice.page).getByRole('button', { name: 'Allow (workspace)', exact: true })).toBeVisible();
+  await expect(question(bob.page).getByRole('button', { name: 'Allow (workspace)', exact: true })).toHaveCount(0);
 
-  await bob.page.getByRole('button', { name: 'Deny' }).click();
-  await expect(alice.page.getByRole('heading', { name: 'Approve write_file' })).toBeHidden();
+  await question(bob.page).getByRole('button', { name: 'Deny' }).click();
+  await expect(question(alice.page)).toBeHidden();
   await alice.context.close();
   await bob.context.close();
 });
@@ -121,13 +136,13 @@ test('a second run in the same folder waits, says why, and starts when the first
   const first = await startRun(page, 'first in the folder');
   await page.goto('/');
   await startRun(page, 'second in the folder');
-  await expect(page.getByText(/Another run in this folder/)).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Current action' })).toContainText(/Another run in this folder/);
 
   const firstPage = await context.newPage();
   await firstPage.goto(first);
-  await firstPage.getByRole('button', { name: 'Deny' }).click();
+  await question(firstPage).getByRole('button', { name: 'Deny' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Approve write_file' })).toBeVisible();
+  await expect(question(page)).toContainText('Approve write_file');
   await answerWhateverWaits(page);
   await context.close();
 });
@@ -161,11 +176,10 @@ test('a viewer reads runs and is offered nothing to do to them', async ({ browse
   await expect(vera.page.getByLabel('Task', { exact: true })).toHaveCount(0);
   await expect(vera.page.getByRole('button', { name: 'Run in background' })).toHaveCount(0);
   await vera.page.goto(run);
-  await expect(vera.page.getByRole('heading', { name: 'Approve write_file' })).toBeVisible();
-  await expect(vera.page.getByRole('button', { name: 'Cancel the run' })).toHaveCount(0);
-
-  await vera.page.getByRole('button', { name: 'Deny' }).click();
-  await expect(vera.page.getByText('role does not include')).toBeVisible();
+  await expect(question(vera.page)).toContainText('Approve write_file');
+  // The full action is hers to read; no answer, and no Stop, is hers to give.
+  await expect(question(vera.page).getByRole('button')).toHaveCount(0);
+  await expect(stop(vera.page)).toHaveCount(0);
 
   await answerWhateverWaits(alice.page);
   await alice.context.close();
@@ -175,11 +189,11 @@ test('a viewer reads runs and is offered nothing to do to them', async ({ browse
 test('a role lowered while its page is open cannot act from that page', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
   await startRun(page, 'role taken away');
-  await expect(page.getByRole('heading', { name: 'Approve write_file' })).toBeVisible();
+  await expect(question(page)).toContainText('Approve write_file');
 
   setRole('alice', 'Viewer');
   try {
-    await page.getByRole('button', { name: 'Cancel the run' }).click();
+    await stop(page).click();
     await expect(page.getByText('Your session has ended')).toBeVisible();
   } finally {
     setRole('alice', 'Operator');
@@ -187,7 +201,7 @@ test('a role lowered while its page is open cannot act from that page', async ({
 
   // Back to Operator: signed in again, the run that was left is answered so the folder is free.
   const again = await signedIn(browser, 'alice');
-  await again.page.getByRole('link', { name: /role taken away/i }).first().click();
+  await openRunning(again.page, 'role taken away');
   await answerWhateverWaits(again.page);
   await context.close();
   await again.context.close();
@@ -196,8 +210,8 @@ test('a role lowered while its page is open cannot act from that page', async ({
 test('a past run is tried again from its page, and deleted after its question', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
   await startRun(page, 'kept in the history');
-  await page.getByRole('button', { name: 'Allow', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Cancel the run' })).toBeHidden();
+  await question(page).getByRole('button', { name: 'Allow', exact: true }).click();
+  await expect(stop(page)).toBeDisabled();
 
   // The Runs screen's column lists the workspace's history; the run it just ran is there once it has ended.
   await page.goto('/');
@@ -208,8 +222,8 @@ test('a past run is tried again from its page, and deleted after its question', 
   // Try again: a run of the same task starts, and asks its question again.
   await page.getByRole('button', { name: 'Try again' }).click();
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
-  await page.getByRole('button', { name: 'Deny' }).click();
-  await expect(page.getByRole('button', { name: 'Cancel the run' })).toBeHidden();
+  await question(page).getByRole('button', { name: 'Deny' }).click();
+  await expect(stop(page)).toBeDisabled();
 
   // Delete: the window's question, on a page, then the record goes.
   await page.goto(past);
@@ -418,7 +432,7 @@ test('a lost connection disables actions until it is back', async ({ browser }) 
     sockets.push(socket);
   });
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Approve write_file' })).toBeVisible();
+  await expect(question(page)).toContainText('Approve write_file');
   const bar = page.locator('header.top');
   await expect(bar.getByText('Connected', { exact: true })).toBeVisible();
 
@@ -427,13 +441,13 @@ test('a lost connection disables actions until it is back', async ({ browser }) 
   await expect(bar.getByText('Reconnecting…', { exact: true })).toBeVisible();
   // A click while the connection is down would be dropped without a word: the page takes none. A trial click only
   // checks that the button would receive it, and times out when something lies over it.
-  const deny = page.getByRole('button', { name: 'Deny' });
+  const deny = question(page).getByRole('button', { name: 'Deny' });
   await expect(deny.click({ trial: true, timeout: 1_000 })).rejects.toThrow();
 
   await context.setOffline(false);
   await expect(bar.getByText('Connected', { exact: true })).toBeVisible();
   await deny.click();
-  await expect(page.getByRole('heading', { name: 'Approve write_file' })).toBeHidden();
+  await expect(question(page)).toBeHidden();
   await context.close();
 });
 
