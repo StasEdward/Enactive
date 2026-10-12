@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.VisualTree;
 using Enactive.App.Ui.ViewModels;
+using Enactive.Application;
 using Enactive.Remote.Contracts.Crypto;
 using Enactive.Settings;
 

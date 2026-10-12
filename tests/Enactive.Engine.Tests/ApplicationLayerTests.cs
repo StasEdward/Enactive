@@ -93,6 +93,18 @@ public sealed class ApplicationLayerTests
     [InlineData(typeof(LogWindowViewModel))]
     [InlineData(typeof(BatchObservableCollection<int>))]
     [InlineData(typeof(WorkspaceReports))]
+    [InlineData(typeof(SettingsViewModel))]
+    [InlineData(typeof(ProviderRow))]
+    [InlineData(typeof(WorkerRow))]
+    [InlineData(typeof(McpServerRow))]
+    [InlineData(typeof(TemplateRow))]
+    [InlineData(typeof(WritableRootRow))]
+    [InlineData(typeof(ProviderEditViewModel))]
+    [InlineData(typeof(WorkerEditViewModel))]
+    [InlineData(typeof(ToolToggle))]
+    [InlineData(typeof(BuildInfo))]
+    [InlineData(typeof(IHostSettingsPane))]
+    [InlineData(typeof(NoStartupEntry))]
     public void Moved_types_come_from_the_application_assembly(Type type)
         => Assert.Equal("Enactive.Application", type.Assembly.GetName().Name);
 }

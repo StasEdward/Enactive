@@ -1,10 +1,11 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Enactive.App.Ui.ViewModels"
+        xmlns:app="using:Enactive.Application"
         xmlns:local="using:Enactive.App.Ui"
         xmlns:core="using:Enactive.Core.Guidance"
         x:Class="Enactive.App.Ui.SettingsWindow"
-        x:DataType="vm:SettingsViewModel"
+        x:DataType="app:SettingsViewModel"
         Title="Settings"
         Width="900" Height="800"
         WindowStartupLocation="CenterOwner"
@@ -88,7 +89,7 @@
                     </StackPanel>
                     <ListBox x:Name="McpList" Classes="cards gutter" ItemsSource="{Binding McpServers}" SelectedItem="{Binding SelectedMcp}">
                         <ListBox.ItemTemplate>
-                            <DataTemplate x:DataType="vm:McpServerRow">
+                            <DataTemplate x:DataType="app:McpServerRow">
                                 <Border Classes="card" BorderBrush="{Binding IsLocal, Converter={x:Static local:Palette.Local}}">
                                     <Grid ColumnDefinitions="*,Auto,Auto">
                                         <StackPanel Margin="0,0,10,0">
@@ -133,7 +134,7 @@
                     </StackPanel>
                     <ListBox x:Name="TemplateList" Classes="cards gutter" ItemsSource="{Binding Templates}" SelectedItem="{Binding SelectedTemplate}">
                         <ListBox.ItemTemplate>
-                            <DataTemplate x:DataType="vm:TemplateRow">
+                            <DataTemplate x:DataType="app:TemplateRow">
                                 <Border Classes="card" BorderBrush="{Binding Edge, Converter={x:Static local:Palette.Template}}">
                                     <Grid ColumnDefinitions="*,Auto">
                                         <StackPanel Margin="0,0,10,0">
@@ -384,7 +385,7 @@
                     <ScrollViewer Classes="gutter bare" Margin="0,6,0,0">
                         <ItemsControl ItemsSource="{Binding Components}">
                             <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="local:BuildComponent">
+                                <DataTemplate x:DataType="app:BuildComponent">
                                     <Grid ColumnDefinitions="*,140,120" Margin="0,0,0,3">
                                         <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="12"
                                                    TextTrimming="CharacterEllipsis" />
@@ -417,7 +418,7 @@
                         <ScrollViewer Classes="gutter bare">
                             <ItemsControl ItemsSource="{Binding WritableRootRows}">
                                 <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:WritableRootRow">
+                                    <DataTemplate x:DataType="app:WritableRootRow">
                                         <Border Classes="card" Margin="0,0,0,6" Padding="10">
                                             <Grid ColumnDefinitions="*,Auto">
                                                 <StackPanel Grid.Column="0" Spacing="2">
@@ -576,7 +577,7 @@
                         <ListBox x:Name="ProviderList" Classes="cards gutter" ItemsSource="{Binding Providers}"
                                  SelectedItem="{Binding SelectedProvider}">
                             <ListBox.ItemTemplate>
-                                <DataTemplate x:DataType="vm:ProviderRow">
+                                <DataTemplate x:DataType="app:ProviderRow">
                                     <Border Classes="card" BorderBrush="{Binding IsLocal, Converter={x:Static local:Palette.Local}}">
                                         <Grid ColumnDefinitions="*,Auto,Auto">
                                             <StackPanel Grid.Column="0" Orientation="Horizontal"
@@ -634,7 +635,7 @@
                         <ListBox x:Name="WorkerList" Classes="cards gutter" ItemsSource="{Binding Workers}"
                                  SelectedItem="{Binding SelectedWorker}">
                             <ListBox.ItemTemplate>
-                                <DataTemplate x:DataType="vm:WorkerRow">
+                                <DataTemplate x:DataType="app:WorkerRow">
                                     <Border Classes="card" BorderBrush="{Binding Autonomy, Converter={x:Static local:Palette.Autonomy}}">
                                         <Grid ColumnDefinitions="*,Auto">
                                             <StackPanel Grid.Column="0" Margin="0,0,10,0">

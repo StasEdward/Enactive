@@ -1,6 +1,6 @@
-namespace Enactive.App.Ui.Tests;
+namespace Enactive.Engine.Tests;
 
-using Enactive.App.Ui.ViewModels;
+using Enactive.Application;
 using Enactive.Core.Providers;
 using Enactive.Settings;
 

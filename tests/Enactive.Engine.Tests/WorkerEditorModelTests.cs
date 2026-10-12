@@ -1,6 +1,6 @@
 namespace Enactive.Engine.Tests;
 
-using Enactive.App.Ui.ViewModels;
+using Enactive.Application;
 using Enactive.Core.Guidance;
 using Enactive.Settings;
 using Xunit;

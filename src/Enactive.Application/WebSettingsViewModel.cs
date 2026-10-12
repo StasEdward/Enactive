@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui.ViewModels;
+namespace Enactive.Application;
 
 using Enactive.Application.Mvvm;
 using Enactive.Tools.Web;

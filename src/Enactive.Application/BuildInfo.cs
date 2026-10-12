@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui;
+namespace Enactive.Application;
 
 using System.Diagnostics;
 using System.Reflection;
