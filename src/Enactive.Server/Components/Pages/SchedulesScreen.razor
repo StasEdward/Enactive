@@ -125,9 +125,11 @@
                     <div class="schedule-field">
                         <span class="label" id="s-time">Time</span>
                         <div class="schedule-time" role="group" aria-labelledby="s-time">
-                            <input type="number" min="0" max="23" aria-label="Hour" @bind="vm.DraftHour" />
+                            <input type="number" min="0" max="23" aria-label="Hour" value="@TwoDigits(vm.DraftHour)"
+                                   @onchange="e => vm.DraftHour = NumberOr(e, vm.DraftHour)" />
                             <span>:</span>
-                            <input type="number" min="0" max="59" aria-label="Minute" @bind="vm.DraftMinute" />
+                            <input type="number" min="0" max="59" aria-label="Minute" value="@TwoDigits(vm.DraftMinute)"
+                                   @onchange="e => vm.DraftMinute = NumberOr(e, vm.DraftMinute)" />
                         </div>
                     </div>
 
@@ -308,6 +310,13 @@
         if (vm.Zones.FirstOrDefault(z => z.Id == e.Value?.ToString()) is { } zone)
             vm.DraftZone = zone;
     }
+
+    /// <summary>Two digits, as the window's spinners show them (FormatString="00"): 07:05, not 7:5.</summary>
+    private static string TwoDigits(decimal value) => value.ToString("00", CultureInfo.InvariantCulture);
+
+    /// <summary>What was typed, read as the number input sends it (invariant); anything else keeps what was there.</summary>
+    private static decimal NumberOr(ChangeEventArgs e, decimal was)
+        => decimal.TryParse(e.Value?.ToString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var typed) ? typed : was;
 
     /// <summary>The date input's own format (yyyy-MM-dd), whatever the culture: the browser reads no other.</summary>
     private static string DateText(SchedulesViewModel vm)

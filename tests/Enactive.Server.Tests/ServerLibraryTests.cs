@@ -163,6 +163,67 @@ public sealed class ServerLibraryTests : IDisposable
     }
 
     /// <summary>
+    /// The permissions are made again by the service from the tier the schedule says it is at, over the settings now: a
+    /// page that handed it a looser policy - here one with no shell rule while the settings say never - does not get it
+    /// saved.
+    /// </summary>
+    [Fact]
+    public void A_looser_policy_than_the_settings_allow_is_made_again_from_its_tier()
+    {
+        var settings = Enactive.Settings.AppSettings.Load(_engine.SettingsFile);
+        settings.ShellCommands = Enactive.Settings.ShellCommandPolicy.Off;
+        settings.Save(_engine.SettingsFile, replaceUnreadable: true);
+        _engine.Reload();
+        _library.SaveTemplate(As("alice"), _workspace, Weekly, TemplateScope.Workspace);
+        var loose = Daily("weekly") with
+        {
+            Permissions = new Enactive.Core.Permissions.PermissionPolicy(Enactive.Core.Permissions.PermissionLevel.Execute, ["*"], [])
+        };
+
+        Assert.True(_library.SaveSchedule(As("alice"), _workspace, loose).Saved);
+
+        var expected = Enactive.Settings.EngineComposition.PolicyFor(settings, 2);
+        var kept = Assert.Single(_engine.Schedules.For(_workspace)).Permissions;
+        Assert.NotEmpty(expected.Deny);
+        Assert.Equal(expected.Level, kept.Level);
+        Assert.Equal(expected.Deny, kept.Deny);
+        Assert.Equal(expected.AskBefore, kept.AskBefore);
+    }
+
+    /// <summary>
+    /// A schedules file the service cannot write - here its write's temporary file is a folder - is said in words, and
+    /// nothing is called saved, switched or deleted. The store swallows a failed write, and the service said "Saved" for
+    /// a schedule that was not on the disk; through the form, the words are where it says what went wrong.
+    /// </summary>
+    [Fact]
+    public async Task A_schedules_file_that_cannot_be_written_is_said_and_nothing_is_called_done()
+    {
+        _library.SaveTemplate(As("alice"), _workspace, Weekly, TemplateScope.Workspace);
+        Assert.True(_library.SaveSchedule(As("alice"), _workspace, Daily("weekly")).Saved);
+        var id = _engine.Schedules.For(_workspace).Single().Id;
+        Directory.CreateDirectory(Path.Combine(_root, "data", "schedules.json.tmp"));
+
+        var (saved, said) = _library.SaveSchedule(As("alice"), _workspace, Daily("weekly") with { Name = "second" });
+        Assert.False(saved);
+        Assert.Contains("could not write its schedules file", said);
+        Assert.False(_library.SwitchSchedule(As("alice"), _workspace, id, on: false).Done);
+        Assert.False(_library.DeleteSchedule(As("alice"), _workspace, id).Done);
+
+        var form = await Opened("alice");
+        form.ToggleEnabledCommand.Execute(null);
+        Assert.Contains("could not write its schedules file", form.Status);
+        form.EditCommand.Execute(null);
+        form.DraftName = "renamed";
+        form.SaveCommand.Execute(null);
+        Assert.Contains("could not write its schedules file", form.Problems);
+        Assert.True(form.IsEditing);
+
+        var kept = Assert.Single(_engine.Schedules.For(_workspace));
+        Assert.Equal(("morning digest", true), (kept.Name, kept.Enabled));
+        Assert.DoesNotContain(_users.AuditTrail(), e => e.Action is "schedule switched off" or "schedule deleted" or "schedule changed");
+    }
+
+    /// <summary>
     /// A Viewer reads the schedules - the form's view model is theirs to read - and changes none: not by the service's
     /// calls, and not through the form, whose changes come back to the service as them.
     /// </summary>

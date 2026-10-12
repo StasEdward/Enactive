@@ -142,17 +142,20 @@ internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunCo
         if (Writing(user, root) is not { } known)
             return (false, Why(user, Role.Operator));
 
-        // Its permissions are the form's tier with the settings' shell rule on top, asked of the settings as they are now
-        // (SchedulePolicy, which the form was given from this service): a schedule saved with the tier alone would run
-        // commands on a service whose settings say never to.
-        var draft = new ScheduleDraft(schedule.Name, known.RootPath, schedule.Work, schedule.Timing, schedule.Permissions,
+        // Its permissions are made again here: the tier it says it is at, with the settings' shell rule on top, asked of
+        // the settings as they are now (SchedulePolicy). Taken as given, a looser policy than the settings allow would be
+        // saved, and a schedule run commands on a service whose settings say never to.
+        var permissions = new SchedulePolicy(() => engine.Settings ?? new AppSettings()).For(schedule.Permissions.Level);
+        var draft = new ScheduleDraft(schedule.Name, known.RootPath, schedule.Work, schedule.Timing, permissions,
             schedule.Missed, schedule.Enabled, schedule.Id);
         var checkedDraft = ScheduleDrafts.Check(draft, WorkspaceInfo.For(known.RootPath), DateTimeOffset.Now, new TemplateStore(known.RootPath).Find);
         if (checkedDraft.Schedule is not { } kept)
             return (false, string.Join(Environment.NewLine, checkedDraft.Problems));
 
         var changed = engine.Schedules.For(known.RootPath).Any(s => s.Id == kept.Id);
-        engine.Schedules.Save(kept);
+        if (Written(() => engine.Schedules.Save(kept), () => engine.Schedules.For(known.RootPath).Any(s => s.Id == kept.Id && s.Name == kept.Name
+                && s.Timing == kept.Timing && s.Enabled == kept.Enabled)) is { } failed)
+            return (false, failed);
         users.Audit(Who(user), changed ? "schedule changed" : "schedule added", $"{kept.Name} in {known.RootPath}: {ScheduleWords.When(kept.Timing)}");
         return (true, $"Saved '{kept.Name}'. {ScheduleWords.NextRun(kept, DateTimeOffset.Now)}");
     }
@@ -164,7 +167,9 @@ internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunCo
             return (false, Why(user, Role.Operator));
         if (engine.Schedules.For(known.RootPath).FirstOrDefault(s => s.Id == id) is not { } schedule)
             return (false, "There is no such schedule here.");
-        engine.Schedules.Save(schedule with { Enabled = on });
+        if (Written(() => engine.Schedules.Save(schedule with { Enabled = on }),
+                () => engine.Schedules.For(known.RootPath).Any(s => s.Id == id && s.Enabled == on)) is { } failed)
+            return (false, failed);
         users.Audit(Who(user), on ? "schedule switched on" : "schedule switched off", $"{schedule.Name} in {known.RootPath}");
         return (true, on ? $"'{schedule.Name}' is on." : $"'{schedule.Name}' is off.");
     }
@@ -176,10 +181,32 @@ internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunCo
             return (false, Why(user, Role.Operator));
         if (engine.Schedules.For(known.RootPath).FirstOrDefault(s => s.Id == id) is not { } schedule)
             return (false, "There is no such schedule here.");
-        engine.Schedules.Remove(known.RootPath, id);
+        if (Written(() => engine.Schedules.Remove(known.RootPath, id), () => engine.Schedules.For(known.RootPath).All(s => s.Id != id)) is { } failed)
+            return (false, failed);
         users.Audit(Who(user), "schedule deleted", $"{schedule.Name} in {known.RootPath}");
         return (true, $"Deleted '{schedule.Name}'.");
     }
+
+    /// <summary>
+    /// Makes a change to the schedules file and says whether it took: null when it did, otherwise what to tell the person.
+    /// The store swallows a write that fails - a locked or read-only file - and throws only when another process holds
+    /// its lock too long; the service said "Saved" for a change that was not on the disk, and the exception ended the
+    /// person's page. So it is read back, and either failure is said in words.
+    /// </summary>
+    private static string? Written(Action change, Func<bool> took)
+    {
+        try
+        {
+            change();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException)
+        {
+            return CouldNotWrite;
+        }
+        return took() ? null : CouldNotWrite;
+    }
+
+    private const string CouldNotWrite = "The service could not write its schedules file, so nothing was changed. Try again in a moment.";
 
     private WorkspaceEntry? Reading(ClaimsPrincipal user, string root)
         => ServerAuth.StillValid(users, user) is { Role: >= Role.Viewer } ? engine.Workspaces.Find(root) : null;

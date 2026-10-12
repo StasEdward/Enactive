@@ -112,6 +112,20 @@ public sealed class SchedulesTests : ComponentHost
         Assert.Contains(Users.AuditTrail(), e => e is { Account: "alice", Action: "schedule added" });
     }
 
+    /// <summary>The time is two digits a side, as the window's spinners show it (FormatString="00").</summary>
+    [Fact]
+    public void The_time_is_shown_in_two_digits_as_the_window_s()
+    {
+        Saved();
+        var screen = Screen("alice");
+
+        Press(screen, "Edit");
+        screen.Find("input[aria-label='Minute']").Change("5");
+
+        Assert.Equal("07", screen.Find("input[aria-label='Hour']").GetAttribute("value"));
+        Assert.Equal("05", screen.Find("input[aria-label='Minute']").GetAttribute("value"));
+    }
+
     /// <summary>
     /// The form says why it cannot be saved, every reason at once, in the scheduler's words - and keeps what was typed.
     /// </summary>
