@@ -224,6 +224,26 @@ public sealed class CommandBarTests : ComponentHost
         Assert.Equal("write the digest", bar.Find("textarea").GetAttribute("value"));
     }
 
+    /// <summary>
+    /// A folder that stages cannot have a run nobody watches: Run in background there is refused at once, in the composer's
+    /// words (the service's EngineExecutor says them), under the bar - and what was typed stays, to be run and watched.
+    /// </summary>
+    [Fact]
+    public void Run_in_background_in_a_folder_that_stages_is_refused_under_the_bar()
+    {
+        var workspace = Known("project", stage: true);
+        var composer = new EngineExecutor(Engine, new ServerStaging(Users, Engine));
+        _executor.RefuseBackground = root => composer.BackgroundRefusal(root, "alice");
+        var bar = Bar("alice", workspace);
+
+        bar.Find("textarea").Input("digest the inbox");
+        Button(bar, "Run in background").Click();
+
+        Assert.Contains("a run nobody is watching cannot stage", Said(bar));
+        Assert.Empty(Runs.List(As("alice")));
+        Assert.Equal("digest the inbox", bar.Find("textarea").GetAttribute("value"));
+    }
+
     /// <summary>The service decides, whatever the page still offers: an account disabled a second ago starts nothing.</summary>
     [Fact]
     public void An_account_disabled_while_the_page_is_open_is_told_its_session_ended()
@@ -336,6 +356,11 @@ public sealed class CommandBarTests : ComponentHost
         public string? Problem => null;
         public SessionApprovals Session { get; } = new();
         public ApprovalStore Approvals { get; } = approvals;
+
+        /// <summary>What a background run in a folder is refused with - none by default, the composer's in one test.</summary>
+        public Func<string, string?> RefuseBackground { get; set; } = _ => null;
+
+        public string? BackgroundRefusal(string root, string owner) => RefuseBackground(root);
 
         public void Release() => _released.TrySetResult();
 
