@@ -104,7 +104,7 @@ public sealed class TemplatesTests : ComponentHost
         editor.FindAll("[role=tab]").Single(t => t.TextContent.Trim() == "JSON").Click();
         var shown = editor.Find("textarea.template-json").GetAttribute("value") ?? editor.Find("textarea.template-json").TextContent;
 
-        // Into the workspace's library, chosen: a new template is offered the global one first (Ruling 16), and that is
+        // Into the workspace's library, chosen: a new template is offered the global one first, as the window offers it, and that is
         // the real %APPDATA% of whoever runs the tests.
         editor.Find("select[aria-label='Kept in']").Change("Workspace");
         editor.FindAll("button").Single(b => b.TextContent.Trim() == "Save").Click();
@@ -128,7 +128,7 @@ public sealed class TemplatesTests : ComponentHost
 
         editor.Find("#t-id").Input("Release Check");
         editor.Find("#t-name").Input("Release Check");
-        // Into the workspace's library, chosen: a new template is offered the global one first (Ruling 16), and that is
+        // Into the workspace's library, chosen: a new template is offered the global one first, as the window offers it, and that is
         // the real %APPDATA% of whoever runs the tests.
         editor.Find("select[aria-label='Kept in']").Change("Workspace");
         editor.FindAll("button").Single(b => b.TextContent.Trim() == "Save").Click();

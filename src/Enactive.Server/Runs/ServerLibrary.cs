@@ -253,7 +253,7 @@ internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunCo
         => EngineComposition.Tools(engine.Settings ?? new AppSettings()).Definitions.Select(d => d.Name).ToList();
 
     /// <summary>
-    /// Where a draft may be saved, the one offered first (Ruling 16). A template with a file of its own is offered its own
+    /// Where a draft may be saved, the one offered first. A template with a file of its own is offered its own
     /// library first: offered another, Save would write a second copy and leave the first where it was. A draft with no
     /// file yet - a new template, a duplicate, a built-in's copy - is offered the window's order, Global first
     /// (TemplateSettingsViewModel.Edit offers [Global, Workspace]), so the same choice reads the same in both.

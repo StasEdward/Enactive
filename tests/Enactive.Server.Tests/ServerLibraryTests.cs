@@ -212,7 +212,7 @@ public sealed class ServerLibraryTests : IDisposable
     /// What the editor opens: a template's own file in its own library first, a built-in as a copy of the same id, a
     /// duplicate under an id nothing uses, a new one blank - the window's rules (TemplateDrafts) - with the tools this
     /// service's engine registers for the deny and ask lists. A draft with no file of its own yet - new, a duplicate, a
-    /// built-in's copy - is offered the libraries in the window's order, Global first (Ruling 16).
+    /// built-in's copy - is offered the libraries in the window's order, Global first.
     /// </summary>
     [Fact]
     public void The_editor_opens_what_the_window_s_would()
@@ -233,7 +233,7 @@ public sealed class ServerLibraryTests : IDisposable
     }
 
     // A draft with no file of its own yet is offered the libraries in the window's order, Global first
-    // (TemplateSettingsViewModel.Edit; Ruling 16): one each for a new template, a duplicate and a built-in's copy.
+    // (TemplateSettingsViewModel.Edit): one each for a new template, a duplicate and a built-in's copy.
 
     [Fact]
     public void A_new_template_is_offered_the_global_library_first_as_the_window_offers_it()
