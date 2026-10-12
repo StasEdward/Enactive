@@ -1,6 +1,7 @@
 namespace Enactive.Server.Runs;
 
 using System.Security.Claims;
+using Enactive.Agents;
 using Enactive.Application;
 using Enactive.Application.Projections;
 using Enactive.Core.Context;
@@ -210,6 +211,58 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         => ServerAuth.StillValid(users, user) is not { } account ? "Your session has ended. Sign in again."
             : account.Role < Role.Operator ? "Your role does not include acting on runs."
             : "The service does not know that folder as a workspace.";
+
+    // ── a workspace's run settings (Operators) ──────────────────────────────
+    // The slider, the worker box and the staging switch of the window, saved as the window saves them: against the
+    // folder, where the next run in it - from the browser or the console - reads them (EngineExecutor).
+
+    /// <summary>
+    /// The workers a run in a workspace can be given, by id and the name the person knows them by - what the window's
+    /// worker box lists: the engine's workers, or - with no engine to run on yet - the settings' own. Empty when there
+    /// are none, and then the workspace's default worker is all there is to pick.
+    /// </summary>
+    public IReadOnlyList<(string Id, string Name)> Workers()
+        => engine.Current is { } composed
+            ? composed.Workers.All.Select(w => (w.Id, w.Role)).ToList()
+            : engine.Settings?.Workers.Select(w => (w.Id, w.Role)).ToList() ?? [];
+
+    /// <summary>
+    /// Saves a workspace's level, worker and staging; null when saved, else why not. A blank <paramref name="workerId"/> is
+    /// the workspace's default worker.
+    /// </summary>
+    public string? SaveSettings(ClaimsPrincipal user, string root, int autonomy, string? workerId, bool stageChanges)
+    {
+        if (ServerAuth.StillValid(users, user) is not { } account)
+            return "Your session has ended. Sign in again.";
+        if (account.Role < Role.Operator)
+            return "Your role does not include changing a workspace's settings.";
+
+        // Before the registry is asked: its SaveSettings lists any folder it is given, so a post naming a path on the
+        // server's disks would have made it one of the workspaces the service shows (and reads) to everybody.
+        if (engine.Workspaces.Find(root) is not { } known)
+            return "The service does not know that folder as a workspace.";
+
+        // A level the slider has no position for is refused, not clamped: the window cannot send one, so a page that does
+        // is wrong, and saving "the top" for a 9 would be a run with more freedom than anyone asked for.
+        if (autonomy < 0 || autonomy > AutonomyTiers.Highest)
+            return $"The level must be from 0 to {AutonomyTiers.Highest}.";
+
+        // The worker is kept by id. One the settings no longer have would be saved and then quietly replaced by the
+        // default worker on every run, which reads as a choice that was ignored.
+        string? worker = null;
+        if (!string.IsNullOrWhiteSpace(workerId))
+        {
+            var wanted = workerId.Trim();
+            worker = Workers().Select(w => w.Id).FirstOrDefault(id => string.Equals(id, wanted, StringComparison.OrdinalIgnoreCase));
+            if (worker is null)
+                return $"There is no worker “{wanted}” in the settings.";
+        }
+
+        engine.Workspaces.SaveSettings(known.RootPath, autonomy, worker, stageChanges);
+        users.Audit(account.Name, "workspace settings changed",
+            $"{known.RootPath}: {AutonomyTiers.Names[autonomy]}, worker {worker ?? "default"}, staging {(stageChanges ? "on" : "off")}");
+        return null;
+    }
 
     // ── adding a workspace (Operators) ──────────────────────────────────────
 

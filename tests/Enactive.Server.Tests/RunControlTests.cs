@@ -427,9 +427,20 @@ public sealed class RunControlTests : IDisposable
 
     // ── acting on the history (phase 2: everything the window does around a run) ─
 
-    private ServerHistory HistoryOf()
+    private ServerHistory HistoryOf() => HistoryOf(out _);
+
+    /// <summary>The history of a service whose settings name these workers (id and role), and the engine it reads and writes.</summary>
+    private ServerHistory HistoryOf(out ServerEngine engine, params (string Id, string Role)[] workers)
     {
-        var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        if (workers.Length > 0)
+        {
+            var settings = new Enactive.Settings.AppSettings();
+            foreach (var (id, role) in workers)
+                settings.Workers.Add(new Enactive.Settings.WorkerConfig { Id = id, Role = role });
+            Directory.CreateDirectory(Path.Combine(_root, "data"));
+            settings.Save(Path.Combine(_root, "data", "settings.json"), replaceUnreadable: true);
+        }
+        engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
         engine.Workspaces.Touch(_workspace);
         return new ServerHistory(_users, engine, _control, new WorkspaceRoots([_root]));
     }
@@ -516,6 +527,90 @@ public sealed class RunControlTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_workspace, "draft.md")));
         Assert.True(File.Exists(Path.Combine(_root, "outside.md")));
         Assert.Contains("not in this workspace", said);
+    }
+
+    // ── a workspace's run settings (the window's slider, worker box and staging switch) ─
+
+    /// <summary>Saved as the window saves them, audited with who did it, and what the next browser run reads (EngineExecutor).</summary>
+    [Fact]
+    public void An_operator_saves_a_workspace_s_level_worker_and_staging_and_it_is_audited()
+    {
+        var history = HistoryOf(out var engine, ("writer", "Writer"), ("coder", "Coder"));
+
+        Assert.Null(history.SaveSettings(As("alice"), _workspace, 3, "coder", true));
+
+        // The entry the executor reads for the next request: its Defaults and its staging.
+        var saved = engine.Workspaces.Find(_workspace)!;
+        Assert.Equal(3, saved.Defaults.Autonomy);
+        Assert.Equal("coder", saved.Defaults.WorkerId);
+        Assert.True(saved.StageChanges);
+        // ... and it is on disk, for a service that starts again.
+        var reloaded = Enactive.Workspace.WorkspaceRegistry.Load(filePath: Path.Combine(_root, "data", "workspaces.json")).Find(_workspace)!;
+        Assert.Equal((3, "coder", true), (reloaded.Autonomy, reloaded.WorkerId, reloaded.StageChanges));
+        Assert.Contains(_users.AuditTrail(), e => e is { Account: "alice", Action: "workspace settings changed" }
+            && e.Detail == $"{_workspace}: autonomous, worker coder, staging on");
+    }
+
+    /// <summary>No worker named is the workspace's default worker; and the picker offers the settings' workers.</summary>
+    [Fact]
+    public void No_worker_named_is_the_default_worker_and_the_picker_lists_the_settings_workers()
+    {
+        var history = HistoryOf(out var engine, ("writer", "Writer"), ("coder", "Coder"));
+        history.SaveSettings(As("alice"), _workspace, 3, "coder", true);
+
+        Assert.Null(history.SaveSettings(As("alice"), _workspace, 1, "  ", false));
+
+        var saved = engine.Workspaces.Find(_workspace)!;
+        Assert.Equal((1, null, false), (saved.Autonomy, saved.WorkerId, saved.StageChanges));
+        Assert.Contains(_users.AuditTrail(), e => e.Detail == $"{_workspace}: suggest, worker default, staging off");
+        Assert.Equal([("writer", "Writer"), ("coder", "Coder")], history.Workers());
+    }
+
+    [Fact]
+    public void A_viewer_cannot_change_a_workspace_s_settings()
+    {
+        var history = HistoryOf(out var engine);
+
+        Assert.Contains("role does not include", history.SaveSettings(As("vera"), _workspace, 3, null, true));
+
+        var saved = engine.Workspaces.Find(_workspace)!;
+        Assert.Equal((2, false), (saved.Autonomy, saved.StageChanges));
+        Assert.DoesNotContain(_users.AuditTrail(), e => e.Action == "workspace settings changed");
+    }
+
+    /// <summary>A page posting 9 would otherwise be saved as a level that is no position of the slider.</summary>
+    [Fact]
+    public void A_level_out_of_range_is_refused()
+    {
+        var history = HistoryOf(out var engine);
+
+        Assert.Contains("level", history.SaveSettings(As("alice"), _workspace, 4, null, false));
+        Assert.Contains("level", history.SaveSettings(As("alice"), _workspace, -1, null, false));
+
+        Assert.Equal(2, engine.Workspaces.Find(_workspace)!.Autonomy);
+    }
+
+    [Fact]
+    public void A_worker_the_settings_do_not_have_is_refused()
+    {
+        var history = HistoryOf(out var engine, ("writer", "Writer"));
+
+        Assert.Contains("no worker", history.SaveSettings(As("alice"), _workspace, 2, "ghost", false));
+
+        Assert.Null(engine.Workspaces.Find(_workspace)!.WorkerId);
+    }
+
+    /// <summary>SaveSettings alone would list any folder it is given - the server's disks, for a post.</summary>
+    [Fact]
+    public void Settings_of_a_folder_the_service_does_not_know_are_refused()
+    {
+        var history = HistoryOf(out var engine);
+        var elsewhere = Path.Combine(_root, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+
+        Assert.Contains("does not know that folder", history.SaveSettings(As("alice"), elsewhere, 3, null, false));
+
+        Assert.Null(engine.Workspaces.Find(elsewhere));
     }
 
     // ── the service's scheduler (phase 3) ──────────────────────────────────
