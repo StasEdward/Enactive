@@ -260,6 +260,7 @@ internal static class ServerApp
             sp.GetRequiredService<Runs.WorkspaceRoots>()));
         services.AddSingleton(new Runs.WorkspaceRoots(options.WorkspaceRoots));
         services.AddSingleton<Runs.ServerHistory>();
+        services.AddSingleton<Runs.WorkspaceIds>();
         services.AddSingleton<Runs.ServerInbox>();
         services.AddSingleton<AccountAdmin>();
         services.AddSingleton<Runs.ServerSettings>();
