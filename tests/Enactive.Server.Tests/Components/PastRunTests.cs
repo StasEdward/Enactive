@@ -138,6 +138,23 @@ public sealed class PastRunTests : ComponentHost
         Assert.All(screen.FindAll(".past-run .artifact button"), b => Assert.True(b.HasAttribute("disabled")));
     }
 
+    /// <summary>A file gone since the run is not asked about: its card says so, in the window's words, and is done with.</summary>
+    [Fact]
+    public async Task A_file_already_gone_is_said_to_be_on_its_card()
+    {
+        var root = Known("project");
+        var past = await RecordedAsync(root);
+        var screen = Past("alice", root, past.RunId);
+        Tab(screen, "Artifacts");
+        File.Delete(Path.Combine(root, "digest.md"));
+
+        screen.FindAll(".past-run .artifact button").Single(b => b.TextContent.Trim() == "Delete").Click();
+
+        screen.WaitForAssertion(() => Assert.Equal("already gone", screen.Find(".past-run .artifact-status").TextContent.Trim()));
+        Assert.Empty(screen.FindAll("[role=dialog]"));
+        Assert.All(screen.FindAll(".past-run .artifact button"), b => Assert.True(b.HasAttribute("disabled")));
+    }
+
     [Fact]
     public async Task A_viewer_is_offered_neither_retry_nor_delete()
     {
