@@ -69,4 +69,38 @@ public sealed class TemplateEditorTests
         Assert.Empty(saved);
         Assert.Contains("must be a slug", editor.Status);
     }
+
+    // ── what is opened, and what is asked before a delete (TemplateDrafts) ──
+
+    private static StoredTemplate Stored(TemplateOrigin origin, TemplateOrigin? shadows = null)
+        => new(new TaskTemplate("release-check", "Release Check", "Check it.", Builtin: origin == TemplateOrigin.Builtin), origin, shadows);
+
+    [Fact]
+    public void A_built_in_is_opened_as_a_copy_of_the_same_id_whose_id_may_still_change()
+    {
+        var (draft, idEditable) = TemplateDrafts.Edit(Stored(TemplateOrigin.Builtin));
+
+        Assert.False(draft.Builtin);
+        Assert.Equal("release-check", draft.Id);
+        Assert.True(idEditable);
+        Assert.False(TemplateDrafts.Edit(Stored(TemplateOrigin.Workspace)).IdEditable);
+    }
+
+    [Fact]
+    public void A_duplicate_takes_an_id_nothing_uses()
+        => Assert.Equal("release-check-copy-2",
+            TemplateDrafts.Duplicate(Stored(TemplateOrigin.Global), ["release-check", "Release-Check-Copy"]).Id);
+
+    [Fact]
+    public void Deleting_one_that_replaced_a_built_in_is_a_reset_and_the_window_says_its_cancel_does_not_undo_it()
+    {
+        var reset = TemplateDrafts.Remove(Stored(TemplateOrigin.Workspace, TemplateOrigin.Builtin), "closing Settings with Cancel");
+        var delete = TemplateDrafts.Remove(Stored(TemplateOrigin.Workspace));
+
+        Assert.Equal("Reset “Release Check” to the built-in?", reset.Headline);
+        Assert.Equal("Your version is deleted and the one that ships with Enactive comes back. "
+                     + "This happens now — closing Settings with Cancel does not undo it.", reset.Body);
+        Assert.Equal(("Delete “Release Check”?", "The file is deleted from this workspace. This happens now.", "Remove", "Keep"),
+            (delete.Headline, delete.Body, delete.Confirm, delete.Cancel));
+    }
 }

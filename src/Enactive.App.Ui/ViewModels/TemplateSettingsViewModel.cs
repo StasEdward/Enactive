@@ -115,12 +115,9 @@ internal sealed partial class SettingsViewModel
     {
         _templates = new TemplateStore(workspaceRoot);
         ShowTemplatesCommand = new(() => Section = SectionTemplates);
-        AddTemplateCommand = new(() => Edit(Blank(), isNew: true));
+        AddTemplateCommand = new(() => Edit(TemplateDrafts.New(), isNew: true));
         RefreshTemplates();
     }
-
-    private static TaskTemplate Blank()
-        => new(Id: "", Name: "", Goal: "", Description: null, Category: "Custom");
 
     private void RefreshTemplates()
     {
@@ -137,32 +134,16 @@ internal sealed partial class SettingsViewModel
             var row = entry;
             Templates.Add(new TemplateRow(
                 row,
-                edit: () => Edit(Customisable(row), isNew: row.IsBuiltin),
-                duplicate: () => Edit(row.Template.Duplicate(Available(row.Template.Id + "-copy")), isNew: true),
+                edit: () =>
+                {
+                    var (draft, idEditable) = TemplateDrafts.Edit(row);
+                    Edit(draft, isNew: idEditable);
+                },
+                duplicate: () => Edit(TemplateDrafts.Duplicate(row, Templates.Select(r => r.Template.Id)), isNew: true),
                 remove: () => _ = RemoveTemplateAsync(row)));
         }
 
         OnPropertyChanged(nameof(TemplateFolders));
-    }
-
-    /// <summary>
-    /// The draft to open. A built-in becomes a normal template of the same id — saving it writes a
-    /// file that shadows the built-in, which is the documented customisation path and is undone by
-    /// deleting that file.
-    /// </summary>
-    private static TaskTemplate Customisable(StoredTemplate entry)
-        => entry.IsBuiltin ? entry.Template with { Builtin = false } : entry.Template;
-
-    /// <summary>An id nothing is using yet, so a duplicate does not silently replace its original.</summary>
-    private string Available(string wanted)
-    {
-        var taken = Templates.Select(r => r.Template.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (!taken.Contains(wanted))
-            return wanted;
-
-        for (var n = 2; ; n++)
-            if (!taken.Contains($"{wanted}-{n}"))
-                return $"{wanted}-{n}";
     }
 
     private void Edit(TaskTemplate draft, bool isNew)
@@ -186,15 +167,9 @@ internal sealed partial class SettingsViewModel
         if (_templates is null || entry.Scope is not { } scope)
             return;
 
-        var (headline, detail) = entry.Shadows == TemplateOrigin.Builtin
-            ? ($"Reset “{entry.Template.Name}” to the built-in?",
-               "Your version is deleted and the one that ships with Enactive comes back. This happens now — "
-               + "closing Settings with Cancel does not undo it.")
-            : ($"Delete “{entry.Template.Name}”?",
-               $"The file is deleted from {(scope == TemplateScope.Workspace ? "this workspace" : "your global templates")}. "
-               + "This happens now — closing Settings with Cancel does not undo it.");
-
-        if (!await ConfirmAsync(headline, detail))
+        // The window's Settings has a Cancel, and it does not undo this: said, in the question's words (TemplateDrafts).
+        var question = TemplateDrafts.Remove(entry, "closing Settings with Cancel");
+        if (!await ConfirmAsync(question.Headline, question.Body))
             return;
 
         _templates.Delete(entry.Template.Id, scope);
