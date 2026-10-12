@@ -100,6 +100,13 @@
                                   Said="@(_saidFor == question.Request.Id ? _said : null)" Busy="_answering"
                                   OnAnswer="choice => AnswerAsync(question.Request.Id, choice)" />
                 }
+                else if (_said is { Length: > 0 } late)
+                {
+                    @* Two people pressed an answer at once: the service took the other one, and the card went with the
+                       question. Said under the card only, the refusal went with it too - the card vanished under the
+                       second person's pointer and nothing said why. *@
+                    <p class="said" role="alert">@late</p>
+                }
             </Decision>
         </StatusColumn>
     </div>
@@ -201,6 +208,10 @@
             _repoSeen = seen;
             _repoReads++;
         }
+        // A refusal is about its own question: once another is up, it is forgotten - kept, it came back as that one's card
+        // went, and said a question was answered that had nothing to do with it.
+        if (_run?.Questions.Pending is { } up && up.Request.Id != _saidFor)
+            _said = null;
         StateHasChanged();
     }
 

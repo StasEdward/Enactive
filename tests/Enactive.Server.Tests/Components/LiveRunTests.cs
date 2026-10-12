@@ -188,6 +188,36 @@ public sealed class LiveRunTests : ComponentHost
         page.WaitForAssertion(() => Assert.Empty(page.FindAll(".decision")));
     }
 
+    /// <summary>
+    /// Two people press an answer at once: the service takes the first, and the second - refused - is told in words. The
+    /// card goes from both pages with the question, and the refusal was drawn under that card only: the second person saw
+    /// the card vanish under their pointer and never read why.
+    /// </summary>
+    [Fact]
+    public async Task A_late_answer_is_told_the_question_was_answered_after_its_card_has_gone()
+    {
+        var run = await StartedAsync();
+        var request = WriteFile(run.Workspace);
+        // Up as the router puts it up, with an answer the router no longer takes: somebody else's got there first.
+        await run.Questions.ShowAsync(request, [new DecisionChoice("Allow", "allow"), new DecisionChoice("Deny", "deny")], _ => false);
+        var page = Open("ada", run);
+        page.WaitForAssertion(() => Assert.NotEmpty(Answers(page)));
+
+        page.FindAll(".decision button").Single(b => b.TextContent.Trim() == "Deny").Click();
+        await run.Questions.ClearAsync(request);
+
+        page.WaitForAssertion(() => Assert.Empty(page.FindAll(".decision")));
+        Assert.Equal("That question has already been answered, or withdrawn.", page.Find("[role=alert]").TextContent.Trim());
+
+        // The run asks again: the refusal was about the question before, and is not said again when this one goes.
+        var next = WriteFile(run.Workspace);
+        await run.Questions.ShowAsync(next, [new DecisionChoice("Allow", "allow")], _ => true);
+        page.WaitForAssertion(() => Assert.NotEmpty(Answers(page)));
+        await run.Questions.ClearAsync(next);
+        page.WaitForAssertion(() => Assert.Empty(page.FindAll(".decision")));
+        Assert.Empty(page.FindAll("[role=alert]"));
+    }
+
     [Fact]
     public async Task The_tiles_follow_the_panel()
     {
