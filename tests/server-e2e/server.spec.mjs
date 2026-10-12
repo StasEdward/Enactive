@@ -370,20 +370,39 @@ test('an admin adds an MCP server with a token header, and the page names the he
 
 test('an operator writes a template and schedules it, and the schedule says when it runs next', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
-  // The workspace is chosen in the Runs screen's switcher, and its templates and schedules are a link from there.
-  await page.getByRole('button', { name: /^Workspace:/ }).click();
-  await page.getByRole('link', { name: /^project/ }).click();
-  await expect(page.getByRole('button', { name: 'Workspace: project' })).toBeVisible();
-  await page.getByRole('link', { name: 'Templates and schedules' }).click();
+  // Templates are the rail's, on the workspace used last - "project" is picked in the screen's switcher when it is not.
+  await page.getByRole('link', { name: 'Templates · a saved task', exact: true }).click();
+  // On the Templates screen first: the Runs screen has a workspace card of its own, read before it was replaced.
+  await expect(page.getByRole('link', { name: 'New template', exact: true })).toBeVisible();
+  await onProject(page);
 
-  await page.getByRole('link', { name: 'New template…' }).click();
-  await page.getByLabel('The template, as JSON').fill(JSON.stringify({
-    id: 'digest', name: 'Digest', goal: 'Write the digest of {topic}.',
-    parameters: [{ id: 'topic', name: 'Topic', type: 'Text', required: true }]
-  }));
-  await page.getByRole('button', { name: 'Save' }).click();
+  // Written on the editor's form (the window's), its parameter added on the form too.
+  await page.getByRole('link', { name: 'New template', exact: true }).click();
+  // Exact: the parameter's own "id" is beside the template's "Id".
+  await page.getByLabel('Id', { exact: true }).fill('digest');
+  await page.getByLabel('Name', { exact: true }).fill('Digest');
+  await page.getByLabel('Goal', { exact: true }).fill('Write the digest of {topic}.');
+  await page.getByRole('button', { name: 'Add parameter' }).click();
+  await page.getByLabel('id', { exact: true }).fill('topic');
+  await page.getByLabel('Label shown to you').fill('Topic');
+  // The JSON tab is the same template: what the form says, in the store's own words.
+  await page.getByRole('tab', { name: 'JSON' }).click();
+  await expect(page.getByLabel('The template, as JSON')).toHaveValue(/"Id": "topic"/);
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+
+  // Back in the library, on the template saved: what it asks for, and what it will be asked to do.
   await expect(page.getByText("Saved 'Digest' to the workspace's library.")).toBeVisible();
+  const template = page.getByRole('region', { name: 'Template' });
+  await expect(template.getByText('Write the digest of {topic}.')).toBeVisible();
+  await expect(template.getByLabel('Topic')).toBeVisible();
+  await expect(template.getByRole('button', { name: 'Run', exact: true })).toBeDisabled();
 
+  // Its schedules are the Runs screen's link until they have a screen of their own (Task 17).
+  await page.getByRole('link', { name: 'Runs', exact: true }).click();
+  // On the Runs screen first: the Templates screen has a workspace card of its own, read before it was replaced.
+  await expect(page.getByRole('heading', { name: 'Runs' })).toBeVisible();
+  await onProject(page);
+  await page.getByRole('link', { name: 'Schedules', exact: true }).click();
   await page.getByRole('link', { name: 'New schedule…' }).click();
   await page.getByLabel('Name', { exact: true }).fill('morning digest');
   await page.getByRole('combobox', { name: 'Runs' }).selectOption({ label: 'Template · Digest' });
