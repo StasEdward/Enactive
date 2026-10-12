@@ -22,7 +22,13 @@ internal sealed class RunPanel(Func<string?, ModelReach> reachOf)
 
     public int PromptTokens { get; private set; }
     public int CompletionTokens { get; private set; }
-    public int Artifacts { get; private set; }
+    /// <summary>
+    /// Files the run produced, one per path, case-insensitive. Matches the window's artifact cards (one card per file,
+    /// MainWindow.AddArtifact): counting every event made a step that wrote report.md twice read 2 here and 1 there.
+    /// </summary>
+    public int Artifacts => _artifacts.Count;
+
+    private readonly HashSet<string> _artifacts = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Folds one event in. True when a figure changed, so a host redraws only for events that matter.</summary>
     public bool Apply(WorkEvent ev)
@@ -44,8 +50,14 @@ internal sealed class RunPanel(Func<string?, ModelReach> reachOf)
                 return true;
 
             case EventKind.ArtifactProduced:
-                Artifacts++;
-                return true;
+                // The path the window uses, with its fallback for a run recorded before the payload named one:
+                // the text after the first ": " in the summary, else the summary itself.
+                var path = ev.ArtifactPath()
+                           ?? (ev.Summary.Contains(": ", StringComparison.Ordinal)
+                               ? ev.Summary[(ev.Summary.IndexOf(": ", StringComparison.Ordinal) + 2)..]
+                               : ev.Summary);
+                // A repeated write to a known path says nothing new.
+                return _artifacts.Add(path);
 
             default:
                 return false;

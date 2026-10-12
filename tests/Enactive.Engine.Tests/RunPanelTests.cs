@@ -1,6 +1,7 @@
 namespace Enactive.Engine.Tests;
 
 using Enactive.Application.Projections;
+using Enactive.Core.Chat;
 using Enactive.Core.Events;
 using Xunit;
 
@@ -60,6 +61,23 @@ public sealed class RunPanelTests
     }
 
     [Fact]
+    public void A_file_written_twice_counts_once_as_in_the_window()
+    {
+        var panel = new RunPanel(ReachOf);
+        Func<string, WorkEvent> wrote = path => Event(EventKind.ArtifactProduced, "Wrote: " + path,
+            WorkEventPayload.ArtifactPayload("document", path));
+
+        Assert.True(panel.Apply(wrote("report.md")));
+        Assert.False(panel.Apply(wrote("report.md")));
+        Assert.False(panel.Apply(wrote("REPORT.md")));
+        // A run recorded before the payload named a path: the window reads it from the summary.
+        Assert.True(panel.Apply(Event(EventKind.ArtifactProduced, "Wrote: old.md")));
+        Assert.False(panel.Apply(Event(EventKind.ArtifactProduced, "Wrote: old.md")));
+
+        Assert.Equal(2, panel.Artifacts);
+    }
+
+    [Fact]
     public void Other_events_change_nothing()
     {
         var panel = new RunPanel(ReachOf);
@@ -81,7 +99,8 @@ public sealed class RunPanelTests
         var panel = new RunPanel(ReachOf);
         panel.Performance.ShowRun(Run);
 
-        panel.Add(new Enactive.Core.Chat.ModelCallMetrics("anthropic", "sonnet", 100, 50, null, 2, 0.5, null, Run));
+        panel.Add(new ModelCallMetrics(ProviderId: "anthropic", Model: "sonnet", PromptTokens: 100, CompletionTokens: 50,
+            CachedPromptTokens: null, RequestSeconds: 2, FirstDeltaSeconds: 0.5, Timings: null, RunId: Run));
 
         Assert.Single(panel.Performance.Rows);
     }
