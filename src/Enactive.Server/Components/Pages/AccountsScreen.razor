@@ -16,7 +16,17 @@
 
 <div class="admin-screen">
     <h1 class="admin-title">Accounts</h1>
-    @if (_refusal is { } refusal)
+    @* Above the refusal as well: an Admin who changes their own role or password ends their own session with it, and
+       what was done must still be said when the page then refuses them. *@
+    @if (_loaded && _said is { } said)
+    {
+        <p class="hint admin-said" role="status">@said</p>
+    }
+    @if (!_loaded)
+    {
+        // Nothing until the role is checked: an unchecked page is a closed one.
+    }
+    else if (_refusal is { } refusal)
     {
         <p class="said" role="alert">@refusal</p>
     }
@@ -32,11 +42,6 @@
         </div>
 
         <p class="hint">Green can sign in; amber is locked after too many wrong passwords and frees itself; grey is disabled. The first administrator is made on the server itself, never here.</p>
-
-        @if (_said is { } said)
-        {
-            <p class="hint admin-said" role="status">@said</p>
-        }
 
         <ul class="cards settings-cards" aria-label="Accounts">
             @foreach (var row in _rows)
@@ -119,6 +124,10 @@
     [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
 
     private ClaimsPrincipal _user = new();
+
+    // Closed until the gate has run: while the person is still being read, a null refusal would have meant "allowed",
+    // and the page drew the trust warning and Add before it knew who was asking.
+    private bool _loaded;
     private string? _refusal;
     private IReadOnlyList<AccountRow> _rows = [];
     private string? _said;
@@ -149,6 +158,7 @@
     {
         _refusal = Service.Refusal(_user);
         _rows = _refusal is null ? Service.List(_user).Select(a => AccountRow.Of(a, DateTimeOffset.UtcNow)).ToList() : [];
+        _loaded = true;
     }
 
     private void OpenAdd()

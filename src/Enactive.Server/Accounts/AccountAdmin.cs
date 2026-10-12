@@ -47,7 +47,7 @@ internal sealed class AccountAdmin(UserStore users)
     {
         if (Admin(user) is not { } admin)
             return new(false, Refusal(user) ?? "Your session has ended. Sign in again.");
-        // A name copied with a space around it: the form's post trimmed it, and the page's box sends it as typed.
+        // Trimmed: a name pasted with a space around it was refused as a name with whitespace.
         name = name.Trim();
 
         string? problem;

@@ -6,6 +6,7 @@ using Bunit;
 using Enactive.Server.Accounts;
 using Enactive.Server.Components.Pages;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Components.Authorization;
 
 /// <summary>
 /// The accounts and the audit trail (web only, Admin), drawn as the settings' lists are: a card per account with its
@@ -213,6 +214,44 @@ public sealed partial class AccountsTests : ComponentHost
         Assert.False(Users.Find("alice")!.Disabled);
     }
 
+    /// <summary>
+    /// An Admin who sets their own password ends their own session with it: the page then refuses them, and still says
+    /// what was done - the refusal alone read as if the change had not been made.
+    /// </summary>
+    [Fact]
+    public void An_admin_s_own_change_is_still_said_when_the_page_then_refuses_them()
+    {
+        var screen = Accounts("ada");
+
+        Edit(screen, "ada");
+        screen.Find("#account-password").Input(NewPassword);
+        screen.Find("#account-again").Input(NewPassword);
+        Press(Dialog(screen), "Set password");
+
+        Assert.Equal("New password set for ada; its sessions are ended.", screen.Find("[role='status']").TextContent.Trim());
+        Assert.Equal("Your session has ended. Sign in again.", screen.Find("[role='alert']").TextContent.Trim());
+        Assert.Empty(screen.FindAll(".settings-card"));
+    }
+
+    /// <summary>
+    /// Closed until the role is checked: while the person is still being read the page draws nothing of an Admin's - it
+    /// drew the trust warning and Add, a null refusal taken for "allowed".
+    /// </summary>
+    [Fact]
+    public void Nothing_of_an_admin_s_is_drawn_before_the_role_is_checked()
+    {
+        var who = new TaskCompletionSource<AuthenticationState>();
+        var accounts = Render<AccountsScreen>(p => p.AddCascadingValue(who.Task));
+        var audit = Render<AuditScreen>(p => p.AddCascadingValue(who.Task));
+
+        Assert.Empty(accounts.FindAll(".admin-trust, button, [role='alert'], [role='status']"));
+        Assert.Empty(audit.FindAll("table, [role='alert'], .hint"));
+
+        who.SetResult(new AuthenticationState(ServerAuth.PrincipalOf(Users.Find("ada")!)));
+        accounts.WaitForAssertion(() => Assert.NotEmpty(accounts.FindAll(".admin-trust")));
+        audit.WaitForAssertion(() => Assert.NotEmpty(audit.FindAll(".hint")));
+    }
+
     /// <summary>A lockout says until when in the same figures on any machine: the current culture made it "14.05" on some.</summary>
     [Fact]
     public void A_locked_account_says_until_when_whatever_the_culture()
@@ -285,6 +324,19 @@ public sealed partial class AccountsTests : ComponentHost
 
         Assert.Equal("Your role does not include administering accounts.", screen.Find("[role='alert']").TextContent.Trim());
         Assert.Empty(screen.FindAll("table"));
+    }
+
+    /// <summary>Exactly as many as are drawn: the page says nothing of older entries, because there are none.</summary>
+    [Fact]
+    public void At_exactly_the_limit_the_audit_says_nothing_of_older_entries()
+    {
+        for (var i = 0; i < AuditScreen.Newest; i++)
+            Users.Audit("alice", "run started", $"task {i}");
+
+        var screen = Audit("ada");
+
+        Assert.Equal(AuditScreen.Newest, screen.FindAll("tbody tr").Count);
+        Assert.DoesNotContain("The newest", screen.Find(".admin-screen").TextContent);
     }
 
     /// <summary>The newest entries only, and the page says so: the table is never trimmed, and years of sign-ins drawn at once would be the page.</summary>

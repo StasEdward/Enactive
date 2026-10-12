@@ -79,6 +79,7 @@ public sealed class LooksTests
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Entry((FeedEntryKind)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Template((TemplateEdge)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Schedule((ScheduleState)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Account((Enactive.Server.Accounts.AccountStanding)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Autonomy(4));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Autonomy(-1));
         // Applied and rejected at once is not a state a change is ever in.
@@ -209,6 +210,8 @@ public sealed class LooksTests
         string[] tiers = ["AutonomyObserve", "AutonomySuggest", "AutonomyExecute", "AutonomyAutonomous"];
         for (var level = 0; level < tiers.Length; level++)
             rows.Add(($"Autonomy.{level}", Looks.Autonomy(level), BrandHex(tiers[level])));
+
+        // Looks.Account has no row here: the accounts are the web's alone, and the window has no colour for them to match.
 
         var differ = rows
             .Where(r => ToneHex(r.Class) != r.Window)
