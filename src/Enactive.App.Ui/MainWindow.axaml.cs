@@ -20,6 +20,7 @@ using Enactive.App.Ui.ViewModels;
 using Enactive.Core.Events;
 using Enactive.Core.History;
 using Enactive.Core.Inbox;
+using Enactive.Core.Schedules;
 using Enactive.Core.Intents;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
@@ -99,6 +100,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     // The strip at the foot of the window (RepoBarViewModel): local git every half minute while nothing runs, GitHub at
     // most every two minutes - it is a network call, and a strip is not worth a rate limit.
     private DispatcherTimer? _repoPoll;
+
+    // The schedules, asked every minute while the app is open - in the tray too. See TickSchedulesAsync.
+    private DispatcherTimer? _scheduleTick;
+    private int _scheduleTicking;
+    private static readonly TimeSpan ScheduleTickEvery = TimeSpan.FromMinutes(1);
     private DateTimeOffset _pullRequestReadAt = DateTimeOffset.MinValue;
     private int _repoReads;
     private static readonly TimeSpan PullRequestEvery = TimeSpan.FromMinutes(2);
@@ -259,6 +265,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _inboxPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         _inboxPoll.Tick += (_, _) => RefreshInboxButton();
         _inboxPoll.Start();
+
+        _scheduleTick = new DispatcherTimer { Interval = ScheduleTickEvery };
+        _scheduleTick.Tick += (_, _) => _ = TickSchedulesAsync();
+        _scheduleTick.Start();
+        // Once at start too: an occurrence that came due while the app was closed is still within its grace now.
+        _ = TickSchedulesAsync();
 
         // After InitializeComponent, or the XAML's own Width/Height would overwrite the saved bounds.
         TrySetIcon();
@@ -612,6 +624,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
             _shuttingDown = true;
             _inboxPoll?.Stop();
+            _scheduleTick?.Stop();
             _vm.StatusPhase = "Stopping…";
             // Begin all shutdown paths before awaiting any one of them. Keep the dispatcher and log
             // alive until recorder, resources and final UI cleanup have finished.
@@ -1900,6 +1913,116 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             if (execution is null) EndLive(row);
             else _ = ObserveBackgroundAsync(execution);
         }
+
+    /// <summary>
+    /// One tick of the schedules: the pulse, then the most overdue schedule anywhere, run in the background.
+    ///
+    /// <para>The app did not run its own schedules (2026-10-11): only the console's --due-all did, woken by a Windows
+    /// task nobody had registered, so a schedule made in this window never ran while the window was open all day.
+    /// Now the app asks every minute while it is open, the tray included. The console path stays for a machine where
+    /// the app is not running; both take the same claim (DueSchedules), so they do not start one schedule twice.</para>
+    /// </summary>
+    private async Task TickSchedulesAsync()
+    {
+        // One tick at a time: a slow one (a large schedules file, a workspace on a network drive) must not be
+        // overtaken by the next and decide the same schedule twice in this process.
+        if (_shuttingDown || Interlocked.Exchange(ref _scheduleTicking, 1) == 1)
+            return;
+        try
+        {
+            var now = DateTimeOffset.Now;
+            // The pulse first: it says the schedules ARE being asked, which the schedules window reports.
+            Heartbeat.Stamp(now);
+            // No model, no run - and the occurrence is left for a tick within its grace, after it is configured.
+            if (_engineProblem is { Length: > 0 })
+                return;
+
+            if (await Task.Run(() => DueSchedules.Default.TakeAsync(now, CancellationToken.None)) is not { } taken)
+                return;
+            await Dispatcher.UIThread.InvokeAsync(() => StartScheduled(taken));
+        }
+        catch (Exception ex)
+        {
+            _log.Warn(LogSource.System, "Could not check the schedules: " + ex.Message);
+        }
+        finally
+        {
+            Volatile.Write(ref _scheduleTicking, 0);
+        }
+    }
+
+    /// <summary>
+    /// A schedule's run, headless, under the schedule's own permissions and with nobody to answer: the same
+    /// run the console's --due-all starts. Its outcome goes to the Inbox under the schedule, which is where the
+    /// schedules window lists it.
+    /// </summary>
+    private void StartScheduled(TakenSchedule taken)
+    {
+        var schedule = taken.Schedule;
+        var workspace = taken.Workspace;
+        var inbox = InboxStoreFactory.Create(workspace);
+        // The schedule's level, not the slider on screen: the slider is about the folder on screen, and the
+        // template's permissions are already narrowed to the schedule's (ScheduledSpec).
+        var request = new RunRequest(workspace, taken.Spec.Goal, IntentSource.Schedule, Spec: taken.Spec)
+            { Defaults = new WorkspaceDefaults((int)schedule.Permissions.Level) };
+
+        if ((_shuttingDown ? "the app was closing" : RunComposer.Refusal(request)) is { } why)
+        {
+            taken.Dispose();
+            _ = inbox.AppendAsync(ScheduledOutcome.CouldNotStart(workspace.Id, schedule.Id, schedule.Name, why, DateTimeOffset.UtcNow),
+                CancellationToken.None);
+            return;
+        }
+
+        var engine = CurrentEngine();
+        var row = BeginLive(schedule.Name, workspace.RootPath, headless: true);
+        _log.Info(LogSource.System, $"Schedule '{schedule.Name}' started in {workspace.RootPath}.");
+
+        var execution = _background.TryStart(async ct =>
+        {
+            using (taken)
+            {
+                try
+                {
+                    // Nobody is here to answer, as at the console: a question is refused, not parked. A schedule's
+                    // template was checked for that before it was taken (ScheduleTick, approvalIsPossible: false).
+                    await using var composed = await RunComposer.ComposeAsync(engine, request, new UnattendedDecisionHandler(), ct);
+                    await BackgroundRunner.RunAsync(composed.Events(ct), inbox, workspace, schedule.Name, ct, schedule.Id);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    var line = InboxLines.For("Cancelled", 0, 0, null);
+                    await inbox.AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, line.Kind, schedule.Name,
+                        line.Summary, Guid.Empty, "unread", DateTimeOffset.UtcNow, schedule.Id), CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    await inbox.AppendAsync(ScheduledOutcome.CouldNotStart(workspace.Id, schedule.Id, schedule.Name,
+                        ex.Message, DateTimeOffset.UtcNow), CancellationToken.None);
+                }
+                finally
+                {
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        EndLive(row);
+                        if (!_shuttingDown) RefreshInboxButton();
+                        if (!_shuttingDown && string.Equals(
+                                WorkspaceRegistry.Normalise(_vm.WorkspacePath), workspace.RootPath,
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            _ = LoadRunsAsync();
+                        }
+                    });
+                }
+            }
+        });
+        if (execution is null)
+        {
+            EndLive(row);
+            taken.Dispose();
+        }
+        else _ = ObserveBackgroundAsync(execution);
+    }
 
     /// <summary>
     /// Carries on a background run that stopped at a question, now answered: from its last step
