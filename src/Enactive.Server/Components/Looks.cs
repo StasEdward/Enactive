@@ -1,0 +1,107 @@
+namespace Enactive.Server.Components;
+
+using Enactive.Application.Projections;
+using Enactive.Core.History;
+using Enactive.Providers;
+using Enactive.Workspace;
+
+/// <summary>
+/// What colour a fact is drawn in on the web: the CSS class (wwwroot/theme.css) for each state, value for value what
+/// the window's Palette.cs gives it. A page says what is the case and asks for the class; it never picks a colour.
+///
+/// <para>Each table over an enum names every value and throws on one it does not know, rather than falling back: a new
+/// state that quietly drew in the fallback colour is the state nobody noticed was new. LooksTests asks every value of
+/// every one, and holds the colour behind each class to the one Palette.cs gives the same state.</para>
+/// </summary>
+internal static class Looks
+{
+    /// <summary>A step card's edge. The window's Pending is faint, Blocked is the card that waits for a person (amber).</summary>
+    public static string Card(FeedCardStatus status) => status switch
+    {
+        FeedCardStatus.Pending => "tone-faint",
+        FeedCardStatus.Running => "tone-running",
+        FeedCardStatus.Done => "tone-done",
+        FeedCardStatus.Failed => "tone-failed",
+        FeedCardStatus.Skipped => "tone-skipped",
+        FeedCardStatus.Unverified => "tone-unverified",
+        FeedCardStatus.Blocked => "tone-warning",
+        _ => throw Unknown(status)
+    };
+
+    /// <summary>
+    /// A run's edge in a list, as Palette.RunEdge: done green, failed red, idle muted - and amber for every other word,
+    /// a run in progress included, because the window draws a status it has no end for as a person's problem to look at.
+    /// </summary>
+    public static string Run(RunStandingKind standing) => standing switch
+    {
+        RunStandingKind.Done => "tone-done",
+        RunStandingKind.Failed => "tone-failed",
+        RunStandingKind.Idle => "tone-idle",
+        RunStandingKind.Running or RunStandingKind.Open => "tone-open",
+        _ => throw Unknown(standing)
+    };
+
+    /// <summary>A line of a run's timeline, by the kind of event it was.</summary>
+    public static string Timeline(TimelineTone tone) => tone switch
+    {
+        TimelineTone.Failed => "tone-failed",
+        TimelineTone.Refused => "tone-warning",
+        TimelineTone.Succeeded => "tone-done",
+        TimelineTone.Quiet => "tone-idle",
+        TimelineTone.Plain => "tone-plain",
+        _ => throw Unknown(tone)
+    };
+
+    /// <summary>Green when it ran on this machine, blue when it did not; faint where nobody knows.</summary>
+    public static string Reach(ModelReach reach) => reach switch
+    {
+        ModelReach.Local => "tone-local",
+        ModelReach.Cloud => "tone-cloud",
+        ModelReach.Unknown => "tone-faint",
+        _ => throw Unknown(reach)
+    };
+
+    /// <summary>A staged change: amber while it waits for a person or could not be applied, then what was done.</summary>
+    public static string Change(bool applied, bool rejected) => (applied, rejected) switch
+    {
+        (false, false) => "tone-open",
+        (true, false) => "tone-done",
+        (false, true) => "tone-failed",
+        // Both at once is not a state a change is in; the window's ChangeState cannot say it either.
+        _ => throw Unknown((applied, rejected))
+    };
+
+    /// <summary>A tier, 0 Observe to 3 Autonomous: a risk scale, green through blue and yellow to red.</summary>
+    public static string Autonomy(int level) => level switch
+    {
+        >= 0 and <= 3 => $"tier-{level}",
+        _ => throw Unknown(level)
+    };
+
+    /// <summary>A pull request's checks: passed, failed, still running - or none reported.</summary>
+    public static string Ci(CiState state) => state switch
+    {
+        CiState.Passing => "tone-done",
+        CiState.Failing => "tone-failed",
+        CiState.Pending => "tone-warning",
+        CiState.None => "tone-faint",
+        _ => throw Unknown(state)
+    };
+
+    /// <summary>
+    /// Three answers, three colours, and grey for "nobody has asked" - never green. Amber rather than red for a missing
+    /// model: the provider answered and the credential was accepted, so nothing is broken; something is not installed
+    /// or is misspelled, and that is a different repair.
+    /// </summary>
+    public static string Health(ProviderHealth health) => health switch
+    {
+        ProviderHealth.Ready => "tone-done",
+        ProviderHealth.ModelMissing => "tone-warning",
+        ProviderHealth.Unreachable => "tone-failed",
+        ProviderHealth.Unknown or ProviderHealth.Checking => "tone-faint",
+        _ => throw Unknown(health)
+    };
+
+    private static ArgumentOutOfRangeException Unknown<T>(T value)
+        => new(nameof(value), value, $"No look is chosen for {typeof(T).Name} {value}: add it to Looks and theme.css.");
+}
