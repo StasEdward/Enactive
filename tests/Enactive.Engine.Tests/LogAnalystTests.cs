@@ -263,4 +263,24 @@ public sealed class LogAnalystTests
 
         Assert.DoesNotContain("_settings", window[start..end]);
     }
+
+    /// <summary>
+    /// What reading cost, said beside the answer by both hosts from one place: the tokens spent in the same digits on
+    /// every machine, and nothing when the provider did not count them - "0 tokens" reads as a free answer.
+    /// </summary>
+    [Fact]
+    public void The_cost_is_the_tokens_spent_or_nothing()
+    {
+        var was = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("ru-RU");
+            Assert.Equal("4,200 tokens", new LogAnalysisResult("fine", "a-model", 10, 10, 4000, 200).Cost);
+            Assert.Equal("", new LogAnalysisResult("fine", "a-model", 10, 10).Cost);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = was;
+        }
+    }
 }

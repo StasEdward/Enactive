@@ -20,6 +20,12 @@ public sealed record LogAnalysisResult(
     public bool WasExcerpt => LinesSent < LinesTotal;
 
     /// <summary>
+    /// What reading it cost, beside the answer's buttons: the tokens spent, or nothing when the provider did not say. In
+    /// the same digits on every host - the window and the service's page say it from here.
+    /// </summary>
+    public string Cost => PromptTokens + CompletionTokens > 0 ? $"{Invariant.N0(PromptTokens + CompletionTokens)} tokens" : "";
+
+    /// <summary>
     /// What the window says above the answer, so nobody has to guess what was read.
     ///
     /// <para>A digest is a different claim from an excerpt and has to read as one: an excerpt is
