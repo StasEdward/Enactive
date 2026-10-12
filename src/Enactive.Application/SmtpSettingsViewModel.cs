@@ -71,7 +71,31 @@ internal sealed partial class SettingsViewModel
 
     public bool SmtpStartTls { get => _smtpStartTls; set => Set(ref _smtpStartTls, value); }
     public string SmtpUser { get => _smtpUser; set => Set(ref _smtpUser, value); }
-    public string SmtpPassword { get => _smtpPassword; set => Set(ref _smtpPassword, value); }
+    public string SmtpPassword
+    {
+        get => _smtpPassword;
+        set { if (Set(ref _smtpPassword, value)) OnPropertyChanged(nameof(SmtpPasswordStored)); }
+    }
+
+    /// <summary>
+    /// A password is kept that the box does not show - on a host whose pages are never handed one
+    /// (AppSettings.WithoutSecrets), where the box opens empty, an empty box keeps it, and this is
+    /// what the pane says instead. The window's box holds the placeholder above, and never reads this.
+    /// </summary>
+    public bool SmtpPasswordStored
+        => _smtpPassword.Length == 0 && !_smtpForgetPassword && AppSettings.IsKept(_working.Smtp.PasswordProtected);
+
+    private bool _smtpForgetPassword;
+
+    /// <summary>
+    /// Takes the kept password away on Save: the explicit way to remove it where an empty box keeps
+    /// it. The window never sets it - emptying its box is how a password is removed there.
+    /// </summary>
+    public bool SmtpForgetPassword
+    {
+        get => _smtpForgetPassword;
+        set { if (Set(ref _smtpForgetPassword, value)) OnPropertyChanged(nameof(SmtpPasswordStored)); }
+    }
     public string SmtpFrom { get => _smtpFrom; set => Set(ref _smtpFrom, value); }
 
     /// <summary>One address per line. A list, not a pattern: see the note on the class.</summary>
@@ -145,8 +169,10 @@ internal sealed partial class SettingsViewModel
         _smtpRecipients = string.Join(Environment.NewLine, smtp.Recipients);
         _smtpSendWithoutAsking = smtp.SendWithoutAsking;
         _smtpPassword = string.IsNullOrEmpty(smtp.Password) ? string.Empty : PasswordUnchanged;
-        _smtpPasswordUnreadable =
-            string.IsNullOrEmpty(smtp.Password) && !string.IsNullOrEmpty(smtp.PasswordProtected);
+        // Asked of the stored form, not read off an empty password beside a stored one: on a copy that holds no
+        // secret (AppSettings.WithoutSecrets) every password stored looks like that, and the pane said each one was
+        // unreadable.
+        _smtpPasswordUnreadable = _working.CannotDecrypt(smtp.PasswordProtected);
 
     }
 
@@ -202,6 +228,13 @@ internal sealed partial class SettingsViewModel
         // empty box - is what was meant, so clearing the box clears the password.
         if (SmtpPassword != PasswordUnchanged)
             smtp.Password = SmtpPassword;
+
+        // Both forms: on a copy that holds no secret, an empty password beside a stored one is the password kept.
+        if (SmtpForgetPassword)
+        {
+            smtp.Password = string.Empty;
+            smtp.PasswordProtected = string.Empty;
+        }
 
 
     }

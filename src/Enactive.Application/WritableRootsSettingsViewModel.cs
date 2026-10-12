@@ -37,8 +37,12 @@ internal sealed partial class SettingsViewModel
         + "answer \"keep for this workspace\" on the card that asks about a command writing "
         + "somewhere else.";
 
-    private void InitializeWritableRoots()
+    private Func<IEnumerable<string>> _knownWorkspaces = () => WorkspaceRegistry.Load().Entries.Select(e => e.RootPath);
+
+    private void InitializeWritableRoots(WritableRoots? writableRoots, Func<IEnumerable<string>>? knownWorkspaces)
     {
+        _writableRoots = writableRoots ?? WritableRoots.Default;
+        _knownWorkspaces = knownWorkspaces ?? _knownWorkspaces;
         ShowWritableRootsCommand = new(() => Section = SectionWritableRoots);
         ReloadWritableRoots();
     }
@@ -54,7 +58,7 @@ internal sealed partial class SettingsViewModel
 
         // The store is keyed by the id a PATH gives and holds no paths, on purpose - see
         // WritableRoots.Review. The registry is what knows the workspaces, so the join happens here.
-        var known = WorkspaceRegistry.Load().Entries.Select(e => e.RootPath).ToArray();
+        var known = _knownWorkspaces().ToArray();
 
         foreach (var entry in _writableRoots.Review(known))
         {

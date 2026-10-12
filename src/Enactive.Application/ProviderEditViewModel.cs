@@ -43,10 +43,15 @@ internal sealed class ProviderEditViewModel : ObservableObject
     private string _status = string.Empty;
     private string? _selectedFetchedModel;
 
-    public ProviderEditViewModel(ProviderConfig config, Action onSaved)
+    private readonly IProviderCalls _calls;
+    private bool _forgetKey;
+
+    /// <param name="calls">How Test and Fetch reach the provider; null asks it directly with the key in the box (the window).</param>
+    public ProviderEditViewModel(ProviderConfig config, Action onSaved, IProviderCalls? calls = null)
     {
         _config = config;
         _onSaved = onSaved;
+        _calls = calls ?? DirectProviderCalls.Instance;
 
         _id = config.Id;
         _kind = config.Kind;
@@ -100,7 +105,24 @@ internal sealed class ProviderEditViewModel : ObservableObject
     /// <summary>The reasoning profile and reasoning sent back - read by the OpenAI-compatible adapter alone.</summary>
     public bool ShowsOpenAiOptions => Kind == ProviderKind.OpenAiCompatible;
     public string BaseUrl { get => _baseUrl; set => Set(ref _baseUrl, value); }
-    public string ApiKey { get => _apiKey; set => Set(ref _apiKey, value); }
+    public string ApiKey
+    {
+        get => _apiKey;
+        set { if (Set(ref _apiKey, value)) OnPropertyChanged(nameof(KeyStored)); }
+    }
+
+    /// <summary>
+    /// A key is kept for this provider that the box does not show. The window's box shows the key itself; a host whose
+    /// pages are never handed a stored key (AppSettings.WithoutSecrets) shows an empty box and says this instead, and an
+    /// empty box there keeps the key rather than removing it.
+    /// </summary>
+    public bool KeyStored => _apiKey.Length == 0 && AppSettings.IsKept(_config.ApiKeyProtected);
+
+    /// <summary>
+    /// Takes the kept key away on Apply - the explicit way to remove one where an empty box means "keep it". The window
+    /// never sets it: there the box holds the key, and emptying it removes it.
+    /// </summary>
+    public bool ForgetKey { get => _forgetKey; set => Set(ref _forgetKey, value); }
     public string MaxTokensText { get => _maxTokensText; set => Set(ref _maxTokensText, value); }
     public string OllamaKeepAliveText { get => _ollamaKeepAliveText; set => Set(ref _ollamaKeepAliveText, value); }
     public string StreamIdleTimeoutText { get => _streamIdleTimeoutText; set => Set(ref _streamIdleTimeoutText, value); }
@@ -209,13 +231,25 @@ internal sealed class ProviderEditViewModel : ObservableObject
         Status = "checking…";
         Health = ProviderHealth.Checking;
 
-        var status = await ProviderProbe.CheckAsync(
-            Http, Kind, Id.Trim(), BaseUrl.Trim(), ApiKey,
-            ModelFetch.ParseHeaders(HeadersText), ModelLines().FirstOrDefault());
+        var status = await _calls.CheckAsync(Typed(Id.Trim(), BaseUrl.Trim()), ModelLines().FirstOrDefault());
 
         Status = status.Summary;
         Health = status.Health;
     }
+
+    /// <summary>
+    /// The provider as the boxes have it, for Test and Fetch: and, where the key box was left empty, which key is kept
+    /// for it - unless Remove was ticked, when it is asked with none, as it would be once saved.
+    /// </summary>
+    private ProviderConfig Typed(string id, string baseUrl) => new()
+    {
+        Id = id,
+        Kind = Kind,
+        BaseUrl = baseUrl,
+        ApiKey = ApiKey,
+        ApiKeyProtected = ApiKey.Length == 0 && !ForgetKey ? _config.ApiKeyProtected : "",
+        Headers = ModelFetch.ParseHeaders(HeadersText)
+    };
 
     private async Task FetchModelsAsync()
     {
@@ -223,8 +257,7 @@ internal sealed class ProviderEditViewModel : ObservableObject
         try
         {
             // Which catalogue a provider has is a fact about the provider, and lives with it.
-            var models = await ModelFetch.ForAsync(
-                Http, Kind, BaseUrl, ApiKey, ModelFetch.ParseHeaders(HeadersText));
+            var models = await _calls.ModelsAsync(Typed(Id, BaseUrl));
 
             FetchedModels.Clear();
             foreach (var m in models)
@@ -249,7 +282,14 @@ internal sealed class ProviderEditViewModel : ObservableObject
         _config.Id = Id.Trim();
         _config.Kind = Kind;
         _config.BaseUrl = BaseUrl.Trim();
-        _config.ApiKey = ApiKey.Trim();
+        if (ForgetKey)
+        {
+            // Both forms: an empty plaintext beside a stored one is a key kept, on a page that was never handed it.
+            _config.ApiKey = string.Empty;
+            _config.ApiKeyProtected = string.Empty;
+        }
+        else
+            _config.ApiKey = ApiKey.Trim();
         _config.MaxTokens = int.TryParse(MaxTokensText.Trim(), out var mt) && mt > 0 ? mt : null;
         _config.StreamIdleTimeoutSeconds = int.TryParse(StreamIdleTimeoutText, out var idle) && idle > 0 ? idle : 300;
         _config.OpenAiReasoningProfile = OpenAiReasoningProfile;

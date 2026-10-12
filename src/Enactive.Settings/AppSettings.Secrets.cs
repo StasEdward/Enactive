@@ -1,5 +1,7 @@
 namespace Enactive.Settings;
 
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Enactive.Secrets;
 
@@ -17,6 +19,11 @@ using Enactive.Secrets;
 /// is. Such a secret keeps its stored form untouched while it is, and is otherwise written exactly as it stands -
 /// an empty one removes it - because the person editing that server is the one who decides.
 /// </param>
+/// <param name="Blank">Removes the plaintext, for a copy that must hold none (<see cref="AppSettings.WithoutSecrets"/>).</param>
+/// <param name="FillBlank">
+/// Puts back, from the decrypted value of the secret it was made from, what <see cref="Blank"/> removed and nobody has
+/// typed over since (<see cref="AppSettings.RestoreSecrets"/>).
+/// </param>
 internal sealed record SettingsSecret(
     string Name,
     Func<string> Stored,
@@ -25,6 +32,8 @@ internal sealed record SettingsSecret(
     Func<string, bool> Use,
     string Unreadable,
     string Unencrypted,
+    Action Blank,
+    Action<string> FillBlank,
     Func<bool>? Unavailable = null,
     Action? CannotRead = null);
 
@@ -105,6 +114,26 @@ public sealed partial class AppSettings
                 + "are entered again: edit it under MCP and re-enter its environment and headers, or remove it.",
                 $"The credentials for MCP server '{server.Id}' are stored UNENCRYPTED in settings.json. They will be "
                 + "encrypted the next time settings are saved.",
+                // The names stay - a page says which are set - and only the values go.
+                Blank: () =>
+                {
+                    server.Environment = server.Environment.ToDictionary(p => p.Key, _ => "");
+                    server.Headers = server.Headers.ToDictionary(p => p.Key, _ => "");
+                },
+                // Each of the two on its own: new headers typed over a server whose environment nobody touched must
+                // not take the environment with them, and the other way round.
+                FillBlank: plain =>
+                {
+                    McpSecrets? kept;
+                    try { kept = JsonSerializer.Deserialize<McpSecrets>(plain); }
+                    catch (JsonException) { return; }
+                    if (kept is null)
+                        return;
+                    if (kept.Environment is { } environment && server.Environment.Values.All(v => v.Length == 0))
+                        server.Environment = new(environment);
+                    if (kept.Headers is { } headers && server.Headers.Values.All(v => v.Length == 0))
+                        server.Headers = new(headers);
+                },
                 Unavailable: () => server.CredentialsUnavailable,
                 CannotRead: () => server.CredentialsUnavailable = true));
 
@@ -112,8 +141,94 @@ public sealed partial class AppSettings
 
         static SettingsSecret Text(string name, Func<string> stored, Action<string> store, Func<string> plain,
             Action<string> use, string unreadable, string unencrypted)
-            => new(name, stored, store, plain, value => { use(value); return value.Length > 0; }, unreadable, unencrypted);
+            => new(name, stored, store, plain, value => { use(value); return value.Length > 0; }, unreadable, unencrypted,
+                Blank: () => use(""),
+                FillBlank: value =>
+                {
+                    if (plain().Length == 0)
+                        use(value);
+                });
     }
+
+    /// <summary>What a stored form is called in a copy that holds no secret (<see cref="WithoutSecrets"/>).</summary>
+    private const string KeptPrefix = "kept:";
+
+    // A key of this process's own: a handle names a stored secret to the settings it was made from and says nothing
+    // about it to anybody else - not even whether two copies opened at different times hold the same one.
+    private static readonly byte[] HandleKey = RandomNumberGenerator.GetBytes(32);
+
+    private static string Handle(string stored)
+        => KeptPrefix + Convert.ToHexString(HMACSHA256.HashData(HandleKey, Encoding.UTF8.GetBytes(stored)));
+
+    /// <summary>
+    /// A copy that holds no secret at all, for a host whose pages edit the settings - the service's, where the copy a
+    /// page edits lives as long as the page does. Every plaintext is removed, and every stored form, which is the
+    /// ciphertext or - from an older build - the secret in the clear, is replaced by a handle that names it.
+    ///
+    /// <para>The page says whether a secret is kept (<see cref="IsKept"/>), takes a new one typed over the blank, and
+    /// removes one by emptying its stored form too. <see cref="RestoreSecrets"/> puts back every one that was left
+    /// alone, from the settings the copy was made of. Handed the decrypted settings, as it used to be, the page held
+    /// every key and password in the clear for as long as it was open.</para>
+    /// </summary>
+    public AppSettings WithoutSecrets()
+    {
+        var copy = Clone();
+        foreach (var secret in copy.Secrets())
+        {
+            secret.Blank();
+            if (secret.Stored() is { Length: > 0 } stored)
+                secret.Store(Handle(stored));
+        }
+        copy._unreadableSecrets = new HashSet<string>(_unreadableSecrets.Select(Handle), StringComparer.Ordinal);
+        return copy;
+    }
+
+    /// <summary>
+    /// Puts back into a copy made by <see cref="WithoutSecrets"/> the secrets it left alone, from <paramref name="from"/>
+    /// - the settings it was made of, read again: every handle becomes the stored form it names, and every plaintext
+    /// left blank the secret decrypted from it. One typed over the blank stays as typed; one whose stored form was
+    /// emptied stays removed.
+    /// </summary>
+    /// <returns>
+    /// The secrets whose handle names nothing in <paramref name="from"/>, which are left removed - the settings were
+    /// changed since the copy was made. Empty when every one was found.
+    /// </returns>
+    public IReadOnlyList<string> RestoreSecrets(AppSettings from)
+    {
+        var kept = new Dictionary<string, SettingsSecret>(StringComparer.Ordinal);
+        foreach (var secret in from.Secrets())
+            if (secret.Stored() is { Length: > 0 } stored)
+                kept.TryAdd(Handle(stored), secret);
+
+        var missing = new List<string>();
+        foreach (var secret in Secrets())
+        {
+            if (!secret.Stored().StartsWith(KeptPrefix, StringComparison.Ordinal))
+                continue;
+            if (!kept.TryGetValue(secret.Stored(), out var original))
+            {
+                // Never written as it is: a handle on disk would be a secret replaced by a name for it.
+                secret.Store("");
+                missing.Add(secret.Name);
+                continue;
+            }
+            secret.Store(original.Stored());
+            secret.FillBlank(original.Plain());
+        }
+        // One that cannot be decrypted is kept as it was on save (ProtectOrPreserve), as it is for settings loaded.
+        _unreadableSecrets.UnionWith(from._unreadableSecrets);
+        return missing;
+    }
+
+    /// <summary>Whether a secret is kept in this stored form - the ciphertext, or a handle for it: what a page says instead.</summary>
+    public static bool IsKept(string stored) => !string.IsNullOrEmpty(stored);
+
+    /// <summary>
+    /// Whether the secret kept in this stored form could not be decrypted when the settings were read (the file came
+    /// from another computer, or the account was rebuilt). Asked by the form and not by an empty plaintext beside a
+    /// stored one, which is also what every secret of a copy made by <see cref="WithoutSecrets"/> looks like.
+    /// </summary>
+    public bool CannotDecrypt(string stored) => _unreadableSecrets.Contains(stored);
 
     /// <summary>Decrypts every secret into memory, and notes the ones that cannot be.</summary>
     private void UnprotectSecrets()

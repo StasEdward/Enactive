@@ -10,6 +10,7 @@ using Enactive.Core.Execution;
 using Enactive.Workspace;
 using Enactive.Core.Providers;
 using Enactive.Settings;
+using Enactive.Core.Permissions;
 
 /// <summary>One row of the Providers list. Wraps the config so the row can be told to re-read it
 /// after the edit dialog writes back, instead of rebuilding the whole list.</summary>
@@ -79,7 +80,9 @@ internal sealed class ProviderRow : ObservableObject
     /// </summary>
     public string HealthTip => Health.Health == ProviderHealth.Unknown
         ? "Not checked. Open this provider and press Test."
-        : $"{Health.Summary}\nChecked at {Health.At.ToLocalTime():HH:mm:ss}";
+        // The time in one format on every machine: "HH:mm:ss" in a format string takes the culture's time separator,
+        // which is not ':' everywhere.
+        : $"{Health.Summary}\nChecked at {Health.At.ToLocalTime().ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture)}";
 }
 
 /// <summary>One row of the Team list, on the same terms as <see cref="ProviderRow"/>.</summary>
@@ -234,9 +237,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
 
         try
         {
-            row.Health = await ProviderProbe.CheckAsync(
-                ProviderEditViewModel.Http, config.Kind, config.Id, config.BaseUrl,
-                config.ApiKey, config.Headers, config.Models?.FirstOrDefault());
+            row.Health = await ProviderCalls.CheckAsync(config, config.Models?.FirstOrDefault());
         }
         catch (Exception ex)
         {
@@ -292,21 +293,33 @@ internal sealed partial class SettingsViewModel : ObservableObject
     /// Makes the pane only this host has, over the working copy this edits - the window's Remote access.
     /// Null for a host with none.
     /// </param>
+    /// <param name="providerCalls">
+    /// How a provider is asked whether it is there - the lights on the Providers list, and the editor's Test and
+    /// Fetch (<see cref="ProviderCalls"/>). Null asks it directly with the key the settings hold (the window).
+    /// </param>
+    /// <param name="writableRoots">
+    /// The standing grants the Writable folders pane lists, and the workspaces it names them by. Null for each is the
+    /// machine's own (WritableRoots.Default, and the window's workspace list in %APPDATA%), which the window shows; a
+    /// host whose engine keeps its workspaces elsewhere names them, and a test names files of its own.
+    /// </param>
     public SettingsViewModel(
         AppSettings settings, Action<AppSettings> onSaved,
         string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null,
-        IStartupEntry? startup = null, Func<AppSettings, IHostSettingsPane>? hostPane = null)
+        IStartupEntry? startup = null, Func<AppSettings, IHostSettingsPane>? hostPane = null,
+        IProviderCalls? providerCalls = null,
+        WritableRoots? writableRoots = null, Func<IEnumerable<string>>? knownWorkspaces = null)
     {
         _working = settings.Clone();
         _onSaved = onSaved;
         _startup = startup ?? NoStartupEntry.Instance;
+        ProviderCalls = providerCalls ?? DirectProviderCalls.Instance;
         ToolNames = toolNames ?? Array.Empty<string>();
         InitializeMcp();
         InitializeTemplates(workspaceRoot);
         _hostPane = hostPane?.Invoke(_working);
         InitializeSmtp();
         InitializeWeb();
-        InitializeWritableRoots();
+        InitializeWritableRoots(writableRoots, knownWorkspaces);
 
         _numCtxText = _working.Engine.NumCtx?.ToString() ?? string.Empty;
         _generationAction = _working.Engine.GenerationBudgets.Action.ToString();
@@ -375,6 +388,9 @@ internal sealed partial class SettingsViewModel : ObservableObject
     }
 
     private bool HostPaneBusy => _hostPane?.Busy == true;
+
+    /// <summary>How a provider is asked whether it is there; the editors a host opens ask the same way.</summary>
+    public IProviderCalls ProviderCalls { get; }
 
     public event Action? CloseRequested;
 

@@ -1,6 +1,7 @@
 namespace Enactive.Application;
 
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 
@@ -50,7 +51,7 @@ internal static class BuildInfo
                 var path = Environment.ProcessPath ?? Assembly.GetEntryAssembly()?.Location;
                 return string.IsNullOrEmpty(path)
                     ? "unknown"
-                    : File.GetLastWriteTime(path).ToString("yyyy-MM-dd HH:mm");
+                    : File.GetLastWriteTime(path).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
             }
             catch
             {
@@ -100,7 +101,7 @@ internal static class BuildInfo
             rows.Add(new BuildComponent(
                 Path.GetFileNameWithoutExtension(file),
                 version,
-                File.GetLastWriteTime(file).ToString("yyyy-MM-dd HH:mm")));
+                File.GetLastWriteTime(file).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)));
         }
         catch
         {
