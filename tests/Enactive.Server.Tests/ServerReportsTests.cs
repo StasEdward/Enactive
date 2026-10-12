@@ -59,6 +59,33 @@ public sealed class ServerReportsTests : IDisposable
         Assert.Equal([_workspace], _probed);
     }
 
+    /// <summary>
+    /// A probe starts programs as the service's account, and opening the page again asks for one: a workspace is probed at
+    /// most once a minute, whoever asks how often.
+    /// </summary>
+    [Fact]
+    public async Task A_workspace_is_probed_at_most_once_in_a_while()
+    {
+        var clock = new Clock();
+        var reports = new ServerReports(_users, new KnownWorkspaces(_engine, new WorkspaceRoots([_root])), Probe, clock);
+
+        var first = await reports.EnvironmentAsync(Vera, _workspace, CancellationToken.None);
+        clock.Now += ServerReports.ProbeKept - TimeSpan.FromSeconds(1);
+        Assert.Equal(first, await reports.EnvironmentAsync(Vera, _workspace, CancellationToken.None));
+        Assert.Single(_probed);
+
+        clock.Now += TimeSpan.FromSeconds(1);
+        await reports.EnvironmentAsync(Vera, _workspace, CancellationToken.None);
+        Assert.Equal(2, _probed.Count);
+    }
+
+    private sealed class Clock : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = DateTimeOffset.UtcNow;
+
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
     [Fact]
     public async Task A_folder_the_service_does_not_know_is_neither_read_nor_probed()
     {

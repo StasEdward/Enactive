@@ -292,8 +292,8 @@ public sealed partial class SignInTests : IAsyncLifetime
 
     /// <summary>
     /// A link in an earlier mail or a bookmark still lands: the history and the workspace list are the Runs screen now,
-    /// which names a workspace by its id, never its path. What the old page was told to say (an action's result) comes
-    /// along; a folder the service does not know is not looked up on the disk.
+    /// which names a workspace by its id, never its path. What the old page was told to say does not come along; a folder
+    /// the service does not know is not looked up on the disk.
     /// </summary>
     [Fact]
     public async Task An_old_history_address_lands_on_the_runs_screen_by_the_workspace_s_id()
@@ -306,7 +306,8 @@ public sealed partial class SignInTests : IAsyncLifetime
 
         var known = await browser.GetAsync("/history?ws=" + Uri.EscapeDataString(folder) + "&said=" + Uri.EscapeDataString("Forgotten."));
         Assert.Equal(HttpStatusCode.Redirect, known.StatusCode);
-        Assert.Equal($"/?ws={Enactive.Core.Context.WorkspaceInfo.For(folder).Id}&said=Forgotten.", known.Headers.Location!.OriginalString);
+        // What the old page was told to say stays behind: any link could put words there for the service to say.
+        Assert.Equal($"/?ws={Enactive.Core.Context.WorkspaceInfo.For(folder).Id}", known.Headers.Location!.OriginalString);
 
         var unknown = await browser.GetAsync("/history?ws=" + Uri.EscapeDataString(Path.Combine(_root, "elsewhere")));
         Assert.Equal("/", unknown.Headers.Location!.OriginalString);

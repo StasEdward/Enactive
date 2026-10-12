@@ -3,23 +3,27 @@ namespace Enactive.Server.Runs;
 using Enactive.Application;
 using Enactive.Core.Permissions;
 
-/// <summary>A question a run is waiting on, as a page shows it: what it asks, and the answers it offers.</summary>
+/// <summary>
+/// A question a run is waiting on, as a page shows it: what it asks, and the answers it offers. Not how to answer it: that
+/// stays with the runs' one door (RunControl.Answer), which checks who answers. Carried here, any page holding the run
+/// could have answered it - with any choice, as anybody, unaudited.
+/// </summary>
 /// <param name="AskedAt">
 /// When it went up (UTC): with the service's wait (IRunControl.QuestionWait) it says how long it still waits before the
 /// run stops at it for the inbox - without it a page could say only that it waits, not for how long.
 /// </param>
-internal sealed record WebQuestion(DecisionRequest Request, IReadOnlyList<DecisionChoice> Choices, Func<DecisionChoice, bool> Answer,
-    DateTimeOffset AskedAt);
+internal sealed record WebQuestion(DecisionRequest Request, IReadOnlyList<DecisionChoice> Choices, DateTimeOffset AskedAt);
 
 /// <summary>A question answered from a page: which (DecisionRequest.Id), by whom, with which answer (its label).</summary>
 internal sealed record AnsweredQuestion(Guid Question, string By, string Answer);
 
 /// <summary>
-/// The browser's side of asking (IDecisionPresenter): the run's waiting question is held here, where every page
-/// watching the run - the owner's, another Operator's, one opened after the question was asked - finds it. The rules of
-/// asking stay the DecisionRouter's; this only keeps the question up and takes it down.
+/// The browser's side of asking: the run's waiting question is held here, where every page watching the run - the owner's,
+/// another Operator's, one opened after the question was asked - finds it. The rules of asking stay the DecisionRouter's,
+/// and the answer is RunControl's to give (its presenter keeps the router's answer, out of every page's reach); this only
+/// shows the question and takes it down.
 /// </summary>
-internal sealed class WebQuestions : IDecisionPresenter
+internal sealed class WebQuestions
 {
     private volatile WebQuestion? _pending;
     private volatile AnsweredQuestion? _answered;
@@ -44,21 +48,20 @@ internal sealed class WebQuestions : IDecisionPresenter
         Changed?.Invoke();
     }
 
-    public Task ShowAsync(DecisionRequest request, IReadOnlyList<DecisionChoice> choices, Func<DecisionChoice, bool> answer)
+    /// <summary>Puts the question up for every page watching the run.</summary>
+    public void Show(DecisionRequest request, IReadOnlyList<DecisionChoice> choices)
     {
-        _pending = new WebQuestion(request, choices, answer, DateTimeOffset.UtcNow);
+        _pending = new WebQuestion(request, choices, DateTimeOffset.UtcNow);
         Changed?.Invoke();
-        return Task.CompletedTask;
     }
 
-    public Task ClearAsync(DecisionRequest request)
+    /// <summary>Takes THIS question down - a later one already up in its place stays.</summary>
+    public void Clear(DecisionRequest request)
     {
-        // Only THIS question: a later one already up in its place stays.
         if (_pending?.Request.Id == request.Id)
         {
             _pending = null;
             Changed?.Invoke();
         }
-        return Task.CompletedTask;
     }
 }

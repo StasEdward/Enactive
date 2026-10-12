@@ -197,6 +197,9 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
 {
     private readonly object _gate = new();
     private readonly List<ServerRun> _runs = new();
+
+    /// <summary>Each asking run's presenter, which alone holds the router's answer (<see cref="Asking"/>).</summary>
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ServerRun, Asking> _asking = new();
     private bool _stopping;
 
     public TimeSpan? QuestionWait => parkQuestionsAfter;
@@ -215,7 +218,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         var root = Workspace.WorkspaceRegistry.Normalise(due.Schedule.WorkspaceRoot);
         // Held to the roots as a person's run is: the schedules file is also the account's desktop's and console tick's,
         // and a schedule there for a folder outside the roots ran an agent there every time it came due.
-        if ((RunLauncher.Refusal(root, executor.Problem) ?? roots?.Refusal(root)) is { } refused)
+        if ((roots?.Refusal(root) ?? RunLauncher.Refusal(root, executor.Problem)) is { } refused)
         {
             due.Hold.Dispose();
             return new(null, refused);
@@ -247,7 +250,10 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
     {
         if (Allowed(user, Role.Operator) is null)
             return new(null, NotAllowed(user, "resume a run"));
-        var root = Workspace.WorkspaceRegistry.Normalise(workspace);
+        // Every check a start makes, before the folder is read: its checkpoints were read first, from any folder a caller
+        // named, and whether one was there said something about a folder outside the roots.
+        if (Check(user, workspace, out _, out var root) is { } refused)
+            return new(null, refused);
         var checkpoints = await new JsonCheckpointStore(WorkspaceInfo.For(root)).LoadAllAsync(CancellationToken.None);
         if (checkpoints.FirstOrDefault(c => c.RunId == runId) is not { } checkpoint)
             return new(null, "There is no such unfinished run in that folder.");
@@ -260,7 +266,9 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
     {
         if (Allowed(user, Role.Operator) is null)
             return new(null, NotAllowed(user, "carry a run on"));
-        var root = Workspace.WorkspaceRegistry.Normalise(workspace);
+        // As for resuming: checked before the folder's checkpoints and ledger are read, and written.
+        if (Check(user, workspace, out _, out var root) is { } refused)
+            return new(null, refused);
         var checkpoint = await BackgroundRun.ContinueFromAsync(parked, root, warning => log.LogWarning("{Warning}", warning), CancellationToken.None);
         return StartRun(user, root, checkpoint?.Request ?? title, parked.TaskId, checkpoint, "run carried on");
     }
@@ -312,9 +320,11 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
             return "Name the folder the run is to work in.";
 
         root = Workspace.WorkspaceRegistry.Normalise(workspace);
-        // The same checks every host makes before a run (RunLauncher): a folder that is there, an engine to run on - and
-        // the service's own: a folder under its roots (WorkspaceRoots).
-        if ((RunLauncher.Refusal(root, executor.Problem) ?? roots?.Refusal(root)) is { } refused)
+        // The service's own check first - a folder under its roots (WorkspaceRoots) - then the ones every host makes before a
+        // run (RunLauncher): a folder that is there, an engine to run on. The other way round, a folder outside the roots
+        // was answered "No such folder" or not by whether it existed, which told anybody who could start a run what was on
+        // the server's disks.
+        if ((roots?.Refusal(root) ?? RunLauncher.Refusal(root, executor.Problem)) is { } refused)
             return refused;
         lock (_gate)
             return _stopping ? "The service is stopping; start the run again when it is back." : null;
@@ -339,7 +349,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
             // would hold its slot and its folder for a page nobody has open. Everybody else's are asked in the browser.
             IDecisionHandler decisions = run.Scheduled is not null ? new Agents.UnattendedDecisionHandler()
                 : run.Background ? new Agents.ParkingDecisionHandler()
-                : new DecisionRouter(run.Questions, executor.Session, executor.Approvals, owner, parkQuestionsAfter);
+                : new DecisionRouter(_asking.GetValue(run, r => new Asking(r.Questions)), executor.Session, executor.Approvals, owner, parkQuestionsAfter);
             await executor.ExecuteAsync(run, decisions, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -494,7 +504,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         if (chosen.Remember != RememberAs.Nothing && account.Name != run.Owner)
             return $"Only {run.Owner}, who started the run, can allow this for longer than this once.";
 
-        if (!pending.Answer(chosen))
+        if (!_asking.TryGetValue(run, out var asking) || !asking.Answer(pending.Request.Id, chosen))
             return "That question has already been answered, or withdrawn.";
         run.Questions.Answered(pending.Request.Id, account.Name, chosen.Label);
         users.Audit(account.Name, "question answered", $"{pending.Request.Topic}: {chosen.Label}" + (account.Name == run.Owner ? "" : $" (run of {run.Owner})"));
@@ -527,6 +537,43 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         if (going.Count > 0)
             log.LogInformation("Stopping: {Cancelled} run(s) cancelled, {Left} not ended in time.", going.Count, left);
         return left;
+    }
+
+    /// <summary>
+    /// A run's questions as the router puts them up: shown to every page (WebQuestions), the router's answer kept here, in
+    /// a class of RunControl's own - reachable from <see cref="Answer"/> only, which checks who answers and with what and
+    /// audits it. Kept on the question a page reads, the answer was a delegate any component holding the run could call.
+    /// </summary>
+    private sealed class Asking(WebQuestions shown) : IDecisionPresenter
+    {
+        private readonly object _gate = new();
+        private (Guid Question, Func<DecisionChoice, bool> Answer)? _answer;
+
+        public Task ShowAsync(DecisionRequest request, IReadOnlyList<DecisionChoice> choices, Func<DecisionChoice, bool> answer)
+        {
+            lock (_gate)
+                _answer = (request.Id, answer);
+            shown.Show(request, choices);
+            return Task.CompletedTask;
+        }
+
+        public Task ClearAsync(DecisionRequest request)
+        {
+            lock (_gate)
+                if (_answer?.Question == request.Id)
+                    _answer = null;
+            shown.Clear(request);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>Gives the router this answer to THIS question; false when it is no longer the one asked.</summary>
+        public bool Answer(Guid question, DecisionChoice chosen)
+        {
+            Func<DecisionChoice, bool>? answer;
+            lock (_gate)
+                answer = _answer is { } up && up.Question == question ? up.Answer : null;
+            return answer?.Invoke(chosen) ?? false;
+        }
     }
 
     /// <summary>The account behind the request, when it still speaks for it and its role is enough; null otherwise.</summary>

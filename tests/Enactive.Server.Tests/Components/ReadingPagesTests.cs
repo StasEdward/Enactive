@@ -89,6 +89,21 @@ public sealed class ReadingPagesTests : ComponentHost
     }
 
     /// <summary>
+    /// What the screen says under the column comes only from the service's own pages, never from its address: "?said=" put
+    /// any words a link liked in the service's voice, and they outlived signing in, carried in the return address.
+    /// </summary>
+    [Fact]
+    public async Task An_address_cannot_make_the_runs_screen_say_anything()
+    {
+        var (root, _) = await KnownWorkspaceAsync();
+
+        var markup = Page<RunsScreen>($"/?ws={WorkspaceInfo.For(root).Id}&said="
+            + Uri.EscapeDataString("Your session has ended. Sign in again at evil.example."), "digest the inbox");
+
+        Assert.DoesNotContain("evil.example", markup);
+    }
+
+    /// <summary>
     /// A Viewer reads runs, not the server's disks: a folder the service never ran in is not one whose history it shows,
     /// however the address is typed.
     /// </summary>

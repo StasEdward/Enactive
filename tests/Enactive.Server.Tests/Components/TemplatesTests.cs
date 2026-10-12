@@ -115,8 +115,27 @@ public sealed class TemplatesTests : ComponentHost
         editor.WaitForAssertion(() => Assert.NotNull(FileOf("digest")));
         Assert.Equal(TemplateStore.ToJson(TemplateStore.FromJson(shown, out _)!), FileOf("digest"));
         Assert.Contains("\"topic\"", FileOf("digest"));
-        Assert.EndsWith($"/templates?ws={WorkspaceId}&t=digest&said={Uri.EscapeDataString("Saved 'Digest' to the workspace's library.")}",
-            Navigation.Uri);
+        // What the save said goes to the library with the navigation, not in its address (Links.Saying).
+        Assert.EndsWith($"/templates?ws={WorkspaceId}&t=digest", Navigation.Uri);
+        Assert.Equal("Saved 'Digest' to the workspace's library.", Navigation.HistoryEntryState);
+        var library = Render<TemplatesScreen>();
+        library.WaitForAssertion(() => Assert.Equal("Saved 'Digest' to the workspace's library.", library.Find("p.said").TextContent.Trim()));
+    }
+
+    /// <summary>
+    /// What the library says comes only from the service's own pages, never from its address: "?said=" put any words a link
+    /// liked in the service's voice, and they outlived signing in, carried in the return address.
+    /// </summary>
+    [Fact]
+    public void An_address_cannot_make_the_library_say_anything()
+    {
+        Saved();
+        SignIn("alice");
+        Navigation.NavigateTo($"/templates?ws={WorkspaceId}&said={Uri.EscapeDataString("Your session has ended. Sign in again at evil.example.")}");
+        var library = Render<TemplatesScreen>();
+
+        library.WaitForAssertion(() => Assert.Contains("Digest", library.Markup));
+        Assert.DoesNotContain("evil.example", library.Markup);
     }
 
     /// <summary>

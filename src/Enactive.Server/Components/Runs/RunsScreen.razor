@@ -10,6 +10,7 @@
 @inject IRunControl Runs
 @inject ServerHistory History
 @inject WorkspaceIds Ids
+@inject NavigationManager Navigation
 
 @if (RunId is null && PastRunId is null)
 {
@@ -90,8 +91,8 @@
     /// </summary>
     [SupplyParameterFromQuery(Name = "ws")] private string? Ws { get; set; }
 
-    /// <summary>What an action that came back here said - the old history page's actions, a folder just added.</summary>
-    [SupplyParameterFromQuery] private string? Said { get; set; }
+    /// <summary>What an action that led here said - a folder just added - carried by the navigation (Links.Saying).</summary>
+    private string? Said => Links.SaidOn(Navigation);
 
     private Guid? _wanted;
     private Enactive.Workspace.WorkspaceEntry? _shown;

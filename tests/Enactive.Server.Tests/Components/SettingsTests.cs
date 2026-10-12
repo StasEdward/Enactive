@@ -174,6 +174,29 @@ public sealed class SettingsTests : ComponentHost
     }
 
     /// <summary>
+    /// Where a credential could be typed into an address or a command line - kept in the clear, shown on the page, named in
+    /// the audit trail - the page says where it goes instead.
+    /// </summary>
+    [Fact]
+    public void Where_an_address_could_carry_a_credential_the_page_says_where_it_goes()
+    {
+        StoreSecrets();
+        var screen = Screen("ada", "web");
+        Assert.Contains("No key or password in the address", screen.Find(".settings-pane .settings-credentials").TextContent);
+
+        Go(screen, "ai-providers");
+        Card(screen, "cloud").QuerySelector("button[title='Edit']")!.Click();
+        screen.WaitForAssertion(() => Assert.Contains("A key goes in API key, any other credential in a header below.",
+            screen.Find("[role='dialog'] .settings-credentials").TextContent));
+        screen.Find("[role='dialog'] .dialog-actions").QuerySelectorAll("button").Single(b => b.TextContent.Trim() == "Cancel").Click();
+
+        Go(screen, "ai-mcp");
+        Card(screen, "tracker").QuerySelector("button[title='Edit']")!.Click();
+        screen.WaitForAssertion(() => Assert.Contains("A credential goes in a header below.",
+            screen.Find("[role='dialog'] .settings-credentials").TextContent));
+    }
+
+    /// <summary>
     /// One copy for every section, as the window has: a change in one is kept while another is open, and nothing is
     /// written until Save - which writes it, says so, and opens the settings again as they now are.
     /// </summary>

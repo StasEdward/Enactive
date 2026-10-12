@@ -228,8 +228,8 @@ else if (_editor is { } t)
     /// <summary>Saved or cancelled: back to the library, on what was saved - or on the template the editor was opened on.</summary>
     private void Close()
         => Navigation.NavigateTo(_saved is { } saved
-            ? Links.Templates(_workspaceId, saved.Id, saved.Said)
-            : Links.Templates(_workspaceId, Id == Links.NewTemplateId ? null : Id));
+            ? Links.Templates(_workspaceId, saved.Id)
+            : Links.Templates(_workspaceId, Id == Links.NewTemplateId ? null : Id), Links.Saying(_saved?.Said));
 
     private void LevelChanged(ChangeEventArgs e)
     {

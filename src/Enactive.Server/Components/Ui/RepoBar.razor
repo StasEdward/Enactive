@@ -55,7 +55,17 @@
     [Parameter] public int Reads { get; set; }
 
     /// <summary>GitHub is asked at most this often unless the person clicks: a network call, and a strip is not worth a rate limit.</summary>
-    private static readonly TimeSpan PullRequestEvery = TimeSpan.FromMinutes(2);
+    internal static readonly TimeSpan PullRequestEvery = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// A click asks GitHub again, but not more often than this. Each ask is a <c>gh pr view</c> started as the service's
+    /// account against its GitHub sign-in, and anybody signed in - a Viewer too - can click: unthrottled, a few quick
+    /// clicks were as many processes on the server and as many calls against the service's rate limit.
+    /// </summary>
+    internal static readonly TimeSpan ClickedEvery = TimeSpan.FromSeconds(15);
+
+    /// <summary>Whether the pull request is asked about now, <paramref name="since"/> the last time it was.</summary>
+    internal static bool AsksPullRequest(bool clicked, TimeSpan since) => since >= (clicked ? ClickedEvery : PullRequestEvery);
 
     private readonly Model _bar = new();
     private string? _root;
@@ -70,6 +80,9 @@
             return Task.CompletedTask;
         var moved = Root != _root;
         (_root, _reads) = (Root, Reads);
+        // Another folder's pull request is asked about at once: when this one's was last read says nothing about it.
+        if (moved)
+            _pullRequestReadAt = DateTimeOffset.MinValue;
         return ReadAsync(forcePullRequest: moved);
     }
 
@@ -90,7 +103,7 @@
                 return;
             _bar.Show(repo);
             StateHasChanged();
-            if (repo?.GitHub is null || (!forcePullRequest && DateTimeOffset.UtcNow - _pullRequestReadAt < PullRequestEvery))
+            if (repo?.GitHub is null || !AsksPullRequest(forcePullRequest, DateTimeOffset.UtcNow - _pullRequestReadAt))
                 return;
             _pullRequestReadAt = DateTimeOffset.UtcNow;
             var pullRequest = await RepoStatusReader.ReadPullRequestAsync(repo, gone);

@@ -29,6 +29,9 @@
 
                 <label class="label" for="provider-url">Base URL</label>
                 <input id="provider-url" placeholder="e.g. http://localhost:11434/v1" @bind="Editor.BaseUrl" />
+                @* Said where the address is typed: an address is kept in the clear, shown on this page to every Admin and
+                   named in the audit trail, so a key typed into it (?api_key=...) is a key no longer kept secret. *@
+                <p class="hint settings-credentials">No key or token in the address - it is kept in the clear, shown here and named in the audit trail. A key goes in API key, any other credential in a header below.</p>
 
                 <label class="label" for="provider-key">API key</label>
                 <input id="provider-key" type="password" autocomplete="new-password"

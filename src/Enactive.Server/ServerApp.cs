@@ -205,8 +205,9 @@ internal static class ServerApp
                 .RequireAuthorization(nameof(Role.Viewer));
 
         // A workspace's history, and the list of workspaces: the Runs screen, which the workspace column is now. What the
-        // old page was told to say (an action's result) comes along.
-        Redirect("/history", (c, h, i) => Components.Links.Runs(OldWorkspace(c, h, i), c.Request.Query["said"].ToString()));
+        // old page was told to say ("said") does not come along: any link could put words there, and the service would
+        // say them in its own voice - after a sign-in too, carried in the return address.
+        Redirect("/history", (c, h, i) => Components.Links.Runs(OldWorkspace(c, h, i)));
         Redirect("/workspaces", (_, _, _) => "/");
 
         // A past run, and a file it wrote: the run on the Runs screen at its own address, its files on its Artifacts tab.

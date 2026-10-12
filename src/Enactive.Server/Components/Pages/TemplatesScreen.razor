@@ -173,7 +173,6 @@
     /// <summary>The template to open the library on - the one just saved, or the one the editor was left from.</summary>
     [SupplyParameterFromQuery(Name = "t")] private string? Template { get; set; }
 
-    [SupplyParameterFromQuery(Name = "said")] private string? Said { get; set; }
 
     private ClaimsPrincipal _user = new();
     private bool _canOperate;
@@ -195,7 +194,8 @@
         _user = (await Auth).User;
         // Offered only: ServerLibrary refuses every change and run to anybody else, whatever a page sent.
         _canOperate = ServerAuth.RoleOf(_user) >= Role.Operator;
-        _said = Said;
+        // What the editor said of a save, carried by its navigation here (Links.Saying) - never read from the address.
+        _said = Links.SaidOn(Navigation);
 
         var known = History.Workspaces(_user);
         Guid? wanted = Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null;

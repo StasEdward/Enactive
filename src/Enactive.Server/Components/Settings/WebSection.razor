@@ -11,6 +11,8 @@
 <label class="label" for="web-search">Search server</label>
 <input id="web-search" placeholder="http://localhost:8888" disabled="@(!Vm.WebEnabled)" @bind="Vm.WebSearchUrl" @bind:event="oninput" />
 <p class="hint">A SearXNG server, for example one started in Docker. In its settings.yml, add json under search.formats - that is what web_search reads. Leave empty for no web_search. A search query is written from the task and leaves this computer.</p>
+@* The address is kept in the clear and shown on this page, and there is no field for a credential beside it. *@
+<p class="hint settings-credentials">No key or password in the address - it is kept in the clear and shown here. A search server that needs one is not one web_search can use.</p>
 @if (Vm.HasWebProblem)
 {
     <p class="hint settings-problem" role="alert">@Vm.WebProblem</p>

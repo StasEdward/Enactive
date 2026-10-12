@@ -463,6 +463,24 @@ public sealed class RunControlTests : IDisposable
         Assert.Equal("unread", Assert.Single(items, i => i.Id == itemId).Status);
     }
 
+    /// <summary>
+    /// A page holds the run and its question, and nothing on them answers it: only the runs' one door does (Answer), which
+    /// checks who answers and with what, and audits it. The router's answer was a delegate on the question a page read.
+    /// </summary>
+    [Fact]
+    public void Nothing_a_page_holds_can_answer_a_question()
+    {
+        var answer = typeof(Func<DecisionChoice, bool>);
+        const System.Reflection.BindingFlags all = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+            | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static;
+        foreach (var type in new[] { typeof(ServerRun), typeof(WebQuestions), typeof(WebQuestion) })
+        {
+            Assert.DoesNotContain(type.GetFields(all), f => f.FieldType == answer);
+            Assert.DoesNotContain(type.GetProperties(all), p => p.PropertyType == answer);
+            Assert.DoesNotContain(type.GetMethods(all), m => m.GetParameters().Any(p => p.ParameterType == answer));
+        }
+    }
+
     /// <summary>The service's runs, with another person's answer recorded as the inbox asks whether a run could start.</summary>
     private sealed class AnsweredMeanwhile(IRunControl inner, Func<bool> answerMeanwhile) : IRunControl
     {
@@ -912,6 +930,26 @@ public sealed class RunControlTests : IDisposable
         var control = new RunControl(_users, new RunQueue(2), _engine, NullLogger<RunControl>.Instance, roots: new WorkspaceRoots([elsewhere]));
 
         Assert.Contains("is not under", control.Start(As("alice"), _workspace, "write the digest").Refusal);
+    }
+
+    /// <summary>
+    /// The roots come before anything about the folder is said or read. A folder outside them that is not there was
+    /// answered "No such folder", and one that is was not - which told whoever could start a run what was on the server's
+    /// disks; resuming or carrying on read the folder's checkpoints before any check at all.
+    /// </summary>
+    [Fact]
+    public async Task A_folder_outside_the_roots_is_refused_before_anything_about_it_is_read()
+    {
+        var roots = Path.Combine(_root, "roots-only-here");
+        Directory.CreateDirectory(roots);
+        var control = new RunControl(_users, new RunQueue(2), _engine, NullLogger<RunControl>.Instance, roots: new WorkspaceRoots([roots]));
+
+        Assert.Contains("is not under", control.Start(As("alice"), Path.Combine(_root, "not-there"), "write the digest").Refusal);
+        Assert.Contains("is not under", control.Refusal(As("alice"), Path.Combine(_root, "not-there")));
+        Assert.Contains("is not under", (await control.ResumeAsync(As("alice"), _workspace, Guid.NewGuid())).Refusal);
+        var (parked, _) = ParkedInTheInbox();
+        Assert.Contains("is not under", (await control.ContinueAsync(As("alice"), _workspace, parked, "mail the digest")).Refusal);
+        Assert.Empty(control.List(As("alice")));
     }
 
     /// <summary>

@@ -198,22 +198,22 @@ public sealed class LiveRunTests : ComponentHost
     {
         var run = await StartedAsync();
         var request = WriteFile(run.Workspace);
-        // Up as the router puts it up, with an answer the router no longer takes: somebody else's got there first.
-        await run.Questions.ShowAsync(request, [new DecisionChoice("Allow", "allow"), new DecisionChoice("Deny", "deny")], _ => false);
+        // Up for the pages with no answer for the router behind it: somebody else's got there first.
+        run.Questions.Show(request, [new DecisionChoice("Allow", "allow"), new DecisionChoice("Deny", "deny")]);
         var page = Open("ada", run);
         page.WaitForAssertion(() => Assert.NotEmpty(Answers(page)));
 
         page.FindAll(".decision button").Single(b => b.TextContent.Trim() == "Deny").Click();
-        await run.Questions.ClearAsync(request);
+        run.Questions.Clear(request);
 
         page.WaitForAssertion(() => Assert.Empty(page.FindAll(".decision")));
         Assert.Equal("That question has already been answered, or withdrawn.", page.Find("[role=alert]").TextContent.Trim());
 
         // The run asks again: the refusal was about the question before, and is not said again when this one goes.
         var next = WriteFile(run.Workspace);
-        await run.Questions.ShowAsync(next, [new DecisionChoice("Allow", "allow")], _ => true);
+        run.Questions.Show(next, [new DecisionChoice("Allow", "allow")]);
         page.WaitForAssertion(() => Assert.NotEmpty(Answers(page)));
-        await run.Questions.ClearAsync(next);
+        run.Questions.Clear(next);
         page.WaitForAssertion(() => Assert.Empty(page.FindAll(".decision")));
         Assert.Empty(page.FindAll("[role=alert]"));
     }

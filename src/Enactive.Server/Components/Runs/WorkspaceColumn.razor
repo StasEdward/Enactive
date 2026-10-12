@@ -180,7 +180,7 @@
     /// <summary>The workspace the address names, by its id; null for the one used last. Guid.Empty names none.</summary>
     [Parameter] public Guid? WorkspaceId { get; set; }
 
-    /// <summary>What an action that led here said (the address's "said").</summary>
+    /// <summary>What an action that led here said (Links.Saying).</summary>
     [Parameter] public string? Said { get; set; }
 
     private WorkspaceColumnState? _state;
@@ -287,6 +287,6 @@
         }
         // As the window does with a folder just added: the column switches to it.
         _browsing = false;
-        Navigation.NavigateTo(Links.Runs(id, said));
+        Navigation.NavigateTo(Links.Runs(id), Links.Saying(said));
     }
 }
