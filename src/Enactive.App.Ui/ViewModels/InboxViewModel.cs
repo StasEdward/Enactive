@@ -7,38 +7,15 @@ using Enactive.Application.Mvvm;
 using Enactive.Core.History;
 using Enactive.Core.Inbox;
 
-/// <summary>One item in the inbox list.</summary>
-internal sealed class InboxItemViewModel : ObservableObject
+// The list's row (InboxItemViewModel) and the inbox's words (InboxRows) are Enactive.Application's: the service draws the
+// same inbox.
+
+/// <summary>One answer a waiting question offers, as a button, labelled as InboxRows.Options says it.</summary>
+internal sealed class WaitingAnswerViewModel(InboxOption option, Func<string, Task> answer)
 {
-    private bool _isUnread;
-
-    public InboxItemViewModel(InboxItem item)
-    {
-        Item = item;
-        _isUnread = string.Equals(item.Status, "unread", StringComparison.OrdinalIgnoreCase);
-    }
-
-    public InboxItem Item { get; }
-
-    public string Title => Item.Title;
-    public string Summary => Item.Summary;
-    public string Kind => Item.Kind;
-    public string When => Item.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
-
-    /// <summary>Unread items carry their weight, the way an unread mail does (Palette.Bold).</summary>
-    public bool IsUnread
-    {
-        get => _isUnread;
-        set => Set(ref _isUnread, value);
-    }
-}
-
-/// <summary>One answer a waiting question offers, as a button.</summary>
-internal sealed class WaitingAnswerViewModel(string id, string label, bool recommended, Func<string, Task> answer)
-{
-    public string Id { get; } = id;
-    public string Label { get; } = recommended ? label + " (recommended)" : label;
-    public AsyncRelayCommand Command { get; } = new(() => answer(id));
+    public string Id { get; } = option.Id;
+    public string Label { get; } = option.Label;
+    public AsyncRelayCommand Command { get; } = new(() => answer(option.Id));
 }
 
 
@@ -141,7 +118,7 @@ internal sealed class InboxViewModel : ObservableObject
     /// to what they were not shown (see DecisionRequest.FullText).
     /// </summary>
     public string DecisionText => _waiting?.FullText ?? string.Empty;
-    public string DecisionAsked => _waiting is null ? string.Empty : "asked " + _waiting.AskedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+    public string DecisionAsked => _waiting is null ? string.Empty : InboxRows.Asked(_waiting);
     public ObservableCollection<WaitingAnswerViewModel> DecisionOptions { get; } = new();
 
     /// <summary>What happened to the answer: sent on, or refused because the question is no longer waiting.</summary>
@@ -151,9 +128,8 @@ internal sealed class InboxViewModel : ObservableObject
     {
         _waiting = waiting;
         DecisionOptions.Clear();
-        foreach (var option in waiting?.Options ?? [])
-            DecisionOptions.Add(new WaitingAnswerViewModel(option.Id, option.Label,
-                string.Equals(option.Id, waiting!.RecommendedOptionId, StringComparison.OrdinalIgnoreCase), AnswerAsync));
+        foreach (var option in waiting is null ? Array.Empty<InboxOption>() : InboxRows.Options(waiting))
+            DecisionOptions.Add(new WaitingAnswerViewModel(option, AnswerAsync));
         OnPropertyChanged(nameof(HasWaitingDecision));
         OnPropertyChanged(nameof(DecisionTopic));
         OnPropertyChanged(nameof(DecisionText));
@@ -177,8 +153,7 @@ internal sealed class InboxViewModel : ObservableObject
         catch { _runSummaries = Array.Empty<RunSummary>(); }
 
         _all.Clear();
-        foreach (var item in items.OrderByDescending(i => i.At))
-            _all.Add(new InboxItemViewModel(item));
+        _all.AddRange(InboxRows.Rows(items));
 
         ApplyFilter();
 
@@ -204,13 +179,11 @@ internal sealed class InboxViewModel : ObservableObject
 
     private void ApplyFilter()
     {
-        // Rebuilt rather than filtered in place: the list is small, and this keeps "unread only"
-        // from having to reason about where an item that just became read used to sit.
+        // Rebuilt rather than filtered in place (InboxRows.Shown).
         var keep = Selected;
         Items.Clear();
-        foreach (var item in _all)
-            if (!UnreadOnly || item.IsUnread)
-                Items.Add(item);
+        foreach (var item in InboxRows.Shown(_all, UnreadOnly))
+            Items.Add(item);
 
         if (keep is not null && Items.Contains(keep))
             Selected = keep;
@@ -221,9 +194,7 @@ internal sealed class InboxViewModel : ObservableObject
     private void UpdateStatus()
     {
         var unread = _all.Count(i => i.IsUnread);
-        Status = _all.Count == 0
-            ? "Inbox is empty"
-            : $"{unread} unread · {_all.Count} item{(_all.Count == 1 ? "" : "s")}";
+        Status = InboxRows.Status(unread, _all.Count);
         UnreadChanged?.Invoke(unread);
     }
 
@@ -244,16 +215,14 @@ internal sealed class InboxViewModel : ObservableObject
         }
 
         DetailTitle = item.Title;
-        DetailMeta = $"{item.Kind} · {item.When}";
+        DetailMeta = InboxRows.Meta(item);
         DetailSummary = item.Summary;
 
         var summary = _runSummaries.FirstOrDefault(r => r.RunId == item.Item.RunId);
         HasRun = summary is not null;
+        RunHeader = InboxRows.RunHeader(summary);
         if (summary is null)
-        {
-            RunHeader = "The run behind this item is no longer in the store.";
             return;
-        }
 
         // The header comes off the summary, so it appears at once; the timeline needs the events and
         // those are fetched for THIS run alone. The list used to hold every run whole so that this
@@ -262,8 +231,6 @@ internal sealed class InboxViewModel : ObservableObject
         // answer is to the task, and a run carried on is a new run under the same one.
         ShowWaiting(_decisions.WaitingFor(summary.TaskId));
 
-        var elapsed = summary.FinishedAt - summary.StartedAt;
-        RunHeader = $"{summary.Title} — {summary.Status} · {summary.Model} · {elapsed.TotalSeconds:0}s";
         foreach (var a in summary.Artifacts)
             RunArtifacts.Add(a);
         foreach (var d in summary.Decisions)
