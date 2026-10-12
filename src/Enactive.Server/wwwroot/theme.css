@@ -571,10 +571,10 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .inbox-head { flex: none; display: grid; gap: 4px; margin: 0 0 8px; }
 .inbox-title { margin: 0; font-family: var(--font-sans); font-size: 16px; font-weight: 600; letter-spacing: normal; overflow-wrap: anywhere; }
 .inbox-head p { margin: 0; }
-.inbox-head .inbox-summary { margin-top: 6px; color: var(--text-body); overflow-wrap: anywhere; }
+.inbox-head .inbox-summary { margin-top: 6px; font-size: 13px; color: var(--text-body); overflow-wrap: anywhere; }
 /* Amber, as the window's: the run is stopped on a person - caution, not action. */
 .inbox-question { display: grid; gap: 6px; margin: 10px 0 0; padding: 10px; border: 1px solid var(--amber-400); border-radius: 6px; }
-.inbox-question-topic { font-weight: 600; overflow-wrap: anywhere; }
+.inbox-question-topic { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .inbox-question-text { margin: 0; max-height: 220px; overflow: auto; font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap;
   overflow-wrap: anywhere; }
 .inbox-answers { display: flex; flex-wrap: wrap; gap: 8px; }
