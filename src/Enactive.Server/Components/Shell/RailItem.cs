@@ -45,40 +45,19 @@ internal sealed record RailItem(string Href, string Label, string Icon, Role Nee
 
     /// <summary>Docked to the bottom of the rail rather than the top.</summary>
     public bool AtBottom => Href is "/environment" or "/settings" or "/accounts" or "/audit";
-}
 
-/// <summary>
-/// Where each rail item leads, relative to the page's base, and which addresses put it in "you are here". Every item
-/// leads to its own address now; the table was where an item led to the old page that did its job while its own page
-/// was being built, and it still holds what marks each item - the Runs item is lit on a run's page too.
-///
-/// <para>An item is marked "you are here" by <c>Active</c>, never by an address another item shares: both would light up
-/// on it.</para>
-/// </summary>
-internal static class RailAddresses
-{
-    /// <param name="Now">Relative to the page's base.</param>
-    /// <param name="Active">Path prefixes (relative, no leading slash) that put the item in "you are here"; "" is the root page only.</param>
-    internal sealed record Where(string Now, string[] Active);
+    /// <summary>The link, relative to the page's base, as every link the pages build is (Links).</summary>
+    public string Link => Href == "/" ? "/" : Href[1..];
 
-    private static readonly Dictionary<string, Where> Table = new()
+    /// <summary>
+    /// Is this base-relative path (no query, no slashes at its ends) inside the item's section - "you are here"? Each
+    /// section is its address and what is under it; the Runs screen also has a run's address and a past run's, and on a
+    /// past run no section was marked. Never an address another item has: both would light up on it.
+    /// </summary>
+    public bool IsIn(string path)
     {
-        ["/"] = new("/", ["", "runs"]),
-        ["/timeline"] = new("timeline", ["timeline"]),
-        ["/templates"] = new("templates", ["templates"]),
-        ["/schedules"] = new("schedules", ["schedules"]),
-        ["/inbox"] = new("inbox", ["inbox"]),
-        ["/proposals"] = new("proposals", ["proposals"]),
-        ["/log"] = new("log", ["log"]),
-        ["/environment"] = new("environment", ["environment"]),
-        ["/settings"] = new("settings", ["settings"]),
-        ["/accounts"] = new("accounts", ["accounts"]),
-        ["/audit"] = new("audit", ["audit"]),
-    };
-
-    public static Where Of(RailItem item) => Table[item.Href];
-
-    /// <summary>Is this base-relative path (no query) inside the item's section?</summary>
-    public static bool IsIn(RailItem item, string path)
-        => Of(item).Active.Any(prefix => prefix.Length == 0 ? path.Length == 0 : path == prefix || path.StartsWith(prefix + "/", StringComparison.Ordinal));
+        string[] prefixes = Href == "/" ? ["runs", "history"] : [Href[1..]];
+        return (Href == "/" && path.Length == 0)
+               || prefixes.Any(prefix => path == prefix || path.StartsWith(prefix + "/", StringComparison.Ordinal));
+    }
 }

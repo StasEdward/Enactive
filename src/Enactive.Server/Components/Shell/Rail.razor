@@ -19,7 +19,7 @@
         <span class="rail-gap"></span>
         @{
             var low = _items.Where(i => i.AtBottom).ToList();
-            var lowIsHere = low.Any(i => RailAddresses.IsIn(i, CurrentPath));
+            var lowIsHere = low.Any(i => i.IsIn(CurrentPath));
         }
         @* On a narrow screen the rail is a bar along the bottom, and eleven icons of a touch's 40 px do not fit across a
            390 px phone: the sections docked low on the rail (Environment, and an Admin's Settings, Accounts and Audit)
@@ -102,12 +102,11 @@
     private RenderFragment<RailItem> Entry => item =>
         @<text>
             @{
-                var where = RailAddresses.Of(item);
-                var on = RailAddresses.IsIn(item, CurrentPath);
+                var on = item.IsIn(CurrentPath);
                 var inbox = item.Href == "/inbox" && _unread > 0;
                 var label = inbox ? $"Inbox — {_unread.ToString(CultureInfo.InvariantCulture)} unread" : item.Label;
             }
-            <a class="@("rail-item" + (on ? " on" : ""))" href="@where.Now" data-rail="@item.Href" aria-label="@label" title="@label"
+            <a class="@("rail-item" + (on ? " on" : ""))" href="@item.Link" data-rail="@item.Href" aria-label="@label" title="@label"
                aria-current="@(on ? "page" : null)">
                 @Icon(item)
                 @* Its name in words, shown only in More's list (theme.css): an icon alone, out of the bar's row, is a guess. *@

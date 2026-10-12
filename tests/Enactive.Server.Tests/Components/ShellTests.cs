@@ -254,6 +254,8 @@ public sealed class ShellTests : ComponentHost
     [Theory]
     [InlineData("http://localhost/", "/")]
     [InlineData("http://localhost/runs/0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/")]
+    // A past run is the Runs screen too, at its own address: no section was marked on it.
+    [InlineData("http://localhost/history/0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f/0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/")]
     [InlineData("http://localhost/inbox", "/inbox")]
     [InlineData("http://localhost/proposals/0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f/abc", "/proposals")]
     [InlineData("http://localhost/templates?ws=0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/templates")]
