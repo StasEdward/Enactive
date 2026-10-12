@@ -412,7 +412,8 @@ test('a viewer reads a staged run\'s proposal, and an operator applies it to the
   const viewer = await signedIn(browser, 'vera');
   await viewer.page.getByRole('link', { name: 'Proposals', exact: true }).click();
   await viewer.page.getByRole('link', { name: /redraft the proposal/ }).click();
-  await expect(viewer.page.locator('pre.file')).toContainText('+ second draft');
+  await expect(viewer.page).toHaveURL(/\/proposals\/[0-9a-f-]{36}\/[0-9a-f]{32}$/);
+  await expect(viewer.page.locator('.diff')).toContainText('+ second draft');
   await expect(viewer.page.getByRole('button', { name: 'Apply' })).toHaveCount(0);
   await viewer.context.close();
 
@@ -421,6 +422,8 @@ test('a viewer reads a staged run\'s proposal, and an operator applies it to the
   await page.getByRole('link', { name: /redraft the proposal/ }).click();
   await page.getByRole('button', { name: 'Apply' }).click();
   await expect(page.getByText(/^Applied: proposal\.md\. Every proposal of this run is decided\./)).toBeVisible();
+  // The rail's dot goes with the last waiting change, with no navigation: the page stays where it is.
+  await expect(page.locator('[data-rail="/proposals"] .dot')).toHaveCount(0);
 
   await page.goto('/proposals');
   await expect(page.getByText('Nothing waits.')).toBeVisible();
