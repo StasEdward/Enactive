@@ -17,4 +17,12 @@ internal sealed class SchedulePolicy(Func<AppSettings> current)
 {
     public PermissionPolicy For(string? tier)
         => EngineComposition.PolicyFor(current(), AutonomyTiers.Parse(tier) ?? 2);
+
+    /// <summary>
+    /// The policy for the tier a policy says it is at, made again from the settings now: whatever else that policy
+    /// allowed is not kept. For a service handed a schedule by a page - taken as given, a looser policy than its settings
+    /// allow (no shell rule on it) would be saved and run unattended.
+    /// </summary>
+    public PermissionPolicy For(PermissionLevel level)
+        => EngineComposition.PolicyFor(current(), AutonomyTiers.Clamp((int)level));
 }

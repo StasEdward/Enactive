@@ -133,6 +133,13 @@ internal sealed class SchedulesViewModel : ObservableObject
 
     // ── the draft ───────────────────────────────────────────────────────────
     private Guid? _draftId;
+
+    /// <summary>
+    /// What the schedule being edited runs, as saved - its template's answers among it. The form has no field for them,
+    /// so they are kept from here while the same template stays chosen: rebuilt from the template alone, an edit dropped
+    /// answers somebody had given, and an optional one silently changed what the unattended run does.
+    /// </summary>
+    private ScheduledWork? _editedWork;
     private string _draftName = string.Empty;
     private WorkChoice? _draftWork;
     private string _draftRepeat = "Daily";
@@ -427,6 +434,7 @@ internal sealed class SchedulesViewModel : ObservableObject
     private void BeginNew()
     {
         _draftId = null;
+        _editedWork = null;
         DraftName = string.Empty;
         DraftRepeat = "Daily";
         DraftHour = 3;
@@ -449,6 +457,7 @@ internal sealed class SchedulesViewModel : ObservableObject
         // The ID travels with the draft. A rename that minted a new id would leave this schedule's
         // outcomes behind while the list showed what looks like the same schedule.
         _draftId = schedule.Id;
+        _editedWork = schedule.Work;
         DraftName = schedule.Name;
         DraftRepeat = schedule.Timing.Repeat.ToString();
         DraftDay = (schedule.Timing.OnDay ?? DayOfWeek.Monday).ToString();
@@ -502,7 +511,7 @@ internal sealed class SchedulesViewModel : ObservableObject
 
         var draft = new ScheduleDraft(
             DraftName, _workspace.RootPath,
-            DraftWork.ToWork(),
+            DraftWork.ToWork(KeptAnswers()),
             BuildTiming(),
             _policy.For(DraftTier),
             DraftRunLate ? MissedRun.RunLate : MissedRun.Skip,
@@ -529,6 +538,21 @@ internal sealed class SchedulesViewModel : ObservableObject
             ? ScheduleWords.Approval(schedule, _now())
             : Array.Empty<string>();
 
+    /// <summary>
+    /// The saved answers of the schedule being edited, while its template is still the one chosen; none once another is
+    /// chosen - they were given to that template's questions, not this one's.
+    /// </summary>
+    private IReadOnlyDictionary<string, string>? KeptAnswers()
+        => DraftWork?.TemplateId is { Length: > 0 } id && _editedWork?.TemplateId == id ? _editedWork.Parameters : null;
+
+    /// <summary>
+    /// The chosen day, or Monday - the form's own first choice - for a word that is no day. The window's list offers only
+    /// days; a page's select can be sent anything, and this is read on every drawing of the form (DraftApproval), where
+    /// a throw ended the person's page.
+    /// </summary>
+    private DayOfWeek ChosenDay
+        => Enum.TryParse<DayOfWeek>(DraftDay, ignoreCase: false, out var day) && Enum.IsDefined(day) ? day : DayOfWeek.Monday;
+
     private ScheduleTiming BuildTiming()
     {
         var at = new TimeOnly(Hour, Minute);
@@ -546,7 +570,7 @@ internal sealed class SchedulesViewModel : ObservableObject
         }
 
         return IsWeekly
-            ? ScheduleTiming.Weekly(Enum.Parse<DayOfWeek>(DraftDay), at, DraftZone.Id)
+            ? ScheduleTiming.Weekly(ChosenDay, at, DraftZone.Id)
             : ScheduleTiming.Daily(at, DraftZone.Id);
     }
 

@@ -139,6 +139,75 @@ public sealed class SchedulesViewModelTests : IDisposable
         Assert.False((await Open(tickFile: tick)).HasTickWarning);
     }
 
+    /// <summary>
+    /// The form has no field for a template's answers, so an edit keeps the ones the schedule was saved with while its
+    /// template stays chosen. Rebuilt from the template alone, an edit dropped them - and an optional one silently changed
+    /// what the unattended run does.
+    /// </summary>
+    [Fact]
+    public async Task Editing_a_schedule_keeps_its_parameter_answers()
+    {
+        var saved = Toned();
+        var schedules = await Open();
+
+        schedules.EditCommand.Execute(null);
+        schedules.DraftName = "brief summary at dawn";
+        schedules.SaveCommand.Execute(null);
+
+        var kept = Assert.Single(_store.For(_workspace));
+        Assert.Equal((saved.Id, "brief summary at dawn"), (kept.Id, kept.Name));
+        Assert.Equal("brief", kept.Work.Parameters["tone"]);
+    }
+
+    /// <summary>Answers given to one template's questions are not carried to another chosen in its place.</summary>
+    [Fact]
+    public async Task Choosing_another_template_drops_the_answers_given_to_the_first()
+    {
+        Toned();
+        var schedules = await Open();
+
+        schedules.EditCommand.Execute(null);
+        schedules.DraftWork = schedules.WorkChoices.Single(c => c.TemplateId == "digest");
+        schedules.SaveCommand.Execute(null);
+
+        var kept = Assert.Single(_store.For(_workspace));
+        Assert.Equal("digest", kept.Work.TemplateId);
+        Assert.Empty(kept.Work.Parameters);
+    }
+
+    /// <summary>
+    /// A day that is no day - the window's list offers only days, a page's select can be sent anything - is read as
+    /// Monday, the form's own first choice, rather than throwing from a drawing of the form.
+    /// </summary>
+    [Fact]
+    public async Task A_day_that_is_no_day_is_read_as_monday()
+    {
+        var schedules = await Open();
+        Fill(schedules);
+        schedules.DraftRepeat = "Weekly";
+
+        foreach (var day in new[] { "Funday", "9", "" })
+        {
+            schedules.DraftDay = day;
+            Assert.Contains(schedules.DraftApproval, line => line.StartsWith("Every Monday at 07:30", StringComparison.Ordinal));
+        }
+
+        schedules.DraftDay = nameof(DayOfWeek.Friday);
+        Assert.Contains(schedules.DraftApproval, line => line.StartsWith("Every Friday at 07:30", StringComparison.Ordinal));
+    }
+
+    /// <summary>A schedule of a template with an optional question, saved with an answer to it.</summary>
+    private Schedule Toned()
+    {
+        new TemplateStore(_workspace).Save(new TaskTemplate("toned", "Toned", "Write the week's summary, {tone}.",
+            Parameters: [new TemplateParameter("tone", "Tone", TemplateParameterType.Text, Required: false)]), TemplateScope.Workspace);
+        var schedule = new Schedule(Guid.NewGuid(), _workspace, "brief summary",
+            ScheduledWork.FromTemplate("toned", new Dictionary<string, string> { ["tone"] = "brief" }),
+            ScheduleTiming.Daily(new TimeOnly(7, 30)), new SchedulePolicy(() => new AppSettings()).For("execute"), DateTimeOffset.Now);
+        _store.Save(schedule);
+        return schedule;
+    }
+
     private Schedule Saved()
         => new(Guid.NewGuid(), _workspace, "morning digest", ScheduledWork.FromTemplate("digest"),
             ScheduleTiming.Daily(new TimeOnly(7, 30)), new SchedulePolicy(() => new AppSettings()).For("execute"), DateTimeOffset.Now);
