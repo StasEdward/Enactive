@@ -160,6 +160,7 @@ else if (_run is { } run)
     private PastRun? _run;
     private string? _problem;
 
-    protected override async Task OnInitializedAsync()
+    // Read per address, not once: see Pages/_Imports.razor.
+    protected override async Task OnParametersSetAsync()
         => (_run, _problem) = await History.OpenAsync((await Auth).User, Ws ?? "", Id, CancellationToken.None);
 }

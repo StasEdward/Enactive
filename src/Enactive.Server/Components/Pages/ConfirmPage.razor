@@ -52,6 +52,7 @@ else if (_question is { } question)
     private Enactive.Application.Question? _question;
     private string? _problem;
 
-    protected override async Task OnInitializedAsync()
+    // Read per address, not once: see Pages/_Imports.razor.
+    protected override async Task OnParametersSetAsync()
         => (_question, _problem) = await History.AskAsync((await Auth).User, Ws ?? "", What ?? "", Id, FilePath, CancellationToken.None);
 }

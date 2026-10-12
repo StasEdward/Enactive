@@ -75,7 +75,8 @@ else if (_set is { } set)
     private IReadOnlyList<StagedFile> _files = [];
     private string? _problem;
 
-    protected override async Task OnInitializedAsync()
+    // Read per address, not once: see Pages/_Imports.razor.
+    protected override async Task OnParametersSetAsync()
         => (_set, _files, _problem) = Staging.Open((await Auth).User, Ws ?? "", Set ?? "");
 
     private static string State(StagedFile f)

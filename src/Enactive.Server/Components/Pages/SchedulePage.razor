@@ -82,7 +82,8 @@
         _ => "execute"
     };
 
-    protected override async Task OnInitializedAsync()
+    // Read per address, not once: see Pages/_Imports.razor.
+    protected override async Task OnParametersSetAsync()
     {
         var user = (await Auth).User;
         (_templates, _) = Library.Templates(user, Ws ?? "");

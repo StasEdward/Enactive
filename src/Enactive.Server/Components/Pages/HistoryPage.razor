@@ -81,7 +81,8 @@ else if (_list is not null)
     private string? _problem;
     private string? _name;
 
-    protected override async Task OnInitializedAsync()
+    // Read per address, not once: see Pages/_Imports.razor.
+    protected override async Task OnParametersSetAsync()
     {
         var user = (await Auth).User;
         _name = History.Workspace(user, Ws ?? "")?.Name;

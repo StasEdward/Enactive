@@ -25,6 +25,7 @@ else
     private string? _text;
     private string? _problem;
 
-    protected override async Task OnInitializedAsync()
+    // Read per address, not once: see Pages/_Imports.razor.
+    protected override async Task OnParametersSetAsync()
         => (_text, _problem) = History.File((await Auth).User, Ws ?? "", FilePath ?? "");
 }

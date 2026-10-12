@@ -109,7 +109,8 @@ else
     private IReadOnlyList<ScheduleView> _schedules = [];
     private string? _problem;
 
-    protected override async Task OnInitializedAsync()
+    // Read per address, not once: see Pages/_Imports.razor.
+    protected override async Task OnParametersSetAsync()
     {
         var user = (await Auth).User;
         (_templates, _problem) = Library.Templates(user, Ws ?? "");

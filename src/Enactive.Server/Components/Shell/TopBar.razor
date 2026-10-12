@@ -8,8 +8,11 @@
 <header class="top">
     <a class="mark" href="/"><img src="brand/mark-loop.svg" alt="" />Enactive</a>
     <span class="host">@Host</span>
-    @* The connection state ("Connected" / "Reconnecting") is shown here once the shell is interactive. *@
-    <span class="conn"></span>
+    @* Only on a live page: a page drawn statically (sign-in) has no connection, and "Connected" there was untrue. *@
+    @if (RendererInfo.IsInteractive)
+    {
+        <ReconnectState />
+    }
     @if (_user?.Identity?.IsAuthenticated == true)
     {
         <span class="who">@_user.Identity.Name</span>

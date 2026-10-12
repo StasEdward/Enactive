@@ -7,17 +7,17 @@
 
 <PageTitle>Enactive</PageTitle>
 
-@* Rendered on the server and posted as a plain form (static rendering), not a live page: a live page's inputs and
-   buttons work only once its connection is up, and text typed or a click made before that was lost - the run was
-   started with an empty folder, or the form went off as a GET (found by tests/server-e2e). A form post works from the
-   first moment the page is there. *@
+@* Live, like every page, and drawn only once its connection is up (App.razor): a live page drawn before that showed a
+   form whose text was lost - the run was started with an empty folder, or the form went off as a GET (found by
+   tests/server-e2e). The start form is submitted over the connection; method="post" stays so that a form the browser
+   ever sent itself would not put the task in an address. *@
 
 <h1>Runs</h1>
 
 <AuthorizeView Policy="Operator">
-    <EditForm Model="Input!" method="post" OnValidSubmit="StartAsync" FormName="start" class="start" Context="form">
+    <EditForm Model="_input" method="post" OnValidSubmit="StartAsync" class="start" Context="form">
         <label>Workspace
-            <InputSelect @bind-Value="Input!.Workspace">
+            <InputSelect @bind-Value="_input.Workspace">
                 @foreach (var workspace in _workspaces)
                 {
                     <option value="@workspace.RootPath">@workspace.Name - @workspace.RootPath</option>
@@ -25,7 +25,7 @@
             </InputSelect>
         </label>
         <a href="workspaces/browse">Add a folder…</a>
-        <label>Task <InputTextArea @bind-Value="Input!.Task" rows="3" /></label>
+        <label>Task <InputTextArea @bind-Value="_input.Task" rows="3" /></label>
         <button type="submit">Run</button>
         @if (_said is not null)
         {
@@ -55,7 +55,7 @@ else
 @code {
     [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
 
-    [SupplyParameterFromForm] private StartForm? Input { get; set; }
+    private readonly StartForm _input = new();
 
     private string? _said;
     private IReadOnlyList<ServerRun> _runs = [];
@@ -69,19 +69,17 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        // Set here, not by an initializer: a form post sets it from the form, and an initializer would be overwritten.
-        Input ??= new();
         var user = (await Auth).User;
         _runs = Runs.List(user);
         // The folders the service knows; a new one is added by browsing its roots (WorkspaceRoots), not typed.
         _workspaces = History.Workspaces(user);
-        if (Input.Workspace.Length == 0 && _workspaces.Count > 0)
-            Input.Workspace = _workspaces[0].RootPath;
+        if (_input.Workspace.Length == 0 && _workspaces.Count > 0)
+            _input.Workspace = _workspaces[0].RootPath;
     }
 
     private async Task StartAsync()
     {
-        var (run, refusal) = Runs.Start((await Auth).User, Input!.Workspace, Input.Task);
+        var (run, refusal) = Runs.Start((await Auth).User, _input.Workspace, _input.Task);
         if (run is null)
         {
             _said = refusal;

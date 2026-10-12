@@ -93,6 +93,29 @@ pre, code, .path { font-family: var(--font-mono); }
 .mark { display: flex; gap: 8px; align-items: center; font-family: var(--font-display); font-weight: 600; font-size: 13px; color: var(--text); text-decoration: none; }
 .mark img { width: 18px; height: 18px; }
 .host, .conn { font-size: 12px; color: var(--text-muted); }
+
+/* The connection (Shell/ReconnectState.razor). Blazor's script marks the element with a class while the connection is
+   down - the page cannot draw then - so each state's text is in the element and these rules show the one the mark
+   calls for: no mark (or -hide) is connected; -show/-retrying/-paused is trying again; -failed/-rejected/-resume-failed
+   has given up. */
+.conn { display: inline-flex; gap: 6px; align-items: center; }
+.conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+.conn-text, .conn-reload, .conn-block { display: none; }
+.conn .conn-up { display: inline; }
+.conn:is(.components-reconnect-show, .components-reconnect-retrying, .components-reconnect-paused,
+  .components-reconnect-failed, .components-reconnect-rejected, .components-reconnect-resume-failed) .conn-up { display: none; }
+.conn:is(.components-reconnect-show, .components-reconnect-retrying, .components-reconnect-paused) .conn-retrying { display: inline; }
+.conn:is(.components-reconnect-show, .components-reconnect-retrying, .components-reconnect-paused) .conn-dot { background: var(--warning); }
+.conn:is(.components-reconnect-failed, .components-reconnect-rejected, .components-reconnect-resume-failed) .conn-down { display: inline; }
+.conn:is(.components-reconnect-failed, .components-reconnect-rejected, .components-reconnect-resume-failed) .conn-dot { background: var(--danger); }
+/* Over the whole window and transparent: the page stays readable, and a click on it - which the server would never
+   get - lands here instead of on a button that would look pressed and do nothing. */
+.conn:is(.components-reconnect-show, .components-reconnect-retrying, .components-reconnect-paused,
+  .components-reconnect-failed, .components-reconnect-rejected, .components-reconnect-resume-failed) .conn-block {
+  display: block; position: fixed; inset: 0; z-index: 1000; background: transparent; cursor: progress; }
+/* Above the overlay: once the script has given up, reloading is the only way back. */
+.conn:is(.components-reconnect-failed, .components-reconnect-rejected, .components-reconnect-resume-failed) .conn-reload {
+  display: inline-flex; position: relative; z-index: 1001; padding: 1px 8px; font-size: 12px; }
 .who { margin-left: auto; font-size: 12px; color: var(--text-muted); }
 .top .pill { padding: 1px 10px; font-size: 11px; }
 .signout { margin: 0; }

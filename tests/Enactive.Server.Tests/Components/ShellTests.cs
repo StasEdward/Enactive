@@ -28,7 +28,12 @@ public sealed class ShellTests : ComponentHost
         public override AntiforgeryRequestToken? GetAntiforgeryToken() => new("token-value", "__RequestVerificationToken");
     }
 
-    public ShellTests() => Services.AddSingleton<AntiforgeryStateProvider>(new FixedToken());
+    public ShellTests()
+    {
+        Services.AddSingleton<AntiforgeryStateProvider>(new FixedToken());
+        // The shell is drawn live in the service (App.razor), and the top bar says the connection only there.
+        SetRendererInfo(new RendererInfo("Server", isInteractive: true));
+    }
 
     /// <summary>The names the rail's items are announced by - the tooltip, which is also the icon's only text.</summary>
     private static string[] Names(IRenderedComponent<Rail> rail)
@@ -193,5 +198,61 @@ public sealed class ShellTests : ComponentHost
         Assert.Contains("Enactive", bar.Markup);
         Assert.Empty(bar.FindAll("form.signout"));
         Assert.Empty(bar.FindAll(".who"));
+    }
+
+    /// <summary>
+    /// Signing in sets a cookie, and only a real response can: a live sign-in page had no response to set it on. The
+    /// attribute keeps the page out of the app's interactive routing (App.razor), so it is rendered and posted statically.
+    /// </summary>
+    [Fact]
+    public void Sign_in_is_not_an_interactive_page()
+        => Assert.Single(typeof(Enactive.Server.Components.Pages.SignIn)
+            .GetCustomAttributes(typeof(ExcludeFromInteractiveRoutingAttribute), inherit: true));
+
+    /// <summary>
+    /// The render mode is the app's, set once in App.razor; a page that set its own as well was one more place for a
+    /// page to be drawn ahead of its connection.
+    /// </summary>
+    [Fact]
+    public void No_page_sets_a_render_mode_of_its_own()
+    {
+        var pages = typeof(ServerApp).Assembly.GetTypes()
+            .Where(t => t.GetCustomAttributes(typeof(RouteAttribute), inherit: false).Length > 0).ToList();
+
+        Assert.NotEmpty(pages);
+        Assert.Empty(pages.Where(t => t.GetCustomAttributes(typeof(RenderModeAttribute), inherit: true).Length > 0)
+            .Select(t => t.Name));
+    }
+
+    /// <summary>
+    /// The connection said in the top bar, on the element Blazor itself marks while the connection is down
+    /// (components-reconnect-modal): the page cannot draw anything then, so each state's text is there already and the
+    /// stylesheet shows the one the mark calls for.
+    /// </summary>
+    [Fact]
+    public void The_top_bar_says_the_connection_on_the_element_blazor_marks()
+    {
+        SignIn("alice");
+
+        var bar = Render<TopBar>();
+
+        var state = bar.Find(".top #components-reconnect-modal");
+        Assert.Equal(["Connected", "Reconnecting…", "Disconnected"],
+            state.QuerySelectorAll(".conn-text").Select(e => e.TextContent.Trim()));
+        Assert.Single(state.QuerySelectorAll(".conn-dot"));
+        Assert.Single(state.QuerySelectorAll(".conn-block"));
+        Assert.Equal("Reload", state.QuerySelector("button.conn-reload")!.TextContent.Trim());
+    }
+
+    /// <summary>A page drawn statically (sign-in) has no connection; the top bar there said "Connected" all the same.</summary>
+    [Fact]
+    public void The_top_bar_of_a_static_page_says_no_connection()
+    {
+        SetRendererInfo(new RendererInfo("Static", isInteractive: false));
+
+        var bar = Render<TopBar>();
+
+        Assert.Empty(bar.FindAll("#components-reconnect-modal"));
+        Assert.DoesNotContain("Connected", bar.Markup);
     }
 }

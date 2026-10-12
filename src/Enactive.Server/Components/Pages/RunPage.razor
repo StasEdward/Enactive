@@ -1,7 +1,4 @@
 @page "/runs/{Id:guid}"
-@* Live, and not drawn ahead of its connection: a prerendered page shows answer and cancel buttons that do nothing
-   until the connection is up, and a click there was lost (found by tests/server-e2e). *@
-@rendermode @(new InteractiveServerRenderMode(prerender: false))
 @implements IAsyncDisposable
 @using Enactive.Core.History
 @using Enactive.Server.Runs

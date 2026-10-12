@@ -48,6 +48,7 @@
         ? $"workspaces/browse?path={Uri.EscapeDataString(parent)}"
         : "workspaces/browse";
 
-    protected override async Task OnInitializedAsync()
+    // Read per address, not once: see Pages/_Imports.razor.
+    protected override async Task OnParametersSetAsync()
         => (_folders, _problem) = History.Browse((await Auth).User, Path);
 }

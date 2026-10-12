@@ -1,5 +1,8 @@
 @page "/signin"
 @attribute [AllowAnonymous]
+@* Out of the app's interactive routing (App.razor): signing in sets a cookie, which only a real response can do - a
+   live page has no response to set it on. *@
+@attribute [ExcludeFromInteractiveRouting]
 @using Microsoft.AspNetCore.Authentication
 @using Microsoft.AspNetCore.Authentication.Cookies
 @using Enactive.Server.Accounts

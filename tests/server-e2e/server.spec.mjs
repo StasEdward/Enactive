@@ -333,3 +333,51 @@ test('a viewer reads a staged run\'s proposal, and an operator applies it to the
   await expect(page.getByText('Nothing waits.')).toBeVisible();
   await context.close();
 });
+
+test('a lost connection disables actions until it is back', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'alice');
+  await startRun(page, 'connection lost');
+  // The page's connection, through a route the test holds. Going offline alone does not cut it: Chromium's offline
+  // emulation stops new requests, and the WebSocket already open went on carrying the circuit - the page never knew.
+  // Offline still matters: it fails Blazor's attempts to reconnect (each starts with a request) until the test is back.
+  const sockets = [];
+  await context.routeWebSocket(/\/_blazor/, (socket) => {
+    socket.connectToServer();
+    sockets.push(socket);
+  });
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Approve write_file' })).toBeVisible();
+  const bar = page.locator('header.top');
+  await expect(bar.getByText('Connected', { exact: true })).toBeVisible();
+
+  await context.setOffline(true);
+  for (const socket of sockets) await socket.close({ code: 4000, reason: 'the network went away' });
+  await expect(bar.getByText('Reconnecting…', { exact: true })).toBeVisible();
+  // A click while the connection is down would be dropped without a word: the page takes none. A trial click only
+  // checks that the button would receive it, and times out when something lies over it.
+  const deny = page.getByRole('button', { name: 'Deny' });
+  await expect(deny.click({ trial: true, timeout: 1_000 })).rejects.toThrow();
+
+  await context.setOffline(false);
+  await expect(bar.getByText('Connected', { exact: true })).toBeVisible();
+  await deny.click();
+  await expect(page.getByRole('heading', { name: 'Approve write_file' })).toBeHidden();
+  await context.close();
+});
+
+test('a connection given up on says so, and reload is the one thing that can be clicked', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'vera');
+  const bar = page.locator('header.top');
+  await expect(bar.getByText('Connected', { exact: true })).toBeVisible();
+
+  // The mark Blazor's script puts on the element once it has stopped trying (its retries take minutes to run out):
+  // the state is what the page is told, and the test tells it directly.
+  await page.evaluate(() => document.getElementById('components-reconnect-modal').classList.add('components-reconnect-failed'));
+  await expect(bar.getByText('Disconnected', { exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Runs' }).click({ trial: true, timeout: 1_000 })).rejects.toThrow();
+
+  await bar.getByRole('button', { name: 'Reload' }).click();
+  await expect(bar.getByText('Connected', { exact: true })).toBeVisible();
+  await expect(bar.getByRole('button', { name: 'Reload' })).toBeHidden();
+  await context.close();
+});

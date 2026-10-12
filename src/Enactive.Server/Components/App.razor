@@ -7,10 +7,24 @@
     <title>Enactive</title>
     <link rel="stylesheet" href="@Assets["brand/brand.css"]" />
     <link rel="stylesheet" href="@Assets["theme.css"]" />
-    <HeadOutlet />
+    <HeadOutlet @rendermode="PageRenderMode" />
 </head>
 <body>
-    <Routes />
+    <Routes @rendermode="PageRenderMode" />
     <script src="_framework/blazor.web.js"></script>
 </body>
 </html>
+
+@code {
+    [CascadingParameter] private HttpContext HttpContext { get; set; } = default!;
+
+    // Every page is live, set here once for all of them, and not drawn ahead of its connection (no prerender): a page
+    // drawn before its connection was up showed inputs and buttons that did nothing yet, and text typed or a click made
+    // then was lost - a run started with an empty folder, an answer that never reached the run (found by
+    // tests/server-e2e). Nothing is shown until the connection is up, so nothing can be lost.
+    // Sign-in is the exception ([ExcludeFromInteractiveRouting], so AcceptsInteractiveRouting is false there): signing
+    // in sets a cookie, which only a real response can do, so that page is drawn and posted as a plain form.
+    private static readonly IComponentRenderMode Live = new InteractiveServerRenderMode(prerender: false);
+
+    private IComponentRenderMode? PageRenderMode => HttpContext.AcceptsInteractiveRouting() ? Live : null;
+}
