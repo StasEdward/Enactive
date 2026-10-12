@@ -507,7 +507,7 @@ public sealed class ExecutionJournal
     {
         var arguments = action.Arguments ?? "";
         if (arguments.Length > MaxArguments)
-            arguments = arguments[..MaxArguments] + $"… ({arguments.Length:N0} characters of arguments)";
+            arguments = arguments[..MaxArguments] + $"… ({Invariant.N0(arguments.Length)} characters of arguments)";
 
         var whose = withStep && action.Step is { } step ? $" (step {step})" : "";
         var facts = (action.ExitCode is { } code ? $" [process exit={code}]" : "")
@@ -574,7 +574,7 @@ public sealed class ExecutionJournal
         {
             var result = new Dictionary<int, string>(texts);
             foreach (var (i, j) in holders)
-                result[i] = $"(the same {flat[i].Length:N0} characters as in the result of [{j + 1}] - shown there, not repeated here)";
+                result[i] = $"(the same {Invariant.N0(flat[i].Length)} characters as in the result of [{j + 1}] - shown there, not repeated here)";
             var allowance = Fair(result.ToDictionary(p => p.Key, p => p.Value.Length), room);
             var lost = holders.Where(h => !Flat(Answer(result[h.Value], allowance[h.Value], out _)).Contains(flat[h.Key], StringComparison.Ordinal))
                 .Select(h => h.Key).ToArray();

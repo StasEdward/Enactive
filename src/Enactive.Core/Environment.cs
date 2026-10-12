@@ -103,7 +103,7 @@ public sealed record EnvironmentSnapshot(
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Snapshot at {At.ToLocalTime():HH:mm:ss}");
-        sb.AppendLine($"RAM in use: {RamPercent:F0}%" + (CpuPercent > 0 ? $"   CPU: {CpuPercent:F0}%" : ""));
+        sb.AppendLine($"RAM in use: {Invariant.Format(RamPercent, "F0")}%" + (CpuPercent > 0 ? $"   CPU: {Invariant.Format(CpuPercent, "F0")}%" : ""));
         if (Containers.Count > 0)
         {
             sb.AppendLine("Containers:");

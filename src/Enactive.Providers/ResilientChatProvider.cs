@@ -2,6 +2,7 @@ namespace Enactive.Providers;
 
 using System.Net;
 using System.Runtime.CompilerServices;
+using Enactive.Core;
 using Enactive.Core.Chat;
 using Enactive.Core.Diagnostics;
 using Enactive.Core.Execution;
@@ -75,7 +76,7 @@ public sealed class ResilientChatProvider(IChatProvider inner, ILogSink? log = n
         // A very long Retry-After is not permission to retry earlier than the server requested.
         if (wait > TimeSpan.FromSeconds(30)) throw error;
         if (wait < TimeSpan.Zero) wait = TimeSpan.Zero;
-        log.Warn(LogSource.Llm, $"Transient provider failure; retry {attempt + 1}/2 in {wait.TotalSeconds:F1}s (HTTP {(int?)(error as HttpRequestException)?.StatusCode}).");
+        log.Warn(LogSource.Llm, $"Transient provider failure; retry {attempt + 1}/2 in {Invariant.Format(wait.TotalSeconds, "F1")}s (HTTP {(int?)(error as HttpRequestException)?.StatusCode}).");
         await (delay ?? Task.Delay)(wait, ct).ConfigureAwait(false);
         ct.ThrowIfCancellationRequested();
         CheckBudget(request, error);

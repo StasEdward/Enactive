@@ -1,5 +1,6 @@
 namespace Enactive.Agents;
 
+using Enactive.Core;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Execution;
 using Enactive.Core.Templates;
@@ -60,7 +61,7 @@ internal static class ProducedFiles
             {
                 var bytes = new FileInfo(full).Length;
                 results.Add(Result(path, CriterionOutcome.Passed,
-                    bytes == 0 ? "on disk, empty" : $"on disk, {bytes:N0} bytes"));
+                    bytes == 0 ? "on disk, empty" : $"on disk, {Invariant.N0(bytes)} bytes"));
                 continue;
             }
 

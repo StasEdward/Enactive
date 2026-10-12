@@ -28,7 +28,10 @@ public sealed class FailureOutputInEvidenceTests
     // a "test run" that crashes while the "parser" throws, and is green once it does not. The same
     // command both times, which is what lets the step reach review at all: a failure left open
     // ends the step before any reviewer is asked, and only the same call succeeding closes it.
-    private const string TestRun = """{"command":"testrun.cmd"}""";
+    // By its path, not its bare name: with NoDefaultCurrentDirectoryInExePath set (a Windows hardening some machines and
+    // sandboxes have) cmd does not look in the current folder, the script was "not recognized", and these tests failed
+    // for a reason that is not theirs.
+    private const string TestRun = """{"command":".\\testrun.cmd"}""";
 
     private static void InstallTestRun(EngineFixture fx)
     {
@@ -129,7 +132,7 @@ public sealed class FailureOutputInEvidenceTests
         // Exit 3 and not a word of output while the "parser" throws; fine once it does not.
         fx.Write("quiet.cmd", "@echo off\r\nfindstr /C:\"throw\" parser.txt >nul && exit /b 3\r\necho fine\r\n");
 
-        const string quiet = """{"command":"quiet.cmd"}""";
+        const string quiet = """{"command":".\\quiet.cmd"}""";   // by its path, as TestRun
         var agent = new FakeChatProvider(
             Turn.Says(QuickPlan),
             Turn.Calls1("run_command", quiet),

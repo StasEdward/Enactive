@@ -1,6 +1,7 @@
 namespace Enactive.Remote.Gateway.Services;
 
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Security.Cryptography;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
@@ -1268,7 +1269,7 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
         if (trimmed.Length is 0 or > MaxLabel || trimmed.Any(char.IsControl))
         {
             throw GatewayFault.BadRequest(
-                $"'label' must be 1 to {MaxLabel:N0} characters, without control characters.");
+                $"'label' must be 1 to {MaxLabel.ToString("N0", CultureInfo.InvariantCulture)} characters, without control characters.");
         }
 
         return trimmed;

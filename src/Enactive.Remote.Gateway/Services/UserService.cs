@@ -1,5 +1,6 @@
 namespace Enactive.Remote.Gateway.Services;
 
+using System.Globalization;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway.Storage;
@@ -813,7 +814,7 @@ public sealed class UserService(
     {
         if (string.IsNullOrWhiteSpace(value) || value.Trim().Length > max)
         {
-            throw GatewayFault.BadRequest($"'{field}' must be 1 to {max:N0} characters.");
+            throw GatewayFault.BadRequest($"'{field}' must be 1 to {max.ToString("N0", CultureInfo.InvariantCulture)} characters.");
         }
 
         return value.Trim();

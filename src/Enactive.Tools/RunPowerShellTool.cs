@@ -3,6 +3,7 @@ namespace Enactive.Tools;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using Enactive.Core;
 using Enactive.Core.Context;
 using Enactive.Core.Permissions;
 using Enactive.Core.Tools;
@@ -113,8 +114,8 @@ public sealed class RunPowerShellTool : ITool, ICommandPolicyValidator
         // taken - a long document is a FILE, not a command line.
         if (encoded.Length > MaxEncodedChars)
             return ToolResults.Unreadable(
-                $"This script is too long to run: {script.Length:N0} characters becomes "
-                + $"{encoded.Length:N0} once encoded, and Windows takes about {MaxEncodedChars:N0} "
+                $"This script is too long to run: {Invariant.N0(script.Length)} characters becomes "
+                + $"{Invariant.N0(encoded.Length)} once encoded, and Windows takes about {Invariant.N0(MaxEncodedChars)} "
                 + "on a command line. Nothing ran. If it is long because it CARRIES content - a "
                 + "document in a here-string, a file being written - that content belongs in a "
                 + "file: use write_file, or edit_file to change part of one. If the script itself "

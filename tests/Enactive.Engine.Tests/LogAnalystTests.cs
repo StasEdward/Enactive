@@ -63,7 +63,7 @@ public sealed class LogAnalystTests
         var excerpt = LogAnalyst.Excerpt(Log(4_000), 4_000, out var sent);
 
         Assert.Contains(LogAnalyst.Gap, excerpt);
-        Assert.Contains($"({4_000 - sent:N0} lines)", excerpt);
+        Assert.Contains($"({Enactive.Core.Invariant.N0(4_000 - sent)} lines)", excerpt);
     }
 
     [Fact]

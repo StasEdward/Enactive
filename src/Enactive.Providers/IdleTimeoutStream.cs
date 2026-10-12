@@ -1,5 +1,7 @@
 namespace Enactive.Providers;
 
+using Enactive.Core;
+
 /// <summary>Times out network inactivity rather than the lifetime of an actively generating response.</summary>
 internal sealed class IdleTimeoutStream(Stream inner, TimeSpan timeout) : Stream
 {
@@ -21,6 +23,6 @@ internal sealed class IdleTimeoutStream(Stream inner, TimeSpan timeout) : Stream
         idle.CancelAfter(timeout);
         try { return await inner.ReadAsync(buffer, idle.Token).ConfigureAwait(false); }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        { throw new TimeoutException($"Provider stream was idle for {timeout.TotalSeconds:F0} seconds."); }
+        { throw new TimeoutException($"Provider stream was idle for {Invariant.Format(timeout.TotalSeconds, "F0")} seconds."); }
     }
 }

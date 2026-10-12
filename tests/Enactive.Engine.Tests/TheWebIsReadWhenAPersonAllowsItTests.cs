@@ -131,7 +131,7 @@ public sealed class TheWebIsReadWhenAPersonAllowsItTests
         var result = await Fetch(web, new { url = "https://example.org/long", max_chars = 1_000_000 });
 
         Assert.DoesNotContain(" END", result.Output, StringComparison.Ordinal);
-        Assert.Contains($"at most {FetchUrlTool.LargestMaxChars:N0}", result.Output, StringComparison.Ordinal);
+        Assert.Contains($"at most {Enactive.Core.Invariant.N0(FetchUrlTool.LargestMaxChars)}", result.Output, StringComparison.Ordinal);
     }
 
     [Fact]
