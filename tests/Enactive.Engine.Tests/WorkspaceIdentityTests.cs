@@ -35,6 +35,7 @@ public sealed class WorkspaceIdentityTests : IDisposable
 
     public void Dispose()
     {
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 
@@ -65,7 +66,7 @@ public sealed class WorkspaceIdentityTests : IDisposable
         // Pools closed first: SQLite keeps the database file open, and Windows will not move a
         // folder somebody has a handle in. That is an artefact of testing a rename in-process, not
         // of the rename — a person renaming a folder has closed the app.
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Enactive.Tests.SqlitePools.ClearUnder(before);
         var after = Path.Combine(_root, "project-beta");
         Directory.Move(before, after);
 

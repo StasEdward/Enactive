@@ -30,7 +30,10 @@ public sealed class WorkspaceColumnTests : ComponentHost
     {
         base.Dispose(disposing);
         if (disposing)
+        {
+            Enactive.Tests.SqlitePools.ClearUnder(_folders);
             try { Directory.Delete(_folders, recursive: true); } catch { /* a temp folder */ }
+        }
     }
 
     /// <summary>A folder the service knows as a workspace.</summary>

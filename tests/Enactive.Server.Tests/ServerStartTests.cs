@@ -23,6 +23,7 @@ public sealed class ServerStartTests : IDisposable
 
     public void Dispose()
     {
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 

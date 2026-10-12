@@ -56,6 +56,7 @@ public sealed class NetworkGateTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await _app.DisposeAsync();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 

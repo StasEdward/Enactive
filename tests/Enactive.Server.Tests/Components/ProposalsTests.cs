@@ -34,7 +34,10 @@ public sealed class ProposalsTests : ComponentHost
     {
         base.Dispose(disposing);
         if (disposing)
+        {
+            Enactive.Tests.SqlitePools.ClearUnder(_folders);
             try { Directory.Delete(_folders, recursive: true); } catch { /* a temp folder */ }
+        }
     }
 
     private ServerStaging Staging => Services.GetRequiredService<ServerStaging>();

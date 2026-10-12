@@ -22,7 +22,7 @@ public sealed class AccountTests : IDisposable
 
     public void Dispose()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 
@@ -50,7 +50,7 @@ public sealed class AccountTests : IDisposable
     public void The_password_is_not_in_the_database()
     {
         _users.Add("alice", Password, Role.Viewer);
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
 
         Assert.DoesNotContain(Password, File.ReadAllText(Path.Combine(_root, "server.db")));
     }

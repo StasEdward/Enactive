@@ -42,7 +42,10 @@ public sealed class SchedulesTests : ComponentHost
     {
         base.Dispose(disposing);
         if (disposing)
+        {
+            Enactive.Tests.SqlitePools.ClearUnder(_folders);
             try { Directory.Delete(_folders, recursive: true); } catch { /* a temp folder */ }
+        }
     }
 
     private ServerLibrary Library => Services.GetRequiredService<ServerLibrary>();

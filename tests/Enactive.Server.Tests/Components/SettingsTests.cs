@@ -37,7 +37,10 @@ public sealed class SettingsTests : ComponentHost
     {
         base.Dispose(disposing);
         if (disposing)
+        {
+            Enactive.Tests.SqlitePools.ClearUnder(_roots);
             try { Directory.Delete(_roots, recursive: true); } catch { /* a temp folder */ }
+        }
     }
 
     private ServerEngine Engine => Services.GetRequiredService<ServerEngine>();

@@ -30,7 +30,7 @@ public sealed class RunSpecStoreTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 
@@ -134,7 +134,7 @@ public sealed class RunSpecStoreTests : IDisposable
             insert.Parameters.AddWithValue("$at", DateTimeOffset.Now.ToString("o"));
             await insert.ExecuteNonQueryAsync();
         }
-        SqliteConnection.ClearAllPools();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
 
         var store = new SqliteRunStore(_workspace);
 

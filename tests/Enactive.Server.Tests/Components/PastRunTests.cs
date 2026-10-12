@@ -39,7 +39,10 @@ public sealed class PastRunTests : ComponentHost
         _engine.Release();
         base.Dispose(disposing);
         if (disposing)
+        {
+            Enactive.Tests.SqlitePools.ClearUnder(_folders);
             try { Directory.Delete(_folders, recursive: true); } catch { /* a temp folder */ }
+        }
     }
 
     private IRunControl Runs => Services.GetRequiredService<IRunControl>();

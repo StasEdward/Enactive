@@ -97,7 +97,7 @@ public sealed class ShellTests : ComponentHost
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            Enactive.Tests.SqlitePools.ClearUnder(folder);
             try { Directory.Delete(folder, recursive: true); } catch { /* a temp folder */ }
         }
     }
@@ -130,7 +130,7 @@ public sealed class ShellTests : ComponentHost
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            Enactive.Tests.SqlitePools.ClearUnder(folder);
             try { Directory.Delete(folder, recursive: true); } catch { /* a temp folder */ }
         }
     }
@@ -168,7 +168,7 @@ public sealed class ShellTests : ComponentHost
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            Enactive.Tests.SqlitePools.ClearUnder(folder);
             try { Directory.Delete(folder, recursive: true); } catch { /* a temp folder */ }
         }
     }

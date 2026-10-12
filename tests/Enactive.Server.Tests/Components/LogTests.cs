@@ -39,7 +39,10 @@ public sealed class LogTests : ComponentHost
     {
         base.Dispose(disposing);
         if (disposing)
+        {
+            Enactive.Tests.SqlitePools.ClearUnder(_folders);
             try { Directory.Delete(_folders, recursive: true); } catch { /* a temp folder */ }
+        }
     }
 
     private BunitJSModuleInterop LogScript { get; }

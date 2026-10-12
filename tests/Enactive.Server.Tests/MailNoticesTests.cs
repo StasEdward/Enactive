@@ -34,6 +34,7 @@ public sealed class MailNoticesTests : IDisposable
     public void Dispose()
     {
         _engine.Dispose();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 

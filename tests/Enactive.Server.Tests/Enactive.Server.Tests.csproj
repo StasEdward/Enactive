@@ -20,6 +20,8 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <!-- Shared with the other test project: what lets go of a test's own SQLite files (tests/Shared). -->
+    <Compile Include="../Shared/SqlitePools.cs" Link="Shared/SqlitePools.cs" />
   </ItemGroup>
 
   <ItemGroup>

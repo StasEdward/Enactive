@@ -37,7 +37,7 @@ public sealed class ServerStagingTests : IDisposable
     public void Dispose()
     {
         _engine.Dispose();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 

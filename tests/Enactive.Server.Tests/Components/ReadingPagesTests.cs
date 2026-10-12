@@ -32,7 +32,10 @@ public sealed class ReadingPagesTests : ComponentHost
     {
         base.Dispose(disposing);
         if (disposing)
+        {
+            Enactive.Tests.SqlitePools.ClearUnder(_folders);
             try { Directory.Delete(_folders, recursive: true); } catch { /* a temp folder */ }
+        }
     }
 
     /// <summary>A workspace the service has run in, with one finished run that wrote one file.</summary>

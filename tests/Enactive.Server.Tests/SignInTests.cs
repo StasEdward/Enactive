@@ -50,7 +50,7 @@ public sealed partial class SignInTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await _app.DisposeAsync();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 

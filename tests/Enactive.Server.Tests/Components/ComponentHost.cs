@@ -72,7 +72,7 @@ public abstract class ComponentHost : BunitContext
         base.Dispose(disposing);
         if (!disposing)
             return;
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 

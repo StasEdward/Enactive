@@ -40,7 +40,7 @@ public sealed class RunControlTests : IDisposable
     public void Dispose()
     {
         _engine.ReleaseAll();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 

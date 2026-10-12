@@ -39,7 +39,10 @@ public sealed class TemplatesTests : ComponentHost
     {
         base.Dispose(disposing);
         if (disposing)
+        {
+            Enactive.Tests.SqlitePools.ClearUnder(_folders);
             try { Directory.Delete(_folders, recursive: true); } catch { /* a temp folder */ }
+        }
     }
 
     private Guid WorkspaceId => WorkspaceInfo.For(_root).Id;
