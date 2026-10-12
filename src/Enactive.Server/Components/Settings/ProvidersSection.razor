@@ -38,6 +38,13 @@
 
     protected override void OnParametersSet()
     {
+        // Let go of the rows no longer listed - removed, or of a view model Save or Cancel replaced - or each kept the
+        // section, and the old copy of the settings, alive for as long as the page.
+        foreach (var gone in _watched.Except(Vm.Providers).ToList())
+        {
+            gone.PropertyChanged -= RowChanged;
+            _watched.Remove(gone);
+        }
         foreach (var row in Vm.Providers.Where(_watched.Add))
             row.PropertyChanged += RowChanged;
     }

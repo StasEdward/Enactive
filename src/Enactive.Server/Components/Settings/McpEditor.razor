@@ -90,7 +90,7 @@
         _form = McpServerForm.Of(Draft);
         // As the window's editor says it on opening: the server is off until they are entered again.
         _status = Draft.CredentialsUnavailable
-            ? "Stored credentials could not be decrypted. Re-enter environment variables and headers before using these settings."
+            ? McpEditorWords.CredentialsUnavailable
             : null;
     }
 
@@ -109,7 +109,7 @@
     private async Task TestAsync()
     {
         _testing = true;
-        _status = "Connecting and listing tools…";
+        _status = McpEditorWords.Connecting;
         try
         {
             var copy = Draft.Clone();

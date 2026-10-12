@@ -103,6 +103,8 @@ public sealed class ApplicationLayerTests
     [InlineData(typeof(WorkerEditViewModel))]
     [InlineData(typeof(ToolToggle))]
     [InlineData(typeof(BuildInfo))]
+    [InlineData(typeof(BuildComponent))]
+    [InlineData(typeof(McpEditorWords))]
     [InlineData(typeof(IHostSettingsPane))]
     [InlineData(typeof(NoStartupEntry))]
     [InlineData(typeof(IProviderCalls))]
