@@ -29,6 +29,9 @@ public sealed class LiveRunTests : ComponentHost
         _script = new Script(new ApprovalStore(Path.Combine(_folders, "permissions.json")));
         Services.AddSingleton<IRunExecutor>(_script);
         Services.AddSingleton(new WorkspaceRoots([_folders]));
+        // No clock: the page redraws only when it is told something, so a test sees what told it - a page redrawn every
+        // second anyway passed whether or not it had been told.
+        Services.AddSingleton(new LiveRunClock(null));
         // Copy all is the browser's clipboard.
         JSInterop.SetupVoid("navigator.clipboard.writeText", _ => true);
     }
@@ -226,13 +229,11 @@ public sealed class LiveRunTests : ComponentHost
         page.WaitForAssertion(() => Assert.Equal(["alice"], run.Session.Watchers));
         Assert.Empty(page.FindAll(".also-watching"));
 
-        // Sooner than the page's clock ticks (LiveRun, a second): drawn because bob came, not because a second passed.
-        var soon = TimeSpan.FromMilliseconds(500);
         var bob = run.Session.Subscribe(run.Session.Seq, "bob");
-        page.WaitForAssertion(() => Assert.Equal("also watching: bob", page.Find(".also-watching").TextContent.Trim()), soon);
+        page.WaitForAssertion(() => Assert.Equal("also watching: bob", page.Find(".also-watching").TextContent.Trim()));
 
         run.Session.Unsubscribe(bob);
-        page.WaitForAssertion(() => Assert.Empty(page.FindAll(".also-watching")), soon);
+        page.WaitForAssertion(() => Assert.Empty(page.FindAll(".also-watching")));
     }
 
     /// <summary>
@@ -370,6 +371,115 @@ public sealed class LiveRunTests : ComponentHost
 
         var none = Render<RunsScreen>(p => p.Add(s => s.RunId, Guid.NewGuid()));
         Assert.Contains("There is no such run on the service", none.Markup);
+    }
+
+    /// <summary>
+    /// A question that comes up while the page is open is drawn at once - it is no event of the run's own, and a run
+    /// waiting on a question has none to redraw for (ServerRun.Changed).
+    /// </summary>
+    [Fact]
+    public async Task A_question_asked_while_the_page_is_open_comes_up_on_it()
+    {
+        var run = await StartedAsync();
+        var page = Open("alice", run);
+        Assert.Empty(page.FindAll(".decision"));
+
+        _ = _script.AskAsync(WriteFile(run.Workspace));
+
+        page.WaitForAssertion(() => Assert.Equal("Approve write_file", page.Find(".decision-topic").TextContent.Trim()));
+    }
+
+    /// <summary>
+    /// The screen moves to another run while the last run's follower is about to read: the page's follower wakes on the
+    /// page's own dispatcher, behind the move, and what it reads then is the old run's - which lands nowhere on screen. It
+    /// wrote the old run's view over the new one's.
+    /// </summary>
+    [Fact]
+    public async Task Moving_to_another_run_while_the_last_one_is_read_keeps_the_new_one_on_screen()
+    {
+        var first = await StartedAsync();
+        _script.Emit(Script.Ev(EventKind.PlanCreated, "Disks — 1 step", WorkEventPayload.PlanPayload("Disks", ["check the disks"])));
+        await WaitUntil(() => first.Session.Seq == 1);
+        // In the same folder: it waits its turn, and its page shows its own title.
+        var second = Runs.Start(As("alice"), first.Workspace, "second task").Run!;
+        SignIn("alice");
+        var page = Render<CountingLiveRun>(p => p.Add(l => l.RunId, first.Id));
+        page.WaitForAssertion(() => Assert.Equal("Disks", page.Find(".task-title").TextContent.Trim()));
+
+        await page.InvokeAsync(() =>
+        {
+            // The first run moves; its follower's wake-up is queued on this dispatcher, behind what runs here now.
+            _script.Emit(Step(EventKind.StepStarted, 1, "[1/1] check the disks"));
+            Assert.True(SpinWait.SpinUntil(() => first.Session.Seq == 2, TimeSpan.FromSeconds(5)));
+            Thread.Sleep(200);
+            page.Render(p => p.Add(l => l.RunId, second.Id));
+        });
+
+        // The old follower read its run after the move ...
+        await WaitUntil(() => page.Instance.ReadsOf(first.Id) >= 2);
+        // ... and the screen, drawn again, is still the second run's.
+        page.Render();
+        Assert.Equal("second task", page.Find(".task-title").TextContent.Trim());
+    }
+
+    /// <summary>
+    /// A page that leaves stops following: its name leaves the run's watchers, its handlers come off the run, and its clock
+    /// stops. Left on, a closed tab was still named as watching, and the run kept a page alive that nobody had open.
+    /// </summary>
+    [Fact]
+    public async Task Leaving_the_page_stops_following_the_run()
+    {
+        // A clock that moves, to be seen to stop.
+        Services.AddSingleton(new LiveRunClock(TimeSpan.FromMilliseconds(20)));
+        var run = await StartedAsync();
+        var page = Open("alice", run);
+        page.WaitForAssertion(() => Assert.Equal(["alice"], run.Session.Watchers));
+        Assert.Equal((1, 1), (Handlers(run, "Changed"), Handlers(run.Session, "WatchersChanged")));
+        var ticking = page.Instance.Ticking;
+        Assert.False(ticking.IsCompleted);
+
+        await DisposeComponentsAsync();
+
+        Assert.Empty(run.Session.Watchers);
+        Assert.Equal((0, 0), (Handlers(run, "Changed"), Handlers(run.Session, "WatchersChanged")));
+        await ticking.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>The screen moving to another run moves the page's name and its following there, and off the last one.</summary>
+    [Fact]
+    public async Task Moving_to_another_run_moves_the_watcher_and_the_follower()
+    {
+        var first = await StartedAsync();
+        var second = Runs.Start(As("alice"), first.Workspace, "second task").Run!;
+        var page = Open("alice", first);
+        page.WaitForAssertion(() => Assert.Equal(["alice"], first.Session.Watchers));
+
+        page.Render(p => p.Add(l => l.RunId, second.Id));
+
+        page.WaitForAssertion(() => Assert.Equal(["alice"], second.Session.Watchers));
+        Assert.Empty(first.Session.Watchers);
+        Assert.Equal((0, 0), (Handlers(first, "Changed"), Handlers(first.Session, "WatchersChanged")));
+        Assert.Equal((1, 1), (Handlers(second, "Changed"), Handlers(second.Session, "WatchersChanged")));
+    }
+
+    /// <summary>How many handlers an event has - read off its field, as nothing else says it.</summary>
+    private static int Handlers(object owner, string name)
+        => (owner.GetType().GetField(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(owner) as Delegate)?.GetInvocationList().Length ?? 0;
+
+    /// <summary>The live run, counting its reads of each run.</summary>
+    private sealed class CountingLiveRun : LiveRun
+    {
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, int> _reads = new();
+
+        public int ReadsOf(Guid run) => _reads.GetValueOrDefault(run);
+
+        internal override LiveRunView ReadOf(ServerRun run, LiveRunReader reader)
+        {
+            var view = base.ReadOf(run, reader);
+            _reads.AddOrUpdate(run.Id, 1, (_, n) => n + 1);
+            return view;
+        }
     }
 
     private static async Task WaitUntil(Func<bool> condition)

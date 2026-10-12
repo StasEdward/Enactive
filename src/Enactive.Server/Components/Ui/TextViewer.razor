@@ -69,5 +69,9 @@
             // The browser refused the clipboard (not a secure page, permission denied): the text is still there to select.
             _copied = false;
         }
+        catch (JSDisconnectedException)
+        {
+            // The page went away as Copy all was pressed: nobody is left to tell.
+        }
     }
 }

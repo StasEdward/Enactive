@@ -257,6 +257,8 @@ internal static class ServerApp
         services.AddSingleton<Runs.ServerSettings>();
         services.AddSingleton<Runs.ServerLibrary>();
         services.AddSingleton<Runs.ServerLogs>();
+        // The live run's page moves its clock every second while the run goes (Runs/LiveRun).
+        services.AddSingleton(Components.Runs.LiveRunClock.EverySecond);
         services.AddHostedService<Runs.RunsStopWithTheService>();
         // The schedules, every minute (ServerScheduler).
         services.AddSingleton<Runs.ServerScheduler>();

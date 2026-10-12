@@ -56,6 +56,16 @@ public sealed record LiveRunView(
 }
 
 /// <summary>
+/// How often a live run's page moves its clock - ELAPSED, and how long a question still waits - while the run goes; null,
+/// never. A service of its own so a test can stop it: a page that redrew every second anyway hid whether a change was
+/// drawn because the page was told of it.
+/// </summary>
+internal sealed record LiveRunClock(TimeSpan? Every)
+{
+    public static readonly LiveRunClock EverySecond = new(TimeSpan.FromSeconds(1));
+}
+
+/// <summary>
 /// Reads a run's fold into a <see cref="LiveRunView"/>. One per page: it keeps each card's copy until the card changes
 /// (FeedCard.Version), so a run of a hundred steps is not copied line by line ten times a second for the one that moved.
 /// Called only under the session's lock (RunSession.Read), which is also what keeps two reads of it from crossing.

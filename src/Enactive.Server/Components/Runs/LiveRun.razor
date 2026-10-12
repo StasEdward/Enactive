@@ -8,6 +8,7 @@
 @implements IAsyncDisposable
 @inject IRunControl Runs
 @inject ServerLogs Logs
+@inject LiveRunClock Clock
 
 @* The live run, as the window shows it under its command bar (MainWindow.axaml 546-920, 1244-1300): the task - its
    title, the request as it was typed (the bar clears when a run starts, and without this what was asked survived only
@@ -24,7 +25,7 @@
     return;
 }
 @{
-    var view = _view;
+    var view = _shownView.View;
     var title = view.Title.Length > 0 ? view.Title : run.Prompt;
     var others = run.Session.Watchers.Where(w => w != _me).ToList();
     var question = run.Questions.Pending;
@@ -112,9 +113,6 @@
     /// <summary>The run on the service (ServerRun.Id).</summary>
     [Parameter] public Guid RunId { get; set; }
 
-    /// <summary>How often the clock on the page moves - ELAPSED and how long a question still waits - while the run goes.</summary>
-    private static readonly TimeSpan Tick = TimeSpan.FromSeconds(1);
-
     /// <summary>The repository is read again this often while the run goes, as the window's strip: a step changes files.</summary>
     private const int RepoEveryTicks = 30;
 
@@ -124,9 +122,11 @@
     private System.Security.Claims.ClaimsPrincipal? _user;
     private string? _me;
     private RunFollower? _follower;
-    private LiveRunReader _reader = new();
-    private LiveRunView _view = LiveRunView.Empty;
+    private Shown _shownView = new();
     private CancellationTokenSource? _ticking;
+
+    /// <summary>The page's clock, until the run ends or the page leaves it; for a test to wait on.</summary>
+    internal Task Ticking { get; private set; } = Task.CompletedTask;
     private int _tab;
     private string? _said;
 
@@ -145,7 +145,12 @@
         _shown = RunId;
         _user = (await Auth).User;
         _me = _user.Identity?.Name;
-        (_tab, _said, _view, _reader) = (0, null, LiveRunView.Empty, new LiveRunReader());
+        (_tab, _said) = (0, null);
+        // A view, and a reader, of this run's own: the last follower's read can still be under way when the screen moves
+        // to another run, and it wrote the old run's view over the new one's - through a reader shared by two sessions'
+        // locks. What it reads now lands in a view nobody draws.
+        var shown = _shownView = new Shown();
+        var reader = new LiveRunReader();
         _run = Runs.Find(_user, RunId);
         _looked = true;
         if (_run is not { } run)
@@ -157,12 +162,30 @@
         run.Session.WatchersChanged += OnChanged;
         // Reads where the run stands, follows it from there, and redraws as it goes - at most ten times a second, and
         // never holding the run up (RunFollower). Named, so the others with the run open see who else is watching.
-        _follower = new RunFollower(run.Session, () => (_view = run.Session.Read(_reader.Read)).Seq,
+        _follower = new RunFollower(run.Session, () => (shown.View = ReadOf(run, reader)).Seq,
             () => InvokeAsync(Redraw), _me);
         _follower.Start();
-        _repoSeen = (_view.StepsDone, run.Ended.IsCompleted);
-        _ticking = new CancellationTokenSource();
-        _ = TickAsync(run, _ticking.Token);
+        _repoSeen = (shown.View.StepsDone, run.Ended.IsCompleted);
+        if (Clock.Every is { } every)
+        {
+            _ticking = new CancellationTokenSource();
+            Ticking = TickAsync(run, every, _ticking.Token);
+        }
+    }
+
+    /// <summary>The run's fold, read under its session's lock (RunSession.Read). Virtual for a test to count the reads.</summary>
+    internal virtual LiveRunView ReadOf(ServerRun run, LiveRunReader reader) => run.Session.Read(reader.Read);
+
+    /// <summary>The view drawn, one per run shown: written by that run's follower only.</summary>
+    private sealed class Shown
+    {
+        private volatile LiveRunView _view = LiveRunView.Empty;
+
+        public LiveRunView View
+        {
+            get => _view;
+            set => _view = value;
+        }
     }
 
     private void OnChanged() => _ = InvokeAsync(Redraw);
@@ -173,7 +196,7 @@
     /// </summary>
     private void Redraw()
     {
-        if (_run is { } run && (_view.StepsDone, run.Ended.IsCompleted) is var seen && seen != _repoSeen)
+        if (_run is { } run && (_shownView.View.StepsDone, run.Ended.IsCompleted) is var seen && seen != _repoSeen)
         {
             _repoSeen = seen;
             _repoReads++;
@@ -182,17 +205,21 @@
     }
 
     /// <summary>The clock: ELAPSED, and how long a question still waits, move while nothing else does.</summary>
-    private async Task TickAsync(ServerRun run, CancellationToken stop)
+    private async Task TickAsync(ServerRun run, TimeSpan every, CancellationToken stop)
     {
-        using var timer = new PeriodicTimer(Tick);
+        using var timer = new PeriodicTimer(every);
         var ticks = 0;
         try
         {
             while (await timer.WaitForNextTickAsync(stop))
             {
-                if (++ticks % RepoEveryTicks == 0)
-                    _repoReads++;
-                await InvokeAsync(Redraw);
+                var readRepo = ++ticks % RepoEveryTicks == 0;
+                await InvokeAsync(() =>
+                {
+                    if (readRepo)
+                        _repoReads++;
+                    Redraw();
+                });
                 // Over: the figures stand still, and one last drawing (the follower's) shows where it ended.
                 if (run.Ended.IsCompleted)
                     return;
