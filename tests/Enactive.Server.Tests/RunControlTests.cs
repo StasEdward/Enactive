@@ -53,6 +53,9 @@ public sealed class RunControlTests : IDisposable
     {
         private readonly List<TaskCompletionSource> _releases = new();
         public bool Ask { get; set; }
+
+        /// <summary>Refused as the composer refuses a run - the workspace held by another process - before any event.</summary>
+        public string? Refuse { get; set; }
         public List<string> Answers { get; } = new();
         public string? Problem => null;
         public SessionApprovals Session { get; } = new();
@@ -60,6 +63,8 @@ public sealed class RunControlTests : IDisposable
 
         public async Task ExecuteAsync(ServerRun run, IDecisionHandler decisions, CancellationToken ct)
         {
+            if (Refuse is { } refusal)
+                throw new InvalidOperationException(refusal);
             var events = Channel.CreateUnbounded<WorkEvent>();
             var drained = run.Session.DrainAsync(events.Reader.ReadAllAsync(ct), ct);
             var runId = Guid.NewGuid();
@@ -584,6 +589,30 @@ public sealed class RunControlTests : IDisposable
         var item = Assert.Single(await Enactive.Workspace.InboxStoreFactory.Create(Enactive.Core.Context.WorkspaceInfo.For(_workspace))
             .LoadAllAsync(CancellationToken.None));
         Assert.Contains("is not under", item.Summary);
+    }
+
+    /// <summary>
+    /// A schedule's run the composer refused - its workspace held by another process - says so in the inbox, as one
+    /// that could not start does. Its occurrence is spent, and nothing but a warning in the log said it did not run.
+    /// </summary>
+    [Fact]
+    public async Task A_schedule_s_run_refused_as_it_starts_says_so_in_the_inbox()
+    {
+        var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        var policy = new PermissionPolicy(PermissionLevel.Autonomous, ["*"], []);
+        var spec = new Enactive.Core.Templates.ResolvedTaskSpec("digest", 1, "Digest", Guid.NewGuid(), "project", _workspace,
+            "write the digest", new Dictionary<string, string>(), policy, [], Enactive.Core.Templates.ExecutionLimits.None, null, false);
+        engine.Schedules.Save(new Enactive.Core.Schedules.Schedule(Guid.NewGuid(), _workspace, "morning digest",
+            Enactive.Core.Schedules.ScheduledWork.FromPastRun(spec.Snapshot()),
+            Enactive.Core.Schedules.ScheduleTiming.Once(DateTimeOffset.Now.AddMinutes(-1)), policy, CreatedAt: DateTimeOffset.Now.AddHours(-1)));
+        _engine.Refuse = "The workspace is in use by another process.";
+
+        var run = Assert.Single(await new ServerScheduler(engine, _control, NullLogger<ServerScheduler>.Instance).TickAsync(DateTimeOffset.Now, CancellationToken.None));
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var item = Assert.Single(await Enactive.Workspace.InboxStoreFactory.Create(Enactive.Core.Context.WorkspaceInfo.For(_workspace))
+            .LoadAllAsync(CancellationToken.None));
+        Assert.Contains("in use by another process", item.Summary);
     }
 
     /// <summary>

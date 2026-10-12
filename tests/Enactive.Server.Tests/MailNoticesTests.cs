@@ -42,11 +42,30 @@ public sealed class MailNoticesTests : IDisposable
         new ServerFolders(_root), NullLogger<MailNotices>.Instance,
         (_, message, _) => { _sent.Add(message); return Task.CompletedTask; });
 
-    private Task Arrives(string title, string summary, string status = "unread")
+    private Task Arrives(string title, string summary, string status = "unread", int secondsFromNow = 1)
     {
         var workspace = WorkspaceInfo.For(_workspace);
         return InboxStoreFactory.Create(workspace).AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, "result", title, summary,
-            Guid.Empty, status, DateTimeOffset.UtcNow.AddSeconds(1)), CancellationToken.None);
+            Guid.Empty, status, DateTimeOffset.UtcNow.AddSeconds(secondsFromNow)), CancellationToken.None);
+    }
+
+    /// <summary>
+    /// An item stamped before the newest one mailed, but filed after that mail - a run in another workspace ending while
+    /// the inbox was read - is mailed too. The newest item mailed was the mark, and anything older was never news again.
+    /// </summary>
+    [Fact]
+    public async Task An_item_filed_late_with_an_earlier_time_is_still_mailed()
+    {
+        var notices = Notices("stas@lab.local");
+        await notices.TickAsync(CancellationToken.None);
+        await Arrives("nightly review", "Completed", secondsFromNow: 3);
+        Assert.Equal(1, await notices.TickAsync(CancellationToken.None));
+
+        await Arrives("morning digest", "Completed", secondsFromNow: 2);
+
+        Assert.Equal(1, await notices.TickAsync(CancellationToken.None));
+        Assert.Contains("morning digest", _sent[^1].TextBody);
+        Assert.Equal(0, await notices.TickAsync(CancellationToken.None));
     }
 
     [Fact]

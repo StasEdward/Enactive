@@ -49,6 +49,12 @@ internal sealed class WorkspaceRoots(IReadOnlyList<string> roots)
         }
     }
 
+    /// <summary>The folder above this one when tasks may run there, or null: up from a root is the list of roots.</summary>
+    public string? Up(string folder)
+        => Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder))) is { } parent && Refusal(parent) is null
+            ? parent
+            : null;
+
     // A drive keeps its separator when trimmed ("D:\"): one more made "D:\\", which no folder on the drive starts with,
     // and a drive named as a root refused every folder on it.
     private static bool Inside(string full, string root)

@@ -33,6 +33,57 @@ public sealed class RunSessionTests
         return all;
     }
 
+    /// <summary>
+    /// A page that subscribes as the run ends - its watchers just told, the end not yet said - is told it ended. It was
+    /// added after the last watchers were told and waited for an end that never came, showing the run as it was before
+    /// its last events.
+    /// </summary>
+    [Fact]
+    public async Task A_page_that_subscribes_as_the_run_ends_is_told_it_ended()
+    {
+        var engine = new Engine();
+        var session = new RunSession("C:\\work", "alice", "tidy the wiki");
+        RunSession.Subscription? late = null;
+        session.Ending = () => late = session.Subscribe(session.Seq);
+        var drained = session.DrainAsync(engine.Events, CancellationToken.None);
+
+        engine.Emit(Ev(EventKind.TaskCompleted, "Completed"));
+        engine.End();
+        await drained;
+
+        Assert.Empty(await AllOf(late!).WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.False(late!.Behind);
+    }
+
+    /// <summary>
+    /// A page that leaves while it is redrawing stops following without an error. The page disposed what told it it
+    /// had left, then read it again on its next wait, and its listener ended in an exception nobody observed.
+    /// </summary>
+    [Fact]
+    public async Task A_page_that_leaves_while_it_redraws_stops_following_without_an_error()
+    {
+        var engine = new Engine();
+        var session = new RunSession("C:\\work", "alice", "tidy the wiki");
+        var drained = session.DrainAsync(engine.Events, CancellationToken.None);
+        var redrawing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var carryOn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var follower = new RunFollower(session, () => session.Seq, async () =>
+        {
+            redrawing.TrySetResult();
+            await carryOn.Task;
+        });
+        follower.Start();
+
+        engine.Emit(Ev(EventKind.StepStarted, "step 1"));
+        await redrawing.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        follower.Dispose();
+        carryOn.SetResult();
+
+        await follower.Following.WaitAsync(TimeSpan.FromSeconds(5));
+        engine.End();
+        await drained;
+    }
+
     [Fact]
     public async Task A_watcher_gets_every_event_in_order_numbered_and_the_end()
     {

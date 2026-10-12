@@ -37,6 +37,9 @@ internal sealed class RunSession
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private long _seq;
 
+    /// <summary>The events have ended and the watchers been taken to be told; under <see cref="_gate"/>.</summary>
+    private bool _over;
+
     public RunSession(string workspace, string owner, string title, int tailCapacity = 4096)
     {
         Workspace = workspace;
@@ -62,6 +65,9 @@ internal sealed class RunSession
 
     /// <summary>Why the run stopped without ending properly - an error the engine threw - or null.</summary>
     public string? Failure { get; private set; }
+
+    /// <summary>A test's: called as the run ends, its watchers taken and not yet told - where a page subscribing lands.</summary>
+    internal Action? Ending { get; set; }
 
     /// <summary>The number of the newest event; 0 before the first.</summary>
     public long Seq
@@ -106,9 +112,13 @@ internal sealed class RunSession
             List<Subscription> watchers;
             lock (_gate)
             {
+                // Over in the same breath as the watchers are taken: a page subscribing between the two was added after
+                // the last ones were told, and waited for an end that never came.
+                _over = true;
                 watchers = [.. _watchers];
                 _watchers.Clear();
             }
+            Ending?.Invoke();
             foreach (var watcher in watchers)
                 watcher.Complete();
             _ended.TrySetResult();
@@ -160,7 +170,7 @@ internal sealed class RunSession
                 if (entry.Seq > afterSeq && !subscription.Offer(entry))
                     return subscription;
 
-            if (_ended.Task.IsCompleted)
+            if (_over)
                 subscription.Complete();
             else
                 _watchers.Add(subscription);

@@ -71,8 +71,7 @@ else
     [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
 
     private ServerRun? _run;
-    private RunSession.Subscription? _subscription;
-    private readonly CancellationTokenSource _leaving = new();
+    private RunFollower? _follower;
     private View _view = View.Empty;
     private string? _said;
 
@@ -90,48 +89,15 @@ else
             return;
 
         _run.Changed += OnRunChanged;
-        Follow();
-    }
-
-    /// <summary>
-    /// Reads where the run stands and follows it from there. Called again when the session drops this page for falling
-    /// behind (Subscription.Behind) - which is also what reopening the tab does.
-    /// </summary>
-    private void Follow()
-    {
-        _view = Read();
-        _subscription = _run!.Session.Subscribe(_view.Seq);
-        _ = ListenAsync(_subscription);
+        // Reads where the run stands, follows it from there, and redraws as it goes (RunFollower).
+        _follower = new RunFollower(_run.Session, () => (_view = Read()).Seq, () => InvokeAsync(StateHasChanged));
+        _follower.Start();
     }
 
     private View Read()
         => _run!.Session.Read((feed, activity, seq) => new View(
             feed.Cards.Select(c => new CardView(c.Title, c.Status, c.Activity, c.Tally)).ToList(),
             activity.CurrentAction, seq));
-
-    private async Task ListenAsync(RunSession.Subscription subscription)
-    {
-        try
-        {
-            // Redrawn at most ten times a second: a reply arrives one event per token, and a page redrawn for each
-            // is a browser kept busy for nothing.
-            while (await subscription.Events.WaitToReadAsync(_leaving.Token))
-            {
-                while (subscription.Events.TryRead(out _)) { }
-                _view = Read();
-                await InvokeAsync(StateHasChanged);
-                await Task.Delay(100, _leaving.Token);
-            }
-            if (subscription.Behind && !_leaving.IsCancellationRequested)
-            {
-                Follow();
-                return;
-            }
-            _view = Read();
-            await InvokeAsync(StateHasChanged);
-        }
-        catch (OperationCanceledException) { }
-    }
 
     private void OnRunChanged() => _ = InvokeAsync(StateHasChanged);
 
@@ -143,14 +109,9 @@ else
 
     public ValueTask DisposeAsync()
     {
-        _leaving.Cancel();
         if (_run is not null)
-        {
             _run.Changed -= OnRunChanged;
-            if (_subscription is not null)
-                _run.Session.Unsubscribe(_subscription);
-        }
-        _leaving.Dispose();
+        _follower?.Dispose();
         return ValueTask.CompletedTask;
     }
 }

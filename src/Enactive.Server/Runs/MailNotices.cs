@@ -26,7 +26,15 @@ internal sealed class MailNotices(ServerEngine engine, ServerOptions options, Se
     private readonly Func<Core.Mail.MailAccount, MimeMessage, CancellationToken, Task> _send = send ?? Tools.MailSending.SendAsync;
     private string StateFile => Path.Combine(folders.Data, "notices.json");
 
-    private sealed record State(DateTimeOffset Since);
+    /// <summary>
+    /// How long an item mailed is remembered as mailed. An item is filed moments after its time, never a day after; past
+    /// this nothing older is news, and the list of what was mailed stays a day's worth.
+    /// </summary>
+    public static readonly TimeSpan Remembered = TimeSpan.FromDays(1);
+
+    /// <param name="Since">Nothing older is news: the first start, then moving with <see cref="Remembered"/>.</param>
+    /// <param name="Mailed">The items mailed, by id, with their time - so one is mailed once, whenever it is filed.</param>
+    private sealed record State(DateTimeOffset Since, Dictionary<Guid, DateTimeOffset>? Mailed = null);
 
     protected override async Task ExecuteAsync(CancellationToken stopping)
     {
@@ -60,14 +68,17 @@ internal sealed class MailNotices(ServerEngine engine, ServerOptions options, Se
         var account = new Core.Mail.MailAccount(smtp.Host.Trim(), smtp.Port, smtp.StartTls, smtp.User.Trim(), smtp.Password,
             smtp.From.Trim(), []);
 
-        var since = ReadSince();
+        // What was mailed, not the newest time mailed: an item stamped before the newest one but filed after it was read
+        // - a run in another workspace ending during the look - was older than the mark and never news again.
+        var state = ReadState();
+        var mailed = state.Mailed ?? [];
         var fresh = new List<(string Workspace, InboxItem Item)>();
         foreach (var workspace in engine.Workspaces.Entries)
         {
             try
             {
                 foreach (var item in await InboxStoreFactory.Create(WorkspaceInfo.For(workspace.RootPath)).LoadAllAsync(ct))
-                    if (item.At > since && item.Status == "unread")
+                    if (item.At > state.Since && item.Status == "unread" && !mailed.ContainsKey(item.Id))
                         fresh.Add((workspace.Name, item));
             }
             catch (Exception) when (!ct.IsCancellationRequested)
@@ -96,7 +107,12 @@ internal sealed class MailNotices(ServerEngine engine, ServerOptions options, Se
         message.Body = new TextPart("plain") { Text = body.ToString() };
 
         await _send(account, message, ct);
-        WriteSince(fresh.Max(f => f.Item.At));
+        foreach (var (_, item) in fresh)
+            mailed[item.Id] = item.At;
+        var horizon = DateTimeOffset.UtcNow - Remembered;
+        foreach (var old in mailed.Where(m => m.Value < horizon).Select(m => m.Key).ToList())
+            mailed.Remove(old);
+        WriteState(new State(state.Since > horizon ? state.Since : horizon, mailed));
         return fresh.Count;
     }
 
@@ -105,23 +121,24 @@ internal sealed class MailNotices(ServerEngine engine, ServerOptions options, Se
             ? ":" + endpoint.Port
             : "";
 
-    /// <summary>When the last mailed item arrived; for a first start, now - the inbox's past is not news.</summary>
-    private DateTimeOffset ReadSince()
+    /// <summary>Where the last look left off; for a first start, now - the inbox's past is not news.</summary>
+    private State ReadState()
     {
         try
         {
+            // A file from before the list of what was mailed has only its time: read as nothing mailed after it.
             if (File.Exists(StateFile) && JsonSerializer.Deserialize<State>(File.ReadAllText(StateFile)) is { } state)
-                return state.Since;
+                return state;
         }
         catch (Exception ex) when (ex is IOException or JsonException) { }
-        var now = DateTimeOffset.UtcNow;
-        WriteSince(now);
-        return now;
+        var first = new State(DateTimeOffset.UtcNow, []);
+        WriteState(first);
+        return first;
     }
 
-    private void WriteSince(DateTimeOffset since)
+    private void WriteState(State state)
     {
         Directory.CreateDirectory(folders.Data);
-        File.WriteAllText(StateFile, JsonSerializer.Serialize(new State(since)));
+        File.WriteAllText(StateFile, JsonSerializer.Serialize(state));
     }
 }

@@ -49,6 +49,19 @@ public sealed class WorkspaceRootsTests : IDisposable
         Assert.Contains(Path.Combine(_work, "project"), roots.Below(_work));
     }
 
+    /// <summary>
+    /// Up from a folder is its parent, and up from a root is the list of roots. It was the parent always, and from a
+    /// root that is outside the roots: the folder page said so and listed nothing.
+    /// </summary>
+    [Fact]
+    public void Up_from_a_folder_is_its_parent_and_from_a_root_the_roots()
+    {
+        var roots = new WorkspaceRoots([_work]);
+
+        Assert.Equal(_work, roots.Up(Path.Combine(_work, "project")));
+        Assert.Null(roots.Up(_work));
+    }
+
     /// <summary>No roots, no runs from the browser: a box to type any path into is every folder one Run from a shell.</summary>
     [Fact]
     public void With_no_roots_no_folder_is_one()

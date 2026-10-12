@@ -284,11 +284,30 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         }
         finally
         {
+            // A schedule's run that never got going - refused by the composer, cancelled in the line - says so where its
+            // owner looks, as one that could not start at all does (ServerScheduler). Its occurrence is spent, and only a
+            // warning in the log said it did not run. One that ran files its own item (EngineExecutor).
+            if (run.Scheduled is { } due && run.Refused is { } why)
+                await ScheduleDidNotRunAsync(run.Workspace, due, why);
             run.Ticket.Dispose();
             // The schedule's claim and its workspace's lease, held from the tick that took it (DueSchedules).
             run.Scheduled?.Hold.Dispose();
             users.Audit(owner, "run ended", run.Workspace + ": " + (run.Refused ?? run.Session.Failure ?? "finished"));
             run.End();
+        }
+    }
+
+    private async Task ScheduleDidNotRunAsync(string root, DueRun due, string why)
+    {
+        try
+        {
+            var workspace = WorkspaceInfo.For(root);
+            await InboxStoreFactory.Create(workspace).AppendAsync(ScheduledOutcome.CouldNotStart(
+                workspace.Id, due.Schedule.Id, due.Schedule.Name, why, DateTimeOffset.UtcNow), CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            log.LogWarning("The inbox of {Workspace} could not be told the schedule {Schedule} did not run: {Why}", root, due.Schedule.Name, ex.Message);
         }
     }
 

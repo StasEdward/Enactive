@@ -91,6 +91,23 @@ public sealed class AccountTests : IDisposable
         Assert.Equal(SignInVerdict.Ok, _users.SignIn("alice", Password).Verdict);
     }
 
+    /// <summary>
+    /// A name that is no account locks as an account does. Only accounts could be locked, so five wrong passwords told a
+    /// guesser whether a name was one: the page says "too many wrong passwords" for a lockout and nothing else.
+    /// </summary>
+    [Fact]
+    public void A_name_that_is_no_account_locks_as_an_account_does()
+    {
+        for (var i = 0; i < UserStore.FailuresBeforeLockout - 1; i++)
+            Assert.Equal(SignInVerdict.Wrong, _users.SignIn("nobody", "guess " + i + "xxxxxxxx").Verdict);
+
+        Assert.Equal(SignInVerdict.Locked, _users.SignIn("NOBODY", "the fifth guess!!").Verdict);
+        Assert.Equal(SignInVerdict.Locked, _users.SignIn("nobody", "and a sixth one!!").Verdict);
+
+        _clock.Now += UserStore.LockoutFor + TimeSpan.FromSeconds(1);
+        Assert.Equal(SignInVerdict.Wrong, _users.SignIn("nobody", "after the wait!!!").Verdict);
+    }
+
     [Fact]
     public void A_right_password_clears_the_count_of_wrong_ones()
     {
