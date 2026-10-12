@@ -329,6 +329,61 @@ public sealed class RunControlTests : IDisposable
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5));
     }
 
+    /// <summary>
+    /// A run is started from a page, on its circuit's synchronization context; the engine goes on the thread pool, never on
+    /// that context. Run there, the engine's synchronous work froze the page that pressed Run, every run from one tab went
+    /// one at a time through it, and a blocking wait in the engine could deadlock it.
+    /// </summary>
+    [Fact]
+    public async Task A_run_started_from_a_page_runs_off_the_page_s_thread()
+    {
+        var executor = new WhereItRuns();
+        var control = new RunControl(_users, new RunQueue(2), executor, NullLogger<RunControl>.Instance);
+        var page = new PageContext();
+        var before = SynchronizationContext.Current;
+        ServerRun foreground, background;
+        SynchronizationContext.SetSynchronizationContext(page);
+        try
+        {
+            foreground = control.Start(As("alice"), _workspace, "write the digest").Run!;
+            background = control.StartBackground(As("alice"), _workspace, "digest the inbox").Run!;
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(before);
+        }
+
+        await Task.WhenAll(foreground.Ended, background.Ended).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(2, executor.Contexts.Count);
+        Assert.All(executor.Contexts, context => Assert.Null(context));
+    }
+
+    /// <summary>A page's context: what is posted to it runs with it as the current context, as a circuit's does.</summary>
+    private sealed class PageContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state)
+            => ThreadPool.QueueUserWorkItem(_ =>
+            {
+                SetSynchronizationContext(this);
+                d(state);
+            });
+    }
+
+    /// <summary>Records the synchronization context the engine was started on, and ends the run.</summary>
+    private sealed class WhereItRuns : IRunExecutor
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<SynchronizationContext?> Contexts { get; } = new();
+        public string? Problem => null;
+        public SessionApprovals Session { get; } = new();
+        public ApprovalStore Approvals { get; } = new(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json"));
+
+        public Task ExecuteAsync(ServerRun run, IDecisionHandler decisions, CancellationToken ct)
+        {
+            Contexts.Enqueue(SynchronizationContext.Current);
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class Stuck : IRunExecutor
     {
         public string? Problem => null;

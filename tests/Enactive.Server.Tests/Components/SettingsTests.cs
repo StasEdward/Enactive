@@ -82,6 +82,19 @@ public sealed class SettingsTests : ComponentHost
     private static AngleSharp.Dom.IElement Card(IRenderedComponent<SettingsScreen> screen, string title)
         => screen.FindAll(".settings-card").Single(c => c.QuerySelector(".card-title")!.TextContent.Trim() == title);
 
+    /// <summary>
+    /// Presses a card's Edit, found and pressed in one go on the page's own dispatcher: a section shown a moment ago may still
+    /// be drawing, and a button found before its last drawing has a handler that is gone by the press (bUnit's
+    /// UnknownEventHandlerIdException, seen under a loaded test run).
+    /// </summary>
+    private static void Edit(IRenderedComponent<SettingsScreen> screen, string card)
+        => screen.InvokeAsync(() => Card(screen, card).QuerySelector("button[title='Edit']")!.Click()).GetAwaiter().GetResult();
+
+    /// <summary>Presses the open dialog's Cancel, as <see cref="Edit"/> presses Edit.</summary>
+    private static void CancelDialog(IRenderedComponent<SettingsScreen> screen)
+        => screen.InvokeAsync(() => screen.Find("[role='dialog'] .dialog-actions").QuerySelectorAll("button")
+            .Single(b => b.TextContent.Trim() == "Cancel").Click()).GetAwaiter().GetResult();
+
     private static string[] Sections(IRenderedComponent<SettingsScreen> screen)
         => screen.FindAll(".settings-nav a").Select(a => a.TextContent.Trim()).ToArray();
 
@@ -155,15 +168,15 @@ public sealed class SettingsTests : ComponentHost
         Assert.Equal("", screen.Find("#smtp-password").GetAttribute("value") ?? "");
 
         Go(screen, "ai-providers");
-        Card(screen, "cloud").QuerySelector("button[title='Edit']")!.Click();
+        Edit(screen, "cloud");
         screen.WaitForAssertion(() => Assert.Contains("A key is stored.", screen.Find("[role='dialog']").TextContent));
         Assert.Equal("", screen.Find("#provider-key").GetAttribute("value") ?? "");
         Assert.Contains("Set: x-api-key: …", screen.Find("[role='dialog']").TextContent);
         seen.Add(screen.Markup);
-        screen.Find("[role='dialog'] .dialog-actions").QuerySelectorAll("button").Single(b => b.TextContent.Trim() == "Cancel").Click();
+        CancelDialog(screen);
 
         Go(screen, "ai-mcp");
-        Card(screen, "tracker").QuerySelector("button[title='Edit']")!.Click();
+        Edit(screen, "tracker");
         screen.WaitForAssertion(() => Assert.Contains("TRACKER_TOKEN=…", screen.Find("[role='dialog']").TextContent));
         Assert.Contains("Authorization: …", screen.Find("[role='dialog']").TextContent);
         seen.Add(screen.Markup);
@@ -185,13 +198,13 @@ public sealed class SettingsTests : ComponentHost
         Assert.Contains("No key or password in the address", screen.Find(".settings-pane .settings-credentials").TextContent);
 
         Go(screen, "ai-providers");
-        Card(screen, "cloud").QuerySelector("button[title='Edit']")!.Click();
+        Edit(screen, "cloud");
         screen.WaitForAssertion(() => Assert.Contains("A key goes in API key, any other credential in a header below.",
             screen.Find("[role='dialog'] .settings-credentials").TextContent));
-        screen.Find("[role='dialog'] .dialog-actions").QuerySelectorAll("button").Single(b => b.TextContent.Trim() == "Cancel").Click();
+        CancelDialog(screen);
 
         Go(screen, "ai-mcp");
-        Card(screen, "tracker").QuerySelector("button[title='Edit']")!.Click();
+        Edit(screen, "tracker");
         screen.WaitForAssertion(() => Assert.Contains("A credential goes in a header below.",
             screen.Find("[role='dialog'] .settings-credentials").TextContent));
     }

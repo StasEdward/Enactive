@@ -239,7 +239,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
             _runs.Add(run);
         }
         users.Audit("(scheduler)", "scheduled run started", $"{root}: {due.Schedule.Name} - {due.Why}");
-        _ = LifeAsync(run, run.Owner);
+        _ = Live(run, run.Owner);
         return new(run, null);
     }
 
@@ -304,7 +304,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
                 _runs.Remove(old);
         }
         users.Audit(account.Name, action, $"{root}: {run.Prompt}");
-        _ = LifeAsync(run, account.Name);
+        _ = Live(run, account.Name);
         return new(run, null);
     }
 
@@ -329,6 +329,15 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         lock (_gate)
             return _stopping ? "The service is stopping; start the run again when it is back." : null;
     }
+
+    /// <summary>
+    /// Sets the run going on the thread pool, never on the caller's thread. A run is started from a page, whose
+    /// synchronization context is its circuit's, and the engine's awaits capture it: left there, the engine's synchronous
+    /// work froze the page that pressed Run, every run started from one tab went one at a time through that tab, and a
+    /// blocking wait in the engine could have deadlocked it. Every start - a person's, again, resumed, carried on from the
+    /// inbox, a schedule's - comes through here.
+    /// </summary>
+    private Task Live(ServerRun run, string owner) => Task.Run(() => LifeAsync(run, owner));
 
     /// <summary>The run from its place in the line to its end. Never throws: what went wrong is the run's to say.</summary>
     private async Task LifeAsync(ServerRun run, string owner)
