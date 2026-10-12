@@ -8,8 +8,11 @@
 <div class="switcher-anchor">
     @if (Current is { } current)
     {
+        @* Named for what it is and where you are: read from its content it was the folder's name and its whole path,
+           which says neither that this is the workspace nor that it opens the others. *@
         <button type="button" class="@("ws-card edge " + Looks.Workspace(current.Place))"
-                title="@current.Entry.RootPath" aria-haspopup="true" aria-expanded="@_open" @onclick="Toggle">
+                aria-label="@($"Workspace: {current.Entry.Name}")" title="@current.Entry.RootPath"
+                aria-haspopup="true" aria-expanded="@_open" @onclick="Toggle">
             <span class="ws-card-text">
                 <span class="@(current.Exists ? "ws-name" : "ws-name missing")">@current.Entry.Name</span>
                 <span class="path">@current.Entry.RootPath</span>

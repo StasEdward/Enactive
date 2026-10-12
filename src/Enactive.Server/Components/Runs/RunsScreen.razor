@@ -41,6 +41,14 @@
             </EditForm>
         </AuthorizeView>
 
+        @if (_shown is { } shown)
+        {
+            @* TEMPORARY (Tasks 16, 17): a workspace's templates and schedules were reached from the workspace list, which is
+               this screen's switcher now, and the rail's Templates and Schedules lead here until they have pages of their
+               own - without this link the library was a page nothing led to. *@
+            <p class="hint"><a href="@Links.Library(shown.RootPath)">Templates and schedules</a></p>
+        }
+
         @if (_runs.Count == 0)
         {
             <p>No runs yet.</p>
@@ -79,6 +87,7 @@
     private IReadOnlyList<ServerRun> _runs = [];
     private IReadOnlyList<Enactive.Workspace.WorkspaceEntry> _workspaces = [];
     private string? _shownWorkspace;
+    private Enactive.Workspace.WorkspaceEntry? _shown;
 
     private sealed class StartForm
     {
@@ -98,7 +107,8 @@
         _workspaces = History.Workspaces(user);
         // The start form runs in the workspace the column shows, as the window's command bar does - set again when the
         // column moves to another one, and left alone while it stays, so a folder picked in the form is not taken back.
-        var shown = WorkspaceColumnState.Choose(_workspaces, _wanted, Ids)?.RootPath ?? _workspaces.FirstOrDefault()?.RootPath ?? "";
+        _shown = WorkspaceColumnState.Choose(_workspaces, _wanted, Ids);
+        var shown = _shown?.RootPath ?? _workspaces.FirstOrDefault()?.RootPath ?? "";
         if (shown != _shownWorkspace)
             (_input.Workspace, _shownWorkspace) = (shown, shown);
     }

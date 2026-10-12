@@ -88,6 +88,8 @@ public sealed class WorkspaceColumnTests : ComponentHost
         Directory.Delete(gone);
 
         var screen = Screen("vera", $"/?ws={IdOf(alpha)}", "alpha");
+        // The card says what it is, not only a folder's name and path.
+        Assert.Equal("Workspace: alpha", screen.Find("button.ws-card").GetAttribute("aria-label"));
         screen.Find("button.ws-card").Click();
 
         var rows = screen.FindAll(".switcher .ws-row");
@@ -189,6 +191,22 @@ public sealed class WorkspaceColumnTests : ComponentHost
         var screen = Screen("vera", $"/?ws={Guid.NewGuid()}", "does not know that workspace");
 
         Assert.DoesNotContain("digest the inbox", screen.Markup);
+    }
+
+    /// <summary>
+    /// The workspace list was the one way to a workspace's templates and schedules, and it is gone: until they have pages
+    /// of their own, the Runs screen leads to them for the workspace it shows - none was a page nothing linked to.
+    /// </summary>
+    [Fact]
+    public void The_workspace_shown_leads_to_its_templates_and_schedules()
+    {
+        Known("alpha");
+        var beta = Known("beta");
+
+        var screen = Screen("vera", $"/?ws={IdOf(beta)}", "beta");
+
+        var link = screen.FindAll("a").Single(a => a.TextContent.Trim() == "Templates and schedules");
+        Assert.Equal("library?ws=" + Uri.EscapeDataString(beta), link.GetAttribute("href"));
     }
 
     /// <summary>

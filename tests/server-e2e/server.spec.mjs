@@ -23,10 +23,12 @@ async function signedIn(browser, name) {
 
 /** Starts a run from the Runs page and waits for its own page. */
 async function startRun(page, task) {
-  await page.getByLabel('Workspace').selectOption(folder());
+  // By role: the column's WORKSPACE card is labelled "Workspace: …" too, and a label alone names both.
+  await page.getByRole('combobox', { name: 'Workspace' }).selectOption(folder());
   // Exact: the rail's icons are named by their tooltips, and getByLabel reads those too ("Templates · a saved task").
   await page.getByLabel('Task', { exact: true }).fill(task);
-  await page.getByRole('button', { name: 'Run' }).click();
+  // Exact: the history's rows have "Delete this run from the history" buttons beside it.
+  await page.getByRole('button', { name: 'Run', exact: true }).click();
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
   return page.url();
 }
@@ -164,10 +166,9 @@ test('a past run is tried again from its page, and deleted after its question', 
   await page.getByRole('button', { name: 'Allow', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Cancel the run' })).toBeHidden();
 
-  // The rail's Templates icon leads to the workspaces for now (Components/Shell/RailItem.cs, RailAddresses).
-  await page.getByRole('link', { name: /^Templates/ }).click();
-  await page.getByRole('link', { name: 'project', exact: true }).click();
-  await page.getByRole('link', { name: 'kept in the history' }).first().click();
+  // The Runs screen's column lists the workspace's history; the run it just ran is there once it has ended.
+  await page.goto('/');
+  await page.getByRole('complementary', { name: 'Runs column' }).getByRole('link', { name: /kept in the history/ }).first().click();
   await expect(page.getByRole('heading', { name: 'kept in the history' })).toBeVisible();
   const past = page.url();
 
@@ -220,18 +221,26 @@ test('an operator is offered no accounts page and is refused it', async ({ brows
 
 test('a folder under the roots is added as a workspace by browsing, and nothing outside is offered', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
-  await page.goto('/workspaces');
-  await page.getByRole('link', { name: 'Add a folder…' }).click();
-  await expect(page.getByRole('link', { name: process.env.E2E_DATA })).toBeVisible();
-  await page.getByRole('link', { name: process.env.E2E_DATA }).click();
-  await page.getByRole('link', { name: 'reports', exact: true }).click();
-  await page.getByRole('button', { name: 'Make this folder a workspace' }).click();
+  // The switcher's Add folder… opens the folder browser in a dialog over the Runs screen.
+  await page.getByRole('button', { name: /^Workspace:/ }).click();
+  await page.getByRole('button', { name: 'Add folder…' }).click();
+  let dialog = page.getByRole('dialog', { name: 'Add folder' });
+  await dialog.getByRole('button', { name: process.env.E2E_DATA, exact: true }).click();
+  await dialog.getByRole('button', { name: 'reports', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Make this folder a workspace' }).click();
+  // The column switches to it, as the window does with a folder just added.
   await expect(page.getByText('reports is a workspace of the service now.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Workspace: reports' })).toBeVisible();
 
-  // Not under a root: refused, whatever the address says.
-  await page.goto('/workspaces/browse?path=' + encodeURIComponent('C:\Windows'));
-  await expect(page.getByText(/is not under the folders the service runs tasks in/)).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Make this folder a workspace' })).toHaveCount(0);
+  // Nothing outside the roots is offered: Up from a root is the list of roots again, never the folder above it.
+  await page.getByRole('button', { name: /^Workspace:/ }).click();
+  await page.getByRole('button', { name: 'Add folder…' }).click();
+  dialog = page.getByRole('dialog', { name: 'Add folder' });
+  await dialog.getByRole('button', { name: process.env.E2E_DATA, exact: true }).click();
+  await dialog.getByRole('button', { name: 'Up' }).click();
+  await expect(dialog.getByRole('button', { name: process.env.E2E_DATA, exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: path.dirname(process.env.E2E_DATA), exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Make this folder a workspace' })).toHaveCount(0);
   await context.close();
 });
 
@@ -280,8 +289,11 @@ test('an admin adds an MCP server with a token header, and the page names the he
 
 test('an operator writes a template and schedules it, and the schedule says when it runs next', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
-  await page.goto('/workspaces');
-  await page.locator('li', { hasText: 'project' }).getByRole('link', { name: 'templates and schedules' }).click();
+  // The workspace is chosen in the Runs screen's switcher, and its templates and schedules are a link from there.
+  await page.getByRole('button', { name: /^Workspace:/ }).click();
+  await page.getByRole('link', { name: /^project/ }).click();
+  await expect(page.getByRole('button', { name: 'Workspace: project' })).toBeVisible();
+  await page.getByRole('link', { name: 'Templates and schedules' }).click();
 
   await page.getByRole('link', { name: 'New template…' }).click();
   await page.getByLabel('The template, as JSON').fill(JSON.stringify({
