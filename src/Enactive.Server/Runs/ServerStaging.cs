@@ -92,11 +92,20 @@ internal sealed class ServerStaging(UserStore users, KnownWorkspaces workspaces)
             var root = Root(workspace.RootPath);
             if (!Directory.Exists(root))
                 continue;
-            foreach (var folder in Directory.EnumerateDirectories(root))
-                // Only what still waits, or is still being written: a folder whose proposals were all decided is
-                // left only when it could not be deleted.
-                if (Read(workspace.RootPath, Path.GetFileName(folder)) is { } set && (set.Pending > 0 || set.Running))
-                    sets.Add(set);
+            try
+            {
+                foreach (var folder in Directory.EnumerateDirectories(root))
+                    // Only what still waits, or is still being written: a folder whose proposals were all decided is
+                    // left only when it could not be deleted.
+                    if (Read(workspace.RootPath, Path.GetFileName(folder)) is { } set && (set.Pending > 0 || set.Running))
+                        sets.Add(set);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // One workspace whose staging cannot be listed now - a drive gone, a folder the service may not read - is
+                // passed over, as one proposal that cannot be read is (Read). Thrown, it took down every page: the rail
+                // asks for this list on each of them.
+            }
         }
         return sets.OrderByDescending(s => s.Started).ToList();
     }

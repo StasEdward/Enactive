@@ -11,6 +11,12 @@
 </head>
 <body>
     <Routes @rendermode="PageRenderMode" />
+    @* For an error no page's boundary caught (MainLayout): Blazor's script shows this element when the connection's
+       circuit fails, and the page is dead from then on. Without it the page stayed as it was, still saying "Connected". *@
+    <div id="blazor-error-ui" role="alert" data-nosnippet>
+        <span>This page stopped working: something went wrong on the service. What was saved is saved, and runs go on.</span>
+        <button type="button" class="btn primary" onclick="location.reload()">Reload</button>
+    </div>
     <script src="_framework/blazor.web.js"></script>
 </body>
 </html>

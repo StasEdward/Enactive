@@ -61,6 +61,31 @@ public sealed class ServerStagingTests : IDisposable
         return folder;
     }
 
+    /// <summary>
+    /// A workspace whose proposals cannot be listed now - here its staging folder is a junction whose target is gone, as a
+    /// drive that went away - is passed over, and the others are listed. Thrown, it took down every page: the rail reads
+    /// this list on each of them.
+    /// </summary>
+    [Fact]
+    public async Task A_workspace_whose_proposals_cannot_be_listed_is_passed_over()
+    {
+        var folder = await StagedAsync();
+        var broken = Path.Combine(_root, "broken");
+        var gone = Path.Combine(_root, "gone");
+        Directory.CreateDirectory(Path.Combine(broken, ".enactive"));
+        Directory.CreateDirectory(gone);
+        using (var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe",
+                   $"/c mklink /J \"{ServerStaging.Root(broken)}\" \"{gone}\"")
+               { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true })!)
+            mklink.WaitForExit();
+        Directory.Delete(gone);
+        _engine.Workspaces.Touch(broken);
+        Assert.True(Directory.Exists(ServerStaging.Root(broken)), "The junction stands with nothing behind it.");
+
+        var set = Assert.Single(_staging.List(As("vera")));
+        Assert.Equal(Path.GetFileName(folder), set.Id);
+    }
+
     [Fact]
     public async Task Proposals_are_listed_shown_and_applied_by_an_operator_and_audited()
     {

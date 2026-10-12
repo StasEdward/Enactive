@@ -24,8 +24,12 @@ internal sealed record InboxEntry(string Workspace, InboxItem Item, ParkedDecisi
 /// <para>Only the workspaces the service knows under its roots (KnownWorkspaces), with the role checked at each call - as for the history. A Viewer reads;
 /// what is read and what is not is the service's, the same for everybody, so only an Operator changes it.</para>
 /// </summary>
-internal sealed class ServerInbox(UserStore users, KnownWorkspaces workspaces, IRunControl runs)
+/// <param name="inboxOf">A workspace's inbox store; null, the one the machine is configured for (InboxStoreFactory).</param>
+internal sealed class ServerInbox(UserStore users, KnownWorkspaces workspaces, IRunControl runs,
+    Func<WorkspaceInfo, IInboxStore>? inboxOf = null)
 {
+    private readonly Func<WorkspaceInfo, IInboxStore> _inboxOf = inboxOf ?? InboxStoreFactory.Create;
+
     /// <summary>
     /// Something read, marked read or answered: the unread count is no longer what it was. The rail's badge listens, as the
     /// window's follows its Inbox (UnreadChanged) - it was read again only at a navigation, and Mark all read is none.
@@ -47,7 +51,7 @@ internal sealed class ServerInbox(UserStore users, KnownWorkspaces workspaces, I
             try
             {
                 var info = WorkspaceInfo.For(workspace.RootPath);
-                items = await InboxStoreFactory.Create(info).LoadAllAsync(ct);
+                items = await _inboxOf(info).LoadAllAsync(ct);
                 summaries = await RunStoreFactory.Create(info).LoadSummariesAsync(ct);
             }
             catch (Exception) when (!ct.IsCancellationRequested)
@@ -88,7 +92,16 @@ internal sealed class ServerInbox(UserStore users, KnownWorkspaces workspaces, I
             return refused;
         if (workspaces.Find(workspace) is not { } known)
             return "The service does not know that folder as a workspace.";
-        await InboxStoreFactory.Create(WorkspaceInfo.For(known.RootPath)).MarkReadAsync(itemId, ct);
+        // Said, not thrown: every store the inbox can be (a file, SQLite, MySQL) fails in its own way, and a throw here
+        // took the whole page down with it - the list is read past a store it cannot read, and this is the same store.
+        try
+        {
+            await _inboxOf(WorkspaceInfo.For(known.RootPath)).MarkReadAsync(itemId, ct);
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            return $"The inbox of {known.Name} could not be written just now, so the item is still unread. Try again in a moment.";
+        }
         Changed?.Invoke();
         return null;
     }
@@ -104,7 +117,7 @@ internal sealed class ServerInbox(UserStore users, KnownWorkspaces workspaces, I
             return refused;
         foreach (var workspace in workspaces.All)
         {
-            try { await InboxStoreFactory.Create(WorkspaceInfo.For(workspace.RootPath)).MarkAllReadAsync(ct); }
+            try { await _inboxOf(WorkspaceInfo.For(workspace.RootPath)).MarkAllReadAsync(ct); }
             catch (Exception) when (!ct.IsCancellationRequested) { /* see above */ }
         }
         Changed?.Invoke();
@@ -144,7 +157,16 @@ internal sealed class ServerInbox(UserStore users, KnownWorkspaces workspaces, I
         if (!recorded)
             return (said, null);
         users.Audit(account.Name, "question answered in the inbox", $"{waiting.Topic}: {optionId}");
-        await InboxStoreFactory.Create(WorkspaceInfo.For(known.RootPath)).MarkReadAsync(itemId, ct);
+        // The answer is recorded and the run carried on whatever happens here: a store that cannot be written now leaves the
+        // item unread, and is said - thrown, it took the page down over an answer that had gone through.
+        try
+        {
+            await _inboxOf(WorkspaceInfo.For(known.RootPath)).MarkReadAsync(itemId, ct);
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            said += " The item could not be marked read just now.";
+        }
         Changed?.Invoke();
         return (said, carried);
     }

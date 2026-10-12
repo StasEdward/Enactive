@@ -558,6 +558,31 @@ public sealed class RunControlTests : IDisposable
         public string? Answer(ClaimsPrincipal user, Guid id, Guid question, string choice) => inner.Answer(user, id, question, choice);
     }
 
+    /// <summary>
+    /// An inbox that cannot be written now - a file store on a share gone away, a database that is down - is said in words:
+    /// thrown, marking an item read took the whole page down with it.
+    /// </summary>
+    [Fact]
+    public async Task An_inbox_that_cannot_be_written_is_said_not_thrown()
+    {
+        var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        engine.Workspaces.Touch(_workspace);
+        var inbox = new ServerInbox(_users, new KnownWorkspaces(engine, new WorkspaceRoots([_root])), _control, _ => new CannotWrite());
+
+        var said = await inbox.MarkReadAsync(As("alice"), _workspace, Guid.NewGuid(), CancellationToken.None);
+
+        Assert.Equal("The inbox of project could not be written just now, so the item is still unread. Try again in a moment.", said);
+    }
+
+    /// <summary>An inbox store that reads as empty and cannot be written.</summary>
+    private sealed class CannotWrite : Enactive.Core.Inbox.IInboxStore
+    {
+        public Task AppendAsync(Enactive.Core.Inbox.InboxItem item, CancellationToken ct) => throw new IOException("The network path was not found.");
+        public Task<IReadOnlyList<Enactive.Core.Inbox.InboxItem>> LoadAllAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<Enactive.Core.Inbox.InboxItem>>([]);
+        public Task MarkReadAsync(Guid id, CancellationToken ct) => throw new IOException("The network path was not found.");
+        public Task MarkAllReadAsync(CancellationToken ct) => throw new IOException("The network path was not found.");
+    }
+
     [Fact]
     public async Task A_viewer_reads_the_inbox_but_cannot_answer_it()
     {

@@ -153,6 +153,10 @@ public sealed partial class SignInTests : IAsyncLifetime
         var home = await (await browser.GetAsync("/")).Content.ReadAsStringAsync();
         Assert.Contains("<!--Blazor:{\"type\":\"server\"", home);
         Assert.DoesNotContain("prerenderId", home);
+        // The band Blazor's script shows when a page's connection fails on an error no page caught: without it the page
+        // stayed as it was, saying "Connected", every button dead.
+        Assert.Matches("<div id=\"blazor-error-ui\"[^>]*>[^<]*<span>This page stopped working", home);
+        Assert.Contains("onclick=\"location.reload()\">Reload</button>", home);
     }
 
     [Fact]

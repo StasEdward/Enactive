@@ -10,15 +10,31 @@
     <div class="shell">
         <Rail />
         <main>
-            @Body
+            @* A page that throws shows that it failed, and a way back. With no boundary, any exception in a page ended the
+               connection and left the page as it was - still saying "Connected" in the top bar, every button dead. The
+               rail and the top bar stay, so another section is one click away; moving to one clears the failure. *@
+            <ErrorBoundary @ref="_failed">
+                <ChildContent>@Body</ChildContent>
+                <ErrorContent>
+                    <div class="page-failed" role="alert">
+                        <p class="label">This page stopped working</p>
+                        <p class="hint">Something went wrong on the service while it was drawn or used. What was saved is saved, and runs go on. Reload the page, or open another section.</p>
+                        <button type="button" class="btn primary" onclick="location.reload()">Reload</button>
+                    </div>
+                </ErrorContent>
+            </ErrorBoundary>
         </main>
     </div>
 </CascadingValue>
 
 @code {
     private DrawerState _drawer = default!;
+    private ErrorBoundary? _failed;
 
     protected override void OnInitialized() => _drawer = new DrawerState(Navigation);
+
+    // Another page in the same place: the failure was the last page's, and the boundary would go on showing it.
+    protected override void OnParametersSet() => _failed?.Recover();
 
     public void Dispose() => _drawer.Dispose();
 }

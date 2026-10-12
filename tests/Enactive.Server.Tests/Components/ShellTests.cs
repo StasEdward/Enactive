@@ -279,6 +279,34 @@ public sealed class ShellTests : ComponentHost
         Assert.Equal(marked, Assert.Single(rail.FindAll("[data-rail][aria-current='page']")).GetAttribute("data-rail"));
     }
 
+    /// <summary>
+    /// A page that throws is shown as failed, with Reload, inside the shell - the rail and the top bar still work around
+    /// it. With nothing to catch it, the exception ended the page's connection and left it as it was, still saying
+    /// "Connected", every button dead.
+    /// </summary>
+    [Fact]
+    public void A_page_that_throws_says_it_stopped_working_and_offers_reload()
+    {
+        SignIn("vera");
+
+        var layout = Render<Enactive.Server.Components.Layout.MainLayout>(p => p.Add(l => l.Body, body =>
+        {
+            body.OpenComponent<Throws>(0);
+            body.CloseComponent();
+        }));
+
+        var failed = layout.Find("main .page-failed[role=alert]");
+        Assert.Equal("This page stopped working", failed.QuerySelector(".label")!.TextContent.Trim());
+        Assert.Equal("location.reload()", failed.QuerySelector("button")!.GetAttribute("onclick"));
+        Assert.NotEmpty(layout.FindAll("nav [data-rail]"));
+    }
+
+    /// <summary>A page that fails as it is drawn.</summary>
+    private sealed class Throws : ComponentBase
+    {
+        protected override void OnInitialized() => throw new InvalidOperationException("a page's own fault");
+    }
+
     [Fact]
     public void The_top_bar_names_who_is_signed_in_and_their_role()
     {
