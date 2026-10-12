@@ -1,12 +1,12 @@
-// The service's pages in a real browser (server plan 1.7): a run that outlives its page, a question two pages and two
-// people see, a run that waits for its folder, and a role taken away while its page is open.
+// The service's web UI in a real browser, against the real service over a scripted engine (tests/ServerHarness): the
+// window's screens at their addresses, found by their accessible names and roles - runs that outlive their pages,
+// questions two pages and two people answer, the inbox, the other screens, every role, a lost connection, and a phone.
 import { test, expect } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 const password = 'e2e password 1234';
 const base = () => process.env.E2E_BASE_URL;
-const folder = () => path.join(process.env.E2E_DATA, 'project');
 
 /** Signs in on a page of its own browser context: each person is their own browser. */
 async function signedIn(browser, name) {
@@ -131,6 +131,57 @@ test('another operator answers a run, and is offered no approval to leave in its
   await bob.context.close();
 });
 
+/**
+ * The page's connection - its circuit - through a route the test holds: what the service sends the page can be kept back
+ * and then let go, in order, while what the page sends goes straight on. The route is taken by a connection the page opens
+ * after it is set.
+ */
+async function heldBack(context) {
+  const gate = { held: false, queue: [] };
+  await context.routeWebSocket(/\/_blazor/, (socket) => {
+    const server = socket.connectToServer();
+    server.onMessage((message) => (gate.held ? gate.queue.push(() => socket.send(message)) : socket.send(message)));
+  });
+  gate.release = () => {
+    gate.held = false;
+    for (const send of gate.queue.splice(0)) send();
+  };
+  return gate;
+}
+
+test('two people answer one question at once and the second is told it was answered', async ({ browser }) => {
+  const alice = await signedIn(browser, 'alice');
+  const run = await startRun(alice.page, 'answered at once');
+  const bob = await signedIn(browser, 'bob');
+  const gates = [await heldBack(alice.context), await heldBack(bob.context)];
+  await alice.page.reload();
+  await bob.page.goto(run);
+  const pages = [alice.page, bob.page];
+  for (const page of pages) await expect(question(page)).toContainText('Approve write_file');
+  await expect(alice.page.getByText('also watching: bob')).toBeVisible();
+
+  // Both press Allow, as close together as Playwright allows. Neither page hears from the service until both have
+  // pressed: drawn sooner, the first answer took the card from under the second finger, and the second press never was.
+  for (const gate of gates) gate.held = true;
+  await Promise.all(pages.map((page) => question(page).getByRole('button', { name: 'Allow', exact: true }).click()));
+  for (const gate of gates) gate.release();
+
+  // One answer is taken. The card goes from both pages, and the person whose answer came second is told why, in words.
+  for (const page of pages) await expect(question(page)).toBeHidden();
+  const told = (page) => page.getByRole('complementary', { name: 'Status' })
+    .getByText('That question has already been answered, or withdrawn.', { exact: true });
+  await expect.poll(async () => (await told(alice.page).count()) + (await told(bob.page).count())).toBe(1);
+
+  // And the run went on once: it ended, and its step says the question was answered once.
+  await expect(stop(alice.page)).toBeDisabled();
+  const step = alice.page.getByRole('tabpanel').locator('li.step').filter({ hasText: 'write the digest' });
+  await step.locator('button[aria-expanded]').click();
+  await expect(step.getByText(/^write_file: /)).toHaveCount(1);
+  await expect(step.getByText('write_file: allow', { exact: true })).toBeVisible();
+  await alice.context.close();
+  await bob.context.close();
+});
+
 test('a second run in the same folder waits, says why, and starts when the first ends', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
   const first = await startRun(page, 'first in the folder');
@@ -166,6 +217,34 @@ test('the command bar takes the window\'s keys: Ctrl+K to focus, Ctrl+Enter a ne
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
   await answerWhateverWaits(page);
   await context.close();
+});
+
+test('the autonomy slider is saved for the workspace, and a viewer reads it and cannot move it', async ({ browser }) => {
+  const alice = await signedIn(browser, 'alice');
+  await onProject(alice.page);
+  const slider = (page) => page.getByRole('slider', { name: 'Autonomy' });
+  const was = await slider(alice.page).inputValue();
+  const set = was === '1' ? '2' : '1';
+  const named = set === '1' ? 'Suggest — prepares changes, asks to apply' : 'Execute — edits freely, asks before run_command';
+
+  // Saved as it is let go - the workspace's, which the service's engine reads at every run - and named on the slider.
+  await slider(alice.page).fill(set);
+  await expect(slider(alice.page)).toHaveAttribute('aria-valuetext', named);
+  await alice.page.reload();
+  await onProject(alice.page);
+  await expect(slider(alice.page)).toHaveValue(set);
+
+  // Another person's page reads the workspace's level - greyed for a Viewer, whose role does not include it.
+  const vera = await signedIn(browser, 'vera');
+  await onProject(vera.page);
+  await expect(slider(vera.page)).toHaveValue(set);
+  await expect(slider(vera.page)).toBeDisabled();
+
+  // Back as it was: the scenarios after this one run at the level the folder had.
+  await slider(alice.page).fill(was);
+  await expect(slider(alice.page)).not.toHaveAttribute('aria-valuetext', named);
+  await alice.context.close();
+  await vera.context.close();
 });
 
 test('a viewer reads runs and is offered nothing to do to them', async ({ browser }) => {
@@ -333,7 +412,7 @@ test('an operator is offered no accounts page and is refused it', async ({ brows
   await context.close();
 });
 
-test('a folder under the roots is added as a workspace by browsing, and nothing outside is offered', async ({ browser }) => {
+test('the workspace switcher adds a folder and switches to it, and nothing outside the roots is offered', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
   // The switcher's Add folder… opens the folder browser in a dialog over the Runs screen.
   await page.getByRole('button', { name: /^Workspace:/ }).click();
@@ -345,6 +424,23 @@ test('a folder under the roots is added as a workspace by browsing, and nothing 
   // The column switches to it, as the window does with a folder just added.
   await expect(page.getByText('reports is a workspace of the service now.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Workspace: reports' })).toBeVisible();
+  // At its own address, by its id; the switcher marks it the one you are in, and the column lists its runs - none yet,
+  // where the folder before it had a history.
+  await expect(page).toHaveURL(/\/\?ws=[0-9a-f-]{36}/);
+  const reports = new URL(page.url()).searchParams.get('ws');
+  const deletes = page.getByRole('complementary', { name: 'Runs column' }).getByRole('button', { name: 'Delete this run from the history' });
+  await expect(deletes).toHaveCount(0);
+  await page.getByRole('button', { name: 'Workspace: reports' }).click();
+  await expect(page.locator('.switcher').getByRole('link', { name: /^reports/ })).toHaveAttribute('aria-current', 'true');
+  // Switched away and back by the switcher, each folder with its own runs.
+  await page.locator('.switcher').getByRole('link', { name: /^project/ }).click();
+  await expect(page.getByRole('button', { name: 'Workspace: project' })).toBeVisible();
+  await expect(deletes.first()).toBeVisible();
+  await page.getByRole('button', { name: 'Workspace: project' }).click();
+  await page.locator('.switcher').getByRole('link', { name: /^reports/ }).click();
+  await expect(page.getByRole('button', { name: 'Workspace: reports' })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`\\?ws=${reports}$`));
+  await expect(deletes).toHaveCount(0);
 
   // Nothing outside the roots is offered: Up from a root is the list of roots again, never the folder above it.
   await page.getByRole('button', { name: /^Workspace:/ }).click();
@@ -641,6 +737,46 @@ test('a question a background run stopped at is read in the inbox by a viewer an
   // And no longer waiting in the inbox.
   await inboxIcon(page).click();
   await page.getByRole('list', { name: 'Inbox items' }).getByRole('button', { name: /mail the digest/ }).click();
+  await expect(page.getByRole('region', { name: 'Waiting for your decision' })).toHaveCount(0);
+  await context.close();
+});
+
+test('a background run reaches the inbox and is carried on from there', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'alice');
+  await onProject(page);
+  await page.getByLabel('Task', { exact: true }).fill('digest in the background');
+  await page.getByRole('button', { name: 'Run in background' }).click();
+  // Started, and the page stays where it is: the bar is free for the next task, and nothing is asked here.
+  await expect(page.getByLabel('Task', { exact: true })).toHaveValue('');
+  await expect(page).not.toHaveURL(/\/runs\//);
+  await expect(question(page)).toHaveCount(0);
+
+  // With nobody to ask, it stops at its question and says so in the inbox - once it has, which the inbox shows on Refresh.
+  await inboxIcon(page).click();
+  const item = page.getByRole('list', { name: 'Inbox items' }).getByRole('button', { name: /digest in the background/ });
+  await expect(async () => {
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await expect(item).toBeVisible({ timeout: 1_000 });
+  }).toPass();
+  await item.click();
+  const waiting = page.getByRole('region', { name: 'Waiting for your decision' });
+  await expect(waiting).toContainText('Approve write_file');
+  await waiting.getByRole('button', { name: 'Allow (recommended)' }).click();
+
+  // Carried on from there: a run of the same task, open on the Runs screen, given the answer the inbox took - it asks
+  // nothing again, writes its file and ends.
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
+  await expect(stop(page)).toBeDisabled();
+  await expect(question(page)).toHaveCount(0);
+  const step = page.getByRole('tabpanel').locator('li.step').filter({ hasText: 'write the digest' });
+  await step.locator('button[aria-expanded]').click();
+  await expect(step.getByText('write_file: allow', { exact: true })).toBeVisible();
+  await page.getByRole('tab', { name: /^Artifacts/ }).click();
+  await expect(page.getByRole('tabpanel')).toContainText('digest.md');
+
+  // And the item waits on nobody any more.
+  await inboxIcon(page).click();
+  await item.click();
   await expect(page.getByRole('region', { name: 'Waiting for your decision' })).toHaveCount(0);
   await context.close();
 });
