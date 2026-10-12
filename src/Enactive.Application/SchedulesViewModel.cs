@@ -99,7 +99,11 @@ internal sealed record ZoneChoice(string Id, string Label)
 internal sealed class SchedulesViewModel : ObservableObject
 {
     private readonly ScheduleStore _store;
+    private readonly IScheduleChanges _changes;
     private readonly Func<DateTimeOffset> _now;
+
+    /// <summary>The tick's pulse (Heartbeat): null for the machine's own, which the console tick writes.</summary>
+    private readonly string? _tickFile;
 
     /// <summary>
     /// What the person configured, for the one thing this form decides on their behalf: the policy
@@ -147,10 +151,17 @@ internal sealed class SchedulesViewModel : ObservableObject
         string workspaceRoot,
         Func<AppSettings> settings,
         ScheduleStore? store = null,
-        Func<DateTimeOffset>? now = null)
+        Func<DateTimeOffset>? now = null,
+        IScheduleChanges? changes = null,
+        string? tickFile = null)
     {
         _store = store ?? ScheduleStore.Default;
+        // Changes go where the host says (IScheduleChanges); the window's own go straight into the store.
+        _changes = changes ?? new StoredScheduleChanges(_store);
         _now = now ?? (() => DateTimeOffset.Now);
+        // Whose tick: a host that asks the schedules itself (the service) says where its pulse is; read from the
+        // machine's, the service's page warned that nothing would run while its own scheduler ran them every minute.
+        _tickFile = tickFile;
         _policy = new SchedulePolicy(settings);
 
         _workspace = WorkspaceInfo.For(workspaceRoot);
@@ -342,7 +353,7 @@ internal sealed class SchedulesViewModel : ObservableObject
         var now = _now();
 
         // Before the list, because it is about whether the list means anything.
-        TickWarning = Heartbeat.Check(Heartbeat.LastSeen(), now, TickInterval).Words;
+        TickWarning = Heartbeat.Check(Heartbeat.LastSeen(_tickFile), now, TickInterval).Words;
 
         Schedules.Clear();
         foreach (var schedule in _store.For(_workspace.RootPath))
@@ -458,11 +469,34 @@ internal sealed class SchedulesViewModel : ObservableObject
 
     private void Save()
     {
-        if (DraftWork is null)
+        if (CheckDraft() is not { } checkedDraft)
         {
             Problems = "There is nothing in this workspace to schedule yet — add a template first.";
             return;
         }
+
+        if (checkedDraft.Schedule is not { } schedule)
+        {
+            Problems = string.Join(Environment.NewLine, checkedDraft.Problems);
+            return;
+        }
+
+        if (_changes.Save(schedule) is { } refused)
+        {
+            Problems = refused;
+            return;
+        }
+
+        Problems = string.Empty;
+        IsEditing = false;
+        _ = ReloadAndSelectAsync(schedule.Id);
+    }
+
+    /// <summary>The form as a draft, checked as the runner will check it; null while there is nothing to run.</summary>
+    private ScheduleDraftResult? CheckDraft()
+    {
+        if (DraftWork is null)
+            return null;
 
         var draft = new ScheduleDraft(
             DraftName, _workspace.RootPath,
@@ -475,19 +509,23 @@ internal sealed class SchedulesViewModel : ObservableObject
 
         // The runner's own resolution, through Core. A form with its own idea of valid accepts
         // schedules the runner refuses at three in the morning.
-        var checkedDraft = ScheduleDrafts.Check(draft, _workspace, _now(), id => _templates.Find(id));
-
-        if (checkedDraft.Schedule is not { } schedule)
-        {
-            Problems = string.Join(Environment.NewLine, checkedDraft.Problems);
-            return;
-        }
-
-        _store.Save(schedule);
-        Problems = string.Empty;
-        IsEditing = false;
-        _ = ReloadAndSelectAsync(schedule.Id);
+        return ScheduleDrafts.Check(draft, _workspace, _now(), id => _templates.Find(id));
     }
+
+    /// <summary>
+    /// What saving the form as it stands would agree to: the lines "What this will do" shows for a saved schedule
+    /// (ScheduleWords.Approval), said of the schedule ScheduleDrafts makes of the form - its next run among them. Empty
+    /// while it is not being edited, or could not be saved yet; Save then says every reason.
+    ///
+    /// <para>Read when asked rather than kept: every field of the form changes it, and a copy updated from each setter is
+    /// the copy one setter forgets. The service's page shows it beside the form, as its design asks - a schedule is an
+    /// approval given in advance, and what is agreed is to be read before it is agreed, not after Save. The window's
+    /// form does not show it; its list and the saved schedule's lines are beside the form there.</para>
+    /// </summary>
+    public IReadOnlyList<string> DraftApproval
+        => _isEditing && CheckDraft() is { Schedule: { } schedule }
+            ? ScheduleWords.Approval(schedule, _now())
+            : Array.Empty<string>();
 
     private ScheduleTiming BuildTiming()
     {
@@ -525,7 +563,12 @@ internal sealed class SchedulesViewModel : ObservableObject
             return;
 
         var schedule = _selected.Schedule;
-        _store.Save(schedule with { Enabled = !schedule.Enabled });
+        if (_changes.Switch(schedule, !schedule.Enabled) is { } refused)
+        {
+            Status = refused;
+            return;
+        }
+
         _ = ReloadAndSelectAsync(schedule.Id);
     }
 
@@ -534,7 +577,12 @@ internal sealed class SchedulesViewModel : ObservableObject
         if (_selected is null)
             return;
 
-        _store.Remove(_workspace.RootPath, _selected.Schedule.Id);
+        if (_changes.Remove(_selected.Schedule) is { } refused)
+        {
+            Status = refused;
+            return;
+        }
+
         _ = RefreshAsync();
     }
 
