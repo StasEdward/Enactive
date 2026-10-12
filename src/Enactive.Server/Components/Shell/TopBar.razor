@@ -1,0 +1,40 @@
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@implements IDisposable
+@inject AuthenticationStateProvider Auth
+@inject NavigationManager Navigation
+
+@* The desktop's title strip on the web: the loop, the name, which service this is, and who is signed in. *@
+<header class="top">
+    <a class="mark" href="/"><img src="brand/mark-loop.svg" alt="" />Enactive</a>
+    <span class="host">@Host</span>
+    @* The connection state ("Connected" / "Reconnecting") is shown here once the shell is interactive. *@
+    <span class="conn"></span>
+    @if (_user?.Identity?.IsAuthenticated == true)
+    {
+        <span class="who">@_user.Identity.Name</span>
+        <span class="pill tone-plain">@_user.FindFirstValue(ClaimTypes.Role)</span>
+        <form method="post" action="/signout" class="signout">
+            <AntiforgeryToken />
+            <button type="submit">Sign out</button>
+        </form>
+    }
+</header>
+
+@code {
+    private ClaimsPrincipal? _user;
+
+    // The address the person typed to reach the service, which is the name they know it by.
+    private string Host => new Uri(Navigation.BaseUri).Host;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Auth.AuthenticationStateChanged += OnChanged;
+        _user = (await Auth.GetAuthenticationStateAsync()).User;
+    }
+
+    private void OnChanged(Task<AuthenticationState> state)
+        => _ = InvokeAsync(async () => { _user = (await state).User; StateHasChanged(); });
+
+    public void Dispose() => Auth.AuthenticationStateChanged -= OnChanged;
+}

@@ -85,14 +85,37 @@ h1 { font-family: var(--font-display); letter-spacing: var(--track-display); fon
 h2 { font-family: var(--font-display); font-size: 1.1rem; margin: 1.4em 0 0.4em; }
 pre, code, .path { font-family: var(--font-mono); }
 
-.top { display: flex; gap: 16px; align-items: center; padding: 10px 16px; background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
-.mark { display: flex; gap: 8px; align-items: center; font-family: var(--font-display); font-weight: 700; color: var(--text); text-decoration: none; }
-.mark img { width: 22px; height: 22px; }
-.nav { display: flex; gap: 12px; }
-.nav a { color: var(--text-muted); text-decoration: none; }
-.nav a:hover { color: var(--text); }
-.who { margin-left: auto; color: var(--text-muted); }
+/* ── The shell: the desktop's title strip and icon rail (MainWindow.axaml, Styles/Controls.axaml) ──────────────────── */
+
+/* 40 px of the darkest ink: the loop and the name on the left, who is signed in on the right. */
+.top { display: flex; gap: 12px; align-items: center; box-sizing: border-box; height: 40px; padding: 0 14px 0 12px;
+  background: var(--ink-950); border-bottom: 1px solid var(--border); }
+.mark { display: flex; gap: 8px; align-items: center; font-family: var(--font-display); font-weight: 600; font-size: 13px; color: var(--text); text-decoration: none; }
+.mark img { width: 18px; height: 18px; }
+.host, .conn { font-size: 12px; color: var(--text-muted); }
+.who { margin-left: auto; font-size: 12px; color: var(--text-muted); }
+.top .pill { padding: 1px 10px; font-size: 11px; }
 .signout { margin: 0; }
+.signout button { padding: 3px 10px; font-size: 12px; }
+
+.shell { display: flex; align-items: stretch; min-height: calc(100vh - 41px); }
+.shell > main { flex: 1; min-width: 0; }
+
+/* 52 px on the same ink as the strip above. Chrome, not content: its icons are quiet until pointed at, and only the
+   section you are in takes ember. Each item is a 38 px square centred in the rail (the desktop's Button.rail: left in
+   a 52 px column it sat 7 px off centre). */
+.rail { display: flex; flex-direction: column; align-items: center; flex: none; box-sizing: border-box; width: 52px;
+  padding: 10px 0; background: var(--ink-950); border-right: 1px solid var(--border); }
+.rail-gap { flex: 1; }
+.rail-item { position: relative; display: flex; align-items: center; justify-content: center; width: 38px; height: 38px;
+  margin-bottom: 2px; border-radius: 6px; color: var(--text-faint); text-decoration: none; }
+.rail-item:hover { color: var(--text); background: var(--card-fill); }
+.rail-item.on { color: var(--ember-500); background: color-mix(in srgb, var(--ember-500) 16%, transparent); }
+.rail-item.disabled { color: var(--ink-500); cursor: default; }
+.rail-item.disabled:hover { color: var(--ink-500); background: transparent; }
+.rail-item .badge { position: absolute; top: 1px; right: 0; min-width: 14px; padding: 0 4px; box-sizing: border-box; border-radius: 7px;
+  background: var(--ember-500); color: #fff; font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; }
+.rail-item .dot { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--ember-500); }
 main { padding: 16px; max-width: 1100px; }
 
 button { font: inherit; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); border-radius: var(--radius-sm); padding: 6px 12px; cursor: pointer; }

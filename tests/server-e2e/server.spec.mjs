@@ -24,7 +24,8 @@ async function signedIn(browser, name) {
 /** Starts a run from the Runs page and waits for its own page. */
 async function startRun(page, task) {
   await page.getByLabel('Workspace').selectOption(folder());
-  await page.getByLabel('Task').fill(task);
+  // Exact: the rail's icons are named by their tooltips, and getByLabel reads those too ("Templates · a saved task").
+  await page.getByLabel('Task', { exact: true }).fill(task);
   await page.getByRole('button', { name: 'Run' }).click();
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
   return page.url();
@@ -123,7 +124,7 @@ test('a viewer reads runs and is offered nothing to do to them', async ({ browse
   const run = await startRun(alice.page, 'watched by vera');
   const vera = await signedIn(browser, 'vera');
 
-  await expect(vera.page.getByLabel('Task')).toHaveCount(0);
+  await expect(vera.page.getByLabel('Task', { exact: true })).toHaveCount(0);
   await vera.page.goto(run);
   await expect(vera.page.getByRole('heading', { name: 'Approve write_file' })).toBeVisible();
   await expect(vera.page.getByRole('button', { name: 'Cancel the run' })).toHaveCount(0);
@@ -163,8 +164,9 @@ test('a past run is tried again from its page, and deleted after its question', 
   await page.getByRole('button', { name: 'Allow', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Cancel the run' })).toBeHidden();
 
-  await page.getByRole('link', { name: 'Workspaces' }).click();
-  await page.getByRole('link', { name: 'project' }).click();
+  // The rail's Templates icon leads to the workspaces for now (Components/Shell/RailItem.cs, RailAddresses).
+  await page.getByRole('link', { name: /^Templates/ }).click();
+  await page.getByRole('link', { name: 'project', exact: true }).click();
   await page.getByRole('link', { name: 'kept in the history' }).first().click();
   await expect(page.getByRole('heading', { name: 'kept in the history' })).toBeVisible();
   const past = page.url();
@@ -291,7 +293,7 @@ test('an operator writes a template and schedules it, and the schedule says when
 
   await page.getByRole('link', { name: 'New schedule…' }).click();
   await page.getByLabel('Name', { exact: true }).fill('morning digest');
-  await page.getByLabel('Runs').selectOption({ label: 'Template · Digest' });
+  await page.getByRole('combobox', { name: 'Runs' }).selectOption({ label: 'Template · Digest' });
   await page.getByLabel(/Parameters for a template/).fill('topic=the inbox');
   await page.getByLabel('At', { exact: true }).fill('07:30');
   await page.getByRole('button', { name: 'Save' }).click();
@@ -302,7 +304,7 @@ test('an operator writes a template and schedules it, and the schedule says when
 
 test('a viewer reads the service log, narrowed, and is offered no model to ask', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'vera');
-  await page.getByRole('link', { name: 'Log', exact: true }).click();
+  await page.getByRole('link', { name: 'Global log', exact: true }).click();
   await expect(page.locator('pre.log')).toContainText('Application started');
   await expect(page.getByRole('button', { name: /Ask a model/ })).toHaveCount(0);
 

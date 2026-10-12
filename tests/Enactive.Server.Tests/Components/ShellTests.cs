@@ -1,0 +1,197 @@
+namespace Enactive.Server.Tests.Components;
+
+using Bunit;
+using Enactive.Core.Context;
+using Enactive.Core.Inbox;
+using Enactive.Server.Accounts;
+using Enactive.Server.Components.Shell;
+using Enactive.Server.Runs;
+using Enactive.Workspace;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Forms;
+using Microsoft.Extensions.DependencyInjection;
+
+/// <summary>
+/// The shell the desktop window has - a dark top bar, a 52 px icon rail - on the web: who sees which section, what the
+/// inbox icon says is unread, and that the top bar names the person signed in with a way out that posts safely.
+/// </summary>
+public sealed class ShellTests : ComponentHost
+{
+    private static readonly string[] ForEveryone = ["Runs", "Timeline · project memory", "Templates · a saved task",
+        "Schedules · run it on a day and a time", "Inbox", "Proposals", "Global log", "Environment"];
+
+    private static readonly string[] ForAdmins = ["Settings", "Accounts", "Audit"];
+
+    /// <summary>A request's antiforgery token: bUnit has no request, so the form would be drawn without the field a post needs.</summary>
+    private sealed class FixedToken : AntiforgeryStateProvider
+    {
+        public override AntiforgeryRequestToken? GetAntiforgeryToken() => new("token-value", "__RequestVerificationToken");
+    }
+
+    public ShellTests() => Services.AddSingleton<AntiforgeryStateProvider>(new FixedToken());
+
+    /// <summary>The names the rail's items are announced by - the tooltip, which is also the icon's only text.</summary>
+    private static string[] Names(IRenderedComponent<Rail> rail)
+        => rail.FindAll("nav [data-rail]").Select(e => e.GetAttribute("aria-label")!).ToArray();
+
+    /// <summary>The rail reads the inbox and the staged proposals on a thread of its own; wait for it to have drawn.</summary>
+    private IRenderedComponent<Rail> RenderedRail()
+    {
+        var rail = Render<Rail>();
+        rail.WaitForState(() => rail.FindAll("nav [data-rail]").Count > 0);
+        return rail;
+    }
+
+    [Fact]
+    public void A_viewer_is_shown_no_admin_section()
+    {
+        Assert.DoesNotContain(RailItem.For(Role.Viewer), i => i.Needs == Role.Admin);
+        Assert.DoesNotContain(RailItem.For(Role.Operator), i => i.Needs == Role.Admin);
+
+        SignIn("vera");
+        var names = Names(RenderedRail());
+
+        Assert.DoesNotContain(names, n => n.StartsWith("Settings") || n.StartsWith("Accounts") || n.StartsWith("Audit"));
+        Assert.Equal(ForEveryone.Length, names.Length);
+    }
+
+    [Fact]
+    public void An_admin_is_shown_every_section()
+    {
+        var items = RailItem.For(Role.Admin);
+        Assert.Equal(
+            ["/", "/timeline", "/templates", "/schedules", "/inbox", "/proposals", "/log", "/environment", "/settings", "/accounts", "/audit"],
+            items.Select(i => i.Href));
+        Assert.Equal(ForAdmins, items.Where(i => i.Needs == Role.Admin).Select(i => i.Label));
+
+        SignIn("ada");
+        var names = Names(RenderedRail());
+
+        Assert.Equal(ForEveryone.Concat(ForAdmins).Select(n => n + (n.StartsWith("Timeline") || n == "Environment" ? " (coming)" : "")), names);
+    }
+
+    [Fact]
+    public async Task The_inbox_icon_counts_what_is_unread()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "enactive-shell-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            Services.GetRequiredService<ServerEngine>().Workspaces.Touch(folder);
+            var workspace = WorkspaceInfo.For(folder);
+            var inbox = InboxStoreFactory.Create(workspace);
+            foreach (var status in new[] { "unread", "unread", "read" })
+                await inbox.AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, "result", "digest", "done", Guid.Empty, status,
+                    DateTimeOffset.UtcNow), CancellationToken.None);
+            SignIn("alice");
+
+            var rail = RenderedRail();
+
+            rail.WaitForAssertion(() => Assert.Equal("2", rail.Find("[data-rail='/inbox'] .badge").TextContent.Trim()));
+            Assert.Equal("Inbox — 2 unread", rail.Find("[data-rail='/inbox']").GetAttribute("aria-label"));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { Directory.Delete(folder, recursive: true); } catch { /* a temp folder */ }
+        }
+    }
+
+    [Fact]
+    public void Nothing_unread_shows_no_count_and_nothing_proposed_shows_no_dot()
+    {
+        SignIn("alice");
+
+        var rail = RenderedRail();
+
+        Assert.Empty(rail.FindAll(".badge"));
+        Assert.Empty(rail.FindAll(".dot"));
+    }
+
+    [Fact]
+    public void The_proposals_icon_has_a_dot_while_a_run_has_proposals_kept()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "enactive-shell-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            Services.GetRequiredService<ServerEngine>().Workspaces.Touch(folder);
+            Services.GetRequiredService<ServerStaging>().Begin(folder, Guid.NewGuid(), "alice", "tidy the notes");
+            SignIn("alice");
+
+            var rail = RenderedRail();
+
+            Assert.Single(rail.FindAll("[data-rail='/proposals'] .dot"));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { Directory.Delete(folder, recursive: true); } catch { /* a temp folder */ }
+        }
+    }
+
+    /// <summary>
+    /// A section with no page yet is shown, but is not a link: a click that led to a page that does not exist was
+    /// the dead end the rail must not have.
+    /// </summary>
+    [Fact]
+    public void A_section_with_no_page_yet_is_disabled_and_says_so()
+    {
+        SignIn("alice");
+
+        var rail = RenderedRail();
+
+        foreach (var href in new[] { "/timeline", "/environment" })
+        {
+            var item = rail.Find($"[data-rail='{href}']");
+            Assert.Null(item.GetAttribute("href"));
+            Assert.Equal("true", item.GetAttribute("aria-disabled"));
+            Assert.EndsWith(" (coming)", item.GetAttribute("aria-label"));
+        }
+    }
+
+    [Theory]
+    [InlineData("http://localhost/", "/")]
+    [InlineData("http://localhost/runs/0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/")]
+    [InlineData("http://localhost/inbox", "/inbox")]
+    [InlineData("http://localhost/proposals/view?ws=x&set=y", "/proposals")]
+    [InlineData("http://localhost/logs", "/log")]
+    [InlineData("http://localhost/admin/settings", "/settings")]
+    [InlineData("http://localhost/admin/users", "/accounts")]
+    public void The_section_you_are_in_is_marked(string address, string marked)
+    {
+        SignIn("ada");
+        Services.GetRequiredService<NavigationManager>().NavigateTo(address);
+
+        var rail = RenderedRail();
+
+        Assert.Equal(marked, Assert.Single(rail.FindAll("[data-rail][aria-current='page']")).GetAttribute("data-rail"));
+    }
+
+    [Fact]
+    public void The_top_bar_names_who_is_signed_in_and_their_role()
+    {
+        SignIn("alice");
+
+        var bar = Render<TopBar>();
+
+        Assert.Equal("alice", bar.Find(".who").TextContent.Trim());
+        Assert.Equal("Operator", bar.Find(".pill").TextContent.Trim());
+        Assert.Equal("localhost", bar.Find(".host").TextContent.Trim());
+        var signOut = bar.Find("form.signout");
+        Assert.Equal("post", signOut.GetAttribute("method"));
+        Assert.Equal("/signout", signOut.GetAttribute("action"));
+        Assert.NotNull(signOut.QuerySelector("input[name='__RequestVerificationToken']"));
+        Assert.Equal("Sign out", signOut.QuerySelector("button")!.TextContent.Trim());
+    }
+
+    [Fact]
+    public void The_top_bar_with_nobody_signed_in_has_the_mark_and_no_way_out()
+    {
+        var bar = Render<TopBar>();
+
+        Assert.Contains("Enactive", bar.Markup);
+        Assert.Empty(bar.FindAll("form.signout"));
+        Assert.Empty(bar.FindAll(".who"));
+    }
+}

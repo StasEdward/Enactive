@@ -1,30 +1,10 @@
 @inherits LayoutComponentBase
-@using Microsoft.AspNetCore.Components.Authorization
+@using Enactive.Server.Components.Shell
 
-<header class="top">
-    <a class="mark" href="/"><img src="brand/mark-loop.svg" alt="" />Enactive</a>
-    <AuthorizeView>
-        <Authorized>
-            <nav class="nav">
-                <a href="/">Runs</a>
-                <a href="inbox">Inbox</a>
-                <a href="proposals">Proposals</a>
-                <a href="workspaces">Workspaces</a>
-                <a href="logs">Log</a>
-                <AuthorizeView Policy="Admin" Context="admin">
-                    <a href="admin/settings">Settings</a>
-                    <a href="admin/users">Accounts</a>
-                    <a href="admin/audit">Audit</a>
-                </AuthorizeView>
-            </nav>
-            <span class="who">@context.User.Identity?.Name</span>
-            <form method="post" action="/signout" class="signout">
-                <AntiforgeryToken />
-                <button type="submit">Sign out</button>
-            </form>
-        </Authorized>
-    </AuthorizeView>
-</header>
-<main>
-    @Body
-</main>
+<TopBar />
+<div class="shell">
+    <Rail />
+    <main>
+        @Body
+    </main>
+</div>

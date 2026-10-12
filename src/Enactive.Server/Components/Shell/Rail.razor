@@ -1,0 +1,95 @@
+@using System.Globalization
+@using Enactive.Server.Accounts
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@implements IDisposable
+@inject AuthenticationStateProvider Auth
+@inject NavigationManager Navigation
+@inject ServerInbox Inbox
+@inject ServerStaging Staging
+
+@* The desktop's icon rail (MainWindow.axaml): 52 px of chrome on the darkest ink; only the section you are in takes ember. *@
+@if (_items.Count > 0)
+{
+    <nav class="rail" aria-label="Sections">
+        @foreach (var item in _items.Where(i => !i.AtBottom))
+        {
+            @Entry(item)
+        }
+        <span class="rail-gap"></span>
+        @foreach (var item in _items.Where(i => i.AtBottom))
+        {
+            @Entry(item)
+        }
+    </nav>
+}
+
+@code {
+    private IReadOnlyList<RailItem> _items = [];
+    private int _unread;
+    private bool _proposed;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Navigation.LocationChanged += OnLocationChanged;
+        await LoadAsync();
+    }
+
+    // The counts are read again at each navigation: the layout outlives the page, and an inbox read or a proposal
+    // applied on a page would otherwise leave its icon saying what was true when the window opened.
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+        => _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
+
+    private async Task LoadAsync()
+    {
+        var user = (await Auth.GetAuthenticationStateAsync()).User;
+        _items = ServerAuth.RoleOf(user) is { } role ? RailItem.For(role) : [];
+        if (_items.Count == 0)
+            return;
+        _unread = (await Inbox.ListAsync(user, CancellationToken.None)).Count(e => e.Item.Status == "unread");
+        _proposed = Staging.List(user).Count > 0;
+    }
+
+    private string CurrentPath => Navigation.ToBaseRelativePath(Navigation.Uri).Split('?', '#')[0].Trim('/');
+
+    private RenderFragment<RailItem> Entry => item =>
+        @<text>
+            @{
+                var where = RailAddresses.Of(item);
+                var on = RailAddresses.IsIn(item, CurrentPath);
+                var inbox = item.Href == "/inbox" && _unread > 0;
+                var label = inbox ? $"Inbox — {_unread.ToString(CultureInfo.InvariantCulture)} unread" : item.Label;
+            }
+            @if (where.Now is null)
+            {
+                @* No page yet: drawn, so the rail is the whole window's, but not a link to nothing. *@
+                <span class="rail-item disabled" role="link" aria-disabled="true" data-rail="@item.Href"
+                      aria-label="@(label + " (coming)")" title="@(label + " (coming)")">@Icon(item)</span>
+            }
+            else
+            {
+                <a class="@("rail-item" + (on ? " on" : ""))" href="@where.Now" data-rail="@item.Href" aria-label="@label" title="@label"
+                   aria-current="@(on ? "page" : null)">
+                    @Icon(item)
+                    @if (inbox)
+                    {
+                        <span class="badge">@_unread.ToString(CultureInfo.InvariantCulture)</span>
+                    }
+                    @if (item.Href == "/proposals" && _proposed)
+                    {
+                        <span class="dot"></span>
+                    }
+                </a>
+            }
+        </text>;
+
+    private static RenderFragment Icon(RailItem item) =>
+        @<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            @foreach (var stroke in item.Strokes)
+            {
+                <path d="@stroke" />
+            }
+        </svg>;
+
+    public void Dispose() => Navigation.LocationChanged -= OnLocationChanged;
+}
