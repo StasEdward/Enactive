@@ -125,7 +125,7 @@
                     <Pill Class="attempts" Title="Show the other attempts at this task" Expanded="State.IsExpanded(run)"
                           OnClick="() => State.Toggle(run)">×@row.Attempts</Pill>
                 }
-                <a class="card-text" href="@Links.PastRun(State.Selected!.RootPath, run.RunId)">
+                <a class="card-text" href="@Links.PastRun(State.Current!.Id, run.RunId)">
                     <span class="card-title">@RunTitle.For(run)</span>
                     <span class="card-meta">@RunRows.Meta(run)</span>
                 </a>

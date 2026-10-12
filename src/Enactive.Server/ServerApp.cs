@@ -132,22 +132,6 @@ internal static class ServerApp
             return Results.LocalRedirect("/" + Components.Links.Proposals(workspace, set) + "&said=" + Uri.EscapeDataString(said));
         });
 
-        // The history's actions - try again, run again, delete a run or a file, forget an unfinished run - after the
-        // confirmation page asked its question where one is due.
-        app.MapPost("/history/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerHistory history) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var workspace = form["ws"].ToString();
-            var (said, run) = await history.DoAsync(context.User, workspace, form["act"].ToString(),
-                Guid.TryParse(form["id"], out var id) ? id : Guid.Empty, form["path"].ToString(), form["choice"].ToString(),
-                context.RequestAborted);
-            return run is { } started
-                ? Results.LocalRedirect($"/runs/{started}")
-                : Results.LocalRedirect("/" + Components.Links.History(workspace) + "&said=" + Uri.EscapeDataString(said));
-        });
-
         // The accounts page's changes: an Admin's, checked by AccountAdmin; the token here. Not at the page's own
         // address: a page also takes form posts, and two endpoints on one address was a 500 (found by tests/server-e2e).
         app.MapPost("/admin/users/act", async (HttpContext context, IAntiforgery antiforgery, AccountAdmin accounts) =>
@@ -172,6 +156,24 @@ internal static class ServerApp
                 context.Request.Query["said"].ToString())))
             .RequireAuthorization(nameof(Role.Viewer));
         app.MapGet("/workspaces", () => Results.LocalRedirect("/")).RequireAuthorization(nameof(Role.Viewer));
+
+        // A past run's old page, and the page a file it wrote was read on, are the Runs screen now - the run at its own
+        // address there (/history/{workspace}/{run}), its files reviewed on its Artifacts tab - and an old link lands, by
+        // the same rule as the history's above: the workspace by its id, a path the service does not know on "/".
+        app.MapGet("/history/run", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids) =>
+            {
+                var workspace = history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known
+                    ? ids.TryIdOf(known.RootPath)
+                    : null;
+                return Results.LocalRedirect(workspace is { } id && Guid.TryParse(context.Request.Query["id"], out var run)
+                    ? "/" + Components.Links.PastRun(id, run)
+                    : Components.Links.Runs(workspace));
+            })
+            .RequireAuthorization(nameof(Role.Viewer));
+        app.MapGet("/file", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids) =>
+            Results.LocalRedirect(Components.Links.Runs(
+                history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known ? ids.TryIdOf(known.RootPath) : null)))
+            .RequireAuthorization(nameof(Role.Viewer));
 
         // A workspace's templates and schedules (ServerLibrary checks the role and the rules), each back to its page.
         app.MapPost("/library/template/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerLibrary library) =>

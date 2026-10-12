@@ -261,7 +261,7 @@ public sealed partial class SignInTests : IAsyncLifetime
     public async Task The_reading_pages_need_a_signed_in_person()
     {
         // The old addresses too: what a workspace's id is, is not told to somebody who has not signed in.
-        foreach (var address in new[] { "/", "/history?ws=x", "/workspaces" })
+        foreach (var address in new[] { "/", "/history?ws=x", "/workspaces", "/history/run?ws=x&id=x", "/file?ws=x&path=y" })
         {
             var response = await NewBrowser().GetAsync(address);
             Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
@@ -290,6 +290,37 @@ public sealed partial class SignInTests : IAsyncLifetime
         var unknown = await browser.GetAsync("/history?ws=" + Uri.EscapeDataString(Path.Combine(_root, "elsewhere")));
         Assert.Equal("/", unknown.Headers.Location!.OriginalString);
         Assert.Equal("/", (await browser.GetAsync("/workspaces")).Headers.Location!.OriginalString);
+    }
+
+    /// <summary>
+    /// A past run's old address - and a file's, which was read on a page of its own and is reviewed on the past run now -
+    /// lands on the Runs screen, the workspace named by its id. A path the service does not know is not looked up on the
+    /// disk: it lands on the Runs screen as it opens.
+    /// </summary>
+    [Fact]
+    public async Task An_old_past_run_address_lands_on_the_new_one()
+    {
+        var folder = Path.Combine(_root, "project");
+        Directory.CreateDirectory(folder);
+        _app.Services.GetRequiredService<Runs.ServerEngine>().Workspaces.Touch(folder);
+        var id = Enactive.Core.Context.WorkspaceInfo.For(folder).Id;
+        var run = Guid.NewGuid();
+        var browser = NewBrowser();
+        await SignInAsync(browser, "alice", Password);
+
+        var past = await browser.GetAsync($"/history/run?ws={Uri.EscapeDataString(folder)}&id={run}");
+        Assert.Equal(HttpStatusCode.Redirect, past.StatusCode);
+        Assert.Equal($"/history/{id}/{run}", past.Headers.Location!.OriginalString);
+
+        var file = await browser.GetAsync($"/file?ws={Uri.EscapeDataString(folder)}&path=digest.md");
+        Assert.Equal(HttpStatusCode.Redirect, file.StatusCode);
+        Assert.Equal($"/?ws={id}", file.Headers.Location!.OriginalString);
+
+        var elsewhere = Uri.EscapeDataString(Path.Combine(_root, "elsewhere"));
+        Assert.Equal("/", (await browser.GetAsync($"/history/run?ws={elsewhere}&id={run}")).Headers.Location!.OriginalString);
+        Assert.Equal("/", (await browser.GetAsync($"/file?ws={elsewhere}&path=digest.md")).Headers.Location!.OriginalString);
+        // The run's address with no run in it names only the workspace.
+        Assert.Equal($"/?ws={id}", (await browser.GetAsync($"/history/run?ws={Uri.EscapeDataString(folder)}&id=x")).Headers.Location!.OriginalString);
     }
 
     [Fact]

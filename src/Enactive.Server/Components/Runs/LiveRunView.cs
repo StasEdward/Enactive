@@ -12,7 +12,13 @@ public sealed record StepLine(FeedEntryKind Kind, string Label, string Detail);
 
 /// <summary>One step card, as the window's StepCardView draws it.</summary>
 public sealed record StepView(string Title, FeedCardStatus Status, bool WaitingForYou, string Activity, string Tally,
-    IReadOnlyList<StepLine> Lines);
+    IReadOnlyList<StepLine> Lines)
+{
+    /// <summary>A card of the fold, copied out: the live run's as it goes, a past run's as its record rebuilds it.</summary>
+    internal static StepView Of(FeedCard card)
+        => new(card.Title, card.Status, card.WaitingForYou, card.Activity, card.Tally,
+            card.Entries.Select(e => new StepLine(e.Kind, e.Label, e.Detail)).ToList());
+}
 
 /// <summary>A ROUTING row: which model served a phase.</summary>
 public sealed record RoutingLine(string Phase, string Model);
@@ -91,8 +97,7 @@ internal sealed class LiveRunReader
     {
         if (_cards.TryGetValue(card, out var kept) && kept.Version == card.Version)
             return kept.View;
-        var view = new StepView(card.Title, card.Status, card.WaitingForYou, card.Activity, card.Tally,
-            card.Entries.Select(e => new StepLine(e.Kind, e.Label, e.Detail)).ToList());
+        var view = StepView.Of(card);
         _cards[card] = (card.Version, view);
         return view;
     }

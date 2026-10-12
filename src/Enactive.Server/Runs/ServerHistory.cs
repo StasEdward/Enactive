@@ -10,7 +10,11 @@ using Enactive.Server.Accounts;
 using Enactive.Settings;
 using Enactive.Workspace;
 
-/// <summary>A finished run, as the service's run page shows it: its head, its cards, its timeline and its tiles.</summary>
+/// <summary>
+/// A finished run, as the Runs screen shows it over the live one: its head, its cards, its timeline and its tiles - the
+/// request as it was typed (<see cref="Request"/>, null for a run recorded before it was kept), and whether Run again is
+/// offered (RunAgainOffer: only while its template is still in the library).
+/// </summary>
 internal sealed record PastRun(
     RunDigest Digest,
     IReadOnlyList<FeedCard> Cards,
@@ -18,7 +22,8 @@ internal sealed record PastRun(
     IReadOnlyList<RoutingRow> Routing,
     IReadOnlyList<ModelWorkRow> Work,
     IReadOnlyList<string> Decisions,
-    bool FromTemplate);
+    string? Request,
+    RunAgainOffer RunAgain);
 
 /// <summary>
 /// Reading the history of the service's workspaces (server plan 1.6), for anybody signed in.
@@ -61,6 +66,8 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         // The same folds and tiles the window shows for a past run, off what was recorded.
         var attempts = RunHistory.AttemptsOf(list.Runs, record);
         var settings = engine.Settings;
+        // Whether the template is still there is a fact about now, read as the window reads it (its library in the folder).
+        var spec = Core.Templates.ResolvedTaskSpec.Parse(record.Spec);
         return (new PastRun(
             RunDigest.Of(record, attempts),
             RunFeed.Replay(record).Cards,
@@ -68,7 +75,8 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
             RunRouting.From(record).Rows.ToList(),
             ModelWorkSplit.From(record, id => settings is null ? ModelReach.Unknown : ModelReaches.Of(settings, id)).Rows.ToList(),
             record.Decisions,
-            Core.Templates.ResolvedTaskSpec.Parse(record.Spec) is not null), null);
+            RunHistory.RequestOf(record),
+            RunAgainOffer.Of(spec, spec is null ? null : new TemplateStore(known.RootPath).Find(spec.TemplateId))), null);
     }
 
     /// <summary>A file of a known workspace, as text, within the limits a page has (WorkspaceFiles).</summary>
@@ -82,7 +90,10 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
 
     // ── acting on the history (Operators) ───────────────────────────────────
     // What the window does with a past run, from the browser - with the window's own questions (RunHistoryService), asked
-    // on a page before anything that cannot be taken back, and each action audited with who did it.
+    // in a dialog on the screen before anything that cannot be taken back, and each action audited with who did it.
+
+    /// <summary>A file's card, when the file it names is not there to ask about deleting: the window's words.</summary>
+    public const string AlreadyGone = "already gone";
 
     /// <summary>The things a page can ask to have done to a workspace's history.</summary>
     public static class Act
@@ -115,9 +126,10 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
                     ? (RunHistoryService.ForgetUnfinished(known.RootPath, checkpoint), null)
                     : (null, "There is no such unfinished run in this workspace.");
             case Act.DeleteFile:
+                // The window's words for a file there is nothing to ask about, on the file's card (DeletePastArtifactAsync).
                 return RunHistoryService.DeleteFile(known.RootPath, path ?? "") is { } question
                     ? (question, null)
-                    : (null, "That file is not there any more, or not in this workspace.");
+                    : (null, AlreadyGone);
             default:
                 return (null, "There is nothing to ask before that.");
         }
@@ -182,14 +194,25 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
                 return (kept ?? (putBack ? "Forgotten, and its files are put back." : "Forgotten."), null);
             }
             case Act.DeleteFile:
-            {
-                var (status, _) = RunHistoryService.DeleteFileNow(known.RootPath, path ?? "");
-                users.Audit(who, "file deleted", $"{known.RootPath}: {path} ({status})");
-                return ($"{path}: {status}.", null);
-            }
+                return (DeleteFile(user, known.RootPath, path ?? "").Status, null);
             default:
                 return ("That is not something the history does.", null);
         }
+    }
+
+    /// <summary>
+    /// Deletes a file of a known workspace - what a run wrote, from its card - and says what became of it in the words the
+    /// window's card shows (RunHistoryService.DeleteFileNow), and whether the card is done with: an error leaves it to try
+    /// again, as the window's does. A refusal (not an Operator, not a known workspace) is not done with either. The card
+    /// asks first (<see cref="AskAsync"/>, <see cref="Act.DeleteFile"/>).
+    /// </summary>
+    public (string Status, bool Done) DeleteFile(ClaimsPrincipal user, string root, string path)
+    {
+        if (Operating(user, root) is not { } known)
+            return (NotOperating(user), false);
+        var (status, done) = RunHistoryService.DeleteFileNow(known.RootPath, path);
+        users.Audit(users.Find(user.Identity?.Name ?? "")!.Name, "file deleted", $"{known.RootPath}: {path} ({status})");
+        return (status, done);
     }
 
     /// <summary>

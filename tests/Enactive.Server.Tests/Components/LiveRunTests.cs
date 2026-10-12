@@ -302,6 +302,37 @@ public sealed class LiveRunTests : ComponentHost
     }
 
     /// <summary>
+    /// A file the run wrote can be deleted from its card, as the window's live run offers (MainWindow.axaml 634-644) -
+    /// after the window's question, by an Operator; the card says what became of it. Delete and not the window's Undo:
+    /// the service keeps no copy of what a run overwrote to put back (the window's DiskArtifactStore.Undo), and the
+    /// question says so - it deletes the file as it is now. A Viewer is offered Review only.
+    /// </summary>
+    [Fact]
+    public async Task A_written_file_is_deleted_from_its_card_after_the_window_s_question()
+    {
+        var run = await StartedAsync();
+        File.WriteAllText(Path.Combine(run.Workspace, "report.md"), "# The disks\n");
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: report.md", WorkEventPayload.ArtifactPayload("document", "report.md")));
+        await WaitUntil(() => run.Session.Seq == 1);
+
+        var viewing = Open("vera", run);
+        viewing.WaitForAssertion(() => Assert.Equal("Artifacts (1)", viewing.FindAll("[role=tab]")[1].TextContent.Trim()));
+        viewing.FindAll("[role=tab]")[1].Click();
+        Assert.Equal(["Review"], viewing.FindAll(".artifact button").Select(b => b.TextContent.Trim()));
+
+        var page = Open("alice", run);
+        page.WaitForAssertion(() => Assert.Equal("Artifacts (1)", page.FindAll("[role=tab]")[1].TextContent.Trim()));
+        page.FindAll("[role=tab]")[1].Click();
+        page.FindAll(".artifact button").Single(b => b.TextContent.Trim() == "Delete").Click();
+        var dialog = page.Find("[role=dialog]");
+        Assert.Equal("Delete “report.md”?", dialog.QuerySelector(".dialog-title")!.TextContent.Trim());
+        dialog.QuerySelectorAll("button").Single(b => b.TextContent.Trim() == "Delete").Click();
+
+        page.WaitForAssertion(() => Assert.Equal("deleted", page.Find(".artifact-status").TextContent.Trim()));
+        Assert.False(File.Exists(Path.Combine(run.Workspace, "report.md")));
+    }
+
+    /// <summary>
     /// Source shows only where there is something to switch between, as the window's viewer: beside a caller's rendering,
     /// which must never be the only way to read the text. With the text alone, a Source button would switch to itself.
     /// </summary>

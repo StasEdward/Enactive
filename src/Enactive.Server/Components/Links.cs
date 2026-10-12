@@ -20,11 +20,8 @@ internal static class Links
     /// <summary>The old address of a workspace's history, which the service redirects to <see cref="Runs"/>.</summary>
     public static string History(string workspace) => "history?ws=" + Uri.EscapeDataString(workspace);
 
-    public static string PastRun(string workspace, Guid runId) => $"history/run?ws={Uri.EscapeDataString(workspace)}&id={runId}";
-
-    public static string Confirm(string workspace, string what, Guid id, string? path = null)
-        => $"history/confirm?ws={Uri.EscapeDataString(workspace)}&what={what}&id={id}"
-           + (path is null ? "" : "&path=" + Uri.EscapeDataString(path));
+    /// <summary>A past run on the Runs screen: its workspace by its id (WorkspaceIds), and the run's.</summary>
+    public static string PastRun(Guid workspace, Guid runId) => $"history/{workspace}/{runId}";
 
     public static string Library(string workspace) => "library?ws=" + Uri.EscapeDataString(workspace);
 
@@ -36,7 +33,4 @@ internal static class Links
 
     public static string Proposals(string workspace, string set)
         => $"proposals/view?ws={Uri.EscapeDataString(workspace)}&set={Uri.EscapeDataString(set)}";
-
-    public static string File(string workspace, string path)
-        => $"file?ws={Uri.EscapeDataString(workspace)}&path={Uri.EscapeDataString(path)}";
 }

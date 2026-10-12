@@ -163,27 +163,13 @@ input, textarea { font: inherit; background: var(--bg-card); color: var(--text);
 .list li { padding: 6px 0; border-bottom: 1px solid var(--border); }
 .list li.local { color: var(--success); }
 
-.tiles { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-.tiles div { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; min-width: 90px; }
-.tiles dt { font-size: 0.75rem; text-transform: uppercase; letter-spacing: var(--track-eyebrow); color: var(--text-muted); }
-.tiles dd { margin: 0; font-size: 1.1rem; }
 
 .question { border: 2px solid var(--accent); border-radius: var(--radius); padding: 12px; margin: 12px 0; background: var(--bg-card); }
 .question pre { white-space: pre-wrap; max-height: 320px; overflow: auto; }
 .answers { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .cards { padding-left: 0; list-style: none; }
-/* The status of a step card as the pages write it today (class="card running"), in the tones Palette.cs gives it. */
-.card.running { --tone: var(--info); }
-.card.done { --tone: var(--success); }
-.card.failed { --tone: var(--danger); }
-.card.blocked, .card.unverified { --tone: var(--warning); }
-.card.skipped { --tone: var(--ink-500); }
-.card.pending { --tone: var(--ink-400); }
-.card-status, .card-tally { color: var(--text-muted); margin-left: 6px; }
-.card-activity { color: var(--text-muted); }
 .entries { margin: 4px 0 0; padding-left: 18px; font-family: var(--font-mono); font-size: 0.85rem; }
-.entry.refusal { color: var(--danger); }
 
 .timeline { border-collapse: collapse; font-size: 0.9rem; width: 100%; }
 .timeline td { padding: 2px 8px; vertical-align: top; border-bottom: 1px solid var(--border); }
@@ -429,7 +415,7 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 /* ── The live run (Runs/LiveRun.razor; MainWindow.axaml 546-920, 1244-1300): the task, the tabs, the run's views over
    Current action on the left, the status column 300 px on the right, the repository strip at the foot ───────────── */
 
-.live-run { display: grid; border-top: 1px solid var(--border); }
+.live-run, .past-run { display: grid; border-top: 1px solid var(--border); }
 .run-gone { margin: 12px 0; }
 
 /* The task: its title, the request kept verbatim and selectable (three lines, fixed, so the run below does not move), who
@@ -544,3 +530,26 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .viewer-rendered { max-height: 60vh; overflow: auto; }
 .viewer-status { align-self: center; margin-right: auto; }
 .btn.on { background: var(--card-fill-active); border-color: var(--border-strong); }
+
+/* A past run (Runs/PastRun.razor; MainWindow.axaml 923-1243), in the live run's frame: Back, the task, then Retry and Run
+   again beside the status pill, and the attempt on a row of its own below them - a label that comes and goes beside the
+   buttons moved them while somebody aimed. */
+.past-run .back { flex: none; align-self: center; }
+.past-actions { display: grid; gap: 4px; flex: none; }
+.past-buttons { display: flex; align-items: center; gap: 8px; }
+.past-buttons .btn { width: 118px; }
+.past-attempt { margin: 0; min-height: 16px; text-align: right; }
+.past-run .run-view { padding-right: 10px; }
+.past-decisions { list-style: none; margin: 6px 0 12px; padding: 0; }
+.past-decisions .card { border-left-width: 2px; padding: 10px; font-size: 12px; color: var(--text-body); }
+.past-timeline { display: grid; gap: 2px; margin-top: 6px; }
+.timeline-row { display: grid; grid-template-columns: auto 130px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.timeline-when { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.timeline-kind { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.timeline-summary { font-size: 12px; color: var(--tone); overflow-wrap: anywhere; }
+.ran-as { gap: 3px; }
+.ran-as-tier { font-size: 11px; color: var(--tone); }
+
+/* A written file's card: its path, what became of it under it, Review and Delete. */
+.artifact-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.artifact-status { overflow-wrap: anywhere; }

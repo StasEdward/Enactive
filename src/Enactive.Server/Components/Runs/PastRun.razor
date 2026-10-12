@@ -1,0 +1,247 @@
+@using Enactive.Application.Projections
+@using Enactive.Core.History
+@using Enactive.Server.Accounts
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerHistory History
+@inject NavigationManager Navigation
+
+@* A finished run, read-only, in the same frame as the live one (MainWindow.axaml 923-1243) - it is the same thing at a
+   different time: the header with ← Back to the run in progress, the title, the request as it was typed and when, on
+   what, which run; Retry (the same run again, exactly) and Run again (its template as it stands now) with the status pill
+   beside them, and which attempt at its task it is on a row of its own below - a label that comes and goes beside the
+   buttons moved them while somebody aimed. The tabs Execution / Artifacts / Timeline, and the status column of what was
+   recorded: THIS RUN's tiles, ROUTING, WHERE IT RAN, RAN AS. No MODEL PERFORMANCE and no Log, as the window has none
+   for a past run: the speed figures and the log are kept for the run in progress, not in a run's record. Everything
+   shown is the window's own projections of the record (ServerHistory.OpenAsync); every action is the service's. *@
+
+@if (_problem is { } problem)
+{
+    <p class="said run-gone">@problem</p>
+    return;
+}
+@if (_run is not { } run)
+{
+    return;
+}
+@{
+    var d = run.Digest;
+}
+
+<PageTitle>@d.Title - Enactive</PageTitle>
+
+<section class="past-run" aria-label="Past run">
+    <header class="task-header">
+        @if (BackTo is { } live)
+        {
+            <a class="btn small back" href="@($"runs/{live}")" title="Back to the current run">← Back</a>
+        }
+        <div class="task-text">
+            <h1 class="task-title" title="@d.Title">@d.Title</h1>
+            @if (d.Subtitle.Length > 0)
+            {
+                @* The request, as the live header keeps it: a finished run's is the one most likely to be copied - into the
+                   command bar, or into a message about what went wrong. *@
+                <textarea class="task-intent" readonly aria-label="Request" rows="3">@run.Request</textarea>
+            }
+            <p class="task-meta" title="@d.Meta">@d.Meta</p>
+        </div>
+        <div class="past-actions">
+            <div class="past-buttons">
+                @if (_canOperate && d.CanRetry)
+                {
+                    <button type="button" class="btn go" title="Run this again, exactly as it was" disabled="@_busy"
+                            @onclick="() => AgainAsync(ServerHistory.Act.Retry)">Retry</button>
+                }
+                @if (_canOperate && run.RunAgain.Can)
+                {
+                    <button type="button" class="btn go-soft" title="@run.RunAgain.Tooltip" disabled="@_busy"
+                            @onclick="() => AgainAsync(ServerHistory.Act.RunAgain)">Run again</button>
+                }
+                <Pill Class="@Looks.Phase(RunStanding.Of(d.Status))">@d.Status</Pill>
+            </div>
+            @* Kept when empty, so the buttons above sit where they always do. "attempt 1 of 1" is noise on every run never
+               retried, and is not said (RunDigest). *@
+            <p class="hint past-attempt">@d.AttemptLabel</p>
+        </div>
+    </header>
+
+    @if (_said is { Length: > 0 } said)
+    {
+        <p class="said" role="alert">@said</p>
+    }
+
+    <Tabs Label="Views of the run" Names="@TabNames(d)" Selected="_tab" SelectedChanged="tab => _tab = tab" />
+
+    <div class="run-body">
+        <div class="run-view" role="tabpanel">
+            @switch (_tab)
+            {
+                case PastRunTabs.Execution:
+                    @if (_steps.Count == 0)
+                    {
+                        <p class="hint">@d.NoStepsReason</p>
+                    }
+                    <ol class="steps">
+                        @for (var i = 0; i < _steps.Count; i++)
+                        {
+                            <StepCard @key="i" Step="_steps[i]" />
+                        }
+                    </ol>
+                    break;
+                case PastRunTabs.Artifacts:
+                    <WrittenFiles Root="@Root" Paths="d.Artifacts" Empty="This run wrote nothing." />
+                    break;
+                default:
+                    @if (run.Decisions.Count > 0)
+                    {
+                        @* What was put to a person, above the run that put it there: "what did it ask me" is why an old run
+                           gets opened. *@
+                        <PanelHeader Text="DECISIONS" />
+                        <ul class="past-decisions">
+                            @foreach (var decision in run.Decisions)
+                            {
+                                <li class="card tone-open">@decision</li>
+                            }
+                        </ul>
+                        <PanelHeader Text="TIMELINE" />
+                    }
+                    <div class="past-timeline">
+                        @foreach (var line in run.Timeline)
+                        {
+                            <div class="timeline-row">
+                                <span class="timeline-when">@line.When</span>
+                                <span class="timeline-kind" title="@line.Kind">@line.Kind</span>
+                                <span class="@("timeline-summary " + Looks.Timeline(line.Tone))">@line.Summary</span>
+                            </div>
+                        }
+                    </div>
+                    break;
+            }
+        </div>
+
+        @* The same column the live run has, off what was recorded. *@
+        <aside class="status-column" aria-label="Status">
+            <div class="status-scroll">
+                <PanelHeader Text="THIS RUN" />
+                <p class="hint status-progress">@d.StepsText</p>
+                @* Four tiles, two by two: a 300 px column cannot hold four across and still show a number. *@
+                <div class="tiles-grid">
+                    <Tile Value="@d.Artifacts.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)" Label="ARTIFACTS" />
+                    <Tile Value="@d.ToolCalls.ToString(System.Globalization.CultureInfo.InvariantCulture)" Label="TOOL CALLS" />
+                    <Tile Value="@d.TokensText" Label="TOKENS" Title="@d.TokensDetail" />
+                    <Tile Value="@d.ElapsedText" Label="ELAPSED" />
+                </div>
+
+                @if (run.Routing.Count > 0)
+                {
+                    @* Read from the run's own Routed events, not the bindings: the settings say what is bound, this says
+                       what was used. *@
+                    <section class="status-block">
+                        <PanelHeader Text="ROUTING" />
+                        @foreach (var row in run.Routing)
+                        {
+                            <div class="routing">
+                                <span class="routing-phase">@row.Phase</span>
+                                <span class="routing-model" title="@row.Model">@row.Model</span>
+                            </div>
+                        }
+                    </section>
+                }
+
+                @if (run.Work.Count > 0)
+                {
+                    <section class="status-block">
+                        <PanelHeader Text="WHERE IT RAN" />
+                        @foreach (var row in run.Work)
+                        {
+                            <div class="routing">
+                                <span class="@("routing-phase reach " + Looks.Reach(row.Reach))">@row.Label</span>
+                                <span class="routing-model" title="@row.Detail">@row.Detail</span>
+                            </div>
+                        }
+                    </section>
+                }
+
+                @if (d.HasSettings)
+                {
+                    @* What it was allowed to do, as recorded: half of "why did it do that" is answered here, and the
+                       slider on screen today is not it. *@
+                    <section class="status-block ran-as">
+                        <PanelHeader Text="RAN AS" />
+                        <span class="@("ran-as-tier " + (d.Autonomy is { } tier ? Looks.Autonomy(tier) : "tone-idle"))">@d.AutonomyText</span>
+                        <span class="hint">@d.WorkerText</span>
+                        <span class="hint">@d.StagingText</span>
+                    </section>
+                }
+
+                <p class="hint">This run has finished. The log tab only holds the current session.</p>
+            </div>
+        </aside>
+    </div>
+</section>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The run's workspace (a known one: the screen found it by its id).</summary>
+    [Parameter, EditorRequired] public string Root { get; set; } = "";
+
+    /// <summary>The run, by its id in the workspace's history.</summary>
+    [Parameter] public Guid RunId { get; set; }
+
+    /// <summary>The run in progress this screen showed last, for ← Back; null when it showed none.</summary>
+    [Parameter] public Guid? BackTo { get; set; }
+
+    private (string Root, Guid Run)? _shown;
+    private Enactive.Server.Runs.PastRun? _run;
+    private IReadOnlyList<StepView> _steps = [];
+    private string? _problem;
+    private bool _canOperate;
+    private bool _busy;
+    private string? _said;
+    private int _tab;
+
+    // Read per address, not once (Pages/_Imports.razor): the screen keeps this page when another history row is chosen.
+    protected override async Task OnParametersSetAsync()
+    {
+        var user = (await Auth).User;
+        _canOperate = ServerAuth.RoleOf(user) >= Role.Operator;
+        if (_shown == (Root, RunId))
+            return;
+        _shown = (Root, RunId);
+        (_run, _problem) = await History.OpenAsync(user, Root, RunId, CancellationToken.None);
+        _steps = _run?.Cards.Select(StepView.Of).ToList() ?? [];
+        // A record that rebuilds no cards opens on its timeline, which is what it holds (PastRunTabs).
+        (_tab, _said) = (PastRunTabs.Opening(_steps.Count), null);
+    }
+
+    /// <summary>The window's past-run tabs, in its order (PastRunTabs); Artifacts carries its count (RunFigures).</summary>
+    private static IReadOnlyList<string> TabNames(RunDigest digest)
+        => ["Execution", RunFigures.ArtifactsTab(digest.Artifacts.Count), "Timeline"];
+
+    /// <summary>
+    /// Retry - the same run again, exactly as it was - or Run again, its template as it stands now: another attempt at
+    /// the same task, started by the service and opened at its own address, as the window opens the run it starts.
+    /// </summary>
+    private async Task AgainAsync(string act)
+    {
+        if (_busy)
+            return;
+        // Busy while it is started: a second press is not a second run.
+        _busy = true;
+        try
+        {
+            var (said, started) = await History.DoAsync((await Auth).User, Root, act, RunId, null, null, CancellationToken.None);
+            if (started is { } id)
+                Navigation.NavigateTo($"runs/{id}");
+            else
+                _said = said;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

@@ -2,13 +2,12 @@
 @using Enactive.Server.Components.Ui
 @using Enactive.Server.Runs
 @using Microsoft.AspNetCore.Components.Authorization
-@inject ServerHistory History
 @inject ServerStaging Staging
 
-@* The run's Artifacts tab (MainWindow.axaml 616-688): the files it wrote, each with Review - its text, in the viewer on
-   the screen - and, once the run has ended, the changes it proposed and the service kept (ServerStaging), amber down the
-   edge while they wait for a person, each with its diff, Apply and Reject. Not before the end: the store is still being
-   written, and the service refuses then anyway. Every action is the service's to decide; what it said is under the list. *@
+@* The run's Artifacts tab (MainWindow.axaml 616-688): the files it wrote, each with Review and Delete (WrittenFiles) -
+   and, once the run has ended, the changes it proposed and the service kept (ServerStaging), amber down the edge while
+   they wait for a person, each with its diff, Apply and Reject. Not before the end: the store is still being written,
+   and the service refuses then anyway. Every action is the service's to decide; what it said is under the list. *@
 
 <div class="artifacts">
     @if (Said is { Length: > 0 } said)
@@ -21,15 +20,7 @@
         <p class="hint">Nothing written yet.</p>
     }
 
-    <ul class="artifact-list">
-        @foreach (var path in Paths)
-        {
-            <li class="card artifact">
-                <span class="path">@path</span>
-                <button type="button" class="btn small" @onclick="() => Review(path)">Review</button>
-            </li>
-        }
-    </ul>
+    <WrittenFiles Root="@Root" Paths="Paths" />
 
     @if (_proposals.Count > 0)
     {
@@ -69,11 +60,6 @@
     }
 </div>
 
-@if (_viewing is { } viewing)
-{
-    <TextViewer Title="@viewing.Path" Text="@(viewing.Text ?? "")" Problem="@viewing.Problem" OnClose="() => _viewing = null" />
-}
-
 @code {
     [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
 
@@ -96,7 +82,6 @@
     private bool _busy;
     private string? _actionSaid;
     private string? _problem;
-    private (string Path, string? Text, string? Problem)? _viewing;
 
     private string? Said => _actionSaid ?? _problem;
 
@@ -124,12 +109,6 @@
         // says nothing; a set that cannot be read says why.
         _proposals = set is null ? [] : files;
         _problem = set is null && problem is not null && problem.StartsWith("These proposals cannot be read", StringComparison.Ordinal) ? problem : null;
-    }
-
-    private async Task Review(string path)
-    {
-        var (text, problem) = History.File((await Auth).User, Root, path);
-        _viewing = (path, text, problem);
     }
 
     private void ToggleDiff(Guid id)

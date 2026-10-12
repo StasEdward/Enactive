@@ -3,7 +3,6 @@ namespace Enactive.Server.Tests.Components;
 using Bunit;
 using Enactive.Core.Context;
 using Enactive.Core.History;
-using Enactive.Server.Components.Pages;
 using Enactive.Server.Components.Runs;
 using Enactive.Server.Runs;
 using Enactive.Workspace;
@@ -70,9 +69,20 @@ public sealed class ReadingPagesTests : ComponentHost
         Assert.Contains("project", Page<RunsScreen>("/", "digest the inbox"));
         Page<RunsScreen>($"/?ws={WorkspaceInfo.For(root).Id}", "digest the inbox");
 
-        var page = Page<PastRunPage>($"/history/run?ws={Uri.EscapeDataString(root)}&id={run.RunId}", "digest the inbox");
-        Assert.Contains("write_file digest.md", page);
-        Assert.Contains("digest.md", page);
+        var past = PastRun(root, run.RunId);
+        past.FindAll(".past-run [role=tab]").Single(t => t.TextContent.Trim() == "Timeline").Click();
+        Assert.Contains("write_file digest.md", past.Find(".past-run .run-view").TextContent);
+        past.FindAll(".past-run [role=tab]").Single(t => t.TextContent.Trim() == "Artifacts (1)").Click();
+        Assert.Equal("digest.md", past.Find(".past-run .artifact .path").TextContent.Trim());
+    }
+
+    /// <summary>The Runs screen on a past run (/history/{workspace}/{run}), for a Viewer, once it is drawn.</summary>
+    private IRenderedComponent<RunsScreen> PastRun(string root, Guid run)
+    {
+        SignIn("vera");
+        var screen = Render<RunsScreen>(p => p.Add(s => s.WorkspaceId, WorkspaceInfo.For(root).Id).Add(s => s.PastRunId, run));
+        screen.WaitForAssertion(() => Assert.Equal("digest the inbox", screen.Find(".past-run .task-title").TextContent.Trim()));
+        return screen;
     }
 
     /// <summary>
@@ -109,19 +119,33 @@ public sealed class ReadingPagesTests : ComponentHost
         Assert.DoesNotContain("digest the inbox", history.Markup);
     }
 
-    /// <summary>A file is shown as text, never as markup, and only from inside the workspace.</summary>
+    /// <summary>
+    /// A file is reviewed as text, never as markup, and only from inside the workspace - whatever path a run record names:
+    /// the service reads records for people who may not open that folder themselves.
+    /// </summary>
     [Fact]
     public async Task A_file_is_shown_as_text_from_inside_the_workspace_only()
     {
         var (root, _) = await KnownWorkspaceAsync();
         File.WriteAllText(Path.Combine(_folders, "secret.txt"), "the service's own");
+        var at = DateTimeOffset.Now;
+        var run = new RunRecord(Guid.NewGuid(), Guid.NewGuid(), "digest the inbox", "qwen", at, at.AddSeconds(5), "Completed",
+            [], ["digest.md", @"..\secret.txt"], []);
+        await RunStoreFactory.Create(WorkspaceInfo.For(root)).SaveAsync(run, CancellationToken.None);
+        var past = PastRun(root, run.RunId);
+        past.FindAll(".past-run [role=tab]").Single(t => t.TextContent.Trim() == "Artifacts (2)").Click();
 
-        var file = Page<FilePage>($"/file?ws={Uri.EscapeDataString(root)}&path=digest.md", "three mails");
-        Assert.Contains("three mails &lt;script&gt;", file);
-        Assert.DoesNotContain("<script>alert(1)", file);
+        Review(past, "digest.md");
+        Assert.Equal("three mails <script>alert(1)</script>", past.Find("[role=dialog] pre").TextContent);
+        Assert.DoesNotContain("<script>alert(1)", past.Find("[role=dialog]").InnerHtml);
+        past.FindAll("[role=dialog] button").Single(b => b.TextContent.Trim() == "Close").Click();
 
-        var outside = Page<FilePage>($"/file?ws={Uri.EscapeDataString(root)}&path={Uri.EscapeDataString("..\\secret.txt")}",
-            "not in this workspace");
-        Assert.DoesNotContain("the service's own", outside);
+        Review(past, @"..\secret.txt");
+        Assert.Contains("not in this workspace", past.Find("[role=dialog] .said").TextContent);
+        Assert.DoesNotContain("the service's own", past.Markup);
     }
+
+    private static void Review(IRenderedComponent<RunsScreen> past, string path)
+        => past.FindAll(".past-run .artifact").Single(a => a.QuerySelector(".path")!.TextContent.Trim() == path)
+            .QuerySelectorAll("button").Single(b => b.TextContent.Trim() == "Review").Click();
 }

@@ -1,0 +1,145 @@
+@using Enactive.Application
+@using Enactive.Server.Accounts
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerHistory History
+
+@* The files a run wrote, each on a card as the window's (MainWindow.axaml 626-644 for the live run, 1087-1125 for a past
+   one): the path, what became of it under it, Review - its text, in the viewer on the screen - and, for an Operator,
+   Delete, asked first in the window's words (RunHistoryService.DeleteFile, through ServerHistory) in a dialog. Delete,
+   never the window's Undo: the service keeps no copy of what a run overwrote to put back (the window's
+   DiskArtifactStore), and the question says what it does - delete the file as it is on disk now. Every action is the
+   service's to decide; a card it is done with offers nothing more, as the window's (ArtifactItemViewModel.CanAct). *@
+
+@if (Paths.Count == 0)
+{
+    @if (Empty is { Length: > 0 } empty)
+    {
+        <p class="hint">@empty</p>
+    }
+    return;
+}
+
+<ul class="artifact-list">
+    @foreach (var path in Paths)
+    {
+        var done = _done.Contains(path);
+        <li class="card artifact">
+            <div class="artifact-text">
+                <span class="path">@path</span>
+                @if (_status.GetValueOrDefault(path) is { Length: > 0 } status)
+                {
+                    <span class="hint artifact-status">@status</span>
+                }
+            </div>
+            <button type="button" class="btn small" disabled="@done" @onclick="() => ReviewAsync(path)">Review</button>
+            @if (_canOperate)
+            {
+                <button type="button" class="btn small destructive" disabled="@(done || _busy)" @onclick="() => AskDeleteAsync(path)">Delete</button>
+            }
+        </li>
+    }
+</ul>
+
+@if (_viewing is { } viewing)
+{
+    <TextViewer Title="@viewing.Path" Text="@(viewing.Text ?? "")" Problem="@viewing.Problem" OnClose="() => _viewing = null" />
+}
+
+@if (_asking is { } asking)
+{
+    <Dialog Title="@asking.Question.Headline" OnClose="Dismiss">
+        <ChildContent>
+            <p class="body">@asking.Question.Body</p>
+        </ChildContent>
+        <Actions>
+            <button type="button" class="btn destructive" disabled="@_busy" @onclick="DeleteAsync">@asking.Question.Confirm</button>
+            <button type="button" class="btn" disabled="@_busy" @onclick="Dismiss">@asking.Question.Cancel</button>
+        </Actions>
+    </Dialog>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The run's workspace, where its files are.</summary>
+    [Parameter, EditorRequired] public string Root { get; set; } = "";
+
+    /// <summary>The files the run wrote, in the order first written.</summary>
+    [Parameter] public IReadOnlyList<string> Paths { get; set; } = [];
+
+    /// <summary>What to say when there are none - or nothing, when the caller says it.</summary>
+    [Parameter] public string? Empty { get; set; }
+
+    private bool _canOperate;
+    private bool _busy;
+    private string? _root;
+
+    // What became of each file, and the ones there is nothing more to do to: this person's, as the window keeps them on
+    // its cards, and dropped when the run shown is another folder's.
+    private readonly Dictionary<string, string> _status = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _done = new(StringComparer.Ordinal);
+
+    private (string Path, string? Text, string? Problem)? _viewing;
+    private (string Path, Question Question)? _asking;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _canOperate = ServerAuth.RoleOf((await Auth).User) >= Role.Operator;
+        if (_root != Root)
+        {
+            _root = Root;
+            _status.Clear();
+            _done.Clear();
+        }
+    }
+
+    private async Task ReviewAsync(string path)
+    {
+        var (text, problem) = History.File((await Auth).User, Root, path);
+        _viewing = (path, text, problem);
+    }
+
+    private async Task AskDeleteAsync(string path)
+    {
+        var (question, problem) = await History.AskAsync((await Auth).User, Root, ServerHistory.Act.DeleteFile, Guid.Empty, path,
+            CancellationToken.None);
+        if (question is not null)
+        {
+            _asking = (path, question);
+            return;
+        }
+        // Nothing to ask about - the file is gone, or this person may not act - said on the file's card, as the window says
+        // "already gone" there; a file already gone is done with.
+        _status[path] = problem ?? "";
+        if (problem == ServerHistory.AlreadyGone)
+            _done.Add(path);
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_asking is not { } asking || _busy)
+            return;
+        // Busy while it is done: a second press is not a second delete.
+        _busy = true;
+        try
+        {
+            var (status, done) = History.DeleteFile((await Auth).User, Root, asking.Path);
+            _status[asking.Path] = status;
+            if (done)
+                _done.Add(asking.Path);
+        }
+        finally
+        {
+            _busy = false;
+            Dismiss();
+        }
+    }
+
+    private void Dismiss()
+    {
+        if (!_busy)
+            _asking = null;
+    }
+}
