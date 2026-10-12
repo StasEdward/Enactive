@@ -35,18 +35,31 @@ internal static class BackgroundRun
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // Composition can be cancelled before the recorder ever receives a run id.
-            var line = InboxLines.For("Cancelled", 0, 0, null);
-            await inbox.AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, line.Kind, title,
-                line.Summary, Guid.Empty, "unread", DateTimeOffset.UtcNow), CancellationToken.None);
+            await inbox.AppendAsync(CancelledBeforeItRan(workspace, title), CancellationToken.None);
         }
         catch (Exception ex)
         {
             // A folder another process is running in (WorkspaceLease), a model that is not there, a tool server that
             // would not start: said where the person will look for this run.
-            await inbox.AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, "error", title,
-                "Failed to start: " + ex.Message, Guid.Empty, "unread", DateTimeOffset.UtcNow), CancellationToken.None);
+            await inbox.AppendAsync(DidNotStart(workspace, title, ex.Message), CancellationToken.None);
         }
     }
+
+    // The Inbox items of a background run that never produced an event - here and in the service's own background runs
+    // (RunControl), which drain into a session rather than through this method: two copies of these words would have let
+    // a run that never started read one way from the window and another from the browser.
+
+    /// <summary>The item of a background run stopped before it had a run id: cancelled while composed, or in the line.</summary>
+    public static InboxItem CancelledBeforeItRan(WorkspaceInfo workspace, string title)
+    {
+        var cancelled = new BackgroundTally();
+        cancelled.Cancelled();
+        return cancelled.Item(workspace, title);
+    }
+
+    /// <summary>The item of a background run refused as it was composed, saying why.</summary>
+    public static InboxItem DidNotStart(WorkspaceInfo workspace, string title, string why)
+        => new(Guid.NewGuid(), workspace.Id, "error", title, "Failed to start: " + why, Guid.Empty, "unread", DateTimeOffset.UtcNow);
 
     /// <summary>
     /// Where a run that stopped at a question, now answered, carries on from: its last step boundary when it has one,

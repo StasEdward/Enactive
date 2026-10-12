@@ -192,6 +192,37 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         }
     }
 
+    /// <summary>
+    /// "Delete these N": the runs <paramref name="filter"/> shows, and only those - picked by the window's own rule
+    /// (RunHousekeeping.Where over the history as it is listed), never by a second one of the page's: two rules behind one
+    /// button could disagree about a row, and the row they disagreed on would be gone. The page asks first, with the count
+    /// (RunHistoryService.DeleteMany). What tells the person, and how many went.
+    /// </summary>
+    public async Task<(string Said, int Deleted)> DeleteShownAsync(
+        ClaimsPrincipal user, string root, RunFilter filter, DateTimeOffset now, CancellationToken ct)
+    {
+        if (Operating(user, root) is not { } known)
+            return (NotOperating(user), 0);
+        var who = users.Find(user.Identity?.Name ?? "")!.Name;
+
+        var list = await _history.LoadAsync(known.RootPath, ct);
+        if (list.Problem is { } unreadable)
+            return (unreadable, 0);
+        var shown = RunHousekeeping.Where(list.Runs, filter, now);
+        if (shown.Count == 0)
+            return ("There are no runs to delete.", 0);
+
+        var refused = await _history.DeleteAsync(known.RootPath, shown, ct);
+        // Some could not be deleted, and the bulk delete does not say which: the history is read again, so only the runs
+        // really gone are audited as deleted - an audit naming a run that is still there is a record that lies.
+        var gone = refused is null
+            ? shown
+            : shown.ExceptBy((await _history.LoadAsync(known.RootPath, ct)).Runs.Select(r => r.RunId), r => r.RunId).ToList();
+        foreach (var run in gone)
+            users.Audit(who, "run deleted", $"{known.RootPath}: {RunTitle.For(run)}");
+        return (refused ?? $"{gone.Count} run{(gone.Count == 1 ? "" : "s")} deleted; the files they wrote are where they were.", gone.Count);
+    }
+
     private async Task<Core.History.RunRecord?> RecordAsync(string root, Guid id, CancellationToken ct)
     {
         var list = await _history.LoadAsync(root, ct);

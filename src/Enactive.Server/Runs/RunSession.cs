@@ -73,6 +73,12 @@ internal sealed class RunSession
     /// <summary>Why the run stopped without ending properly - an error the engine threw - or null.</summary>
     public string? Failure { get; private set; }
 
+    /// <summary>
+    /// The run counted as the window counts a background run for its Inbox line (BackgroundTally): the service's background
+    /// runs drain here, not through the window's runner, and are to read the same in the Inbox. Read once the run has ended.
+    /// </summary>
+    public Agents.BackgroundTally Tally { get; } = new();
+
     /// <summary>A test's: called as the run ends, its watchers taken and not yet told - where a page subscribing lands.</summary>
     internal Action? Ending { get; set; }
 
@@ -134,11 +140,13 @@ internal sealed class RunSession
         {
             lock (_gate) _feed.Stopped();
             Failure = "Cancelled.";
+            Tally.Cancelled();
         }
         catch (Exception ex)
         {
             lock (_gate) _feed.Stopped();
             Failure = ex.Message;
+            Tally.Failed(ex.Message);
         }
         finally
         {
@@ -176,6 +184,7 @@ internal sealed class RunSession
             _feed.Apply(ev);
             _activity.Apply(ev);
             _panel.Apply(ev);
+            Tally.Apply(ev);
 
             _tail.Enqueue(entry);
             if (_tail.Count > _tailCapacity)

@@ -57,12 +57,19 @@ public sealed class RunControlTests : IDisposable
         /// <summary>Refused as the composer refuses a run - the workspace held by another process - before any event.</summary>
         public string? Refuse { get; set; }
         public List<string> Answers { get; } = new();
+
+        /// <summary>Who each run was given to answer its questions, by type - as the run was composed with it.</summary>
+        public List<Type> Handlers { get; } = new();
+
+        /// <summary>How the engine says the run ended once released; null, Completed with no payload as before.</summary>
+        public RunOutcomeKind? EndWith { get; set; }
         public string? Problem => null;
         public SessionApprovals Session { get; } = new();
         public ApprovalStore Approvals { get; } = approvals;
 
         public async Task ExecuteAsync(ServerRun run, IDecisionHandler decisions, CancellationToken ct)
         {
+            lock (Handlers) Handlers.Add(decisions.GetType());
             if (Refuse is { } refusal)
                 throw new InvalidOperationException(refusal);
             var events = Channel.CreateUnbounded<WorkEvent>();
@@ -81,7 +88,10 @@ public sealed class RunControlTests : IDisposable
             var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (_releases) _releases.Add(release);
             await release.Task.WaitAsync(ct);
-            events.Writer.TryWrite(Ev(EventKind.TaskCompleted, "Completed"));
+            events.Writer.TryWrite(EndWith is { } ending
+                ? new(Guid.NewGuid(), Guid.NewGuid(), runId, DateTimeOffset.UtcNow, EventKind.TaskFailed, ending.ToString(),
+                    WorkEventPayload.OutcomePayload(ending, "Approve write_file"))
+                : Ev(EventKind.TaskCompleted, "Completed"));
             events.Writer.Complete();
             await drained;
         }
@@ -446,8 +456,10 @@ public sealed class RunControlTests : IDisposable
     }
 
     private Enactive.Core.History.RunRecord Recorded(string request, params string[] artifacts)
+        => RecordedAt(DateTimeOffset.Now, request, artifacts);
+
+    private Enactive.Core.History.RunRecord RecordedAt(DateTimeOffset at, string request, params string[] artifacts)
     {
-        var at = DateTimeOffset.Now;
         var record = new Enactive.Core.History.RunRecord(Guid.NewGuid(), Guid.NewGuid(), request, "qwen", at, at.AddSeconds(3), "Completed",
             [new Enactive.Core.History.RunEventRecord(at, nameof(EventKind.IntentReceived), "Intent",
                 Payload: WorkEventPayload.RequestPayload(request))], artifacts, []);
@@ -742,6 +754,152 @@ public sealed class RunControlTests : IDisposable
         Assert.Null(carried);
         Assert.Contains("is not under", said);
         Assert.NotNull(Assert.Single(await inbox.ListAsync(As("bob"), CancellationToken.None)).Waiting);
+    }
+
+    // ── in the background (the window's "Run in background") ───────────────
+
+    private async Task<IReadOnlyList<Enactive.Core.Inbox.InboxItem>> InboxItems()
+        => await Enactive.Workspace.InboxStoreFactory.Create(Enactive.Core.Context.WorkspaceInfo.For(_workspace))
+            .LoadAllAsync(CancellationToken.None);
+
+    /// <summary>
+    /// Nobody is watching a background run, so nobody is asked: its question is parked for the inbox at once (as the
+    /// window's BackgroundRun parks it) rather than waiting on a page nobody has open. It is still a run of the service -
+    /// listed, with its session for a page to open - and its start is audited as one in the background.
+    /// </summary>
+    [Fact]
+    public async Task A_background_run_asks_nobody_and_parks_its_question()
+    {
+        _engine.Ask = true;
+
+        var (run, refusal) = _control.StartBackground(As("alice"), _workspace, "write the digest");
+
+        Assert.Null(refusal);
+        Assert.True(run!.Background);
+        Assert.Contains(_control.List(As("vera")), r => r.Id == run.Id);
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(typeof(Enactive.Agents.ParkingDecisionHandler), Assert.Single(_engine.Handlers));
+        Assert.Empty(_engine.Answers);
+        Assert.Null(run.Questions.Pending);
+        Assert.Contains(_users.AuditTrail(), e => e is { Account: "alice", Action: "run started in the background" });
+    }
+
+    /// <summary>
+    /// However it ends, a background run leaves exactly one inbox item - the only place its end can be read. Ending at a
+    /// question, it must not leave two: the one every browser run that stops at a question leaves, and its own.
+    /// </summary>
+    [Fact]
+    public async Task A_background_run_ends_in_one_inbox_item()
+    {
+        _engine.EndWith = RunOutcomeKind.NeedsUser;
+
+        var run = _control.StartBackground(As("alice"), _workspace, "write the digest").Run!;
+        await _engine.ReleaseNextAsync();
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var item = Assert.Single(await InboxItems());
+        Assert.Equal(("decision", RunState.Title(run), run.Session.RunId), (item.Kind, item.Title, (Guid?)item.RunId));
+        Assert.StartsWith("Waiting for your decision", item.Summary);
+    }
+
+    /// <summary>A background run that finished says how, in the same words the window's background runs use (InboxLines).</summary>
+    [Fact]
+    public async Task A_finished_background_run_says_so_in_the_inbox()
+    {
+        var run = _control.StartBackground(As("alice"), _workspace, "write the digest").Run!;
+        await _engine.ReleaseNextAsync();
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var item = Assert.Single(await InboxItems());
+        Assert.Equal(("result", "Completed · 0 artifact(s)"), (item.Kind, item.Summary));
+    }
+
+    /// <summary>One that never started - refused as it was composed, cancelled in the line - says so where it is looked for.</summary>
+    [Fact]
+    public async Task A_background_run_that_never_started_says_so_in_the_inbox()
+    {
+        _engine.Refuse = "The workspace is in use by another process.";
+        var refused = _control.StartBackground(As("alice"), _workspace, "write the digest").Run!;
+        await refused.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+        var item = Assert.Single(await InboxItems());
+        Assert.Equal(("error", "Failed to start: The workspace is in use by another process."), (item.Kind, item.Summary));
+
+        _engine.Refuse = null;
+        var first = _control.Start(As("bob"), _workspace, "write the digest").Run!;
+        var waiting = _control.StartBackground(As("alice"), _workspace, "write the index").Run!;
+        await WaitUntil(() => waiting.Waiting is not null);
+        Assert.Null(_control.Cancel(As("alice"), waiting.Id));
+        await waiting.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var cancelled = (await InboxItems()).Single(i => i.Id != item.Id);
+        Assert.Equal("error", cancelled.Kind);
+        Assert.StartsWith("Cancelled", cancelled.Summary);
+        await _engine.ReleaseNextAsync();
+        await first.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>A browser run stopped at a question nobody answered leaves the question in the inbox, where it is answered.</summary>
+    [Fact]
+    public async Task A_run_from_the_browser_stopped_at_a_question_leaves_it_in_the_inbox()
+    {
+        _engine.EndWith = RunOutcomeKind.NeedsUser;
+
+        var run = _control.Start(As("alice"), _workspace, "write the digest").Run!;
+        await _engine.ReleaseNextAsync();
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var item = Assert.Single(await InboxItems());
+        Assert.Equal(("decision", "Waiting for your decision"), (item.Kind, item.Summary));
+    }
+
+    [Fact]
+    public void A_viewer_cannot_start_in_the_background()
+    {
+        var (run, refusal) = _control.StartBackground(As("vera"), _workspace, "write the digest");
+
+        Assert.Null(run);
+        Assert.Contains("role does not include", refusal);
+        Assert.Empty(_control.List(As("vera")));
+    }
+
+    // ── "Delete these N": the runs a filter shows ──────────────────────────
+
+    /// <summary>
+    /// The runs the filter shows and no others - chosen by the window's own rule (RunHousekeeping), each audited by
+    /// name: "these" is where the person's and the program's must agree.
+    /// </summary>
+    [Fact]
+    public async Task Delete_these_forgets_exactly_the_runs_the_filter_shows()
+    {
+        var now = DateTimeOffset.Now;
+        var old = RecordedAt(now.AddDays(-10), "last month's digest");
+        var yesterday = RecordedAt(now.AddDays(-1), "yesterday's digest");
+        var today = Recorded("today's digest");
+        var history = HistoryOf();
+
+        var (said, deleted) = await history.DeleteShownAsync(As("alice"), _workspace, RunFilter.OlderThanAWeek, now, CancellationToken.None);
+
+        Assert.Equal(1, deleted);
+        Assert.Contains("1 run", said);
+        var left = (await history.ListAsync(As("alice"), _workspace, CancellationToken.None)).List!.Runs.Select(r => r.RunId);
+        Assert.Equal(new[] { yesterday.RunId, today.RunId }.Order(), left.Order());
+        var audited = Assert.Single(_users.AuditTrail(), e => e.Action == "run deleted");
+        Assert.Equal("alice", audited.Account);
+        Assert.Contains("last month's digest", audited.Detail);
+    }
+
+    [Fact]
+    public async Task A_viewer_cannot_delete_runs()
+    {
+        RecordedAt(DateTimeOffset.Now.AddDays(-10), "last month's digest");
+        var history = HistoryOf();
+
+        var (said, deleted) = await history.DeleteShownAsync(As("vera"), _workspace, RunFilter.All, DateTimeOffset.Now, CancellationToken.None);
+
+        Assert.Equal(0, deleted);
+        Assert.Contains("role does not include", said);
+        Assert.Single((await history.ListAsync(As("vera"), _workspace, CancellationToken.None)).List!.Runs);
+        Assert.DoesNotContain(_users.AuditTrail(), e => e.Action == "run deleted");
     }
 }
 

@@ -46,6 +46,12 @@ internal sealed class ServerRun
 
     /// <summary>The schedule that started it, when one did: a run nobody is watching, reported to the inbox.</summary>
     public DueRun? Scheduled { get; init; }
+
+    /// <summary>
+    /// Started to run in the background (the window's "Run in background"): nobody is asked its questions - each is parked
+    /// for the inbox at once and the run stops at it - and its end, however it comes, is one item in the inbox.
+    /// </summary>
+    public bool Background { get; init; }
     public string Owner { get; }
     public string Workspace { get; }
     public string Prompt { get; }
@@ -115,6 +121,12 @@ internal interface IRunControl
     StartResult Start(ClaimsPrincipal user, string workspace, string prompt);
 
     /// <summary>
+    /// A run nobody will watch, as the window's "Run in background" starts one (BackgroundRun): in the same line and the
+    /// same list as every run, its questions parked for the inbox rather than asked, and one inbox item when it ends.
+    /// </summary>
+    StartResult StartBackground(ClaimsPrincipal user, string workspace, string prompt);
+
+    /// <summary>
     /// Carries on an interrupted run from its last step boundary (crash recovery): its owner or any Operator, after
     /// being told what runs again (RunRecovery). Never on its own - a person decides.
     /// </summary>
@@ -160,6 +172,9 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
 
     public StartResult Start(ClaimsPrincipal user, string workspace, string prompt)
         => StartRun(user, workspace, prompt, null, null, "run started");
+
+    public StartResult StartBackground(ClaimsPrincipal user, string workspace, string prompt)
+        => StartRun(user, workspace, prompt, null, null, "run started in the background", background: true);
 
     public StartResult StartScheduled(DueRun due)
     {
@@ -217,7 +232,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
     }
 
     private StartResult StartRun(ClaimsPrincipal user, string workspace, string prompt, Guid? taskId, RunCheckpoint? resume, string action,
-        Core.Templates.ResolvedTaskSpec? spec = null)
+        Core.Templates.ResolvedTaskSpec? spec = null, bool background = false)
     {
         if (string.IsNullOrWhiteSpace(prompt) && Allowed(user, Role.Operator) is not null)
             return new(null, "Say what the run is to do.");
@@ -229,7 +244,10 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         {
             if (_stopping)
                 return new(null, "The service is stopping; start the run again when it is back.");
-            run = new ServerRun(account!.Name, root, prompt.Trim(), queue.Enqueue(root), taskId, resume, spec, executor.ReachOf);
+            run = new ServerRun(account!.Name, root, prompt.Trim(), queue.Enqueue(root), taskId, resume, spec, executor.ReachOf)
+            {
+                Background = background
+            };
             _runs.Add(run);
             var finished = _runs.Where(r => r.Ended.IsCompleted).ToList();
             foreach (var old in finished.Take(Math.Max(0, finished.Count - KeepFinished)))
@@ -273,9 +291,11 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
             run.Notify();
             // The router asks through this run's questions, and remembers what the owner allows as the owner.
             // A schedule's run has nobody to ask: its questions are refused, as the console's are (UnattendedDecisionHandler),
-            // and what was allowed for unwatched runs answers before that. Everybody else's are asked in the browser.
-            IDecisionHandler decisions = run.Scheduled is not null
-                ? new Agents.UnattendedDecisionHandler()
+            // and what was allowed for unwatched runs answers before that. A background run's person will be back: its
+            // question is parked for the inbox at once, as the window's background run parks it - asked in the browser, it
+            // would hold its slot and its folder for a page nobody has open. Everybody else's are asked in the browser.
+            IDecisionHandler decisions = run.Scheduled is not null ? new Agents.UnattendedDecisionHandler()
+                : run.Background ? new Agents.ParkingDecisionHandler()
                 : new DecisionRouter(run.Questions, executor.Session, executor.Approvals, owner, parkQuestionsAfter);
             await executor.ExecuteAsync(run, decisions, ct);
         }
@@ -299,11 +319,66 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
             // warning in the log said it did not run. One that ran files its own item (EngineExecutor).
             if (run.Scheduled is { } due && run.Refused is { } why)
                 await ScheduleDidNotRunAsync(run.Workspace, due, why);
+            await LeaveInTheInboxAsync(run, running);
             run.Ticket.Dispose();
             // The schedule's claim and its workspace's lease, held from the tick that took it (DueSchedules).
             run.Scheduled?.Hold.Dispose();
             users.Audit(owner, "run ended", run.Workspace + ": " + (run.Refused ?? run.Session.Failure ?? "finished"));
             run.End();
+        }
+    }
+
+    /// <summary>
+    /// What a run leaves in its workspace's inbox as it ends - all but a schedule's, which files its own (EngineExecutor,
+    /// <see cref="ScheduleDidNotRunAsync"/>). Here, where every ending passes, rather than in the executor: a background
+    /// run that never got to the executor - cancelled in the line, refused as it was composed - must say so too.
+    /// </summary>
+    /// <param name="ran">Its turn came: false for one cancelled while it waited in the line.</param>
+    private async Task LeaveInTheInboxAsync(ServerRun run, bool ran)
+    {
+        if (run.Scheduled is not null)
+            return;
+        var workspace = WorkspaceInfo.For(run.Workspace);
+        var title = RunState.Title(run);
+        InboxItem item;
+        if (run.Background)
+        {
+            // Exactly one item, however it ended: nobody watched it, so the inbox is the only place its end - even an end
+            // before it began - can be read. In the window's words (BackgroundRun, BackgroundTally), so a run sent to the
+            // background reads the same from the browser as from the desktop.
+            var tally = run.Session.Tally;
+            if (!ran && run.Cancellation.IsCancellationRequested)
+                item = BackgroundRun.CancelledBeforeItRan(workspace, title);
+            else if (run.Refused is { } why)
+                item = BackgroundRun.DidNotStart(workspace, title, why);
+            else
+            {
+                // Cancelled as it was composed: no event was drained to say so.
+                if (run.Cancellation.IsCancellationRequested && !tally.Ended)
+                    tally.Cancelled();
+                item = tally.Item(workspace, title);
+            }
+        }
+        else if (run.Session.Outcome == RunOutcomeKind.NeedsUser)
+        {
+            // Stopped at a question nobody answered in time: the question is in the ledger, and the inbox is where it is
+            // found and answered - as a background run's is (InboxLines), so both read the same.
+            var line = InboxLines.For(nameof(RunOutcomeKind.NeedsUser), 0, 0, null);
+            item = new InboxItem(Guid.NewGuid(), workspace.Id, line.Kind, title, line.Summary, run.Session.RunId ?? Guid.Empty,
+                "unread", DateTimeOffset.UtcNow);
+        }
+        else
+            return;
+
+        try
+        {
+            await InboxStoreFactory.Create(workspace).AppendAsync(item, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // Every store the inbox can be (a file, SQLite, MySQL) fails in its own way, and this runs in the run's last
+            // moments: a throw here would keep the run from ending and its slot and folder from being let go.
+            log.LogWarning("The inbox of {Workspace} could not be told how a run of {Owner} ended: {Why}", run.Workspace, run.Owner, ex.Message);
         }
     }
 
@@ -438,6 +513,8 @@ internal sealed class EngineExecutor(ServerEngine engine, ServerStaging staging)
 
         // A run from the browser (IntentSource.Web): attended, with the shell when the folder's level allows it, and
         // the person who started it named - whose remembered approvals answer for it (RunComposer, ApprovalStore rule 5).
+        // A background run from the browser too: a signed-in person started it and will answer its parked question; only
+        // its decision handler differs (RunControl.LifeAsync).
         var scheduled = run.Scheduled;
         // A folder set to stage keeps a browser run's proposals on disk, for whoever applies them later (ServerStaging).
         // Not a scheduled run's - nobody watches it (RunComposer refuses that) - nor a resumed one, which never stages.
@@ -475,15 +552,8 @@ internal sealed class EngineExecutor(ServerEngine engine, ServerStaging staging)
                 scheduled.Schedule.Name, record, DateTimeOffset.UtcNow), CancellationToken.None);
             return;
         }
-
-        // Stopped at a question nobody answered in time: the question is in the ledger, and the inbox is where it is
-        // found and answered - as a background run's is (InboxLines), so both read the same.
-        if (run.Session.Outcome == RunOutcomeKind.NeedsUser)
-        {
-            var line = InboxLines.For(nameof(RunOutcomeKind.NeedsUser), 0, 0, null);
-            await InboxStoreFactory.Create(workspace).AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, line.Kind,
-                RunState.Title(run), line.Summary, run.Session.RunId ?? Guid.Empty, "unread", DateTimeOffset.UtcNow), CancellationToken.None);
-        }
+        // Every other run's inbox item - a background run's end, a question nobody answered in time - is filed as the run
+        // ends (RunControl.LeaveInTheInboxAsync), where an ending that never reached this method passes too.
     }
 }
 
