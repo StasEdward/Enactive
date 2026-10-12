@@ -170,10 +170,10 @@ public sealed class WorkspaceColumnTests : ComponentHost
         // Shown, not brought back: reading a history that is not there made its store's folders - and so the workspace's.
         Assert.False(Directory.Exists(gone));
 
-        // The start form names the workspace the column shows, and the run is refused in the launcher's words.
-        screen.Find("textarea").Change("write the digest");
-        screen.Find("form.start").Submit();
-        screen.WaitForAssertion(() => Assert.Contains("No such folder:", screen.Find(".start .said").TextContent));
+        // The command bar runs in the workspace the column shows, and the run is refused in the launcher's words.
+        screen.Find(".command-bar textarea").Input("write the digest");
+        screen.FindAll(".command-bar button").Single(b => b.TextContent.Trim() == "Run").Click();
+        screen.WaitForAssertion(() => Assert.Contains("No such folder: " + gone, screen.Find(".command-bar .said").TextContent));
         Assert.Empty(Services.GetRequiredService<IRunControl>().List(
             Enactive.Server.Accounts.ServerAuth.PrincipalOf(Users.Find("alice")!)));
     }

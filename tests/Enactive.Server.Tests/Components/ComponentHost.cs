@@ -46,10 +46,16 @@ public abstract class ComponentHost : BunitContext
         // recorded, for a test to check they were made, and answer nothing.
         DialogScript = JSInterop.SetupModule("./Components/Ui/Dialog.razor.js");
         DialogScript.Mode = JSRuntimeMode.Loose;
+        // The command bar's keys (Runs/CommandBar.razor.js) likewise: Enter, Ctrl+Enter and Ctrl+K are the browser's.
+        CommandBarScript = JSInterop.SetupModule("./Components/Runs/CommandBar.razor.js");
+        CommandBarScript.Mode = JSRuntimeMode.Loose;
     }
 
     /// <summary>The dialog's script, as bUnit stands in for it: what was called on it.</summary>
     internal BunitJSModuleInterop DialogScript { get; }
+
+    /// <summary>The command bar's script, as bUnit stands in for it.</summary>
+    internal BunitJSModuleInterop CommandBarScript { get; }
 
     /// <summary>The service's accounts, the real store.</summary>
     internal UserStore Users { get; }

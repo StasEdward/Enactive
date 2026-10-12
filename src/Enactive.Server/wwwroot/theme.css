@@ -381,6 +381,32 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .row-icon.destructive:hover { color: var(--danger); }
 .row-icon:disabled { color: var(--text-faint); cursor: default; }
 
+/* ── The command bar (Runs/CommandBar.razor; MainWindow.axaml 459-545): the chips and the keys hint over the 88 px box,
+   then Run 86 / Stop 64 with Run in background under them, a line, and the worker 118 with Stage changes over the level's
+   label and its slider, 252 wide ─────────────────────────────────────────────────────────────────────────────────── */
+
+.command-bar { display: grid; gap: 8px; margin: 0 0 16px; }
+.bar-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.verbs { display: flex; flex-wrap: wrap; gap: 6px; }
+.btn.chip { font-size: 11px; padding: 2px 8px; }
+.bar-top .hint { margin-left: 8px; }
+.bar-row { display: flex; align-items: center; }
+.bar-input { flex: 1; min-width: 0; height: 88px; resize: none; background: var(--input-fill); }
+.bar-input:hover:not(:disabled) { background: var(--input-fill-hover); }
+.run-buttons { flex: none; width: 156px; margin-left: 8px; display: grid; gap: 6px; }
+.run-pair { display: flex; gap: 6px; }
+.run-pair .run { width: 86px; }
+.run-pair .stop { width: 64px; }
+.bar-divider { flex: none; width: 1px; align-self: stretch; margin: 2px 12px; background: var(--border); }
+.run-settings { flex: none; width: 252px; display: grid; gap: 4px; }
+.settings-row { display: flex; align-items: center; }
+.settings-row .worker { width: 118px; font-size: 11px; }
+.settings-row .stage { margin-left: 10px; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; }
+/* The label is ON the slider: the tier's colour (--tone from Looks.Autonomy), close above the track. */
+.autonomy-label { margin-top: 2px; font-size: 11px; color: var(--tone); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-settings input[type="range"] { width: 100%; margin: 0; accent-color: var(--tone); }
+.command-bar .said { margin: 0; font-size: 12px; }
+
 /* ── Dialogs (Ui/Dialog.razor): over a scrim, on the darkest surface, buttons at the bottom right ────────────────── */
 
 .dialog-scrim { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center;

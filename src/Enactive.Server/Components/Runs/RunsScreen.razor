@@ -5,41 +5,21 @@
 @inject IRunControl Runs
 @inject ServerHistory History
 @inject WorkspaceIds Ids
-@inject NavigationManager Navigation
 
 <PageTitle>Enactive</PageTitle>
 
-@* The Runs screen, as the main window: the workspace and runs column on the left, the run on the right. It replaces the
-   old pages piece by piece and leaves no gap meanwhile: until the command bar and the live run are built, the main area
-   holds what the start page held - its start form and its list of runs - unchanged, so starting and finding a run keep
-   working while the rest is rebuilt. *@
+@* The Runs screen, as the main window: the workspace and runs column on the left, the command bar and the run on the
+   right. It replaces the old pages piece by piece and leaves no gap meanwhile: until the live run is built (Task 12), the
+   main area keeps the old start page's list of runs under the bar - a run waiting on a question is found there by its
+   title, which the column's RUNNING card does not link. *@
 
 <div class="runs-screen">
     <WorkspaceColumn WorkspaceId="_wanted" Said="@Said" />
 
     <section class="runs-main">
-        @* Live, like every page, and drawn only once its connection is up (App.razor): a live page drawn before that showed
-           a form whose text was lost - the run was started with an empty folder, or the form went off as a GET (found by
-           tests/server-e2e). The start form is submitted over the connection; method="post" stays so that a form the
-           browser ever sent itself would not put the task in an address. *@
-        <AuthorizeView Policy="Operator">
-            <EditForm Model="_input" method="post" OnValidSubmit="StartAsync" class="start" Context="form">
-                <label>Workspace
-                    <InputSelect @bind-Value="_input.Workspace">
-                        @foreach (var workspace in _workspaces)
-                        {
-                            <option value="@workspace.RootPath">@workspace.Name - @workspace.RootPath</option>
-                        }
-                    </InputSelect>
-                </label>
-                <label>Task <InputTextArea @bind-Value="_input.Task" rows="3" /></label>
-                <button type="submit">Run</button>
-                @if (_said is not null)
-                {
-                    <p class="said" role="alert">@_said</p>
-                }
-            </EditForm>
-        </AuthorizeView>
+        @* The window's command bar, on the workspace the column shows: Run starts there and opens the run's page, and the
+           settings beside it are that workspace's. *@
+        <CommandBar Workspace="_shown" />
 
         @if (_shown is { } shown)
         {
@@ -82,18 +62,8 @@
     [SupplyParameterFromQuery] private string? Said { get; set; }
 
     private Guid? _wanted;
-    private readonly StartForm _input = new();
-    private string? _said;
     private IReadOnlyList<ServerRun> _runs = [];
-    private IReadOnlyList<Enactive.Workspace.WorkspaceEntry> _workspaces = [];
-    private string? _shownWorkspace;
     private Enactive.Workspace.WorkspaceEntry? _shown;
-
-    private sealed class StartForm
-    {
-        public string Workspace { get; set; } = "";
-        public string Task { get; set; } = "";
-    }
 
     // Read per address, not once: see Pages/_Imports.razor.
     protected override async Task OnParametersSetAsync()
@@ -103,24 +73,8 @@
         _wanted = Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null;
 
         _runs = Runs.List(user);
-        // The folders the service knows; a new one is added by browsing its roots (Add folder…), not typed.
-        _workspaces = History.Workspaces(user);
-        // The start form runs in the workspace the column shows, as the window's command bar does - set again when the
-        // column moves to another one, and left alone while it stays, so a folder picked in the form is not taken back.
-        _shown = WorkspaceColumnState.Choose(_workspaces, _wanted, Ids);
-        var shown = _shown?.RootPath ?? _workspaces.FirstOrDefault()?.RootPath ?? "";
-        if (shown != _shownWorkspace)
-            (_input.Workspace, _shownWorkspace) = (shown, shown);
-    }
-
-    private async Task StartAsync()
-    {
-        var (run, refusal) = Runs.Start((await Auth).User, _input.Workspace, _input.Task);
-        if (run is null)
-        {
-            _said = refusal;
-            return;
-        }
-        Navigation.NavigateTo($"runs/{run.Id}");
+        // The command bar runs in the workspace the column shows, as the window's does; none when the address names one
+        // the service does not know - a run is never started in another folder than the one on screen.
+        _shown = WorkspaceColumnState.Choose(History.Workspaces(user), _wanted, Ids);
     }
 }
