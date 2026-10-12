@@ -39,7 +39,7 @@ internal sealed partial class SettingsWindow : Window
     {
         // Remote access is this window's own pane, over the copy the shared settings edit (IHostSettingsPane).
         RemoteSettingsViewModel remote = null!;
-        var viewModel = new SettingsViewModel(settings, onSaved, workspaceRoot, toolNames, StartupEntry.System,
+        var viewModel = new SettingsViewModel(settings, onSaved, StartupEntry.System, editsFilesHere: true, workspaceRoot, toolNames,
             hostPane: working => remote = new RemoteSettingsViewModel(working)
             {
                 RemoteCheck = remoteCheck,

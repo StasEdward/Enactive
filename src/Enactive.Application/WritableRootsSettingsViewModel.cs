@@ -92,6 +92,10 @@ internal sealed partial class SettingsViewModel
     /// </summary>
     private void RevokeWritableRoot(GrantedTo entry, string folder)
     {
+        // Not for a host whose grants are not changed from its settings (editsFilesHere): no page reaches the file.
+        if (!_editsFilesHere)
+            return;
+
         if (entry.IsOrphan)
             _writableRoots.Forget(entry.Key);
         else

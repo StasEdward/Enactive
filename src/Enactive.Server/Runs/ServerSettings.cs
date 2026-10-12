@@ -70,10 +70,13 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
                     throw new InvalidOperationException(said.StartsWith(NotSaved, StringComparison.Ordinal) ? said[NotSaved.Length..] : said);
                 saved(said);
             },
+            // The service has no start-up to change (Windows starts it) and no Remote access (it pairs with no gateway).
+            startup: NoStartupEntry.Instance,
+            // Its templates are changed through ServerLibrary as the person, and its grants not from a page at all: the
+            // view model's own writes to them are off, whatever a section might wire later.
+            editsFilesHere: false,
             workspaceRoot: templatesWorkspace,
             toolNames: engine.ToolNames(),
-            // The service has no start-up to change (Windows starts it) and no Remote access (it pairs with no gateway).
-            startup: null,
             hostPane: null,
             providerCalls: new AsTheAdmin(this, user),
             // Its engine's grants and its own workspaces: the files the service's runs read.

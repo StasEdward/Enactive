@@ -134,6 +134,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private readonly AppSettings _working;
     private readonly Action<AppSettings> _onSaved;
     private readonly IStartupEntry _startup;
+    private readonly bool _editsFilesHere;
 
     private string _numCtxText;
     private string _globalInstructions;
@@ -286,8 +287,16 @@ internal sealed partial class SettingsViewModel : ObservableObject
     /// <param name="startup">
     /// Where "start with Windows" is read and changed: the window passes the real Run key, and anything
     /// else that builds this view model passes its own, so the registry of the machine it runs on is
-    /// left alone. Null is a host that has no start-up of its own to offer - the service, which Windows
-    /// starts as a service: nothing is read or changed, and nothing is said about it either.
+    /// left alone. <see cref="NoStartupEntry"/> is a host that has no start-up of its own to offer - the
+    /// service, which Windows starts as a service: nothing is read or changed, and nothing is said about it
+    /// either. Required: with a default, a desktop caller that forgot it lost start-up without a word.
+    /// </param>
+    /// <param name="editsFilesHere">
+    /// Whether the Templates and Writable folders panes write their files themselves - the window's, where a
+    /// template is saved or deleted and a grant revoked at once. False for a host whose pages change those
+    /// elsewhere, as the person and after its own checks (the service: templates through its library, grants not
+    /// at all): its rows' Add, Edit, Duplicate, Remove and Revoke then do nothing, so no control a page might wire
+    /// later can write past those checks. Required, for the same reason as <paramref name="startup"/>.
     /// </param>
     /// <param name="hostPane">
     /// Makes the pane only this host has, over the working copy this edits - the window's Remote access.
@@ -303,15 +312,16 @@ internal sealed partial class SettingsViewModel : ObservableObject
     /// host whose engine keeps its workspaces elsewhere names them, and a test names files of its own.
     /// </param>
     public SettingsViewModel(
-        AppSettings settings, Action<AppSettings> onSaved,
+        AppSettings settings, Action<AppSettings> onSaved, IStartupEntry startup, bool editsFilesHere,
         string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null,
-        IStartupEntry? startup = null, Func<AppSettings, IHostSettingsPane>? hostPane = null,
+        Func<AppSettings, IHostSettingsPane>? hostPane = null,
         IProviderCalls? providerCalls = null,
         WritableRoots? writableRoots = null, Func<IEnumerable<string>>? knownWorkspaces = null)
     {
         _working = settings.Clone();
         _onSaved = onSaved;
-        _startup = startup ?? NoStartupEntry.Instance;
+        _startup = startup;
+        _editsFilesHere = editsFilesHere;
         ProviderCalls = providerCalls ?? DirectProviderCalls.Instance;
         ToolNames = toolNames ?? Array.Empty<string>();
         InitializeMcp();
@@ -346,7 +356,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
         // Read from the system, not from settings.json: the Run key is the truth, and a copy would
         // drift the first time the user removed it in Task Manager.
         _startupLoad = LoadStartupAsync();
-        _startupNote = _startup.Supported || startup is null
+        _startupNote = _startup.Supported || _startup is NoStartupEntry
             ? string.Empty
             : "Only Windows starts programs this way; this desktop does not.";
 
@@ -637,7 +647,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
         _working.Bindings.ExecuteHeavy = FromSelection(ExecuteHeavy);
 
         // Validate, write, and only then change start-up: the order is SettingsSave's, where it is
-        // tested. This view model cannot be built without Avalonia, so the steps live apart from it.
+        // tested on their own, apart from this view model and whatever host it is in.
         var result = await SettingsSave.RunAsync(_working, _onSaved, _startup, RunAtStartup);
 
         if (result.Note.Length > 0)

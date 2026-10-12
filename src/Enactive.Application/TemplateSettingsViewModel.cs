@@ -148,7 +148,8 @@ internal sealed partial class SettingsViewModel
 
     private void Edit(TaskTemplate draft, bool isNew)
     {
-        if (_templates is null)
+        // Not for a host whose templates are changed elsewhere, as the person (editsFilesHere).
+        if (_templates is null || !_editsFilesHere)
             return;
 
         var scopes = _templates.WorkspaceFolder is null
@@ -164,7 +165,7 @@ internal sealed partial class SettingsViewModel
 
     private async Task RemoveTemplateAsync(StoredTemplate entry)
     {
-        if (_templates is null || entry.Scope is not { } scope)
+        if (_templates is null || !_editsFilesHere || entry.Scope is not { } scope)
             return;
 
         // The window's Settings has a Cancel, and it does not undo this: said, in the question's words (TemplateDrafts).

@@ -30,7 +30,7 @@ public sealed class SettingsViewModelTests : IDisposable
     /// </summary>
     private SettingsViewModel Open(AppSettings settings, IStartupEntry? startup = null,
         Func<AppSettings, IHostSettingsPane>? hostPane = null, IProviderCalls? calls = null)
-        => new(settings, s => _saved = s, startup: startup, hostPane: hostPane, providerCalls: calls,
+        => new(settings, s => _saved = s, startup ?? NoStartupEntry.Instance, editsFilesHere: true, hostPane: hostPane, providerCalls: calls,
             writableRoots: new WritableRoots(Path.Combine(_folder, "writable-roots.json")),
             knownWorkspaces: () => []);
 
@@ -226,12 +226,76 @@ public sealed class SettingsViewModelTests : IDisposable
         var roots = new WritableRoots(Path.Combine(_folder, "writable-roots.json"));
         Assert.Null(roots.Add(workspace, outside));
 
-        var vm = new SettingsViewModel(new AppSettings(), _ => { }, writableRoots: roots, knownWorkspaces: () => [workspace]);
+        var vm = new SettingsViewModel(new AppSettings(), _ => { }, NoStartupEntry.Instance, editsFilesHere: true,
+            writableRoots: roots, knownWorkspaces: () => [workspace]);
 
         var row = Assert.Single(vm.WritableRootRows);
         Assert.False(row.IsOrphan);
         Assert.EndsWith("project", row.Workspace);
         Assert.EndsWith("elsewhere", row.Folder);
+    }
+
+    /// <summary>
+    /// A host whose templates and grants are changed elsewhere, as the person (the service), is given a view model whose
+    /// Templates and Writable folders write nothing: New, Remove and Revoke do nothing there, so a control a page wires
+    /// to them later cannot write past the host's own checks. The window's still do.
+    /// </summary>
+    [Fact]
+    public void A_host_that_edits_no_files_here_removes_no_template_and_revokes_no_grant()
+    {
+        var workspace = Path.Combine(_folder, "project");
+        var outside = Path.Combine(_folder, "elsewhere");
+        Directory.CreateDirectory(workspace);
+        Directory.CreateDirectory(outside);
+        var store = new Enactive.Workspace.TemplateStore(workspace);
+        store.Save(Enactive.Workspace.TemplateStore.FromJson("""{ "id": "weekly", "name": "Weekly", "goal": "Sum up the week." }""", out _)!,
+            Enactive.Workspace.TemplateScope.Workspace);
+        var roots = new WritableRoots(Path.Combine(_folder, "writable-roots.json"));
+        Assert.Null(roots.Add(workspace, outside));
+
+        var vm = new SettingsViewModel(new AppSettings(), _ => { }, NoStartupEntry.Instance, editsFilesHere: false,
+            workspaceRoot: workspace, writableRoots: roots, knownWorkspaces: () => [workspace]);
+        var asked = 0;
+        vm.ConfirmRequested += (_, _) => { asked++; return Task.FromResult(true); };
+        vm.TemplateEditRequested += (_, _, _, _) => asked++;
+
+        vm.AddTemplateCommand.Execute(null);
+        var weekly = vm.Templates.Single(t => t.Template.Id == "weekly" && t.Origin == "This workspace");
+        weekly.EditCommand.Execute(null);
+        weekly.RemoveCommand.Execute(null);
+        vm.WritableRootRows.Single().RevokeCommand.Execute(null);
+
+        Assert.Equal(0, asked);
+        Assert.NotNull(store.Find("weekly"));
+        Assert.Single(roots.For(workspace));
+
+        // The window's: the same New asks for the editor, so the switch is what stopped it above.
+        var window = new SettingsViewModel(new AppSettings(), _ => { }, NoStartupEntry.Instance, editsFilesHere: true,
+            workspaceRoot: workspace, writableRoots: roots, knownWorkspaces: () => [workspace]);
+        window.TemplateEditRequested += (_, _, _, _) => asked++;
+        window.AddTemplateCommand.Execute(null);
+        Assert.Equal(1, asked);
+    }
+
+    /// <summary>The build's dates read the same under any culture: "HH:mm" took the culture's time separator.</summary>
+    [Fact]
+    public void The_build_s_dates_are_the_same_under_any_culture()
+    {
+        var was = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fi-FI");
+            var date = new System.Text.RegularExpressions.Regex(@"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$");
+
+            Assert.Matches(date, BuildInfo.BuiltAt);
+            var components = BuildInfo.Components();
+            Assert.NotEmpty(components);
+            Assert.All(components.Where(c => c.Detail.Length > 0), c => Assert.Matches(date, c.Detail));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = was;
+        }
     }
 
     /// <summary>A provider asked: what it was asked with, and Ready for every one.</summary>
