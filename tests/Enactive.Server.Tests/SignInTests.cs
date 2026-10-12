@@ -261,7 +261,7 @@ public sealed partial class SignInTests : IAsyncLifetime
     public async Task The_reading_pages_need_a_signed_in_person()
     {
         // The old addresses too: what a workspace's id is, is not told to somebody who has not signed in.
-        foreach (var address in new[] { "/", "/history?ws=x", "/workspaces", "/history/run?ws=x&id=x", "/file?ws=x&path=y" })
+        foreach (var address in new[] { "/", "/history?ws=x", "/workspaces", "/history/run?ws=x&id=x", "/file?ws=x&path=y", "/library/template?ws=x" })
         {
             var response = await NewBrowser().GetAsync(address);
             Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
@@ -348,6 +348,31 @@ public sealed partial class SignInTests : IAsyncLifetime
         Assert.Equal("/proposals", (await browser.GetAsync($"/proposals/view?ws={Uri.EscapeDataString(folder)}")).Headers.Location!.OriginalString);
         // Not an address a set is named in: only a run's id, so no name walks out of the folder.
         Assert.Equal("/proposals", (await browser.GetAsync($"/proposals/view?ws={Uri.EscapeDataString(folder)}&set=..")).Headers.Location!.OriginalString);
+    }
+
+    /// <summary>
+    /// The old template page's address (the workspace by its path, the template in a query) lands on the template in the
+    /// Templates screen's editor, the workspace named by its id - and with no template, on a new one, as the old page
+    /// opened. A path the service does not know lands on the Templates screen as it opens, and is not looked up on the disk.
+    /// </summary>
+    [Fact]
+    public async Task An_old_template_address_lands_on_the_template_by_the_workspace_s_id()
+    {
+        var folder = Path.Combine(_root, "project");
+        Directory.CreateDirectory(folder);
+        _app.Services.GetRequiredService<Runs.ServerEngine>().Workspaces.Touch(folder);
+        var id = Enactive.Core.Context.WorkspaceInfo.For(folder).Id;
+        var browser = NewBrowser();
+        await SignInAsync(browser, "alice", Password);
+
+        var known = await browser.GetAsync($"/library/template?ws={Uri.EscapeDataString(folder)}&id=digest");
+        Assert.Equal(HttpStatusCode.Redirect, known.StatusCode);
+        Assert.Equal($"/templates/digest?ws={id}", known.Headers.Location!.OriginalString);
+        Assert.Equal($"/templates/New?ws={id}",
+            (await browser.GetAsync($"/library/template?ws={Uri.EscapeDataString(folder)}")).Headers.Location!.OriginalString);
+
+        var elsewhere = Uri.EscapeDataString(Path.Combine(_root, "elsewhere"));
+        Assert.Equal("/templates", (await browser.GetAsync($"/library/template?ws={elsewhere}&id=digest")).Headers.Location!.OriginalString);
     }
 
     [Fact]

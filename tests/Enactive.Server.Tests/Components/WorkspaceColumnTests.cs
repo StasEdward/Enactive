@@ -194,19 +194,21 @@ public sealed class WorkspaceColumnTests : ComponentHost
     }
 
     /// <summary>
-    /// The workspace list was the one way to a workspace's templates and schedules, and it is gone: until they have pages
-    /// of their own, the Runs screen leads to them for the workspace it shows - none was a page nothing linked to.
+    /// The workspace list was the one way to a workspace's schedules, and it is gone: until they have a page of their own
+    /// (Task 17), the Runs screen leads to them for the workspace it shows - none was a page nothing linked to. Its
+    /// templates have theirs (the rail's Templates), so the link is the schedules' alone.
     /// </summary>
     [Fact]
-    public void The_workspace_shown_leads_to_its_templates_and_schedules()
+    public void The_workspace_shown_leads_to_its_schedules()
     {
         Known("alpha");
         var beta = Known("beta");
 
         var screen = Screen("vera", $"/?ws={IdOf(beta)}", "beta");
 
-        var link = screen.FindAll("a").Single(a => a.TextContent.Trim() == "Templates and schedules");
+        var link = screen.FindAll("a").Single(a => a.TextContent.Trim() == "Schedules");
         Assert.Equal("library?ws=" + Uri.EscapeDataString(beta), link.GetAttribute("href"));
+        Assert.DoesNotContain(screen.FindAll("a"), a => a.TextContent.Contains("Templates", StringComparison.Ordinal));
     }
 
     /// <summary>

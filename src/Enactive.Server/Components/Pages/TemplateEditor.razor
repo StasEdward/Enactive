@@ -1,0 +1,262 @@
+@page "/templates/{Id}"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = "Operator")]
+@using System.ComponentModel
+@using System.Security.Claims
+@using Enactive.Application
+@using Enactive.Core.Permissions
+@using Enactive.Core.Templates
+@using Enactive.Server.Components.Runs
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Enactive.Workspace
+@using Microsoft.AspNetCore.Components.Authorization
+@implements IDisposable
+@inject ServerLibrary Library
+@inject ServerHistory History
+@inject WorkspaceIds Ids
+@inject NavigationManager Navigation
+
+<PageTitle>Template - Enactive</PageTitle>
+
+@* The window's template editor (TemplateEditWindow.axaml): a Form for what people change and the whole template as JSON
+   for what a form cannot reach - one template, switched between, never two that drift. What it shows and decides is the
+   window's own view model (TemplateEditViewModel, in Enactive.Application); this draws it. Save goes through ServerLibrary,
+   which checks the person, the validator and the store's format again before the file is written; JSON that will not
+   parse keeps its tab and changes nothing. The page is an Operator's, and ServerLibrary refuses a draft to anybody else.
+   Its address names a template by its id (Links.Template); a new one is "New", which no id can be. *@
+
+@if (_problem is { } problem)
+{
+    <p class="said">@problem</p>
+    <p><a href="@Links.Templates(_workspaceId == Guid.Empty ? null : _workspaceId)">← Templates</a></p>
+}
+else if (_editor is { } t)
+{
+    <div class="template-editor">
+        <Tabs Label="Template" Names="@TabNames" Selected="t.Tab" SelectedChanged="@(i => t.Tab = i)" />
+
+        @if (t.IsForm)
+        {
+            <div class="template-form">
+                <label class="label" for="t-id">Id</label>
+                <input id="t-id" @bind="t.Id" @bind:event="oninput" disabled="@(!t.IdEditable)" placeholder="lowercase-with-dashes" />
+                <p class="hint">The id is the file name and it is how a scheduled run names this template. An existing template keeps its id — duplicate it to make one under another name. Saving under a built-in's id replaces that built-in until you delete the file.</p>
+
+                <label class="label" for="t-name">Name</label>
+                <input id="t-name" @bind="t.Name" @bind:event="oninput" placeholder="Release Check" />
+
+                <label class="label" for="t-description">Description</label>
+                <input id="t-description" @bind="t.Description" @bind:event="oninput" placeholder="One line, shown in the library" />
+
+                <label class="label" for="t-category">Category</label>
+                <input id="t-category" @bind="t.Category" @bind:event="oninput" placeholder="Development, Maintenance, …" />
+
+                <label class="label" for="t-goal">Goal</label>
+                <textarea id="t-goal" class="template-goal-text" @bind="t.Goal" @bind:event="oninput"
+                          placeholder="What to do. Write {parameter_id} where a value goes."></textarea>
+                <p class="hint">Every {placeholder} here must match a parameter below. A parameter nobody filled in leaves nothing behind — not its own name.</p>
+
+                <h2 class="label">Parameters</h2>
+                @foreach (var row in t.Parameters)
+                {
+                    <div class="card param-row">
+                        <div class="row-line">
+                            <input @bind="row.Id" @bind:event="oninput" placeholder="id" aria-label="id" />
+                            <input @bind="row.Name" @bind:event="oninput" placeholder="Label shown to you" aria-label="Label shown to you" />
+                            <button type="button" class="btn small destructive" title="Remove" aria-label="Remove" @onclick="() => row.RemoveCommand?.Execute(null)">×</button>
+                        </div>
+                        <div class="row-line">
+                            <select aria-label="Type" @bind="row.Type">
+                                @foreach (var type in row.Types)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </select>
+                            <input @bind="row.Default" @bind:event="oninput" placeholder="Default value (blank = none)" aria-label="Default value (blank = none)" />
+                            <label class="check"><input type="checkbox" @bind="row.Required" /> Required</label>
+                        </div>
+                        <input @bind="row.Description" @bind:event="oninput" placeholder="What this is, in one line" aria-label="What this is, in one line" />
+                        @if (row.IsChoice)
+                        {
+                            <input @bind="row.Choices" @bind:event="oninput" placeholder="Choices, comma separated" aria-label="Choices, comma separated" />
+                        }
+                    </div>
+                }
+                <button type="button" class="btn" @onclick="() => t.AddParameterCommand.Execute(null)">Add parameter</button>
+
+                <h2 class="label">Checks that decide whether it finished</h2>
+                <p class="hint">Each runs as a command; its exit code decides. A required check that fails keeps the run out of Completed. With no checks at all, the run report says nothing was verified — which is true.</p>
+                @foreach (var row in t.Criteria)
+                {
+                    <div class="card check-row">
+                        <input @bind="row.Name" @bind:event="oninput" placeholder="Builds" aria-label="Check" />
+                        <input @bind="row.Command" @bind:event="oninput" placeholder="dotnet build" aria-label="Command" />
+                        <input class="exit-codes" @bind="row.ExitCode" @bind:event="oninput" aria-label="Exit codes"
+                               title="Exit codes that count as a pass, e.g. 0 or 0, 1" />
+                        <label class="check"><input type="checkbox" @bind="row.Required" /> Required</label>
+                        <button type="button" class="btn small destructive" title="Remove" aria-label="Remove" @onclick="() => row.RemoveCommand?.Execute(null)">×</button>
+                    </div>
+                }
+                <button type="button" class="btn" @onclick="() => t.AddCriterionCommand.Execute(null)">Add check</button>
+
+                <h2 class="label">Permissions</h2>
+                <p class="hint">A template can only NARROW what the workspace already allows — there is no way to grant more. Denying a tool steers the model away from it; while a shell is allowed it is not a sandbox, because most tools can be reached through a command.</p>
+                <label class="label" for="t-level">Highest autonomy this template may use</label>
+                @* The empty choice is "no cap of its own", which is not the same as Autonomous (TemplateEditViewModel.MaxLevel). *@
+                <select id="t-level" value="@(t.MaxLevel?.ToString() ?? "")" @onchange="LevelChanged">
+                    @foreach (var level in t.Levels)
+                    {
+                        <option value="@(level?.ToString() ?? "")">@(level?.ToString() ?? "")</option>
+                    }
+                </select>
+                @if (t.HasUnknownTools)
+                {
+                    <p class="card template-unknown-tools">@t.UnknownToolsText</p>
+                }
+                <div class="tool-rows">
+                    @foreach (var tool in t.Tools)
+                    {
+                        <div class="tool-row">
+                            <span class="tool-name">@tool.Name</span>
+                            <label class="check"><input type="checkbox" @bind="tool.Ask" aria-label="@($"Ask first: {tool.Name}")" /> Ask first</label>
+                            <label class="check"><input type="checkbox" @bind="tool.Deny" aria-label="@($"Deny: {tool.Name}")" /> Deny</label>
+                        </div>
+                    }
+                </div>
+
+                <h2 class="label">Limits</h2>
+                <p class="hint">Blank means no limit of its own, which is not the same as zero. Limits are checked between steps, never inside one — a step that has started always finishes.</p>
+                <div class="limits">
+                    <label><span class="hint">Max steps</span><input @bind="t.MaxSteps" @bind:event="oninput" /></label>
+                    <label><span class="hint">Max tokens</span><input @bind="t.MaxTokens" @bind:event="oninput" /></label>
+                    <label><span class="hint">Max seconds</span><input @bind="t.MaxSeconds" @bind:event="oninput" /></label>
+                </div>
+
+                <label class="check template-review"><input type="checkbox" @bind="t.ReviewRequired" /> Review each step before it counts as done</label>
+
+                <label class="label" for="t-worker">Run as worker</label>
+                <input id="t-worker" @bind="t.WorkerId" @bind:event="oninput" placeholder="Blank uses the workspace's default worker" />
+            </div>
+        }
+        else
+        {
+            <div class="template-json-tab">
+                <p class="hint">The whole template, exactly as it is stored. Switching back to the form applies what is here; JSON that will not parse keeps you on this tab and changes nothing.</p>
+                <textarea class="template-json" aria-label="The template, as JSON" spellcheck="false" @bind="t.JsonText" @bind:event="oninput"></textarea>
+            </div>
+        }
+
+        @if (t.HasStatus)
+        {
+            <p class="template-status" role="alert">@t.Status</p>
+        }
+
+        <div class="template-editor-actions">
+            @* The window's says Cancel in Settings does not undo it; here there is no Settings to cancel - only the file, now. *@
+            <span class="hint">Save writes the file now.</span>
+            <select aria-label="Kept in" @bind="t.Scope">
+                @foreach (var scope in t.Scopes)
+                {
+                    <option value="@scope">@scope</option>
+                }
+            </select>
+            <button type="button" class="btn primary" @onclick="() => t.SaveCommand.Execute(null)">Save</button>
+            <button type="button" class="btn" @onclick="() => t.CancelCommand.Execute(null)">Cancel</button>
+        </div>
+    </div>
+}
+
+@code {
+    private static readonly IReadOnlyList<string> TabNames = ["Form", "JSON"];
+
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The template's id, or <see cref="Links.NewTemplateId"/> for a new one.</summary>
+    [Parameter] public string Id { get; set; } = "";
+
+    /// <summary>The workspace, by its id - read as text and parsed, as the library's (TemplatesScreen).</summary>
+    [SupplyParameterFromQuery(Name = "ws")] private string? Ws { get; set; }
+
+    /// <summary>A copy of the template under an id nothing uses, rather than the template (the window's Duplicate).</summary>
+    [SupplyParameterFromQuery(Name = "copy")] private bool? Copy { get; set; }
+
+    private ClaimsPrincipal _user = new();
+    private string _root = "";
+    private Guid _workspaceId;
+    private TemplateEditViewModel? _editor;
+    private string? _problem;
+
+    /// <summary>What was saved and what the service said, to go back to the library on it.</summary>
+    private (string Id, string Said)? _saved;
+
+    // Read per address, not once (Pages/_Imports.razor).
+    protected override async Task OnParametersSetAsync()
+    {
+        _user = (await Auth).User;
+        _saved = null;
+        Show(null);
+
+        Guid? wanted = Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null;
+        if (WorkspaceColumnState.Choose(History.Workspaces(_user), wanted, Ids) is not { } workspace)
+        {
+            _problem = "The service does not know that workspace.";
+            return;
+        }
+        _root = workspace.RootPath;
+        _workspaceId = Ids.TryIdOf(_root) ?? Guid.Empty;
+
+        var (draft, problem) = Library.Draft(_user, _root, Id == Links.NewTemplateId ? null : Id, Copy == true);
+        _problem = problem;
+        if (draft is not null)
+            Show(new TemplateEditViewModel(draft.Template, draft.IdEditable, draft.Scopes, draft.ToolNames, Save));
+    }
+
+    /// <summary>
+    /// The editor's <c>saved</c>: the template in the store's own format (TemplateStore.ToJson - what the window's store
+    /// writes) to ServerLibrary, which checks the person and the template again. A refusal is thrown back: the view model
+    /// says "This template was not saved: …" and stays open, as it does when the window's file write fails.
+    /// </summary>
+    private void Save(TaskTemplate template, TemplateScope scope)
+    {
+        var (saved, said) = Library.SaveTemplate(_user, _root, TemplateStore.ToJson(template), scope);
+        if (!saved)
+            throw new InvalidOperationException(said);
+        _saved = (template.Id, said);
+    }
+
+    /// <summary>Saved or cancelled: back to the library, on what was saved - or on the template the editor was opened on.</summary>
+    private void Close()
+        => Navigation.NavigateTo(_saved is { } saved
+            ? Links.Templates(_workspaceId, saved.Id, saved.Said)
+            : Links.Templates(_workspaceId, Id == Links.NewTemplateId ? null : Id));
+
+    private void LevelChanged(ChangeEventArgs e)
+    {
+        if (_editor is not { } editor)
+            return;
+        editor.MaxLevel = Enum.TryParse<PermissionLevel>(e.Value?.ToString(), out var level) ? level : null;
+    }
+
+    /// <summary>
+    /// The view model drawn: what changes in it is drawn again (INotifyPropertyChanged) - a Status set by a refused switch,
+    /// Ask cleared by Deny - and its CloseRequested is the page's way back.
+    /// </summary>
+    private void Show(TemplateEditViewModel? editor)
+    {
+        if (_editor is not null)
+        {
+            _editor.PropertyChanged -= Changed;
+            _editor.CloseRequested -= Close;
+        }
+        _editor = editor;
+        if (_editor is not null)
+        {
+            _editor.PropertyChanged += Changed;
+            _editor.CloseRequested += Close;
+        }
+    }
+
+    private void Changed(object? sender, PropertyChangedEventArgs e) => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Show(null);
+}

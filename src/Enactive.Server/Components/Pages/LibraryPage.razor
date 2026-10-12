@@ -1,15 +1,17 @@
 @page "/library"
-@using Enactive.Core.Templates
 @using Enactive.Workspace
 @using Enactive.Server.Runs
 @using Microsoft.AspNetCore.Components.Authorization
 @inject ServerLibrary Library
 @inject ServerHistory History
 
-<PageTitle>Templates and schedules - Enactive</PageTitle>
+<PageTitle>Schedules - Enactive</PageTitle>
 
+@* TEMPORARY (Task 17): a workspace's schedules, until the Schedules screen replaces this page. Its templates went to the
+   Templates screen (/templates); the schedules stay here, reached from the Runs screen's "Schedules" link, so that none
+   of them is unreachable in between. *@
 <p><a href="@Links.History(Ws ?? "")">← @Ws</a></p>
-<h1>Templates and schedules</h1>
+<h1>Schedules</h1>
 @if (Said is { Length: > 0 })
 {
     <p class="said" role="alert">@Said</p>
@@ -20,7 +22,6 @@
 }
 else
 {
-    <h2>Schedules</h2>
     <AuthorizeView Policy="Operator"><Authorized><p><a href="@Links.Schedule(Ws!, null)">New schedule…</a></p></Authorized></AuthorizeView>
     @if (_schedules.Count == 0)
     {
@@ -65,39 +66,6 @@ else
             </li>
         }
     </ul>
-
-    <h2>Templates</h2>
-    <AuthorizeView Policy="Operator"><Authorized><p><a href="@Links.Template(Ws!, null)">New template…</a></p></Authorized></AuthorizeView>
-    <ul class="list">
-        @foreach (var stored in _templates)
-        {
-            <li>
-                <strong>@stored.Template.Name</strong> <span class="where">@stored.Template.Id · @stored.Origin@(stored.Shadows is { } under ? $" (over the {under} one)" : "")</span>
-                @if (stored.Template.Description is { Length: > 0 } description)
-                {
-                    <div class="where">@description</div>
-                }
-                <AuthorizeView Policy="Operator">
-                    <Authorized>
-                        <div class="answers">
-                            <a href="@Links.Template(Ws!, stored.Template.Id)">@(stored.IsBuiltin ? "Copy and edit" : "Edit")</a>
-                            @if (stored.Scope is { } scope)
-                            {
-                                <form method="post" action="/library/template/act" class="inline">
-                                    <AntiforgeryToken />
-                                    <input type="hidden" name="ws" value="@Ws" />
-                                    <input type="hidden" name="id" value="@stored.Template.Id" />
-                                    <input type="hidden" name="scope" value="@scope" />
-                                    <input type="hidden" name="act" value="delete" />
-                                    <button type="submit" class="secondary">Delete</button>
-                                </form>
-                            }
-                        </div>
-                    </Authorized>
-                </AuthorizeView>
-            </li>
-        }
-    </ul>
 }
 
 @code {
@@ -105,7 +73,6 @@ else
     [SupplyParameterFromQuery] private string? Said { get; set; }
     [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
 
-    private IReadOnlyList<StoredTemplate> _templates = [];
     private IReadOnlyList<ScheduleView> _schedules = [];
     private string? _problem;
 
@@ -113,8 +80,6 @@ else
     protected override async Task OnParametersSetAsync()
     {
         var user = (await Auth).User;
-        (_templates, _problem) = Library.Templates(user, Ws ?? "");
-        if (_problem is null)
-            (_schedules, _problem) = await Library.SchedulesAsync(user, Ws ?? "", CancellationToken.None);
+        (_schedules, _problem) = await Library.SchedulesAsync(user, Ws ?? "", CancellationToken.None);
     }
 }

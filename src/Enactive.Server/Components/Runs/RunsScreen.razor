@@ -32,10 +32,10 @@
 
         @if (_shown is { } shown)
         {
-            @* TEMPORARY (Tasks 16, 17): a workspace's templates and schedules were reached from the workspace list, which is
-               this screen's switcher now, and the rail's Templates and Schedules lead here until they have pages of their
-               own - without this link the library was a page nothing led to. *@
-            <p class="hint"><a href="@Links.Library(shown.RootPath)">Templates and schedules</a></p>
+            @* TEMPORARY (Task 17): a workspace's schedules were reached from the workspace list, which is this screen's
+               switcher now, and the rail's Schedules leads here until it has a page of its own - without this link the
+               schedules were a page nothing led to. Templates have theirs (/templates, the rail's Templates). *@
+            <p class="hint"><a href="@Links.Library(shown.RootPath)">Schedules</a></p>
         }
 
         @if (PastRunId is { } past)

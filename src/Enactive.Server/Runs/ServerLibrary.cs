@@ -4,6 +4,7 @@ using System.Security.Claims;
 using Enactive.Application;
 using Enactive.Core.Context;
 using Enactive.Core.Inbox;
+using Enactive.Core.Permissions;
 using Enactive.Core.Schedules;
 using Enactive.Core.Templates;
 using Enactive.Server.Accounts;
@@ -12,6 +13,13 @@ using Enactive.Workspace;
 
 /// <summary>A schedule as the page lists it: when, what next, what it may do, and its last outcomes.</summary>
 internal sealed record ScheduleView(Schedule Schedule, string When, string Next, IReadOnlyList<string> MayDo, IReadOnlyList<InboxItem> Outcomes);
+
+/// <summary>
+/// What the template editor opens (TemplateEditViewModel's arguments): the draft, whether its id may still change, the
+/// libraries it may be saved to - the first is the one offered - and the tools the service's engine registers, for the
+/// deny and ask lists.
+/// </summary>
+internal sealed record TemplateDraft(TaskTemplate Template, bool IdEditable, IReadOnlyList<TemplateScope> Scopes, IReadOnlyList<string> ToolNames);
 
 /// <summary>What the schedule form filled in, as text - turned into a draft and checked here, not on the page.</summary>
 internal sealed record ScheduleForm(
@@ -30,23 +38,62 @@ internal sealed record ScheduleForm(
 ///
 /// <para>Only the workspaces the service knows; the role checked at each call; every change audited.</para>
 /// </summary>
-internal sealed class ServerLibrary(UserStore users, ServerEngine engine)
+internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunControl runs)
 {
     /// <summary>The templates seen from a workspace: its own, the service account's global ones, the built-ins.</summary>
     public (IReadOnlyList<StoredTemplate> Templates, string? Problem) Templates(ClaimsPrincipal user, string root)
         => Reading(user, root) is { } known ? (new TemplateStore(known.RootPath).Inventory(), null) : ([], Why(user, Role.Viewer));
 
-    /// <summary>A template as its file holds it, for the editor; a new one's skeleton when <paramref name="id"/> is empty.</summary>
-    public (string? Json, string? Problem) TemplateText(ClaimsPrincipal user, string root, string? id)
+    /// <summary>
+    /// The library as the window shows it (TemplatesViewModel): this workspace's templates, the service account's global
+    /// ones and the built-ins, each run's summary said against the folder's level as the service has it now - a template
+    /// may only narrow what its workspace allows, so "runs at Execute" is a statement about this folder.
+    /// </summary>
+    public (TemplatesViewModel? Library, string? Problem) Library(ClaimsPrincipal user, string root)
+        => Reading(user, root) is { } known
+            ? (new TemplatesViewModel(known.RootPath, PolicyOf(known)), null)
+            : (null, Why(user, Role.Viewer));
+
+    /// <summary>
+    /// What the editor opens - a template's own (<paramref name="copy"/> false), a copy of it under an id nothing uses, or a
+    /// new one (<paramref name="id"/> empty) - by the window's rules (TemplateDrafts). An Operator's: a draft is for saving.
+    /// </summary>
+    public (TemplateDraft? Draft, string? Problem) Draft(ClaimsPrincipal user, string root, string? id, bool copy)
     {
-        if (Reading(user, root) is not { } known)
-            return (null, Why(user, Role.Viewer));
+        if (Writing(user, root) is not { } known)
+            return (null, Why(user, Role.Operator));
+        var inventory = new TemplateStore(known.RootPath).Inventory();
+        var tools = ToolNames();
         if (string.IsNullOrWhiteSpace(id))
-            return (TemplateStore.ToJson(new TaskTemplate("my-task", "My task", "Describe the task. {topic}",
-                Parameters: [new TemplateParameter("topic", "Topic", TemplateParameterType.Text)])), null);
-        return new TemplateStore(known.RootPath).Find(id) is { } template
-            ? (TemplateStore.ToJson(template), null)
-            : (null, $"There is no template '{id}' here.");
+            return (new TemplateDraft(TemplateDrafts.New(), true, Scopes(null), tools), null);
+        if (inventory.FirstOrDefault(t => string.Equals(t.Template.Id, id, StringComparison.OrdinalIgnoreCase)) is not { } entry)
+            return (null, $"There is no template '{id}' here.");
+        if (copy)
+            return (new TemplateDraft(TemplateDrafts.Duplicate(entry, inventory.Select(t => t.Template.Id)), true, Scopes(null), tools), null);
+        var (draft, idEditable) = TemplateDrafts.Edit(entry);
+        return (new TemplateDraft(draft, idEditable, Scopes(entry.Scope), tools), null);
+    }
+
+    /// <summary>
+    /// Starts a template from the library, as the window's library does (TemplatesWindow.OnRun): resolved with the answers
+    /// given - again here, from the template as its file holds it now and the folder's level now, never from what the page
+    /// last showed - and started as that saved task through the runs' one door, which checks the person again. The run,
+    /// or why there is none.
+    /// </summary>
+    public (Guid? Run, string Said) RunTemplate(ClaimsPrincipal user, string root, string id, IReadOnlyDictionary<string, string> answers)
+    {
+        if (Writing(user, root) is not { } known)
+            return (null, Why(user, Role.Operator, "starting runs"));
+        if (new TemplateStore(known.RootPath).Find(id) is not { } template)
+            return (null, $"There is no template '{id}' here.");
+
+        var resolved = TemplateResolution.Resolve(template, WorkspaceInfo.For(known.RootPath), PolicyOf(known), answers);
+        if (resolved.Spec is not { } spec)
+            return (null, string.Join(" ", resolved.Problems.Select(p => p.Message)));
+
+        // A new task: the library starts one, where Retry and Run again are attempts at a task already begun.
+        var (run, refusal) = runs.Again(user, known.RootPath, new Rerun(spec.Goal, spec, Guid.NewGuid()), "template run");
+        return run is null ? (null, refusal ?? "Not started.") : (run.Id, "");
     }
 
     /// <summary>Saves a template given as JSON into the workspace's library or the global one; what to tell the person.</summary>
@@ -194,8 +241,27 @@ internal sealed class ServerLibrary(UserStore users, ServerEngine engine)
 
     private string Who(ClaimsPrincipal user) => user.Identity?.Name ?? "?";
 
-    private string Why(ClaimsPrincipal user, Role needed)
+    /// <summary>The policy a template is narrowed from: the folder's saved level, with the settings' shell rule on top.</summary>
+    private PermissionPolicy PolicyOf(WorkspaceEntry known)
+        => EngineComposition.PolicyFor(engine.Settings ?? new AppSettings(), known.Autonomy);
+
+    /// <summary>
+    /// The tools the service's engine registers, built from its settings as they are now (EngineComposition.Tools, as the
+    /// window's Settings asks): a deny list typed against a hand-kept list restricted tools nobody had (TemplateEditViewModel).
+    /// </summary>
+    private IReadOnlyList<string> ToolNames()
+        => EngineComposition.Tools(engine.Settings ?? new AppSettings()).Definitions.Select(d => d.Name).ToList();
+
+    /// <summary>
+    /// Where a draft may be saved, the one offered first: a template's own library when it has one - offered another, Save
+    /// would write a second copy and leave the first in place - and otherwise the workspace's, with the project, as the
+    /// browser always offered it. The global library is the service account's, shared by every workspace on the service.
+    /// </summary>
+    private static IReadOnlyList<TemplateScope> Scopes(TemplateScope? own)
+        => own == TemplateScope.Global ? [TemplateScope.Global, TemplateScope.Workspace] : [TemplateScope.Workspace, TemplateScope.Global];
+
+    private string Why(ClaimsPrincipal user, Role needed, string what = "changing templates and schedules")
         => ServerAuth.StillValid(users, user) is not { } account ? "Your session has ended. Sign in again."
-            : account.Role < needed ? "Your role does not include changing templates and schedules."
+            : account.Role < needed ? $"Your role does not include {what}."
             : "The service does not know that folder as a workspace.";
 }

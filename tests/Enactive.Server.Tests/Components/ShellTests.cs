@@ -194,17 +194,17 @@ public sealed class ShellTests : ComponentHost
     }
 
     /// <summary>
-    /// Templates and Schedules have no page of their own yet, and the workspace list they led to is gone (its switcher is
-    /// on the Runs screen): a link to an address with no page was the dead end the rail must not have.
+    /// Templates has its page (Task 16); Schedules has none of its own yet, and the workspace list it led to is gone (its
+    /// switcher is on the Runs screen): a link to an address with no page was the dead end the rail must not have.
     /// </summary>
     [Fact]
-    public void Templates_and_schedules_lead_to_the_runs_screen_until_their_pages_exist()
+    public void Templates_leads_to_its_page_and_schedules_to_the_runs_screen_until_its_page_exists()
     {
         SignIn("alice");
 
         var rail = RenderedRail();
 
-        Assert.Equal("/", rail.Find("[data-rail='/templates']").GetAttribute("href"));
+        Assert.Equal("templates", rail.Find("[data-rail='/templates']").GetAttribute("href"));
         Assert.Equal("/", rail.Find("[data-rail='/schedules']").GetAttribute("href"));
     }
 
@@ -213,6 +213,9 @@ public sealed class ShellTests : ComponentHost
     [InlineData("http://localhost/runs/0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/")]
     [InlineData("http://localhost/inbox", "/inbox")]
     [InlineData("http://localhost/proposals/0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f/abc", "/proposals")]
+    [InlineData("http://localhost/templates?ws=0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/templates")]
+    [InlineData("http://localhost/templates/digest?ws=0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/templates")]
+    [InlineData("http://localhost/library?ws=x", "/schedules")]
     [InlineData("http://localhost/logs", "/log")]
     [InlineData("http://localhost/admin/settings", "/settings")]
     [InlineData("http://localhost/admin/users", "/accounts")]

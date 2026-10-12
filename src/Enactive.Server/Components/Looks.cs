@@ -1,5 +1,6 @@
 namespace Enactive.Server.Components;
 
+using Enactive.Application;
 using Enactive.Application.Projections;
 using Enactive.Core.History;
 using Enactive.Providers;
@@ -136,6 +137,19 @@ internal static class Looks
         ModelReach.Cloud => "tone-cloud",
         ModelReach.Unknown => "tone-faint",
         _ => throw Unknown(reach)
+    };
+
+    /// <summary>
+    /// A template's edge in the library, as Palette.Template: grey for a built-in, blue for the global library, green for one
+    /// that lives with the project - and amber for the one chosen, whose form is filled in (TemplateListItem.Edge).
+    /// </summary>
+    public static string Template(TemplateEdge edge) => edge switch
+    {
+        TemplateEdge.Builtin => "edge-builtin",
+        TemplateEdge.Global => "edge-global",
+        TemplateEdge.Workspace => "edge-workspace",
+        TemplateEdge.Selected => "edge-selected",
+        _ => throw Unknown(edge)
     };
 
     /// <summary>A staged change: amber while it waits for a person or could not be applied, then what was done.</summary>

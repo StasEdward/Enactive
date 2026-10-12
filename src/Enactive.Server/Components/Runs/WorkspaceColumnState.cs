@@ -114,10 +114,17 @@ internal sealed class WorkspaceColumnState(ServerHistory history, IRunControl ru
         Selected = Choose(known, wanted, ids);
         Problem = wanted is not null && Selected is null ? "The service does not know that workspace." : null;
 
-        Workspaces = known.Select(k => new SwitcherRow(k, IdOf(k.RootPath), Exists(k.RootPath),
-            Selected is not null && SamePath(k.RootPath, Selected.RootPath))).ToList();
+        Workspaces = Switcher(known, Selected, ids);
         await RefreshAsync(ct);
     }
+
+    /// <summary>
+    /// The switcher's rows: every workspace in <paramref name="known"/>, the <paramref name="selected"/> one marked - one
+    /// rule for every screen that is about one workspace (the Runs screen, Templates), so they mark the same one the same way.
+    /// </summary>
+    public static IReadOnlyList<SwitcherRow> Switcher(IReadOnlyList<WorkspaceEntry> known, WorkspaceEntry? selected, WorkspaceIds ids)
+        => known.Select(k => new SwitcherRow(k, IdOf(ids, k.RootPath), Exists(k.RootPath),
+            selected is not null && SamePath(k.RootPath, selected.RootPath))).ToList();
 
     /// <summary>Reads the selected workspace's history and the runs going now again (the column's Refresh).</summary>
     public async Task RefreshAsync(CancellationToken ct)
@@ -244,7 +251,9 @@ internal sealed class WorkspaceColumnState(ServerHistory history, IRunControl ru
 
     // A known folder whose path cannot be read at all still has its row - red, as missing - with no id to be chosen by:
     // one such entry must not take the column down for every other workspace (as WorkspaceIds.Find steps over it).
-    private Guid IdOf(string root) => ids.TryIdOf(root) ?? Guid.Empty;
+    private Guid IdOf(string root) => IdOf(ids, root);
+
+    private static Guid IdOf(WorkspaceIds ids, string root) => ids.TryIdOf(root) ?? Guid.Empty;
 
     private static bool Exists(string root)
     {

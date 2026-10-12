@@ -1,9 +1,11 @@
 namespace Enactive.Server.Tests;
 
 using System.Security.Claims;
+using Enactive.Application;
 using Enactive.Server.Accounts;
 using Enactive.Server.Runs;
 using Enactive.Workspace;
+using Microsoft.Extensions.Logging.Abstractions;
 
 /// <summary>
 /// A workspace's templates and schedules, kept from the browser (server plan phase 3) - by the window's own rules:
@@ -17,6 +19,7 @@ public sealed class ServerLibraryTests : IDisposable
     private readonly UserStore _users;
     private readonly ServerEngine _engine;
     private readonly ServerLibrary _library;
+    private readonly RunControl _runs;
 
     private const string Password = "correct horse battery";
 
@@ -34,7 +37,10 @@ public sealed class ServerLibraryTests : IDisposable
         _users.Add("vera", Password, Role.Viewer);
         _engine = new ServerEngine(Path.Combine(_root, "data"), new FileLogSink(Path.Combine(_root, "logs")));
         _engine.Workspaces.Touch(_workspace);
-        _library = new ServerLibrary(_users, _engine);
+        // The runs' real door (RunControl checks the role and the folder), over an engine that ends a run at once.
+        _runs = new RunControl(_users, new RunQueue(maxActive: 2), new EndsAtOnce(Path.Combine(_root, "permissions.json")),
+            NullLogger<RunControl>.Instance);
+        _library = new ServerLibrary(_users, _engine, _runs);
     }
 
     public void Dispose()
@@ -133,4 +139,104 @@ public sealed class ServerLibraryTests : IDisposable
     public void A_time_that_is_not_one_is_refused()
         => Assert.Contains("not a time", _library.SaveSchedule(As("alice"), _workspace,
             new ScheduleForm(null, "x", "template:digest", "daily", "25:99", null, null, "execute", false, "")).Said);
+
+    // ── the library page and the editor (Task 16) ──────────────────────────
+
+    /// <summary>
+    /// Run from the library as the window runs one (TemplatesWindow → MainWindow.RunAsync): the template resolved with the
+    /// answers filled in, against the folder's level as it is now, and started as that saved task - its goal is the run's.
+    /// </summary>
+    [Fact]
+    public async Task A_template_is_run_with_its_answers_as_the_saved_task_it_is()
+    {
+        _library.SaveTemplate(As("alice"), _workspace, Digest, TemplateScope.Workspace);
+
+        var (id, said) = _library.RunTemplate(As("alice"), _workspace, "digest", new Dictionary<string, string> { ["topic"] = "the inbox" });
+
+        Assert.True(id is not null, said);
+        var run = _runs.Find(As("alice"), id!.Value)!;
+        Assert.Equal("Write the digest of the inbox.", run.Prompt);
+        Assert.Equal(("digest", "the inbox"), (run.Spec!.TemplateId, run.Spec.Parameters["topic"]));
+        Assert.Equal(Enactive.Settings.EngineComposition.PolicyFor(_engine.Settings ?? new Enactive.Settings.AppSettings(), 2).Level,
+            run.Spec.Permissions.Level);
+        Assert.Contains(_users.AuditTrail(), e => e is { Account: "alice", Action: "template run" });
+        await run.Ended;
+    }
+
+    [Fact]
+    public void A_template_missing_an_answer_is_not_run_and_says_which()
+    {
+        _library.SaveTemplate(As("alice"), _workspace, Digest, TemplateScope.Workspace);
+
+        var (id, said) = _library.RunTemplate(As("alice"), _workspace, "digest", new Dictionary<string, string>());
+
+        Assert.Null(id);
+        Assert.Contains("Topic", said);
+        Assert.Empty(_runs.List(As("alice")));
+    }
+
+    [Fact]
+    public void A_viewer_runs_no_template_and_opens_none_to_edit()
+    {
+        _library.SaveTemplate(As("alice"), _workspace, Digest, TemplateScope.Workspace);
+
+        var (id, said) = _library.RunTemplate(As("vera"), _workspace, "digest", new Dictionary<string, string> { ["topic"] = "x" });
+        var (draft, problem) = _library.Draft(As("vera"), _workspace, "digest", copy: false);
+
+        Assert.Null(id);
+        Assert.Contains("role does not include", said);
+        Assert.Null(draft);
+        Assert.Contains("role does not include", problem);
+        Assert.Empty(_runs.List(As("alice")));
+    }
+
+    /// <summary>The library is the window's (TemplatesViewModel), pointed at the workspace and at its level as the service has it.</summary>
+    [Fact]
+    public void The_library_is_the_window_s_for_the_workspace_and_a_viewer_reads_it()
+    {
+        _library.SaveTemplate(As("alice"), _workspace, Digest, TemplateScope.Workspace);
+
+        var (library, problem) = _library.Library(As("vera"), _workspace);
+
+        Assert.Null(problem);
+        Assert.Equal(_workspace, library!.WorkspaceRoot);
+        library.Selected = library.Templates.Single(t => t.Template.Id == "digest");
+        Assert.StartsWith("runs at Execute", library.SelectedSummary);
+        Assert.Contains("this workspace", library.Selected.Meta);
+        Assert.Contains("The service does not know", _library.Library(As("vera"), Path.Combine(_root, "elsewhere")).Problem);
+    }
+
+    /// <summary>
+    /// What the editor opens: a template's own file in its own library first, a built-in as a copy of the same id, a
+    /// duplicate under an id nothing uses, a new one blank - the window's rules (TemplateDrafts) - with the tools this
+    /// service's engine registers for the deny and ask lists.
+    /// </summary>
+    [Fact]
+    public void The_editor_opens_what_the_window_s_would()
+    {
+        _library.SaveTemplate(As("alice"), _workspace, Digest, TemplateScope.Workspace);
+
+        var own = _library.Draft(As("alice"), _workspace, "digest", copy: false).Draft!;
+        Assert.Equal(("digest", false, TemplateScope.Workspace), (own.Template.Id, own.IdEditable, own.Scopes[0]));
+        Assert.Contains("read_file", own.ToolNames);
+
+        var copy = _library.Draft(As("alice"), _workspace, "digest", copy: true).Draft!;
+        Assert.Equal(("digest-copy", true), (copy.Template.Id, copy.IdEditable));
+
+        var blank = _library.Draft(As("alice"), _workspace, null, copy: false).Draft!;
+        Assert.Equal(("", true, TemplateScope.Workspace), (blank.Template.Id, blank.IdEditable, blank.Scopes[0]));
+
+        Assert.Contains("There is no template 'nothing' here.", _library.Draft(As("alice"), _workspace, "nothing", copy: false).Problem);
+    }
+
+    /// <summary>The engine, stood in for: a run begins and ends with no step.</summary>
+    private sealed class EndsAtOnce(string approvals) : IRunExecutor
+    {
+        public string? Problem => null;
+        public Enactive.Core.Permissions.SessionApprovals Session { get; } = new();
+        public Enactive.Core.Permissions.ApprovalStore Approvals { get; } = new(approvals);
+
+        public Task ExecuteAsync(ServerRun run, Enactive.Core.Permissions.IDecisionHandler decisions, CancellationToken ct)
+            => run.Session.DrainAsync(System.Linq.AsyncEnumerable.Empty<Enactive.Core.Events.WorkEvent>(), ct);
+    }
 }

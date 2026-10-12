@@ -25,8 +25,35 @@ internal static class Links
 
     public static string Library(string workspace) => "library?ws=" + Uri.EscapeDataString(workspace);
 
-    public static string Template(string workspace, string? id)
-        => $"library/template?ws={Uri.EscapeDataString(workspace)}" + (id is null ? "" : "&id=" + Uri.EscapeDataString(id));
+    /// <summary>
+    /// The Templates screen on a workspace, named by its id (WorkspaceIds) - with none, the one used last - opened on a
+    /// template when <paramref name="template"/> names one, with what an action said, when one did.
+    /// </summary>
+    public static string Templates(Guid? workspace, string? template = null, string? said = null)
+    {
+        var query = new List<string>();
+        if (workspace is { } id)
+            query.Add($"ws={id}");
+        if (!string.IsNullOrEmpty(template))
+            query.Add("t=" + Uri.EscapeDataString(template));
+        if (!string.IsNullOrEmpty(said))
+            query.Add("said=" + Uri.EscapeDataString(said));
+        return query.Count == 0 ? "templates" : "templates?" + string.Join("&", query);
+    }
+
+    /// <summary>
+    /// The template editor on a template of a workspace: its own (<paramref name="copy"/> false) or a copy of it.
+    /// </summary>
+    public static string Template(Guid workspace, string id, bool copy = false)
+        => $"templates/{Uri.EscapeDataString(id)}?ws={workspace}" + (copy ? "&copy=true" : "");
+
+    /// <summary>
+    /// The template editor on a new template. "New" can never be a template's id - an id starts with a lowercase letter
+    /// (TemplateValidator) - so a template called "new" keeps its own address, templates/new.
+    /// </summary>
+    public const string NewTemplateId = "New";
+
+    public static string NewTemplate(Guid workspace) => $"templates/{NewTemplateId}?ws={workspace}";
 
     public static string Schedule(string workspace, Guid? id)
         => $"library/schedule?ws={Uri.EscapeDataString(workspace)}" + (id is null ? "" : $"&id={id}");

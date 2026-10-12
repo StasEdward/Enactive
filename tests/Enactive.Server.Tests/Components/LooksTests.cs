@@ -2,6 +2,7 @@ namespace Enactive.Server.Tests.Components;
 
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Enactive.Application;
 using Enactive.Application.Projections;
 using Enactive.Core.History;
 using Enactive.Providers;
@@ -38,6 +39,7 @@ public sealed class LooksTests
         classes.AddRange(Enum.GetValues<DiffLineKind>().Select(Looks.Diff));
         classes.AddRange(Enum.GetValues<Enactive.Core.Diagnostics.LogLevel>().Select(Looks.Log));
         classes.AddRange(Enum.GetValues<FeedEntryKind>().Select(Looks.Entry));
+        classes.AddRange(Enum.GetValues<TemplateEdge>().Select(Looks.Template));
         classes.AddRange(new[] { "result", "decision", "error", "anything else" }.Select(Looks.Inbox));
         classes.Add(Looks.Change(applied: false, rejected: false));
         classes.Add(Looks.Change(applied: true, rejected: false));
@@ -72,6 +74,7 @@ public sealed class LooksTests
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Diff((DiffLineKind)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Log((Enactive.Core.Diagnostics.LogLevel)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Entry((FeedEntryKind)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Template((TemplateEdge)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Autonomy(4));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Autonomy(-1));
         // Applied and rejected at once is not a state a change is ever in.
@@ -162,6 +165,14 @@ public sealed class LooksTests
             [FeedEntryKind.Tool] = "FeedEntryKind.Tool",
             [FeedEntryKind.Note] = "FeedEntryKind.Note",
             [FeedEntryKind.Refusal] = "FeedEntryKind.Refusal"
+        }));
+
+        rows.AddRange(Rows(Looks.Template, new Dictionary<TemplateEdge, string>
+        {
+            [TemplateEdge.Builtin] = "TemplateEdge.Builtin",
+            [TemplateEdge.Global] = "TemplateEdge.Global",
+            [TemplateEdge.Workspace] = "TemplateEdge.Workspace",
+            [TemplateEdge.Selected] = "TemplateEdge.Selected"
         }));
 
         // The phase pill is Brand.PhaseText's, a table in Brand.cs rather than an arm of Palette: done green, failed red,

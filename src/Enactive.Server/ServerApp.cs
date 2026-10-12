@@ -168,19 +168,23 @@ internal static class ServerApp
                 history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known ? ids.TryIdOf(known.RootPath) : null)))
             .RequireAuthorization(nameof(Role.Viewer));
 
-        // A workspace's templates and schedules (ServerLibrary checks the role and the rules), each back to its page.
-        app.MapPost("/library/template/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerLibrary library) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var workspace = form["ws"].ToString();
-            var scope = Enum.TryParse<Enactive.Workspace.TemplateScope>(form["scope"], out var s) ? s : Enactive.Workspace.TemplateScope.Workspace;
-            var said = form["act"] == "delete"
-                ? library.DeleteTemplate(context.User, workspace, form["id"].ToString(), scope)
-                : library.SaveTemplate(context.User, workspace, form["json"].ToString(), scope).Said;
-            return Results.LocalRedirect("/" + Components.Links.Library(workspace) + "&said=" + Uri.EscapeDataString(said));
-        });
+        // The old template page (the workspace by its path, the template in a query): the template in the Templates
+        // screen's editor, the workspace by its id - a new one with no template named, as the old page opened. A path the
+        // service does not know is not looked up on the disk: the Templates screen as it opens.
+        app.MapGet("/library/template", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids) =>
+            {
+                var workspace = history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known
+                    ? ids.TryIdOf(known.RootPath)
+                    : null;
+                var template = context.Request.Query["id"].ToString();
+                return Results.LocalRedirect("/" + (workspace is not { } id ? Components.Links.Templates(null)
+                    : template.Length == 0 ? Components.Links.NewTemplate(id)
+                    : Components.Links.Template(id, template)));
+            })
+            .RequireAuthorization(nameof(Role.Viewer));
+
+        // A workspace's schedules (ServerLibrary checks the role and the rules), back to their page. Its templates are the
+        // Templates screen's (/templates), whose actions call ServerLibrary from the live page.
         app.MapPost("/library/schedule/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerLibrary library) =>
         {
             if (!await antiforgery.IsRequestValidAsync(context))
