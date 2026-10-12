@@ -34,4 +34,23 @@ public sealed class RunFiguresTests
     {
         Assert.Equal(["⌘", "📄", "🛠", "🔔", "🛇"], Enum.GetValues<FeedEntryKind>().Select(StepEntries.Icon));
     }
+
+    /// <summary>
+    /// A token count reads the same whatever the machine's culture: the service's tiles are drawn by a process whose culture
+    /// is the server's, not the reader's, and "1,5k" on one box and "1.5k" on another is one count said two ways.
+    /// </summary>
+    [Fact]
+    public void A_token_count_reads_the_same_in_every_culture()
+    {
+        var before = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("ru-RU");
+            Assert.Equal(("1.5k", "2.3M", "999"), (TokenCounts.Compact(1_500), TokenCounts.Compact(2_300_000), TokenCounts.Compact(999)));
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = before;
+        }
+    }
 }
