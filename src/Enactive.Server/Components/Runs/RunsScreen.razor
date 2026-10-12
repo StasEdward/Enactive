@@ -25,8 +25,10 @@
 
     <section class="runs-main">
         @* The window's command bar, on the workspace the column shows: Run starts there and opens the run here, and the
-           settings beside it are that workspace's. Its Stop is the open run's. *@
-        <CommandBar Workspace="_shown" OpenRun="RunId ?? _live" />
+           settings beside it are that workspace's. Its Stop is the open run's - under a past run, the run in progress it
+           is read over; on the screen without a run, none: kept on the last one there, the bar was busy for a run not on
+           screen, Run greyed, and Stop cancelled a run in another workspace. *@
+        <CommandBar Workspace="_shown" OpenRun="RunId ?? (PastRunId is null ? null : _live)" />
 
         @if (_shown is { } shown)
         {

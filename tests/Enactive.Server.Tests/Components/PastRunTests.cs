@@ -208,6 +208,32 @@ public sealed class PastRunTests : ComponentHost
         Assert.Equal("Back to the current run", back.GetAttribute("title"));
     }
 
+    /// <summary>
+    /// The run the screen showed last is remembered for a past run only - its Back, and the bar's Stop under it. On the
+    /// Runs screen without a run (the mark, or another workspace in the switcher) the bar is free: kept on the last run,
+    /// it was busy for a run not on screen, Run greyed and Stop cancelling a run in another workspace.
+    /// </summary>
+    [Fact]
+    public async Task Leaving_a_run_for_the_runs_screen_leaves_the_bar_free()
+    {
+        var root = Known("project");
+        var live = Runs.Start(ServerAuth.PrincipalOf(Users.Find("alice")!), root, "check the disks").Run!;
+        await _engine.Started.WaitAsync(TimeSpan.FromSeconds(10));
+        SignIn("alice");
+        var screen = Render<RunsScreen>(p => p.Add(s => s.RunId, live.Id));
+        screen.WaitForAssertion(() => Assert.False(Bar(screen, "Stop").HasAttribute("disabled")));
+
+        // The router moves the screen to "/": none of the run's address is left.
+        screen.Render(p => p.Add(s => s.RunId, null));
+
+        screen.WaitForAssertion(() => Assert.True(Bar(screen, "Stop").HasAttribute("disabled")));
+        Assert.False(Bar(screen, "Run").HasAttribute("disabled"));
+        Assert.False(live.Ended.IsCompleted);
+    }
+
+    private static AngleSharp.Dom.IElement Bar(IRenderedComponent<RunsScreen> screen, string name)
+        => screen.FindAll(".command-bar button").Single(b => b.TextContent.Trim() == name);
+
     /// <summary>An address naming a run the workspace does not have says so, rather than an empty frame.</summary>
     [Fact]
     public void A_run_the_workspace_does_not_have_is_said_to_be_missing()

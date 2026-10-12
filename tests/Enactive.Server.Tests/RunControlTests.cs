@@ -599,12 +599,36 @@ public sealed class RunControlTests : IDisposable
         File.WriteAllText(Path.Combine(_root, "outside.md"), "not the workspace's");
         var history = HistoryOf();
 
-        await history.DoAsync(As("alice"), _workspace, ServerHistory.Act.DeleteFile, Guid.Empty, "draft.md", "confirm", CancellationToken.None);
-        var (said, _) = await history.DoAsync(As("alice"), _workspace, ServerHistory.Act.DeleteFile, Guid.Empty, "..\\outside.md", "confirm", CancellationToken.None);
+        Assert.Equal(("deleted", true), history.DeleteFile(As("alice"), _workspace, "draft.md"));
+        var (said, _) = history.DeleteFile(As("alice"), _workspace, "..\\outside.md");
 
         Assert.False(File.Exists(Path.Combine(_workspace, "draft.md")));
         Assert.True(File.Exists(Path.Combine(_root, "outside.md")));
         Assert.Contains("not in this workspace", said);
+    }
+
+    /// <summary>
+    /// A file is deleted by an Operator only, whatever a page sent - a Viewer is refused and the card is not done with -
+    /// and an Operator's delete is audited with who did it. One way to delete a file: the history's actions
+    /// (<see cref="ServerHistory.DoAsync"/>) do not, so there is no second path that could come to check less.
+    /// </summary>
+    [Fact]
+    public async Task A_viewer_cannot_delete_a_file_and_an_operator_s_delete_is_audited()
+    {
+        File.WriteAllText(Path.Combine(_workspace, "draft.md"), "x");
+        var history = HistoryOf();
+
+        Assert.Equal(("Your role does not include acting on runs.", false), history.DeleteFile(As("vera"), _workspace, "draft.md"));
+        Assert.True(File.Exists(Path.Combine(_workspace, "draft.md")));
+        Assert.Equal("That is not something the history does.",
+            (await history.DoAsync(As("alice"), _workspace, ServerHistory.Act.DeleteFile, Guid.Empty, "draft.md", "confirm", CancellationToken.None)).Said);
+        Assert.True(File.Exists(Path.Combine(_workspace, "draft.md")));
+
+        history.DeleteFile(As("alice"), _workspace, "draft.md");
+
+        Assert.False(File.Exists(Path.Combine(_workspace, "draft.md")));
+        Assert.Contains(_users.AuditTrail(), e => e is { Account: "alice", Action: "file deleted" } && e.Detail == $"{_workspace}: draft.md (deleted)");
+        Assert.DoesNotContain(_users.AuditTrail(), e => e is { Account: "vera" });
     }
 
     // ── a workspace's run settings (the window's slider, worker box and staging switch) ─

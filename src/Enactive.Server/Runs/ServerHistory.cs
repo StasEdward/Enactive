@@ -193,8 +193,8 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
                     $"{known.RootPath}: {RunTitle.OneLine(checkpoint.Title)}");
                 return (kept ?? (putBack ? "Forgotten, and its files are put back." : "Forgotten."), null);
             }
-            case Act.DeleteFile:
-                return (DeleteFile(user, known.RootPath, path ?? "").Status, null);
+            // Not Act.DeleteFile: a file is deleted through DeleteFile alone, which also says whether its card is done with.
+            // A second way in that nothing called was a second path to keep checking the same as the first.
             default:
                 return ("That is not something the history does.", null);
         }

@@ -39,7 +39,9 @@
         }
         <div class="task-text">
             <h1 class="task-title" title="@d.Title">@d.Title</h1>
-            @if (d.Subtitle.Length > 0)
+            @* Shown when it says more than the title, as the window's (HasSubtitle) - and only when it was recorded: a run
+               from before the request was kept has none. *@
+            @if (d.Subtitle.Length > 0 && run.Request is { Length: > 0 })
             {
                 @* The request, as the live header keeps it: a finished run's is the one most likely to be copied - into the
                    command bar, or into a message about what went wrong. *@
