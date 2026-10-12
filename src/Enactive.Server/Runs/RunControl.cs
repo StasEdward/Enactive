@@ -101,6 +101,13 @@ internal interface IRunExecutor
     /// </summary>
     Func<string?, ModelReach> ReachOf => _ => ModelReach.Unknown;
 
+    /// <summary>
+    /// Why a background run of <paramref name="owner"/> in <paramref name="root"/> would be refused as it was composed, in
+    /// the composer's words, or null - asked before it is started, as the window asks (RunComposer.Refusal): a folder that
+    /// stages cannot have a run nobody watches. A stand-in with no workspaces to read refuses nothing.
+    /// </summary>
+    string? BackgroundRefusal(string root, string owner) => null;
+
     Task ExecuteAsync(ServerRun run, IDecisionHandler decisions, CancellationToken ct);
 }
 
@@ -238,6 +245,10 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
             return new(null, "Say what the run is to do.");
         if (Check(user, workspace, out var account, out var root) is { } refused)
             return new(null, refused);
+        // Refused here, where it was asked for, rather than as it is composed - by then it has taken a place in the line,
+        // and its only word would be an inbox item saying it failed to start.
+        if (background && executor.BackgroundRefusal(root, account!.Name) is { } notInTheBackground)
+            return new(null, notInTheBackground);
 
         ServerRun run;
         lock (_gate)
@@ -349,13 +360,18 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
             var tally = run.Session.Tally;
             if (!ran && run.Cancellation.IsCancellationRequested)
                 item = BackgroundRun.CancelledBeforeItRan(workspace, title);
-            else if (run.Refused is { } why)
+            // Refused before a single event: it never ran. Only then - something that throws after the run's events
+            // (keeping its proposals, closing its tools) set Refused too, and a run that did its work read "Failed to start".
+            else if (run.Refused is { } why && run.Session.RunId is null)
                 item = BackgroundRun.DidNotStart(workspace, title, why);
             else
             {
                 // Cancelled as it was composed: no event was drained to say so.
                 if (run.Cancellation.IsCancellationRequested && !tally.Ended)
                     tally.Cancelled();
+                // It ran, and what came after its events failed before the engine said how it ended.
+                else if (run.Refused is { } after && !tally.Ended)
+                    tally.Failed(after);
                 item = tally.Item(workspace, title);
             }
         }
@@ -501,6 +517,51 @@ internal sealed class EngineExecutor(ServerEngine engine, ServerStaging staging)
     public Func<string?, ModelReach> ReachOf
         => id => engine.Settings is { } settings ? ModelReaches.Of(settings, id) : ModelReach.Unknown;
 
+    public string? BackgroundRefusal(string root, string owner)
+        => engine.Workspaces.Find(root) is { } saved
+            ? RunComposer.Refusal(BackgroundRequest(WorkspaceInfo.For(root), "", owner, saved))
+            : null;
+
+    /// <summary>
+    /// A folder set to stage keeps a browser run's proposals on disk, for whoever applies them later (ServerStaging). Not
+    /// a scheduled or a background run's - nobody watches them (RunComposer refuses that) - nor a resumed one, which
+    /// never stages.
+    /// </summary>
+    internal static bool KeepsProposals(ServerRun run, WorkspaceEntry saved)
+        => run.Scheduled is null && !run.Background && saved.StageChanges && run.Resume is null;
+
+    /// <summary>The request a run is composed from: who it is for, whether anybody watches it, and the folder's settings.</summary>
+    internal static RunRequest RequestFor(ServerRun run, WorkspaceInfo workspace, WorkspaceEntry saved, string? keepProposalsIn)
+    {
+        // The service account's own run, like the console's tick: no principal, its unwatched approvals.
+        if (run.Scheduled is not null)
+            return new RunRequest(workspace, run.Prompt, IntentSource.Schedule, Spec: run.Spec) { Defaults = saved.Defaults };
+        if (run.Background)
+            return BackgroundRequest(workspace, run.Prompt, run.Owner, saved, run.TaskId, run.Resume, run.Spec);
+        // A run from the browser (IntentSource.Web): attended, with the shell when the folder's level allows it, and
+        // the person who started it named - whose remembered approvals answer for it (RunComposer, ApprovalStore rule 5).
+        return new RunRequest(workspace, run.Prompt, IntentSource.Web, run.TaskId, run.Resume, run.Spec,
+            Stage: saved.StageChanges, Principal: run.Owner)
+        {
+            Defaults = saved.Defaults,
+            KeepProposalsIn = keepProposalsIn
+        };
+    }
+
+    /// <summary>
+    /// A background run from the browser, composed as the window's background run is (IntentSource.Inbox): nobody watches
+    /// it. It was composed as a browser run (Web), which the composer reads as watched, and the owner's "Allow (workspace)"
+    /// answered its questions - a plain approval holds only where somebody is watching (ApprovalStore, rule 4). Its owner is
+    /// still named: only their own approvals for unwatched runs answer for it (rule 5). The folder's staging is asked for as
+    /// it is, so a folder that stages is refused in the composer's words rather than written to directly.
+    /// </summary>
+    private static RunRequest BackgroundRequest(WorkspaceInfo workspace, string prompt, string owner, WorkspaceEntry saved,
+        Guid? taskId = null, RunCheckpoint? resume = null, Core.Templates.ResolvedTaskSpec? spec = null)
+        => new(workspace, prompt, IntentSource.Inbox, taskId, resume, spec, Stage: saved.StageChanges, Principal: owner)
+        {
+            Defaults = saved.Defaults
+        };
+
     public async Task ExecuteAsync(ServerRun run, IDecisionHandler decisions, CancellationToken ct)
     {
         // First, before anything is composed: the engine is the service's one and reports every model call through one
@@ -511,23 +572,9 @@ internal sealed class EngineExecutor(ServerEngine engine, ServerStaging staging)
         var workspace = WorkspaceInfo.Adopt(run.Workspace);
         var saved = engine.Workspaces.Find(run.Workspace) ?? engine.Workspaces.Touch(run.Workspace);
 
-        // A run from the browser (IntentSource.Web): attended, with the shell when the folder's level allows it, and
-        // the person who started it named - whose remembered approvals answer for it (RunComposer, ApprovalStore rule 5).
-        // A background run from the browser too: a signed-in person started it and will answer its parked question; only
-        // its decision handler differs (RunControl.LifeAsync).
         var scheduled = run.Scheduled;
-        // A folder set to stage keeps a browser run's proposals on disk, for whoever applies them later (ServerStaging).
-        // Not a scheduled run's - nobody watches it (RunComposer refuses that) - nor a resumed one, which never stages.
-        var keep = scheduled is null && saved.StageChanges && run.Resume is null ? staging.Begin(run.Workspace, run.Id, run.Owner, run.Prompt) : null;
-        var request = scheduled is not null
-            // The service account's own run, like the console's tick: no principal, its unwatched approvals.
-            ? new RunRequest(workspace, run.Prompt, IntentSource.Schedule, Spec: run.Spec) { Defaults = saved.Defaults }
-            : new RunRequest(workspace, run.Prompt, IntentSource.Web, run.TaskId, run.Resume, run.Spec,
-                Stage: saved.StageChanges, Principal: run.Owner)
-            {
-                Defaults = saved.Defaults,
-                KeepProposalsIn = keep
-            };
+        var keep = KeepsProposals(run, saved) ? staging.Begin(run.Workspace, run.Id, run.Owner, run.Prompt) : null;
+        var request = RequestFor(run, workspace, saved, keep);
         Core.Artifacts.IArtifactStore? artifacts = null;
         try
         {

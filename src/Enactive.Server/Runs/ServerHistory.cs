@@ -193,13 +193,14 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
     }
 
     /// <summary>
-    /// "Delete these N": the runs <paramref name="filter"/> shows, and only those - picked by the window's own rule
-    /// (RunHousekeeping.Where over the history as it is listed), never by a second one of the page's: two rules behind one
-    /// button could disagree about a row, and the row they disagreed on would be gone. The page asks first, with the count
-    /// (RunHistoryService.DeleteMany). What tells the person, and how many went.
+    /// "Delete these N": the runs the page showed - <paramref name="shown"/>, picked there by the window's rule
+    /// (RunHousekeeping.Where) - and that are still in the history. Not the filter chosen again at the click: a run that
+    /// ended between showing and confirming joined the filter and was deleted unseen, by a question whose count did not
+    /// include it. The page asks first, with the count (RunHistoryService.DeleteMany). What tells the person, and how
+    /// many went.
     /// </summary>
     public async Task<(string Said, int Deleted)> DeleteShownAsync(
-        ClaimsPrincipal user, string root, RunFilter filter, DateTimeOffset now, CancellationToken ct)
+        ClaimsPrincipal user, string root, IReadOnlyCollection<Guid> shown, CancellationToken ct)
     {
         if (Operating(user, root) is not { } known)
             return (NotOperating(user), 0);
@@ -208,20 +209,28 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         var list = await _history.LoadAsync(known.RootPath, ct);
         if (list.Problem is { } unreadable)
             return (unreadable, 0);
-        var shown = RunHousekeeping.Where(list.Runs, filter, now);
-        if (shown.Count == 0)
+        var ids = shown.ToHashSet();
+        var doomed = list.Runs.Where(r => ids.Contains(r.RunId)).ToList();
+        if (doomed.Count == 0)
             return ("There are no runs to delete.", 0);
 
-        var refused = await _history.DeleteAsync(known.RootPath, shown, ct);
+        var refused = await _history.DeleteAsync(known.RootPath, doomed, ct);
         // Some could not be deleted, and the bulk delete does not say which: the history is read again, so only the runs
         // really gone are audited as deleted - an audit naming a run that is still there is a record that lies.
-        var gone = refused is null
-            ? shown
-            : shown.ExceptBy((await _history.LoadAsync(known.RootPath, ct)).Runs.Select(r => r.RunId), r => r.RunId).ToList();
+        var gone = refused is null ? doomed : ConfirmedGone(doomed, await _history.LoadAsync(known.RootPath, ct));
+        if (gone is null)
+            return (refused + " The history could not be read again to tell which.", 0);
         foreach (var run in gone)
             users.Audit(who, "run deleted", $"{known.RootPath}: {RunTitle.For(run)}");
         return (refused ?? $"{gone.Count} run{(gone.Count == 1 ? "" : "s")} deleted; the files they wrote are where they were.", gone.Count);
     }
+
+    /// <summary>
+    /// Which of <paramref name="deleted"/> the history read <paramref name="after"/> no longer has - or null when it could not
+    /// be read. An unreadable history lists no runs, and every run asked for read as gone and was audited as deleted.
+    /// </summary>
+    internal static IReadOnlyList<RunSummary>? ConfirmedGone(IReadOnlyList<RunSummary> deleted, HistoryList after)
+        => after.Problem is not null ? null : deleted.ExceptBy(after.Runs.Select(r => r.RunId), r => r.RunId).ToList();
 
     private async Task<Core.History.RunRecord?> RecordAsync(string root, Guid id, CancellationToken ct)
     {

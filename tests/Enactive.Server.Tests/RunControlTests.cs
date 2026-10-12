@@ -63,6 +63,19 @@ public sealed class RunControlTests : IDisposable
 
         /// <summary>How the engine says the run ended once released; null, Completed with no payload as before.</summary>
         public RunOutcomeKind? EndWith { get; set; }
+
+        /// <summary>
+        /// A parked question ends the run at it, NeedsUser, as the engine's orchestrator ends it - rather than escaping the
+        /// executor, which is what the other tests' timed-out questions do.
+        /// </summary>
+        public bool StopAtAParkedQuestion { get; set; }
+
+        /// <summary>Thrown after the run's events have all been drained - as keeping its proposals or closing its tools can.</summary>
+        public string? ThrowAfterDrain { get; set; }
+
+        /// <summary>What the executor says of a background run before it starts (IRunExecutor.BackgroundRefusal).</summary>
+        public string? RefuseBackground { get; set; }
+        public string? BackgroundRefusal(string root, string owner) => RefuseBackground;
         public string? Problem => null;
         public SessionApprovals Session { get; } = new();
         public ApprovalStore Approvals { get; } = approvals;
@@ -80,10 +93,21 @@ public sealed class RunControlTests : IDisposable
             events.Writer.TryWrite(Ev(EventKind.StepStarted, "step 1: write the digest"));
             if (Ask)
             {
-                var outcome = await decisions.RequestAsync(new DecisionRequest(Guid.NewGuid(), "Approve write_file", "digest.md",
-                    [new("allow", "Allow"), new("deny", "Deny")], "allow", Subject: "write_file",
-                    Action: new(runId, Guid.NewGuid().ToString(), "write_file", "{}", run.Workspace)), ct);
-                lock (Answers) Answers.Add(outcome.OptionId);
+                try
+                {
+                    var outcome = await decisions.RequestAsync(new DecisionRequest(Guid.NewGuid(), "Approve write_file", "digest.md",
+                        [new("allow", "Allow"), new("deny", "Deny")], "allow", Subject: "write_file",
+                        Action: new(runId, Guid.NewGuid().ToString(), "write_file", "{}", run.Workspace)), ct);
+                    lock (Answers) Answers.Add(outcome.OptionId);
+                }
+                catch (Enactive.Agents.DecisionPendingException parked) when (StopAtAParkedQuestion)
+                {
+                    events.Writer.TryWrite(new(Guid.NewGuid(), Guid.NewGuid(), runId, DateTimeOffset.UtcNow, EventKind.TaskFailed,
+                        nameof(RunOutcomeKind.NeedsUser), WorkEventPayload.OutcomePayload(RunOutcomeKind.NeedsUser, parked.Request.Topic)));
+                    events.Writer.Complete();
+                    await drained;
+                    return;
+                }
             }
             var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (_releases) _releases.Add(release);
@@ -94,6 +118,8 @@ public sealed class RunControlTests : IDisposable
                 : Ev(EventKind.TaskCompleted, "Completed"));
             events.Writer.Complete();
             await drained;
+            if (ThrowAfterDrain is { } after)
+                throw new IOException(after);
         }
 
         public void ReleaseAll()
@@ -771,6 +797,7 @@ public sealed class RunControlTests : IDisposable
     public async Task A_background_run_asks_nobody_and_parks_its_question()
     {
         _engine.Ask = true;
+        _engine.StopAtAParkedQuestion = true;
 
         var (run, refusal) = _control.StartBackground(As("alice"), _workspace, "write the digest");
 
@@ -781,7 +808,93 @@ public sealed class RunControlTests : IDisposable
         Assert.Equal(typeof(Enactive.Agents.ParkingDecisionHandler), Assert.Single(_engine.Handlers));
         Assert.Empty(_engine.Answers);
         Assert.Null(run.Questions.Pending);
+        Assert.Null(run.Refused);
+        var item = Assert.Single(await InboxItems());
+        Assert.Equal("decision", item.Kind);
+        Assert.Contains("Approve write_file", item.Summary);
         Assert.Contains(_users.AuditTrail(), e => e is { Account: "alice", Action: "run started in the background" });
+    }
+
+    /// <summary>
+    /// Nobody watches a background run, so its owner's plain "Allow (workspace)" - given for runs somebody watches - does
+    /// not answer its question: it is parked (ApprovalStore, rule 4). It was composed as a browser run, which the composer
+    /// reads as watched, and the plain approval answered. Shown on the request the executor composes and the composer's
+    /// own reading of it, the engine itself being replaced by a script here.
+    /// </summary>
+    [Fact]
+    public async Task A_background_run_is_one_nobody_watches_and_a_plain_approval_does_not_answer_it()
+    {
+        var run = _control.StartBackground(As("alice"), _workspace, "write the digest").Run!;
+        var foreground = _control.Start(As("alice"), _workspace, "write the index").Run!;
+        var saved = new Enactive.Workspace.WorkspaceEntry("project", _workspace, DateTimeOffset.Now);
+        var workspace = Enactive.Core.Context.WorkspaceInfo.For(_workspace);
+        var store = new ApprovalStore(Path.Combine(_root, "approvals.json"));
+        store.Approve(_workspace, "write_file", principal: "alice");
+
+        var request = EngineExecutor.RequestFor(run, workspace, saved, null);
+        var watchedRequest = EngineExecutor.RequestFor(foreground, workspace, saved, null);
+
+        Assert.Equal((Enactive.Core.Intents.IntentSource.Inbox, "alice"), (request.Source, request.Principal));
+        Assert.False(Enactive.Settings.RunComposer.Attended(request));
+        Assert.Null(Enactive.Settings.RunComposer.Refusal(request));
+        var question = new DecisionRequest(Guid.NewGuid(), "Approve write_file", "digest.md",
+            [new("allow", "Allow"), new("deny", "Deny")], "allow", Subject: "write_file",
+            Action: new(Guid.NewGuid(), Guid.NewGuid().ToString(), "write_file", "{}", _workspace));
+        IDecisionHandler Answering(Enactive.Settings.RunRequest r) => new RememberedApprovals(new Enactive.Agents.ParkingDecisionHandler(),
+            _workspace, store, null, watched: Enactive.Settings.RunComposer.Attended(r), r.Principal);
+        await Assert.ThrowsAsync<Enactive.Agents.DecisionPendingException>(() => Answering(request).RequestAsync(question, CancellationToken.None));
+        // The same approval answers the same question for a run somebody watches - the difference is the run, not the test.
+        Assert.Equal("allow", (await Answering(watchedRequest).RequestAsync(question, CancellationToken.None)).OptionId);
+
+        await _engine.ReleaseNextAsync();
+        await _engine.ReleaseNextAsync();
+    }
+
+    /// <summary>
+    /// A folder that stages cannot have a run nobody watches - it would write to the files while the history said the
+    /// changes were staged. Refused as it is asked for, in the composer's words, as the window refuses it; never staged.
+    /// </summary>
+    [Fact]
+    public void A_background_run_in_a_folder_that_stages_is_refused_in_the_composer_s_words()
+    {
+        var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        engine.Workspaces.Touch(_workspace);
+        engine.Workspaces.SaveSettings(_workspace, 2, null, true);
+        var executor = new EngineExecutor(engine, new ServerStaging(_users, engine));
+
+        var refusal = executor.BackgroundRefusal(_workspace, "alice");
+
+        Assert.Contains("a run nobody is watching cannot stage", refusal);
+        Assert.Null(executor.BackgroundRefusal(Path.Combine(_root, "never-seen"), "alice"));
+        var staged = engine.Workspaces.Find(_workspace)!;
+        _engine.RefuseBackground = refusal;
+        var (run, said) = _control.StartBackground(As("alice"), _workspace, "write the digest");
+        Assert.Null(run);
+        Assert.Equal(refusal, said);
+        Assert.Empty(_control.List(As("alice")));
+        // A run that got through anyway - the folder set to stage after it started - keeps no proposals: it is refused
+        // as it is composed, in the same words.
+        var started = new ServerRun("alice", _workspace, "write the digest", new RunQueue(1).Enqueue(_workspace)) { Background = true };
+        Assert.False(EngineExecutor.KeepsProposals(started, staged));
+        Assert.Equal(refusal, Enactive.Settings.RunComposer.Refusal(
+            EngineExecutor.RequestFor(started, Enactive.Core.Context.WorkspaceInfo.For(_workspace), staged, null)));
+    }
+
+    /// <summary>
+    /// Something that fails after the run's events - keeping its proposals, closing its tools - does not make a run that
+    /// did its work read "Failed to start" in the inbox.
+    /// </summary>
+    [Fact]
+    public async Task A_background_run_that_ran_does_not_say_it_failed_to_start()
+    {
+        _engine.ThrowAfterDrain = "The proposals could not be kept.";
+
+        var run = _control.StartBackground(As("alice"), _workspace, "write the digest").Run!;
+        await _engine.ReleaseNextAsync();
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var item = Assert.Single(await InboxItems());
+        Assert.Equal(("result", "Completed · 0 artifact(s)"), (item.Kind, item.Summary));
     }
 
     /// <summary>
@@ -877,7 +990,10 @@ public sealed class RunControlTests : IDisposable
         var today = Recorded("today's digest");
         var history = HistoryOf();
 
-        var (said, deleted) = await history.DeleteShownAsync(As("alice"), _workspace, RunFilter.OlderThanAWeek, now, CancellationToken.None);
+        var shown = RunHousekeeping.Where((await history.ListAsync(As("alice"), _workspace, CancellationToken.None)).List!.Runs,
+            RunFilter.OlderThanAWeek, now).Select(r => r.RunId).ToList();
+
+        var (said, deleted) = await history.DeleteShownAsync(As("alice"), _workspace, shown, CancellationToken.None);
 
         Assert.Equal(1, deleted);
         Assert.Contains("1 run", said);
@@ -888,13 +1004,52 @@ public sealed class RunControlTests : IDisposable
         Assert.Contains("last month's digest", audited.Detail);
     }
 
+    /// <summary>
+    /// A run that ended between showing the list and confirming is in the filter now, but nobody saw it or counted it:
+    /// it stays. Deleted are the runs the page showed, still there.
+    /// </summary>
+    [Fact]
+    public async Task Delete_these_leaves_a_run_the_page_did_not_show()
+    {
+        var first = Recorded("this morning's digest");
+        var second = Recorded("this afternoon's digest");
+        var history = HistoryOf();
+        var shown = (await history.ListAsync(As("alice"), _workspace, CancellationToken.None)).List!.Runs.Select(r => r.RunId).ToList();
+        var later = Recorded("the run that ended meanwhile");
+
+        var (_, deleted) = await history.DeleteShownAsync(As("alice"), _workspace, [.. shown, Guid.NewGuid()], CancellationToken.None);
+
+        Assert.Equal(2, deleted);
+        Assert.Equal(later.RunId, Assert.Single((await history.ListAsync(As("alice"), _workspace, CancellationToken.None)).List!.Runs).RunId);
+        Assert.Equal(2, _users.AuditTrail().Count(e => e.Action == "run deleted"));
+        Assert.DoesNotContain(_users.AuditTrail(), e => e.Detail?.Contains("meanwhile") == true);
+        _ = (first, second);
+    }
+
+    /// <summary>
+    /// After a bulk delete that could not do them all, only what the history no longer has is gone. A history that could
+    /// not be read again lists nothing, and every run asked for read as gone - and was audited as deleted.
+    /// </summary>
+    [Fact]
+    public void Runs_are_confirmed_gone_only_by_a_history_that_could_be_read()
+    {
+        var at = DateTimeOffset.Now;
+        RunSummary Summary(string request) => new(Guid.NewGuid(), Guid.NewGuid(), request, "qwen", at, at, "Completed", [], []);
+        var (a, b) = (Summary("a"), Summary("b"));
+
+        Assert.Null(ServerHistory.ConfirmedGone([a, b], new HistoryList([], [], "The store could not be reached.")));
+        Assert.Equal([a.RunId], ServerHistory.ConfirmedGone([a, b], new HistoryList([], [b], null))!.Select(r => r.RunId));
+    }
+
     [Fact]
     public async Task A_viewer_cannot_delete_runs()
     {
         RecordedAt(DateTimeOffset.Now.AddDays(-10), "last month's digest");
         var history = HistoryOf();
 
-        var (said, deleted) = await history.DeleteShownAsync(As("vera"), _workspace, RunFilter.All, DateTimeOffset.Now, CancellationToken.None);
+        var shown = (await history.ListAsync(As("vera"), _workspace, CancellationToken.None)).List!.Runs.Select(r => r.RunId).ToList();
+
+        var (said, deleted) = await history.DeleteShownAsync(As("vera"), _workspace, shown, CancellationToken.None);
 
         Assert.Equal(0, deleted);
         Assert.Contains("role does not include", said);

@@ -38,7 +38,8 @@ namespace Enactive.Settings;
 /// <param name="Principal">
 /// Who started the run, for a host that serves several people under one account - the service's browser interface
 /// (<see cref="IntentSource.Web"/>), which must name its signed-in account. Only that person's remembered approvals
-/// answer for the run (ApprovalStore, rule 5). Null on the desktop and the console: their runs are the account's own.
+/// answer for the run (ApprovalStore, rule 5) - also when the service runs it in the background (<see cref="IntentSource.Inbox"/>).
+/// Null on the desktop and the console: their runs are the account's own.
 /// </param>
 public sealed record RunRequest(
     WorkspaceInfo Workspace,
@@ -322,9 +323,11 @@ public static class RunComposer
 
     /// <summary>
     /// Somebody is at a screen for this run: the command bar of the window or the console, or the service's browser
-    /// interface - a person who started it there and is shown its questions there.
+    /// interface - a person who started it there and is shown its questions there. Public so a host can check the request
+    /// it builds is read as it means it: the service's background run was composed as a browser run, and so as watched,
+    /// and its owner's approvals for watched runs answered a run nobody watched (ApprovalStore, rule 4).
     /// </summary>
-    private static bool Attended(RunRequest request) => request.Source is IntentSource.CommandBar or IntentSource.Web;
+    public static bool Attended(RunRequest request) => request.Source is IntentSource.CommandBar or IntentSource.Web;
 
     /// <summary>
     /// The host's decisions, behind the answers a person already gave for good - except for a phone,
