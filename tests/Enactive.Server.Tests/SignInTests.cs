@@ -262,7 +262,7 @@ public sealed partial class SignInTests : IAsyncLifetime
     {
         // The old addresses too: what a workspace's id is, is not told to somebody who has not signed in.
         foreach (var address in new[] { "/", "/history?ws=x", "/workspaces", "/history/run?ws=x&id=x", "/file?ws=x&path=y", "/library/template?ws=x",
-                     "/library?ws=x", "/library/schedule?ws=x&id=x", "/logs", "/admin/settings" })
+                     "/library?ws=x", "/library/schedule?ws=x&id=x", "/logs", "/admin/settings", "/admin/users", "/admin/audit" })
         {
             var response = await NewBrowser().GetAsync(address);
             Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
@@ -432,6 +432,65 @@ public sealed partial class SignInTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.Redirect, old.StatusCode);
         Assert.Equal("/settings", old.Headers.Location!.OriginalString);
+    }
+
+    /// <summary>
+    /// The old accounts and audit pages' addresses land on the pages the rail names - where anybody but an Admin is told
+    /// the role does not include them, as the old pages told them.
+    /// </summary>
+    [Fact]
+    public async Task The_old_accounts_and_audit_addresses_land_on_their_pages()
+    {
+        var browser = NewBrowser();
+        await SignInAsync(browser, "alice", Password);
+
+        var accounts = await browser.GetAsync("/admin/users");
+        Assert.Equal(HttpStatusCode.Redirect, accounts.StatusCode);
+        Assert.Equal("/accounts", accounts.Headers.Location!.OriginalString);
+
+        var audit = await browser.GetAsync("/admin/audit");
+        Assert.Equal(HttpStatusCode.Redirect, audit.StatusCode);
+        Assert.Equal("/audit", audit.Headers.Location!.OriginalString);
+    }
+
+    /// <summary>
+    /// The accounts page's old form post is gone with the page: a change to an account is made only on the live page,
+    /// through AccountAdmin as the person. A post an Admin's browser still sends there changes nothing.
+    /// </summary>
+    [Fact]
+    public async Task The_old_accounts_post_changes_nothing()
+    {
+        _users.Add("ada", Password, Role.Admin);
+        var browser = NewBrowser();
+        await SignInAsync(browser, "ada", Password);
+        var token = await TokenFromAsync(await browser.GetAsync("/signin"));
+
+        var response = await browser.PostAsync("/admin/users/act", new()
+        {
+            ["__RequestVerificationToken"] = token, ["act"] = "disable", ["name"] = "alice"
+        });
+
+        Assert.NotEqual(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.False(_users.Find("alice")!.Disabled);
+        Assert.DoesNotContain(_users.AuditTrail(), e => e.Action == "account disable");
+    }
+
+    /// <summary>
+    /// Sign-in stands on its own: nobody is signed in yet, so there is no top bar to name them and no rail of sections to
+    /// offer - only the brand and the form, in the theme. Drawn in the shell, it had a top bar that named nobody beside an
+    /// empty rail.
+    /// </summary>
+    [Fact]
+    public async Task Sign_in_is_the_brand_and_the_form_without_the_shell()
+    {
+        var page = await (await NewBrowser().GetAsync("/signin")).Content.ReadAsStringAsync();
+
+        Assert.DoesNotContain("class=\"shell\"", page);
+        Assert.DoesNotContain("class=\"top\"", page);
+        Assert.DoesNotContain("class=\"rail\"", page);
+        Assert.Contains("brand/mark-loop.svg", page);
+        Assert.Contains("class=\"signin-card\"", page);
+        Assert.Contains("autocomplete=\"current-password\"", page);
     }
 
     [Fact]

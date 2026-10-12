@@ -1,0 +1,233 @@
+@page "/accounts"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = "Admin")]
+@using System.Security.Claims
+@using Enactive.Server.Accounts
+@using Enactive.Server.Components.Ui
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AccountAdmin Service
+
+<PageTitle>Accounts - Enactive</PageTitle>
+
+@* The service's accounts (web only - the desktop has none), drawn as the settings' lists are: one card per account, its
+   edge what stops it (Looks.Account), the pencil on the card; Add under the list; each change in a dialog. Every
+   change goes to AccountAdmin as the person signed in, which checks at that change that the session is still an
+   Admin's, keeps the rules (the last Admin, the password's length) and audits it. The page decides only what to
+   offer. *@
+
+<div class="admin-screen">
+    <h1 class="admin-title">Accounts</h1>
+    @if (_refusal is { } refusal)
+    {
+        <p class="said" role="alert">@refusal</p>
+    }
+    else
+    {
+        @* ADR 0002, trust model: said where a role is given, because it is where somebody would assume otherwise. *@
+        <div class="card tone-warning admin-trust">
+            <p>The people signed in to this service trust each other. A run started here runs as the service's own
+                account, with its shell when the folder allows it - so an Operator can, through a run, read what that
+                account can read, the other people's settings and secrets included. Roles decide what each may do on these
+                pages, not what they could reach through a run. Give Operator and Admin to people you would give a login
+                to this machine.</p>
+        </div>
+
+        <p class="hint">Green can sign in; amber is locked after too many wrong passwords and frees itself; grey is disabled. The first administrator is made on the server itself, never here.</p>
+
+        @if (_said is { } said)
+        {
+            <p class="hint admin-said" role="status">@said</p>
+        }
+
+        <ul class="cards settings-cards" aria-label="Accounts">
+            @foreach (var row in _rows)
+            {
+                <li class="@($"card settings-card {Looks.Account(row.Standing)}")">
+                    <span class="settings-card-text">
+                        <span class="card-title">@row.Name</span>
+                        <span class="card-meta">@row.Meta</span>
+                    </span>
+                    <RowIcons Edit="() => OpenEdit(row)" Of="@row.Name" />
+                </li>
+            }
+        </ul>
+        <div class="settings-section-actions">
+            <button type="button" class="btn" @onclick="OpenAdd">Add</button>
+        </div>
+    }
+</div>
+
+@if (_adding)
+{
+    <Dialog Title="Add an account" OnClose="Close">
+        <ChildContent>
+            <div class="admin-form">
+                <label class="label" for="account-name">Name</label>
+                <input id="account-name" autocomplete="off" @bind="_name" />
+                <label class="label" for="account-role">Role</label>
+                @RolePicker
+                @PasswordBoxes
+                @Problem
+            </div>
+        </ChildContent>
+        <Actions>
+            <button type="button" class="btn primary" @onclick="Add">Add</button>
+            <button type="button" class="btn" @onclick="Close">Cancel</button>
+        </Actions>
+    </Dialog>
+}
+
+@if (_editing is { } editing)
+{
+    <Dialog Title="@editing.Name" OnClose="Close">
+        <ChildContent>
+            <div class="admin-form">
+                <label class="label" for="account-role">Role</label>
+                <div class="admin-inline">
+                    @RolePicker
+                    <button type="button" class="btn" @onclick="SetRole">Set role</button>
+                </div>
+                <p class="hint">Another role ends the account's sessions: its pages ask it to sign in again.</p>
+
+                <span class="label">State</span>
+                <div class="admin-inline">
+                    <span class="admin-state">@editing.State</span>
+                    @if (editing.Standing == AccountStanding.Disabled)
+                    {
+                        <button type="button" class="btn" @onclick="() => Act(AccountAdmin.Act.Enable, null, withPassword: false)">Enable</button>
+                    }
+                    else
+                    {
+                        <button type="button" class="btn destructive" @onclick="() => Act(AccountAdmin.Act.Disable, null, withPassword: false)">Disable</button>
+                    }
+                </div>
+
+                @PasswordBoxes
+                <p class="hint">A new password ends the account's sessions and lifts a lockout.</p>
+                <div class="admin-inline">
+                    <button type="button" class="btn" @onclick="() => Act(AccountAdmin.Act.Password, null, withPassword: true)">Set password</button>
+                </div>
+                @Problem
+            </div>
+        </ChildContent>
+        <Actions>
+            <button type="button" class="btn" @onclick="Close">Close</button>
+        </Actions>
+    </Dialog>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    private ClaimsPrincipal _user = new();
+    private string? _refusal;
+    private IReadOnlyList<AccountRow> _rows = [];
+    private string? _said;
+
+    private bool _adding;
+    private AccountRow? _editing;
+    private string? _problem;
+    private string _name = "";
+    private Role _role = Role.Operator;
+
+    // What was typed in the password boxes. Taken from each keystroke and never bound back to the boxes: a bound box is
+    // drawn with its value, so every time the page drew itself again the password went back to the browser in the update.
+    private string _password = "";
+    private string _again = "";
+
+    // The boxes are drawn anew when this changes (@key), which is how they are emptied after a try: they hold no value
+    // the page could set to empty.
+    private int _boxes;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _user = (await Auth).User;
+        Load();
+    }
+
+    /// <summary>The accounts as the store has them now - or why this person may not see them.</summary>
+    private void Load()
+    {
+        _refusal = Service.Refusal(_user);
+        _rows = _refusal is null ? Service.List(_user).Select(a => AccountRow.Of(a, DateTimeOffset.UtcNow)).ToList() : [];
+    }
+
+    private void OpenAdd()
+    {
+        Close();
+        _adding = true;
+        _role = Role.Operator;
+    }
+
+    private void OpenEdit(AccountRow row)
+    {
+        Close();
+        _editing = row;
+        _role = row.Role;
+    }
+
+    private void Close()
+    {
+        _adding = false;
+        _editing = null;
+        _problem = null;
+        _name = "";
+        EmptyBoxes();
+    }
+
+    private void Add() => Act(AccountAdmin.Act.Add, _name, withPassword: true);
+
+    private void SetRole() => Act(AccountAdmin.Act.Role, null, withPassword: false);
+
+    /// <summary>
+    /// One change, as the person signed in. Made, the dialog closes and the page says what was done; refused, the dialog
+    /// stays with the reason and everything but the password for another try.
+    /// </summary>
+    private void Act(string act, string? name, bool withPassword)
+    {
+        var change = Service.Do(_user, act, name ?? _editing?.Name ?? "", _role.ToString(),
+            withPassword ? _password : null, withPassword ? _again : null);
+        // Emptied after every try, made or refused: a password left in a box is one more place it waits to be read.
+        EmptyBoxes();
+        if (change.Done)
+        {
+            Close();
+            _said = change.Said;
+        }
+        else
+        {
+            _problem = change.Said;
+            _said = null;
+        }
+        Load();
+    }
+
+    private void EmptyBoxes()
+    {
+        _password = "";
+        _again = "";
+        _boxes++;
+    }
+
+    private RenderFragment RolePicker => @<select id="account-role" @bind="_role">
+                                              <option value="@Role.Viewer">Viewer - reads runs and logs</option>
+                                              <option value="@Role.Operator">Operator - runs tasks, answers their questions</option>
+                                              <option value="@Role.Admin">Admin - also settings and accounts</option>
+                                          </select>;
+
+    // autocomplete="new-password": a browser offers to make one and does not fill in the Admin's own.
+    private RenderFragment PasswordBoxes => @<div class="admin-form" @key="_boxes">
+                                                 <label class="label" for="account-password">@(_adding ? "Password" : "New password") (@UserStore.MinimumPasswordLength characters or more)</label>
+                                                 <input id="account-password" type="password" autocomplete="new-password"
+                                                        @oninput="e => _password = e.Value?.ToString() ?? string.Empty" />
+                                                 <label class="label" for="account-again">Again</label>
+                                                 <input id="account-again" type="password" autocomplete="new-password"
+                                                        @oninput="e => _again = e.Value?.ToString() ?? string.Empty" />
+                                             </div>;
+
+    private RenderFragment Problem => @<text>
+                                          @if (_problem is { } problem)
+                                          {
+                                              <p class="settings-problem" role="alert">@problem</p>
+                                          }
+                                      </text>;
+}

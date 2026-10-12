@@ -150,13 +150,6 @@ input, textarea { font: inherit; background: var(--bg-card); color: var(--text);
 .where, .state, .subtitle { color: var(--text-muted); }
 .state, .where { margin-left: 8px; }
 
-.signin { max-width: 320px; }
-.signin label { display: block; margin: 8px 0; }
-.signin input { display: block; width: 100%; }
-
-.start { display: grid; gap: 8px; max-width: 640px; margin-bottom: 24px; }
-.start input, .start textarea { display: block; width: 100%; }
-
 .list { list-style: none; padding: 0; margin: 0; }
 .list li { padding: 6px 0; border-bottom: 1px solid var(--border); }
 .list li.local { color: var(--success); }
@@ -169,27 +162,15 @@ input, textarea { font: inherit; background: var(--bg-card); color: var(--text);
 .cards { padding-left: 0; list-style: none; }
 .entries { margin: 4px 0 0; padding-left: 18px; font-family: var(--font-mono); font-size: 0.85rem; }
 
-.timeline { border-collapse: collapse; font-size: 0.9rem; width: 100%; }
-.timeline td { padding: 2px 8px; vertical-align: top; border-bottom: 1px solid var(--border); }
-.timeline .when, .timeline .kind { color: var(--text-muted); white-space: nowrap; }
-.timeline tr.failed td { color: var(--danger); }
-.timeline tr.refused td { color: var(--warning); }
-.timeline tr.succeeded td { color: var(--success); }
-.timeline tr.quiet td { color: var(--text-faint); }
 
 .file { white-space: pre-wrap; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; overflow: auto; }
 
-.warning { color: var(--warning); margin: 4px 0; }
-button.secondary { background: var(--bg-card); color: var(--text); border-color: var(--border); }
 .answers .cancel { align-self: center; }
 .body { white-space: pre-wrap; max-width: 760px; }
-form.inline { display: inline-flex; gap: 4px; margin: 2px 6px 2px 0; }
 th { text-align: left; color: var(--text-muted); font-weight: normal; }
 select { font: inherit; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px; }
 main > label { display: block; margin: 4px 0; }
 main > label input:not([type="checkbox"]), main > label select, main > label textarea { display: block; width: 100%; max-width: 720px; }
-.start.wide { max-width: 960px; }
-.start.wide textarea { font-family: var(--font-mono); font-size: 0.85rem; }
 
 /* ── Text, as Styles/Controls.axaml sets it ─────────────────────────────────────────────────────────────────────── */
 
@@ -785,3 +766,41 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .hint-mark > summary:hover, .hint-mark[open] > summary { color: var(--accent); border-color: var(--accent); }
 .hint-mark-text { position: absolute; z-index: 30; top: 20px; left: 0; width: 360px; margin: 0; padding: 10px 12px; font-size: 12px; font-weight: 400;
   color: var(--text-body); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 6px; white-space: pre-line; }
+
+/* ── Accounts and Audit (Pages/AccountsScreen.razor, AuditScreen.razor; web only): the settings' lists on a page of
+   their own - the cards, labels, hints and dialogs of a settings section, one column as wide as a section's pane. ── */
+.admin-screen { display: flex; flex-direction: column; gap: 6px; max-width: 860px; }
+.admin-screen.admin-wide { max-width: none; }
+.admin-screen p { margin: 0; }
+.admin-title { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+/* The trust model (ADR 0002): a card on the warning edge, read before any role is given. */
+.admin-trust { margin: 0 0 4px; color: var(--text-body); font-size: 12px; }
+.admin-said { color: var(--text-body); }
+.admin-form { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.admin-form input:not([type="checkbox"]), .admin-form select { width: 100%; box-sizing: border-box; }
+.admin-form .label { margin: 6px 0 0; }
+.admin-inline { display: flex; align-items: center; gap: 8px; }
+.admin-inline select { flex: 1; }
+.admin-state { flex: 1; font-size: 12px; color: var(--text-body); }
+.audit-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.audit-table th { padding: 4px 8px; font-size: 11px; font-weight: 700; color: var(--text-muted); border-bottom: 1px solid var(--border-strong); }
+.audit-table td { padding: 3px 8px; vertical-align: top; color: var(--text-body); border-bottom: 1px solid var(--border); }
+.audit-table tbody tr:hover td { background: var(--card-fill); }
+.audit-when { white-space: nowrap; font-family: var(--font-mono); color: var(--text-muted); }
+.audit-table td.audit-when { color: var(--text-muted); }
+.audit-detail { overflow-wrap: anywhere; }
+
+/* ── Sign in (Pages/SignIn.razor, BareLayout): nobody is signed in, so no top bar and no rail - the brand and the form on
+   a card in the middle of the ground. ─────────────────────────────────────────────────────────────────────────────── */
+main.bare { max-width: none; min-height: 100vh; box-sizing: border-box; display: grid; place-items: center; padding: 16px; }
+.signin { width: min(340px, 100%); }
+.signin-card { display: flex; flex-direction: column; gap: 4px; padding: 20px 22px 22px; background: var(--bg-elevated);
+  border: 1px solid var(--border); border-radius: 6px; }
+.signin-card p { margin: 0; }
+.signin-card form { display: flex; flex-direction: column; gap: 4px; }
+.signin-card input { width: 100%; box-sizing: border-box; background: var(--input-fill); }
+.signin-card .label { margin: 8px 0 0; }
+.signin-card .btn { margin-top: 14px; }
+.signin-brand { display: flex; align-items: center; gap: 8px; font-family: var(--font-display); font-weight: 600; font-size: 13px; color: var(--text); }
+.signin-brand img { width: 20px; height: 20px; }
+.signin-title { font-size: 20px; font-weight: 600; margin: 10px 0 2px; }

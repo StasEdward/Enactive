@@ -48,10 +48,9 @@ internal sealed record RailItem(string Href, string Label, string Icon, Role Nee
 }
 
 /// <summary>
-/// Where each rail item leads TODAY, while the desktop's pages are being rebuilt for the web. The rail is built for the
-/// final addresses (<see cref="RailItem.Href"/>); an item whose page is not there yet would be a link to nothing, so it
-/// leads to the page that does the job now. Each page built changes its row to the new address, and when every row is the
-/// item's own this table goes.
+/// Where each rail item leads, relative to the page's base, and which addresses put it in "you are here". Every item
+/// leads to its own address now; the table was where an item led to the old page that did its job while its own page
+/// was being built, and it still holds what marks each item - the Runs item is lit on a run's page too.
 ///
 /// <para>An item is marked "you are here" by <c>Active</c>, never by an address another item shares: both would light up
 /// on it.</para>
@@ -62,7 +61,6 @@ internal static class RailAddresses
     /// <param name="Active">Path prefixes (relative, no leading slash) that put the item in "you are here"; "" is the root page only.</param>
     internal sealed record Where(string Now, string[] Active);
 
-    // Rows marked TEMPORARY lead somewhere other than their Href today.
     private static readonly Dictionary<string, Where> Table = new()
     {
         ["/"] = new("/", ["", "runs"]),
@@ -74,8 +72,8 @@ internal static class RailAddresses
         ["/log"] = new("log", ["log"]),
         ["/environment"] = new("environment", ["environment"]),
         ["/settings"] = new("settings", ["settings"]),
-        ["/accounts"] = new("admin/users", ["accounts", "admin/users"]),                 // TEMPORARY: /admin/users today
-        ["/audit"] = new("admin/audit", ["audit", "admin/audit"]),                       // TEMPORARY: /admin/audit today
+        ["/accounts"] = new("accounts", ["accounts"]),
+        ["/audit"] = new("audit", ["audit"]),
     };
 
     public static Where Of(RailItem item) => Table[item.Href];

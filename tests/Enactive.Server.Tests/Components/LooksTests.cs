@@ -42,6 +42,7 @@ public sealed class LooksTests
         classes.AddRange(Enum.GetValues<TemplateEdge>().Select(Looks.Template));
         classes.AddRange(Enum.GetValues<ScheduleState>().Select(Looks.Schedule));
         classes.AddRange(new[] { true, false }.Select(Looks.Local));
+        classes.AddRange(Enum.GetValues<Enactive.Server.Accounts.AccountStanding>().Select(Looks.Account));
         classes.AddRange(new[] { "result", "decision", "error", "anything else" }.Select(Looks.Inbox));
         classes.Add(Looks.Change(applied: false, rejected: false));
         classes.Add(Looks.Change(applied: true, rejected: false));

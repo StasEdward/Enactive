@@ -4,6 +4,7 @@ using Enactive.Application;
 using Enactive.Application.Projections;
 using Enactive.Core.History;
 using Enactive.Providers;
+using Enactive.Server.Accounts;
 using Enactive.Workspace;
 
 /// <summary>
@@ -209,6 +210,18 @@ internal static class Looks
         ProviderHealth.Unreachable => "tone-failed",
         ProviderHealth.Unknown or ProviderHealth.Checking => "tone-faint",
         _ => throw Unknown(health)
+    };
+
+    /// <summary>
+    /// An account's card: green while it can sign in, amber while a lockout holds it (it frees itself), grey when an
+    /// Admin has disabled it - nothing about an account is a failure to draw in red.
+    /// </summary>
+    public static string Account(AccountStanding standing) => standing switch
+    {
+        AccountStanding.Active => "tone-done",
+        AccountStanding.Locked => "tone-warning",
+        AccountStanding.Disabled => "tone-faint",
+        _ => throw Unknown(standing)
     };
 
     private static ArgumentOutOfRangeException Unknown<T>(T value)

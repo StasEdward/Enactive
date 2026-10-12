@@ -6,6 +6,8 @@
 @using Microsoft.AspNetCore.Authentication
 @using Microsoft.AspNetCore.Authentication.Cookies
 @using Enactive.Server.Accounts
+@using Enactive.Server.Components.Layout
+@layout BareLayout
 @inject UserStore Users
 @inject NavigationManager Navigation
 
@@ -14,16 +16,21 @@
 @* Rendered on the server and posted as a plain form (static rendering): signing in sets a cookie, which only a real
    response can do - and a page with no circuit is a page with nothing to attack before sign-in. *@
 <section class="signin">
-    <h1>Sign in</h1>
-    @if (_said is not null)
-    {
-        <p class="said" role="alert">@_said</p>
-    }
-    <EditForm Model="Input!" method="post" OnValidSubmit="SignInAsync" FormName="signin">
-        <label>Name <InputText @bind-Value="Input!.Name" autocomplete="username" /></label>
-        <label>Password <InputText type="password" @bind-Value="Input!.Password" autocomplete="current-password" /></label>
-        <button type="submit">Sign in</button>
-    </EditForm>
+    <div class="signin-card">
+        <p class="signin-brand"><img src="brand/mark-loop.svg" alt="" />Enactive</p>
+        <h1 class="signin-title">Sign in</h1>
+        @if (_said is not null)
+        {
+            <p class="said" role="alert">@_said</p>
+        }
+        <EditForm Model="Input!" method="post" OnValidSubmit="SignInAsync" FormName="signin">
+            <label class="label" for="signin-name">Name</label>
+            <InputText id="signin-name" @bind-Value="Input!.Name" autocomplete="username" />
+            <label class="label" for="signin-password">Password</label>
+            <InputText id="signin-password" type="password" @bind-Value="Input!.Password" autocomplete="current-password" />
+            <button type="submit" class="btn primary">Sign in</button>
+        </EditForm>
+    </div>
 </section>
 
 @code {

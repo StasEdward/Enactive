@@ -233,6 +233,24 @@ public sealed class ShellTests : ComponentHost
         Assert.Equal("settings", rail.Find("[data-rail='/settings']").GetAttribute("href"));
     }
 
+    /// <summary>
+    /// Accounts and Audit lead to their own pages. They led to the old pages at /admin/users and /admin/audit, which are
+    /// redirects now - the last items that led anywhere but their own address.
+    /// </summary>
+    [Fact]
+    public void Accounts_and_audit_lead_to_their_own_pages()
+    {
+        SignIn("ada");
+
+        var rail = RenderedRail();
+
+        Assert.Equal("accounts", rail.Find("[data-rail='/accounts']").GetAttribute("href"));
+        Assert.Equal("audit", rail.Find("[data-rail='/audit']").GetAttribute("href"));
+        // Every item leads to its own address: the base-relative form of the address it is meant to have.
+        Assert.All(rail.FindAll("nav [data-rail]"),
+            item => Assert.Equal(item.GetAttribute("data-rail") == "/" ? "/" : item.GetAttribute("data-rail")!.TrimStart('/'), item.GetAttribute("href")));
+    }
+
     [Theory]
     [InlineData("http://localhost/", "/")]
     [InlineData("http://localhost/runs/0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/")]
@@ -247,7 +265,8 @@ public sealed class ShellTests : ComponentHost
     [InlineData("http://localhost/environment", "/environment")]
     [InlineData("http://localhost/settings", "/settings")]
     [InlineData("http://localhost/settings/ai-providers", "/settings")]
-    [InlineData("http://localhost/admin/users", "/accounts")]
+    [InlineData("http://localhost/accounts", "/accounts")]
+    [InlineData("http://localhost/audit", "/audit")]
     public void The_section_you_are_in_is_marked(string address, string marked)
     {
         SignIn("ada");

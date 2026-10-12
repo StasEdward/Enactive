@@ -125,18 +125,6 @@ internal static class ServerApp
             })
             .RequireAuthorization(nameof(Role.Viewer));
 
-        // The accounts page's changes: an Admin's, checked by AccountAdmin; the token here. Not at the page's own
-        // address: a page also takes form posts, and two endpoints on one address was a 500 (found by tests/server-e2e).
-        app.MapPost("/admin/users/act", async (HttpContext context, IAntiforgery antiforgery, AccountAdmin accounts) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var said = accounts.Do(context.User, form["act"].ToString(), form["name"].ToString().Trim(),
-                form["role"].ToString(), form["password"].ToString(), form["again"].ToString());
-            return Results.LocalRedirect("/admin/users?said=" + Uri.EscapeDataString(said));
-        });
-
         // The old addresses of a workspace's history and of the workspace list, which the Runs screen is now: a link in an
         // earlier mail or a bookmark still lands. The history named its workspace by its path; the Runs screen names it by
         // its id (WorkspaceIds), found only among the workspaces the service knows - a path it does not know lands on the
@@ -204,6 +192,11 @@ internal static class ServerApp
         // is sent on, and /settings itself says to anybody but an Admin that the role does not include it - as the old
         // page did.
         app.MapGet("/admin/settings", () => Results.LocalRedirect("/settings")).RequireAuthorization(nameof(Role.Viewer));
+
+        // The old accounts and audit pages' addresses, by the same rule: the pages are at /accounts and /audit now, as the
+        // rail names them, and they say to anybody but an Admin that the role does not include them.
+        app.MapGet("/admin/users", () => Results.LocalRedirect("/accounts")).RequireAuthorization(nameof(Role.Viewer));
+        app.MapGet("/admin/audit", () => Results.LocalRedirect("/audit")).RequireAuthorization(nameof(Role.Viewer));
 
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
         return app;
