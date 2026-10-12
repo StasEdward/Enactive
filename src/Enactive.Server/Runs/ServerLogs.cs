@@ -27,6 +27,17 @@ internal sealed class ServerLogs(UserStore users, ServerEngine engine)
     }
 
     /// <summary>
+    /// One run's lines, at every level, oldest first - the live run's Log tab, as the window's (RunLogViewModel): the entries
+    /// that carry the run's id, the newest <paramref name="newest"/> of them. A tail, not an archive.
+    /// </summary>
+    public IReadOnlyList<LogEntry> OfRun(ClaimsPrincipal user, Guid runId, int newest = 4000)
+    {
+        if (ServerAuth.StillValid(users, user) is null)
+            return [];
+        return engine.Log.Snapshot().Where(e => e.RunId == runId).TakeLast(newest).ToList();
+    }
+
+    /// <summary>
     /// Asks the review model what went wrong in these entries - the text a person sees and exports (LogText), not the
     /// whole buffer: narrowing is how a person points at what they are asking about.
     /// </summary>

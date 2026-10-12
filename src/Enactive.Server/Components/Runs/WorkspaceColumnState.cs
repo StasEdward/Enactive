@@ -231,7 +231,7 @@ internal sealed class WorkspaceColumnState(ServerHistory history, IRunControl ru
         // window starts every run at once, the service has a line (RunQueue).
         var meta = run.Waiting is not null
             ? RunState.Of(run)
-            : RunColumn.Meta(new LiveRun(run.Id, run.Id, title, run.Background, done, total, run.StartedAt,
+            : RunColumn.Meta(new Enactive.Core.History.LiveRun(run.Id, run.Id, title, run.Background, done, total, run.StartedAt,
                 Waiting: run.Questions.Pending is not null));
         return new RunningRow(run.Id, RunTitle.OneLine(title), meta,
             $"{run.Owner} · {run.Workspace} · started {run.StartedAt:HH:mm}");

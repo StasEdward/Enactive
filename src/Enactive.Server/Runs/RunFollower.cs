@@ -1,7 +1,7 @@
 namespace Enactive.Server.Runs;
 
 /// <summary>
-/// A page following a run (RunPage): it reads where the run stands, subscribes from there, and redraws as events come -
+/// A page following a run (Runs/LiveRun): it reads where the run stands, subscribes from there, and redraws as events come -
 /// at most ten times a second. Dropped for falling behind, it reads again and subscribes afresh, which is also what a
 /// reopened tab does. Kept out of the page so what it does when the page leaves can be tested without one.
 /// </summary>

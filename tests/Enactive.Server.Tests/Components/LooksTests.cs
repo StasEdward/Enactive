@@ -34,6 +34,10 @@ public sealed class LooksTests
         classes.AddRange(Enum.GetValues<ProviderHealth>().Select(Looks.Health));
         classes.AddRange(Enumerable.Range(0, 4).Select(Looks.Autonomy));
         classes.AddRange(Enum.GetValues<WorkspacePlace>().Select(Looks.Workspace));
+        classes.AddRange(Enum.GetValues<RunStandingKind>().Select(Looks.Phase));
+        classes.AddRange(Enum.GetValues<DiffLineKind>().Select(Looks.Diff));
+        classes.AddRange(Enum.GetValues<Enactive.Core.Diagnostics.LogLevel>().Select(Looks.Log));
+        classes.AddRange(Enum.GetValues<FeedEntryKind>().Select(Looks.Entry));
         classes.Add(Looks.Change(applied: false, rejected: false));
         classes.Add(Looks.Change(applied: true, rejected: false));
         classes.Add(Looks.Change(applied: false, rejected: true));
@@ -63,6 +67,10 @@ public sealed class LooksTests
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Ci((CiState)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Health((ProviderHealth)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Workspace((WorkspacePlace)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Phase((RunStandingKind)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Diff((DiffLineKind)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Log((Enactive.Core.Diagnostics.LogLevel)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Entry((FeedEntryKind)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Autonomy(4));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Autonomy(-1));
         // Applied and rejected at once is not a state a change is ever in.
@@ -131,6 +139,37 @@ public sealed class LooksTests
             [WorkspacePlace.Other] = "WorkspacePlace.Other",
             [WorkspacePlace.Missing] = "WorkspacePlace.Missing"
         }));
+
+        rows.AddRange(Rows(Looks.Diff, new Dictionary<DiffLineKind, string>
+        {
+            [DiffLineKind.Added] = "DiffLineKind.Added",
+            [DiffLineKind.Removed] = "DiffLineKind.Removed",
+            [DiffLineKind.Context] = "DiffLineKind.Context"
+        }));
+        rows.AddRange(Rows(Looks.Log, new Dictionary<Enactive.Core.Diagnostics.LogLevel, string>
+        {
+            [Enactive.Core.Diagnostics.LogLevel.Trace] = "LogLevel.Trace",
+            [Enactive.Core.Diagnostics.LogLevel.Debug] = "LogLevel.Debug",
+            [Enactive.Core.Diagnostics.LogLevel.Info] = "LogLevel.Info",
+            [Enactive.Core.Diagnostics.LogLevel.Warn] = "LogLevel.Warn",
+            [Enactive.Core.Diagnostics.LogLevel.Error] = "LogLevel.Error"
+        }));
+        rows.AddRange(Rows(Looks.Entry, new Dictionary<FeedEntryKind, string>
+        {
+            [FeedEntryKind.Command] = "FeedEntryKind.Command",
+            [FeedEntryKind.File] = "FeedEntryKind.File",
+            [FeedEntryKind.Tool] = "FeedEntryKind.Tool",
+            [FeedEntryKind.Note] = "FeedEntryKind.Note",
+            [FeedEntryKind.Refusal] = "FeedEntryKind.Refusal"
+        }));
+
+        // The phase pill is Brand.PhaseText's, a table in Brand.cs rather than an arm of Palette: done green, failed red,
+        // waiting on a person amber, idle muted - and a run going blue (its word lifted to the light blue on the pill,
+        // .pill.tone-running, as PhaseText's InfoSoft is), where the history's edge (Looks.Run) draws it amber.
+        foreach (var (kind, member) in new[] { (RunStandingKind.Done, "Success"), (RunStandingKind.Failed, "Danger"),
+                     (RunStandingKind.Open, "Amber"), (RunStandingKind.Idle, "TextMuted"), (RunStandingKind.Running, "Info") })
+            rows.Add(($"Phase.{kind}", Looks.Phase(kind), BrandHex(member)));
+        Assert.Equal(Enum.GetValues<RunStandingKind>().Length, rows.Count(r => r.State.StartsWith("Phase.", StringComparison.Ordinal)));
 
         // The change is two flags here and an enum in the window: staged and refused wait for a person, then what was done.
         rows.Add(("Change.Staged", Looks.Change(false, false), WindowHex("ChangeState.Staged")));

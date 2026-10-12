@@ -62,4 +62,26 @@ public sealed class ServerLogsTests : IDisposable
         Assert.Contains("role does not include", (await _logs.AnalyseAsync(As("vera"), shown, CancellationToken.None)).Problem);
         Assert.Contains("no engine", (await _logs.AnalyseAsync(As("alice"), shown, CancellationToken.None)).Problem);
     }
+
+    /// <summary>
+    /// A live run's Log tab: that run's lines and no other's, oldest first, at every level kept - the window's tab beside the steps
+    /// (RunLogViewModel), which answers "what went to the model in this run" without the whole service's log around it.
+    /// </summary>
+    [Fact]
+    public void A_run_s_log_is_its_own_lines()
+    {
+        var run = Guid.NewGuid();
+        Entry(run, LogLevel.Info, "the prompt of this run");
+        Entry(Guid.NewGuid(), LogLevel.Info, "another run's line");
+        Entry(run, LogLevel.Warn, "a tool of this run failed");
+
+        Assert.Equal(["the prompt of this run", "a tool of this run failed"], _logs.OfRun(As("vera"), run).Select(e => e.Message));
+
+        var vera = As("vera");
+        _users.SetDisabled("vera", true);
+        Assert.Empty(_logs.OfRun(vera, run));
+    }
+
+    private void Entry(Guid run, LogLevel level, string message)
+        => _engine.Log.Log(new LogEntry(0, DateTimeOffset.UtcNow, level, LogSource.Host, run, null, message, null, null));
 }

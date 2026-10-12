@@ -4,7 +4,12 @@ using Enactive.Application;
 using Enactive.Core.Permissions;
 
 /// <summary>A question a run is waiting on, as a page shows it: what it asks, and the answers it offers.</summary>
-internal sealed record WebQuestion(DecisionRequest Request, IReadOnlyList<DecisionChoice> Choices, Func<DecisionChoice, bool> Answer);
+/// <param name="AskedAt">
+/// When it went up (UTC): with the service's wait (IRunControl.QuestionWait) it says how long it still waits before the
+/// run stops at it for the inbox - without it a page could say only that it waits, not for how long.
+/// </param>
+internal sealed record WebQuestion(DecisionRequest Request, IReadOnlyList<DecisionChoice> Choices, Func<DecisionChoice, bool> Answer,
+    DateTimeOffset AskedAt);
 
 /// <summary>
 /// The browser's side of asking (IDecisionPresenter): the run's waiting question is held here, where every page
@@ -23,7 +28,7 @@ internal sealed class WebQuestions : IDecisionPresenter
 
     public Task ShowAsync(DecisionRequest request, IReadOnlyList<DecisionChoice> choices, Func<DecisionChoice, bool> answer)
     {
-        _pending = new WebQuestion(request, choices, answer);
+        _pending = new WebQuestion(request, choices, answer, DateTimeOffset.UtcNow);
         Changed?.Invoke();
         return Task.CompletedTask;
     }

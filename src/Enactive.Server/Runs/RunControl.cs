@@ -57,6 +57,15 @@ internal sealed class ServerRun
     public string Prompt { get; }
     public DateTimeOffset StartedAt { get; } = DateTimeOffset.Now;
     public RunQueue.Ticket Ticket { get; }
+
+    /// <summary>
+    /// When its turn came and it began to run (UTC), or null while it waits in the line. The ELAPSED tile counts from here,
+    /// as the window's stopwatch counts from Run: counted from <see cref="StartedAt"/> it took in another run's time.
+    /// </summary>
+    public DateTimeOffset? RunningSince { get; internal set; }
+
+    /// <summary>When it was over (UTC), whether it ran or not; null until then. Where the ELAPSED tile stops.</summary>
+    public DateTimeOffset? EndedAt { get; private set; }
     public RunSession Session { get; }
     public WebQuestions Questions { get; } = new();
     public CancellationTokenSource Cancellation { get; } = new();
@@ -80,6 +89,7 @@ internal sealed class ServerRun
 
     internal void End()
     {
+        EndedAt ??= DateTimeOffset.UtcNow;
         _ended.TrySetResult();
         Changed?.Invoke();
     }
@@ -163,6 +173,13 @@ internal interface IRunControl
     ServerRun? Find(ClaimsPrincipal user, Guid id);
     string? Cancel(ClaimsPrincipal user, Guid id);
     string? Answer(ClaimsPrincipal user, Guid id, Guid question, string choice);
+
+    /// <summary>
+    /// How long a question asked in the browser waits before the run stops at it and it goes to the inbox; null, as long as
+    /// it takes. Said on the question's card ("waits 12 min more"), so an Operator can tell an answer needed now from one
+    /// that can wait for the inbox.
+    /// </summary>
+    TimeSpan? QuestionWait { get; }
 }
 
 /// <param name="parkQuestionsAfter">How long a question waits before the run stops at it for the inbox; null, never.</param>
@@ -173,6 +190,8 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
     private readonly object _gate = new();
     private readonly List<ServerRun> _runs = new();
     private bool _stopping;
+
+    public TimeSpan? QuestionWait => parkQuestionsAfter;
 
     /// <summary>How many finished runs stay listed here; older ones are read from the history (1.6).</summary>
     private const int KeepFinished = 50;
@@ -299,6 +318,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
             // Its turn: a free slot and nobody else in its folder (RunQueue). Said meanwhile by run.Waiting.
             await run.Ticket.Started.WaitAsync(ct);
             running = true;
+            run.RunningSince = DateTimeOffset.UtcNow;
             run.Notify();
             // The router asks through this run's questions, and remembers what the owner allows as the owner.
             // A schedule's run has nobody to ask: its questions are refused, as the console's are (UnattendedDecisionHandler),

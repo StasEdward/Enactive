@@ -21,6 +21,11 @@
 {
     return;
 }
+@{
+    // Asked once a drawing: every greyed button asked again - seven lookups of the run a draw, each a lock and a search
+    // of every run, and the bar is drawn again with each event of the run beside it.
+    var busy = State.IsBusy;
+}
 
 <section class="command-bar" aria-label="Command bar">
     @if (State.CanOperate)
@@ -29,7 +34,7 @@
             <div class="verbs">
                 @foreach (var verb in CommandVerbs.All)
                 {
-                    <button type="button" class="btn chip" disabled="@State.IsBusy" @onclick="() => Prefix(verb)">@verb</button>
+                    <button type="button" class="btn chip" disabled="@busy" @onclick="() => Prefix(verb)">@verb</button>
                 }
             </div>
             <span class="hint">Ctrl+K to focus · Enter to run · Ctrl+Enter = newline</span>
@@ -40,17 +45,17 @@
         @if (State.CanOperate)
         {
             <textarea class="bar-input" aria-label="Task" placeholder="What do you want to accomplish?" @ref="_box"
-                      disabled="@State.IsBusy" @bind="State.Input" @bind:event="oninput"></textarea>
+                      disabled="@busy" @bind="State.Input" @bind:event="oninput"></textarea>
 
             <div class="run-buttons">
                 <div class="run-pair">
-                    <button type="button" class="btn go run" title="Run this here, and watch it." disabled="@State.IsBusy"
+                    <button type="button" class="btn go run" title="@RunButton.Tip(busy)" disabled="@busy"
                             @onclick="RunAsync">Run</button>
                     @* Stop throws away work that is half done - the same act as Reject, so the danger colour; outlined, so it is
                        found without competing with Run. *@
-                    <button type="button" class="btn destructive stop" disabled="@(!State.IsBusy)" @onclick="State.Stop">Stop</button>
+                    <button type="button" class="btn destructive stop" disabled="@(!busy)" @onclick="State.Stop">Stop</button>
                 </div>
-                <button type="button" class="btn go-soft" disabled="@State.IsBusy" @onclick="RunInBackground"
+                <button type="button" class="btn go-soft" disabled="@busy" @onclick="RunInBackground"
                         title="Runs it headless: the window stays free and it reports back to the Inbox when it is done.">Run in background</button>
             </div>
 
@@ -70,7 +75,7 @@
                     }
                 </select>
                 <label class="stage" title="Write changes to a staging area and review the diff before applying.">
-                    <input type="checkbox" checked="@State.StageChanges" disabled="@(!CanChange || State.IsBusy)"
+                    <input type="checkbox" checked="@State.StageChanges" disabled="@(!CanChange || busy)"
                            @onchange="StageChanged" />
                     Stage changes
                 </label>
@@ -81,7 +86,7 @@
                let go, not at every step of a drag - each save is a line in the audit. *@
             <input type="range" class="@State.AutonomyTone" min="0" max="@CommandBarState.HighestLevel" step="1"
                    value="@State.AutonomyLevel" aria-label="Autonomy" aria-valuetext="@State.AutonomyLabel"
-                   disabled="@(!CanChange || State.IsBusy)" @onchange="LevelChanged" />
+                   disabled="@(!CanChange || busy)" @onchange="LevelChanged" />
         </div>
     </div>
 
@@ -133,6 +138,9 @@
         if (OpenRun != _watched)
         {
             _watched = OpenRun;
+            // The screen has come to a run - the one Run opened, or another: the press that opened it is done with. Held,
+            // the guard kept every later Enter from running once Run stayed on the page with the run under it.
+            _opening = false;
             if (OpenRun is { } id && Runs.Find((await Auth).User, id) is { } run)
                 _ = RedrawWhenItEndsAsync(run);
         }
@@ -193,7 +201,8 @@
     private Task RunAsync()
     {
         // One run per press: a second Enter (or click) that reached the page before it left for the first run's page
-        // started the same task again - the box still held it, as the browser had not yet drawn it cleared.
+        // started the same task again - the box still held it, as the browser had not yet drawn it cleared. Let go when the
+        // screen gives the bar the run it opened (OnParametersSetAsync).
         if (_opening)
             return Task.CompletedTask;
         if (State.Run() is { } id)

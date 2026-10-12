@@ -1,4 +1,5 @@
 @page "/"
+@page "/runs/{RunId:guid}"
 @attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = "Viewer")]
 @using Enactive.Server.Runs
 @using Microsoft.AspNetCore.Components.Authorization
@@ -6,20 +7,23 @@
 @inject ServerHistory History
 @inject WorkspaceIds Ids
 
-<PageTitle>Enactive</PageTitle>
+@if (RunId is null)
+{
+    <PageTitle>Enactive</PageTitle>
+}
 
 @* The Runs screen, as the main window: the workspace and runs column on the left, the command bar and the run on the
-   right. It replaces the old pages piece by piece and leaves no gap meanwhile: until the live run is built (Task 12), the
-   main area keeps the old start page's list of runs under the bar - a run waiting on a question is found there by its
-   title, which the column's RUNNING card does not link. *@
+   right. A run has an address of its own (/runs/{id}) on this same screen, under the bar - the window shows the run it
+   watches where it started it - and is opened from the column's RUNNING list. A past run keeps its own page until it
+   too comes to this screen (Task 13). *@
 
 <div class="runs-screen">
     <WorkspaceColumn WorkspaceId="_wanted" Said="@Said" />
 
     <section class="runs-main">
-        @* The window's command bar, on the workspace the column shows: Run starts there and opens the run's page, and the
-           settings beside it are that workspace's. *@
-        <CommandBar Workspace="_shown" />
+        @* The window's command bar, on the workspace the column shows: Run starts there and opens the run here, and the
+           settings beside it are that workspace's. Its Stop is the open run's. *@
+        <CommandBar Workspace="_shown" OpenRun="RunId" />
 
         @if (_shown is { } shown)
         {
@@ -29,28 +33,18 @@
             <p class="hint"><a href="@Links.Library(shown.RootPath)">Templates and schedules</a></p>
         }
 
-        @if (_runs.Count == 0)
+        @if (RunId is { } run)
         {
-            <p>No runs yet.</p>
-        }
-        else
-        {
-            <ul class="list">
-                @foreach (var run in _runs)
-                {
-                    <li>
-                        <a href="@($"runs/{run.Id}")">@RunState.Title(run)</a>
-                        <span class="state">@RunState.Of(run)</span>
-                        <span class="where">@run.Workspace · @run.Owner · @run.StartedAt.ToString("HH:mm")</span>
-                    </li>
-                }
-            </ul>
+            <LiveRun RunId="run" />
         }
     </section>
 </div>
 
 @code {
     [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The run shown under the bar, at /runs/{id}; null on the screen without one.</summary>
+    [Parameter] public Guid? RunId { get; set; }
 
     /// <summary>
     /// The workspace, by its id (WorkspaceIds). Read as text and parsed here: an address is typed by people, and one
@@ -62,7 +56,6 @@
     [SupplyParameterFromQuery] private string? Said { get; set; }
 
     private Guid? _wanted;
-    private IReadOnlyList<ServerRun> _runs = [];
     private Enactive.Workspace.WorkspaceEntry? _shown;
 
     // Read per address, not once: see Pages/_Imports.razor.
@@ -70,9 +63,12 @@
     {
         var user = (await Auth).User;
         // An id that does not parse names no workspace (Guid.Empty is no folder's), rather than the one used last.
-        _wanted = Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null;
+        _wanted = Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty
+            // A run's address names no workspace: the column shows the run's, as the window's shows the folder of the run
+            // it watches - with the one used last there, Run under a run would have started in another folder than its.
+            : RunId is { } runId && Runs.Find(user, runId) is { } run ? Ids.TryIdOf(run.Workspace)
+            : null;
 
-        _runs = Runs.List(user);
         // The command bar runs in the workspace the column shows, as the window's does; none when the address names one
         // the service does not know - a run is never started in another folder than the one on screen.
         _shown = WorkspaceColumnState.Choose(History.Workspaces(user), _wanted, Ids);

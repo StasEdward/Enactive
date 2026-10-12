@@ -670,8 +670,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     /// <summary>Opens a pull request's page in the browser - only a github.com address, which is what the strip shows.</summary>
     private void OpenRepoPage(string? url)
     {
-        if (url is null || !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps
-            || !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+        // Qualified: RepoBar here is the strip's Border (x:Name), not the model.
+        if (global::Enactive.Application.Projections.RepoBar.GitHubPage(url) is not { } uri)
             return;
         _ = TopLevel.GetTopLevel(this)?.Launcher.LaunchUriAsync(uri);
     }

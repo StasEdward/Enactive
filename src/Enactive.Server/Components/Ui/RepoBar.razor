@@ -1,0 +1,114 @@
+@using Enactive.Workspace
+@using Model = Enactive.Application.Projections.RepoBar
+@implements IDisposable
+
+@* The window's repository strip, at the foot of the run (MainWindow.axaml 1262-1310): the branch's pull request with its
+   checks when GitHub can be asked, then the repository, the branch, how far from its upstream, and what is not committed
+   - added green, removed red, as git and GitHub show them. Only where there is a repository. The number and the checks
+   open their pages; anywhere else on the strip reads it again. What it says is RepoBar's, the window's own. *@
+
+@if (_bar.IsVisible)
+{
+    <div class="repo-bar" title="The workspace's repository - click to read it again" @onclick="() => ReadAsync(forcePullRequest: true)">
+        @if (_bar.HasPullRequest && Model.GitHubPage(_bar.PullRequestUrl) is { } pullRequestPage)
+        {
+            <a class="repo-pr" href="@pullRequestPage" target="_blank" rel="noopener noreferrer" title="Open the pull request"
+               @onclick:stopPropagation="true">@_bar.PullRequest</a>
+        }
+        <span class="repo-name">@_bar.Name</span>
+        <span class="repo-muted">@_bar.Branch</span>
+        @if (_bar.Sync.Length > 0)
+        {
+            <span class="repo-muted">@_bar.Sync</span>
+        }
+        <span class="repo-changes" title="Changed since the last commit, staged or not, and files git does not track">
+            <span class="tone-done repo-tone">@_bar.Added</span>
+            <span class="tone-failed repo-tone">@_bar.Removed</span>
+            <span class="repo-muted">@_bar.NewFiles</span>
+            <span class="repo-muted">@_bar.NoChanges</span>
+        </span>
+        @if (_bar.HasPullRequest)
+        {
+            <span class="repo-changes" title="The pull request's lines added and removed">
+                <span class="tone-done repo-tone">@_bar.PullRequestAdded</span>
+                <span class="tone-failed repo-tone">@_bar.PullRequestRemoved</span>
+            </span>
+        }
+        @if (_bar.HasCi && Model.GitHubPage(_bar.PullRequestUrl + "/checks") is { } checks)
+        {
+            <a class="repo-ci" href="@checks" target="_blank" rel="noopener noreferrer" title="Open the pull request's checks"
+               @onclick:stopPropagation="true"><span class="@("repo-light " + Looks.Ci(_bar.Ci))" aria-hidden="true"></span>@_bar.CiText</a>
+        }
+        <button type="button" class="row-icon repo-again" aria-label="Read the repository again" title="Read the repository again"
+                @onclick="() => ReadAsync(forcePullRequest: true)" @onclick:stopPropagation="true">⟳</button>
+    </div>
+}
+
+@code {
+    /// <summary>The workspace's folder; none, no strip.</summary>
+    [Parameter] public string? Root { get; set; }
+
+    /// <summary>
+    /// Bumped by the caller when the files may have changed - a step ended, the run is over - so the strip is read again
+    /// then and not only on a click: what a step changes is what a person watches for.
+    /// </summary>
+    [Parameter] public int Reads { get; set; }
+
+    /// <summary>GitHub is asked at most this often unless the person clicks: a network call, and a strip is not worth a rate limit.</summary>
+    private static readonly TimeSpan PullRequestEvery = TimeSpan.FromMinutes(2);
+
+    private readonly Model _bar = new();
+    private string? _root;
+    private int _reads = -1;
+    private int _reading;
+    private DateTimeOffset _pullRequestReadAt = DateTimeOffset.MinValue;
+    private readonly CancellationTokenSource _gone = new();
+
+    protected override Task OnParametersSetAsync()
+    {
+        if (Root == _root && Reads == _reads)
+            return Task.CompletedTask;
+        var moved = Root != _root;
+        (_root, _reads) = (Root, Reads);
+        return ReadAsync(forcePullRequest: moved);
+    }
+
+    /// <summary>
+    /// Reads the repository - and its pull request when two minutes have passed or the person asked. A read started after
+    /// this one wins, as the window's: a slow answer about the folder left behind must not overwrite the one now open.
+    /// </summary>
+    private async Task ReadAsync(bool forcePullRequest)
+    {
+        var read = ++_reading;
+        var root = _root;
+        // Taken once: read from the source after the page left, it threw - the source is disposed with the page.
+        var gone = _gone.Token;
+        try
+        {
+            var repo = root is null ? null : await RepoStatusReader.ReadAsync(root, gone);
+            if (read != _reading || gone.IsCancellationRequested)
+                return;
+            _bar.Show(repo);
+            StateHasChanged();
+            if (repo?.GitHub is null || (!forcePullRequest && DateTimeOffset.UtcNow - _pullRequestReadAt < PullRequestEvery))
+                return;
+            _pullRequestReadAt = DateTimeOffset.UtcNow;
+            var pullRequest = await RepoStatusReader.ReadPullRequestAsync(repo, gone);
+            if (read == _reading && !gone.IsCancellationRequested)
+            {
+                _bar.ShowPullRequest(pullRequest);
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException) when (gone.IsCancellationRequested)
+        {
+            // The page went away while git was asked.
+        }
+    }
+
+    public void Dispose()
+    {
+        _gone.Cancel();
+        _gone.Dispose();
+    }
+}

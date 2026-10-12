@@ -353,6 +353,46 @@ public sealed class RunControlTests : IDisposable
         Assert.Contains("Waiting for a decision", run.Refused);
     }
 
+    /// <summary>
+    /// The card says how long the question still waits before it goes to the inbox: so the question says when it was asked,
+    /// and the service how long a question waits. Without them the page could only say that it waits, not for how long -
+    /// and an Operator could not tell an answer needed now from one that can wait for the inbox.
+    /// </summary>
+    [Fact]
+    public async Task A_question_says_when_it_was_asked_and_the_service_how_long_it_waits()
+    {
+        _engine.Ask = true;
+        var control = new RunControl(_users, new RunQueue(2), _engine, NullLogger<RunControl>.Instance, TimeSpan.FromMinutes(30));
+        var before = DateTimeOffset.UtcNow;
+
+        var run = control.Start(As("alice"), _workspace, "write the digest").Run!;
+        await WaitUntil(() => run.Questions.Pending is not null);
+
+        Assert.Equal(TimeSpan.FromMinutes(30), control.QuestionWait);
+        Assert.InRange(run.Questions.Pending!.AskedAt, before, DateTimeOffset.UtcNow);
+        Assert.Null(_control.QuestionWait);
+        Assert.Null(control.Cancel(As("alice"), run.Id));
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>
+    /// The ELAPSED tile counts from the run's turn to its end, as the window's stopwatch does from Run to the end - not
+    /// from its place in the line, which would count another run's time as this one's.
+    /// </summary>
+    [Fact]
+    public async Task A_run_says_when_its_turn_came_and_when_it_ended()
+    {
+        var run = _control.Start(As("alice"), _workspace, "write the digest").Run!;
+        await WaitUntil(() => run.RunningSince is not null);
+        Assert.Null(run.EndedAt);
+
+        await _engine.ReleaseNextAsync();
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(run.EndedAt >= run.RunningSince);
+        Assert.True(run.RunningSince >= run.StartedAt);
+    }
+
     private (Enactive.Agents.ParkedDecision Parked, Guid ItemId) ParkedInTheInbox()
     {
         var taskId = Guid.NewGuid();

@@ -298,6 +298,35 @@ public sealed class RunSessionTests
         Assert.Empty(session.Watchers);
     }
 
+    /// <summary>
+    /// Somebody opening or leaving the run is told to the pages on it, so "also watching" changes when they come and go.
+    /// The names were only read as a page redrew for an event - and a run waiting on a question has none, so a person who
+    /// opened it was not shown to the others until the run moved again, and one who left was shown as watching.
+    /// </summary>
+    [Fact]
+    public async Task Watchers_coming_and_going_are_told()
+    {
+        var engine = new Engine();
+        var session = new RunSession("C:\\work", "alice", "t");
+        var told = 0;
+        session.WatchersChanged += () => Interlocked.Increment(ref told);
+        var drained = session.DrainAsync(engine.Events, CancellationToken.None);
+
+        var bob = session.Subscribe(0, "bob");
+        Assert.Equal(1, told);
+        session.Unsubscribe(bob);
+        Assert.Equal(2, told);
+        // Nobody named: no name came or went.
+        session.Unsubscribe(session.Subscribe(0));
+        Assert.Equal(2, told);
+
+        session.Subscribe(session.Seq, "carol");
+        engine.End();
+        await drained;
+        Assert.Equal(4, told);
+        Assert.Empty(session.Watchers);
+    }
+
     /// <summary>A page following the run says whose it is, and stops being counted when it leaves.</summary>
     [Fact]
     public void A_page_following_the_run_is_named_among_its_watchers()

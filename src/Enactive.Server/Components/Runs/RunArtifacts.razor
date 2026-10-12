@@ -1,0 +1,165 @@
+@using Enactive.Server.Accounts
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerHistory History
+@inject ServerStaging Staging
+
+@* The run's Artifacts tab (MainWindow.axaml 616-688): the files it wrote, each with Review - its text, in the viewer on
+   the screen - and, once the run has ended, the changes it proposed and the service kept (ServerStaging), amber down the
+   edge while they wait for a person, each with its diff, Apply and Reject. Not before the end: the store is still being
+   written, and the service refuses then anyway. Every action is the service's to decide; what it said is under the list. *@
+
+<div class="artifacts">
+    @if (Said is { Length: > 0 } said)
+    {
+        <p class="said" role="alert">@said</p>
+    }
+
+    @if (Paths.Count == 0 && _proposals.Count == 0)
+    {
+        <p class="hint">Nothing written yet.</p>
+    }
+
+    <ul class="artifact-list">
+        @foreach (var path in Paths)
+        {
+            <li class="card artifact">
+                <span class="path">@path</span>
+                <button type="button" class="btn small" @onclick="() => Review(path)">Review</button>
+            </li>
+        }
+    </ul>
+
+    @if (_proposals.Count > 0)
+    {
+        <ul class="artifact-list">
+            @foreach (var file in _proposals)
+            {
+                var pending = !file.Applied && !file.Rejected;
+                <li class="@("card proposal " + Looks.Change(file.Applied, file.Rejected))">
+                    <div class="proposal-head">
+                        <div class="proposal-text">
+                            <span class="path">@file.Path</span>
+                            <span class="hint">@(file.IsNew ? "new file" : "changed")</span>
+                            <span class="proposal-state">@(file.Applied ? "applied" : file.Rejected ? "rejected" : "staged")</span>
+                        </div>
+                        <button type="button" class="btn small" aria-expanded="@(_diffs.Contains(file.Id) ? "true" : "false")"
+                                @onclick="() => ToggleDiff(file.Id)">Diff</button>
+                        @if (_canOperate && pending)
+                        {
+                            <button type="button" class="btn small" disabled="@_busy" @onclick="() => ActAsync(file, apply: true)">Apply</button>
+                            <button type="button" class="btn small" disabled="@_busy" @onclick="() => ActAsync(file, apply: false)">Reject</button>
+                        }
+                    </div>
+                    @if (_diffs.Contains(file.Id))
+                    {
+                        @if (file.Diff is { } diff)
+                        {
+                            <DiffView Diff="@diff" />
+                        }
+                        else
+                        {
+                            <p class="hint">Not shown as text: @file.Bytes.ToString(System.Globalization.CultureInfo.InvariantCulture) bytes.</p>
+                        }
+                    }
+                </li>
+            }
+        </ul>
+    }
+</div>
+
+@if (_viewing is { } viewing)
+{
+    <TextViewer Title="@viewing.Path" Text="@(viewing.Text ?? "")" Problem="@viewing.Problem" OnClose="() => _viewing = null" />
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The run's workspace, where its files are.</summary>
+    [Parameter, EditorRequired] public string Root { get; set; } = "";
+
+    /// <summary>The files the run wrote, in the order first written (RunPanel.ArtifactPaths).</summary>
+    [Parameter] public IReadOnlyList<string> Paths { get; set; } = [];
+
+    /// <summary>The run, whose kept proposals are named by its id (ServerStaging.Begin).</summary>
+    [Parameter] public Guid RunId { get; set; }
+
+    /// <summary>Over: its proposals can be shown and decided.</summary>
+    [Parameter] public bool Ended { get; set; }
+
+    private IReadOnlyList<StagedFile> _proposals = [];
+    private readonly HashSet<Guid> _diffs = new();
+    private (Guid Run, bool Ended)? _read;
+    private bool _canOperate;
+    private bool _busy;
+    private string? _actionSaid;
+    private string? _problem;
+    private (string Path, string? Text, string? Problem)? _viewing;
+
+    private string? Said => _actionSaid ?? _problem;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var user = (await Auth).User;
+        _canOperate = ServerAuth.RoleOf(user) >= Role.Operator;
+        // Read once the run is over, and once only: they are on disk, and the page is drawn again at every event.
+        if (_read != (RunId, Ended))
+        {
+            _read = (RunId, Ended);
+            Load(user);
+        }
+    }
+
+    private void Load(System.Security.Claims.ClaimsPrincipal user)
+    {
+        if (!Ended)
+        {
+            _proposals = [];
+            return;
+        }
+        var (set, files, problem) = Staging.Open(user, Root, RunId.ToString("N"));
+        // No set is the common case - a run in a folder that does not stage, or one whose proposals are all decided - and
+        // says nothing; a set that cannot be read says why.
+        _proposals = set is null ? [] : files;
+        _problem = set is null && problem is not null && problem.StartsWith("These proposals cannot be read", StringComparison.Ordinal) ? problem : null;
+    }
+
+    private async Task Review(string path)
+    {
+        var (text, problem) = History.File((await Auth).User, Root, path);
+        _viewing = (path, text, problem);
+    }
+
+    private void ToggleDiff(Guid id)
+    {
+        if (!_diffs.Remove(id))
+            _diffs.Add(id);
+    }
+
+    private async Task ActAsync(StagedFile file, bool apply)
+    {
+        if (_busy)
+            return;
+        // Busy while it is done: a second press is not a second apply.
+        _busy = true;
+        try
+        {
+            var user = (await Auth).User;
+            _actionSaid = await Staging.ActAsync(user, Root, RunId.ToString("N"), file.Id, apply, CancellationToken.None);
+            var before = _proposals;
+            Load(user);
+            // Every proposal decided, the service drops the set (ServerStaging) - and read again, the list emptied under the
+            // person's eyes, the change they had just applied gone with it. Only this action can have decided the last one,
+            // and only if it went through (ServerStaging says "Applied: …" / "Rejected: …" then): the list stays, with this
+            // change as it now is.
+            if (_proposals.Count == 0 && before.Count > 0 && _actionSaid.StartsWith(apply ? "Applied:" : "Rejected:", StringComparison.Ordinal))
+                _proposals = before.Select(p => p.Id == file.Id ? p with { Applied = apply, Rejected = !apply } : p).ToList();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

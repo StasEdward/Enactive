@@ -71,6 +71,17 @@ internal sealed class RepoBar : ObservableObject
 
     public bool HasCi => Ci != CiState.None;
 
+    /// <summary>
+    /// The page the strip opens for an address, or null: only a github.com page over https, which is what the strip shows -
+    /// an address read from a repository's remote is the repository's to choose, and a link to anywhere else from a
+    /// trusted strip would be one click from a page nobody asked for. Moved from the window (OpenRepoPage) with the strip.
+    /// </summary>
+    public static Uri? GitHubPage(string? url)
+        => url is not null && Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps
+           && uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+            ? uri
+            : null;
+
     /// <summary>The repository as it now stands - or null, and the strip goes. A different repository forgets the pull request.</summary>
     public void Show(RepoStatus? repo)
     {

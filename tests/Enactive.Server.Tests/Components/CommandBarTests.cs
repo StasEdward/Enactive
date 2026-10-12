@@ -348,6 +348,91 @@ public sealed class CommandBarTests : ComponentHost
         Assert.Single(Runs.List(As("alice")));
     }
 
+    /// <summary>
+    /// Run's tooltip is the window's (RunButton.Tip): what it does, and - while the open run goes - why it is greyed. The bar
+    /// said "Run this here, and watch it." over a button the run under it had greyed.
+    /// </summary>
+    [Fact]
+    public void The_run_button_says_why_it_is_greyed_while_the_open_run_goes()
+    {
+        var workspace = Known("project");
+        var idle = Bar("alice", workspace);
+        Assert.Equal(Enactive.Application.RunButton.Tip(busy: false), Button(idle, "Run").GetAttribute("title"));
+
+        var run = Runs.Start(As("alice"), workspace.RootPath, "write the digest").Run!;
+        var busy = Bar("alice", workspace, run.Id);
+        Assert.Equal(Enactive.Application.RunButton.Tip(busy: true), Button(busy, "Run").GetAttribute("title"));
+    }
+
+    /// <summary>
+    /// The bar and the run share a page: once the run Run opened is on screen and has ended, Enter runs again. The guard
+    /// against a second Enter before the page left was never let go, and with Run staying on the page every later Enter
+    /// did nothing.
+    /// </summary>
+    [Fact]
+    public async Task Once_the_run_it_opened_is_shown_and_over_enter_runs_again()
+    {
+        var workspace = Known("project");
+        var bar = Bar("alice", workspace);
+
+        await bar.InvokeAsync(() => bar.Instance.RunFromKeyboard("write the digest"));
+        var first = Assert.Single(Runs.List(As("alice")));
+        // The screen arrives at the run's address and gives the bar the run it shows.
+        bar.Render(p => p.Add(b => b.OpenRun, first.Id));
+        Assert.Null(Runs.Cancel(As("alice"), first.Id));
+        Assert.True(first.Ended.Wait(TimeSpan.FromSeconds(10)));
+
+        await bar.InvokeAsync(() => bar.Instance.RunFromKeyboard("write the digest again"));
+
+        Assert.Equal(2, Runs.List(As("alice")).Count);
+    }
+
+    /// <summary>
+    /// Whether the open run is going is asked once a drawing: every disabled button asked the service again, seven times a
+    /// draw, each a lock and a search of every run - and the bar is drawn again with every event of the run beside it.
+    /// </summary>
+    [Fact]
+    public void The_open_run_is_looked_up_once_a_drawing()
+    {
+        // The service's runs, counted: wrapped where they are registered, before anything is asked of the services.
+        var registered = Services.Last(d => d.ServiceType == typeof(IRunControl));
+        Services.Remove(registered);
+        Services.AddSingleton<IRunControl>(sp => new CountingRuns((IRunControl)registered.ImplementationFactory!(sp)));
+        var workspace = Known("project");
+        var run = Runs.Start(As("alice"), workspace.RootPath, "write the digest").Run!;
+        var bar = Bar("alice", workspace, run.Id);
+        var counting = (CountingRuns)Runs;
+
+        counting.Finds = 0;
+        bar.Render();
+
+        Assert.Equal(1, counting.Finds);
+    }
+
+    /// <summary>The service's runs, counting how often a run is looked up.</summary>
+    private sealed class CountingRuns(IRunControl inner) : IRunControl
+    {
+        public int Finds;
+
+        public ServerRun? Find(System.Security.Claims.ClaimsPrincipal user, Guid id)
+        {
+            Interlocked.Increment(ref Finds);
+            return inner.Find(user, id);
+        }
+
+        public TimeSpan? QuestionWait => inner.QuestionWait;
+        public StartResult Start(System.Security.Claims.ClaimsPrincipal user, string workspace, string prompt) => inner.Start(user, workspace, prompt);
+        public StartResult StartBackground(System.Security.Claims.ClaimsPrincipal user, string workspace, string prompt) => inner.StartBackground(user, workspace, prompt);
+        public Task<StartResult> ResumeAsync(System.Security.Claims.ClaimsPrincipal user, string workspace, Guid runId) => inner.ResumeAsync(user, workspace, runId);
+        public StartResult Again(System.Security.Claims.ClaimsPrincipal user, string workspace, Enactive.Application.Rerun again, string action) => inner.Again(user, workspace, again, action);
+        public StartResult StartScheduled(Enactive.Application.DueRun due) => inner.StartScheduled(due);
+        public string? Refusal(System.Security.Claims.ClaimsPrincipal user, string workspace) => inner.Refusal(user, workspace);
+        public Task<StartResult> ContinueAsync(System.Security.Claims.ClaimsPrincipal user, string workspace, Enactive.Agents.ParkedDecision parked, string title) => inner.ContinueAsync(user, workspace, parked, title);
+        public IReadOnlyList<ServerRun> List(System.Security.Claims.ClaimsPrincipal user) => inner.List(user);
+        public string? Cancel(System.Security.Claims.ClaimsPrincipal user, Guid id) => inner.Cancel(user, id);
+        public string? Answer(System.Security.Claims.ClaimsPrincipal user, Guid id, Guid question, string choice) => inner.Answer(user, id, question, choice);
+    }
+
     /// <summary>A run that goes on until it is cancelled, or the test is over.</summary>
     private sealed class Holds(ApprovalStore approvals) : IRunExecutor
     {

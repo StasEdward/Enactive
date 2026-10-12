@@ -93,4 +93,14 @@ public sealed class RepoBarTests
         Assert.False(bar.HasPullRequest);
         Assert.Equal(CiState.None, bar.Ci);
     }
+
+    [Theory]
+    [InlineData("https://github.com/StasEdward/Enactive/pull/12", true)]
+    [InlineData("https://GitHub.com/StasEdward/Enactive/pull/12/checks", true)]
+    [InlineData("http://github.com/StasEdward/Enactive/pull/12", false)]
+    [InlineData("https://github.com.example.org/pull/12", false)]
+    [InlineData("javascript:alert(1)", false)]
+    [InlineData(null, false)]
+    public void Only_a_github_page_over_https_is_opened(string? url, bool opened)
+        => Assert.Equal(opened, RepoBar.GitHubPage(url) is not null);
 }

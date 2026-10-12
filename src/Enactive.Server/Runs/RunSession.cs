@@ -104,6 +104,14 @@ internal sealed class RunSession
     }
 
     /// <summary>
+    /// Somebody opened the run or left it: a named subscription came or went - unsubscribed, dropped for falling behind, or
+    /// ended with the run. Raised outside the lock, on whatever thread it happened on; a page marshals it to its own.
+    /// "Also watching" was only read as a page redrew for an event, and a run waiting on a question has none: a person who
+    /// opened it was not shown to the others until the run moved again, and one who had left was still shown.
+    /// </summary>
+    public event Action? WatchersChanged;
+
+    /// <summary>
     /// Reads the run's fold as it stands - the cards, the activity, the status column's figures - with the number of the
     /// newest event folded in, the point to subscribe from. Under the session's lock: the fold is changed by the drain as
     /// events arrive, and a page must not read it half-way. Keep <paramref name="read"/> short; copy what is needed out
@@ -162,6 +170,8 @@ internal sealed class RunSession
             Ending?.Invoke();
             foreach (var watcher in watchers)
                 watcher.Complete();
+            if (watchers.Any(w => w.Watcher is not null))
+                WatchersChanged?.Invoke();
             _ended.TrySetResult();
         }
     }
@@ -196,6 +206,8 @@ internal sealed class RunSession
             if (dropped is not null)
                 _watchers.RemoveAll(dropped.Contains);
         }
+        if (dropped?.Any(w => w.Watcher is not null) == true)
+            WatchersChanged?.Invoke();
     }
 
     /// <summary>
@@ -221,19 +233,26 @@ internal sealed class RunSession
                     return subscription;
 
             if (_over)
+            {
                 subscription.Complete();
-            else
-                _watchers.Add(subscription);
+                return subscription;
+            }
+            _watchers.Add(subscription);
         }
+        if (watcher is not null)
+            WatchersChanged?.Invoke();
         return subscription;
     }
 
     /// <summary>Stops sending to a watcher that has gone - a closed tab, a page navigated away.</summary>
     public void Unsubscribe(Subscription subscription)
     {
+        bool removed;
         lock (_gate)
-            _watchers.Remove(subscription);
+            removed = _watchers.Remove(subscription);
         subscription.Complete();
+        if (removed && subscription.Watcher is not null)
+            WatchersChanged?.Invoke();
     }
 
     /// <summary>One watcher's feed of events.</summary>

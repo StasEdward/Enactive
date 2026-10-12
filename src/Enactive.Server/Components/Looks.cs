@@ -42,6 +42,58 @@ internal static class Looks
     };
 
     /// <summary>
+    /// The live run's phase pill, as Brand.PhaseFill and PhaseText: done green, failed red, waiting on a person amber, idle
+    /// muted - and a run going blue, where the history's edge (<see cref="Run"/>) draws it amber. One table for both looked
+    /// like a run in trouble on the pill of every run in progress.
+    /// </summary>
+    public static string Phase(RunStandingKind standing) => standing switch
+    {
+        RunStandingKind.Done => "tone-done",
+        RunStandingKind.Failed => "tone-failed",
+        RunStandingKind.Open => "tone-open",
+        RunStandingKind.Idle => "tone-idle",
+        RunStandingKind.Running => "tone-running",
+        _ => throw Unknown(standing)
+    };
+
+    /// <summary>A line of a diff, as Palette.DiffLine: added green, removed red, the rest muted.</summary>
+    public static string Diff(DiffLineKind kind) => kind switch
+    {
+        DiffLineKind.Added => "tone-done",
+        DiffLineKind.Removed => "tone-failed",
+        DiffLineKind.Context => "tone-idle",
+        _ => throw Unknown(kind)
+    };
+
+    /// <summary>A log line by its level, as Palette.LogLevel: the quieter the level, the fainter the line.</summary>
+    public static string Log(Core.Diagnostics.LogLevel level) => level switch
+    {
+        Core.Diagnostics.LogLevel.Trace => "tone-faint",
+        Core.Diagnostics.LogLevel.Debug => "tone-idle",
+        Core.Diagnostics.LogLevel.Info => "tone-bright",
+        Core.Diagnostics.LogLevel.Warn => "tone-warning",
+        Core.Diagnostics.LogLevel.Error => "tone-failed",
+        _ => throw Unknown(level)
+    };
+
+    /// <summary>The icon of a line on a step card, as Palette.EntryIcon: what the step did, by its kind.</summary>
+    public static string Entry(FeedEntryKind kind) => kind switch
+    {
+        FeedEntryKind.Command or FeedEntryKind.Tool => "tone-running",
+        FeedEntryKind.File => "tone-done",
+        FeedEntryKind.Note => "tone-warning",
+        FeedEntryKind.Refusal => "tone-failed",
+        _ => throw Unknown(kind)
+    };
+
+    /// <summary>
+    /// A step card's edge, as StepCardViewModel.ToneOf: a question waiting for a person outranks the status - the step has
+    /// not failed, it waits - and is drawn as a blocked one is.
+    /// </summary>
+    public static string Card(FeedCardStatus status, bool waitingForYou)
+        => waitingForYou ? Card(FeedCardStatus.Blocked) : Card(status);
+
+    /// <summary>
     /// A workspace's edge in the switcher and on the WORKSPACE card, as Palette.WorkspaceEdge: every row has one, so the
     /// column is one to scan for "which of these is gone" - blue where you are, red where the folder is gone, grey else.
     /// </summary>

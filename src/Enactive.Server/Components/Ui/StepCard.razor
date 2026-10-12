@@ -1,0 +1,42 @@
+@using Enactive.Application.Projections
+@using Enactive.Server.Components.Runs
+
+@* One plan step, as the window's StepCardView: its status on the left edge (Looks.Card - a running step blue, one
+   waiting for a person amber), its title, what it is doing now in the edge's colour, and what it has done folded behind
+   its tally - one click away when something needs checking, not a transcript to scroll past. *@
+
+<li class="@("card step " + Looks.Card(Step.Status, Step.WaitingForYou))">
+    <div class="step-title">@Step.Title</div>
+    <div class="step-activity">@Step.Activity</div>
+    @if (Step.Lines.Count > 0)
+    {
+        <button type="button" class="disclosure" aria-expanded="@(_open ? "true" : "false")" @onclick="() => _open = !_open">
+            @* "›" folded, "⌄" open: a glyph swapped, as the window's. *@
+            <span class="chevron" aria-hidden="true">@(_open ? "⌄" : "›")</span>@Step.Tally
+        </button>
+        @if (_open)
+        {
+            <ul class="step-lines">
+                @foreach (var line in Step.Lines)
+                {
+                    <li>
+                        <span class="@("step-icon " + Looks.Entry(line.Kind))" aria-hidden="true">@StepEntries.Icon(line.Kind)</span>
+                        <span class="@(line.Kind == Enactive.Core.History.FeedEntryKind.Note ? "step-label note" : "step-label")">@line.Label</span>
+                        @if (line.Detail.Length > 0)
+                        {
+                            <div class="step-detail">@line.Detail</div>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    }
+</li>
+
+@code {
+    [Parameter, EditorRequired] public StepView Step { get; set; } = default!;
+
+    // Open or folded is how this person looks at the card, not a fact of the run: the page's, as the window keeps it on
+    // the card's view model and not in the feed.
+    private bool _open;
+}
