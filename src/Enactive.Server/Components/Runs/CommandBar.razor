@@ -110,6 +110,7 @@
     private bool _gone;
     private bool _focusBox;
     private Task? _attaching;
+    private bool _opening;
 
     private CommandBarState State => _state!;
 
@@ -183,7 +184,7 @@
     [JSInvokable]
     public Task RunFromKeyboard(string text)
     {
-        if (State.IsBusy)
+        if (State.IsBusy || _opening)
             return Task.CompletedTask;
         State.Input = text;
         return RunAsync();
@@ -191,8 +192,15 @@
 
     private Task RunAsync()
     {
+        // One run per press: a second Enter (or click) that reached the page before it left for the first run's page
+        // started the same task again - the box still held it, as the browser had not yet drawn it cleared.
+        if (_opening)
+            return Task.CompletedTask;
         if (State.Run() is { } id)
+        {
+            _opening = true;
             Navigation.NavigateTo($"runs/{id}");
+        }
         StateHasChanged();
         return Task.CompletedTask;
     }

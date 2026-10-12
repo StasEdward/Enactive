@@ -89,7 +89,7 @@ public sealed class CommandBarTests : ComponentHost
         Assert.True(bar.Find("input[type=checkbox]").HasAttribute("checked"));
         Assert.True(bar.Find("input[type=checkbox]").HasAttribute("disabled"));
 
-        Assert.Empty(bar.FindAll("button").Where(b => b.TextContent.Trim() is "Run" or "Stop" or "Run in background"));
+        Assert.DoesNotContain(bar.FindAll("button"), b => b.TextContent.Trim() is "Run" or "Stop" or "Run in background");
         Assert.Empty(bar.FindAll("textarea"));
     }
 
@@ -285,6 +285,47 @@ public sealed class CommandBarTests : ComponentHost
         await bar.InvokeAsync(() => bar.Instance.RunFromKeyboard("write the digest"));
 
         Assert.Equal("write the digest", Assert.Single(Runs.List(As("alice"))).Prompt);
+    }
+
+    /// <summary>
+    /// The Runs screen's bar runs in the workspace its column shows - and in none when the address names one the service
+    /// does not know: the old start form fell back to the first workspace there, a run in a folder nobody had on screen.
+    /// </summary>
+    [Fact]
+    public void On_the_runs_screen_the_bar_runs_in_the_workspace_shown_and_never_another()
+    {
+        Known("alpha");
+        var beta = Known("beta");
+        SignIn("alice");
+        var navigation = Services.GetRequiredService<NavigationManager>();
+
+        navigation.NavigateTo($"/?ws={Enactive.Core.Context.WorkspaceInfo.For(beta.RootPath).Id}");
+        var screen = Render<RunsScreen>();
+        screen.Find(".command-bar textarea").Input("write the digest");
+        screen.FindAll(".command-bar button").Single(b => b.TextContent.Trim() == "Run").Click();
+        Assert.Equal(beta.RootPath, Assert.Single(Runs.List(As("alice"))).Workspace);
+
+        navigation.NavigateTo($"/?ws={Guid.NewGuid()}");
+        screen = Render<RunsScreen>();
+        screen.Find(".command-bar textarea").Input("write the digest");
+        screen.FindAll(".command-bar button").Single(b => b.TextContent.Trim() == "Run").Click();
+        Assert.Equal("Name the folder the run is to work in.", screen.Find(".command-bar .said").TextContent.Trim());
+        Assert.Single(Runs.List(As("alice")));
+    }
+
+    /// <summary>
+    /// Enter pressed twice before the page has left for the run: one run. The second press still sent the text the box
+    /// held - the browser had not drawn it cleared yet - and started the same task a second time.
+    /// </summary>
+    [Fact]
+    public async Task A_second_enter_before_the_run_opens_starts_nothing_more()
+    {
+        var bar = Bar("alice", Known("project"));
+
+        await bar.InvokeAsync(() => bar.Instance.RunFromKeyboard("write the digest"));
+        await bar.InvokeAsync(() => bar.Instance.RunFromKeyboard("write the digest"));
+
+        Assert.Single(Runs.List(As("alice")));
     }
 
     /// <summary>A run that goes on until it is cancelled, or the test is over.</summary>
