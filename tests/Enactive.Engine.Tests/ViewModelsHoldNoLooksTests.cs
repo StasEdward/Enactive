@@ -2,6 +2,7 @@ namespace Enactive.Engine.Tests;
 
 using System.Text.RegularExpressions;
 using Enactive.App.Ui.ViewModels;
+using Enactive.Application;
 using Enactive.Application.Projections;
 using Enactive.Core.Events;
 using Enactive.Core.History;

@@ -1,7 +1,6 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using Enactive.Core.Events;
-using Enactive.Workspace;
 
 // What the view models say about what they show, for the view to draw (Palette). Each is the fact a colour, a weight
 // or an indent stood for when the view models picked those themselves - kept together, and free of Avalonia, so the
@@ -21,23 +20,3 @@ internal enum ChangeState { Staged, Applied, Rejected, Refused }
 
 /// <summary>Whether a schedule will run: off, on but with no time it can ever be run at, or on with a next run.</summary>
 internal enum ScheduleState { Off, Untimed, Scheduled }
-
-
-/// <summary>What a template's edge says: where it comes from, or that it is the one being edited.</summary>
-internal enum TemplateEdge { Builtin, Global, Workspace, Selected }
-
-
-internal static class TemplateEdges
-{
-    /// <summary>
-    /// Where a template comes from, as its edge says - every origin named. One added later is a failure here, as it is
-    /// in the palette; it was drawn as a workspace's own without a word.
-    /// </summary>
-    public static TemplateEdge Of(TemplateOrigin origin) => origin switch
-    {
-        TemplateOrigin.Builtin => TemplateEdge.Builtin,
-        TemplateOrigin.Global => TemplateEdge.Global,
-        TemplateOrigin.Workspace => TemplateEdge.Workspace,
-        _ => throw new ArgumentOutOfRangeException(nameof(origin), origin, "A template's origin with no edge.")
-    };
-}
