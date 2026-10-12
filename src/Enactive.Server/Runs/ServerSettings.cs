@@ -1,12 +1,19 @@
 namespace Enactive.Server.Runs;
 
+using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
+using Enactive.Application;
+using Enactive.Core.Permissions;
+using Enactive.Providers;
 using Enactive.Server.Accounts;
 using Enactive.Settings;
 using Enactive.Tools.Mcp;
 
-/// <summary>The settings as an Admin opened them: a copy to edit, and the version it was opened at.</summary>
+/// <summary>
+/// The settings as an Admin opened them: a copy to edit, which holds no secret (AppSettings.WithoutSecrets), and the
+/// version it was opened at.
+/// </summary>
 internal sealed record OpenedSettings(AppSettings Copy, string Version);
 
 /// <summary>
@@ -18,19 +25,69 @@ internal sealed record OpenedSettings(AppSettings Copy, string Version);
 /// gone without a word. The version a page opened is the file's content hash, compared at save - no field added to the
 /// file, so the desktop and older builds read it as they always did, and a change from anywhere is seen.</para>
 ///
-/// <para><b>Secrets</b> - API keys, the mail password - are DPAPI-protected for the service's account when written
-/// (AppSettings.Save), decrypted only in the service's memory, and never sent to a page: a page shows whether one is
-/// set and takes a new one.</para>
+/// <para><b>Secrets</b> - API keys, the mail password, MCP credentials - are DPAPI-protected for the service's account
+/// when written (AppSettings.Save) and never reach a page, not even the copy a page edits: that copy is made without
+/// them (AppSettings.WithoutSecrets), and Save puts back each one the page left alone from the file it reads again
+/// (RestoreSecrets). A page says whether one is kept, takes a new one, and removes one only on purpose. Testing a
+/// provider or an MCP server with what is kept happens here, as the service, for the same reason.</para>
 /// </summary>
-internal sealed class ServerSettings(UserStore users, ServerEngine engine)
+internal sealed class ServerSettings(UserStore users, ServerEngine engine, WorkspaceRoots roots)
 {
-    /// <summary>A copy of the settings as they are on disk, for an Admin; null and why for anybody else.</summary>
+    /// <summary>What a refused save starts with, so a host that says "Not saved" itself can say it once.</summary>
+    public const string NotSaved = "Not saved - ";
+
+    /// <summary>A copy of the settings as they are on disk, without their secrets, for an Admin; null and why for anybody else.</summary>
     public (OpenedSettings? Opened, string? Problem) Open(ClaimsPrincipal user)
     {
         if (Admin(user) is null)
             return (null, NotAdmin(user));
-        return (new OpenedSettings(AppSettings.Load(engine.SettingsFile), VersionNow()), null);
+        var version = VersionNow();
+        return (new OpenedSettings(AppSettings.Load(engine.SettingsFile).WithoutSecrets(), version), null);
     }
+
+    /// <summary>
+    /// The window's settings (SettingsViewModel) over a copy opened for an Admin, for the settings page: its Save comes
+    /// back here as the person (<see cref="Save"/>), and what the service said of a save that was made goes to
+    /// <paramref name="saved"/>. A save refused is said by the view model, as the window's is.
+    /// </summary>
+    /// <param name="templatesWorkspace">
+    /// The workspace whose templates the Templates section lists beside the global ones - the one the Templates screen
+    /// opens on - or null for none.
+    /// </param>
+    public (SettingsViewModel? View, string? Problem) Edit(ClaimsPrincipal user, string? templatesWorkspace, Action<string> saved)
+    {
+        var (opened, problem) = Open(user);
+        if (opened is null)
+            return (null, problem);
+
+        var view = new SettingsViewModel(
+            opened.Copy,
+            working =>
+            {
+                var (done, said) = Save(user, opened with { Copy = working });
+                // The view model says a refusal as "Not saved — " and the reason, as the window's does.
+                if (!done)
+                    throw new InvalidOperationException(said.StartsWith(NotSaved, StringComparison.Ordinal) ? said[NotSaved.Length..] : said);
+                saved(said);
+            },
+            workspaceRoot: templatesWorkspace,
+            toolNames: engine.ToolNames(),
+            // The service has no start-up to change (Windows starts it) and no Remote access (it pairs with no gateway).
+            startup: null,
+            hostPane: null,
+            providerCalls: new AsTheAdmin(this, user),
+            // Its engine's grants and its own workspaces: the files the service's runs read.
+            writableRoots: WritableRoots.Default,
+            knownWorkspaces: () => engine.Workspaces.Entries.Select(e => e.RootPath));
+        return (view, null);
+    }
+
+    /// <summary>
+    /// The folders the service runs tasks under (server.json, WorkspaceRoots), for an Admin: set when the service was
+    /// installed and read only here - a page that could add one could open every folder of the server to a run.
+    /// </summary>
+    public (IReadOnlyList<string>? Roots, string? Problem) WorkspaceRoots(ClaimsPrincipal user)
+        => Admin(user) is null ? (null, NotAdmin(user)) : (roots.All, null);
 
     /// <summary>Saves an edited copy, if nothing changed the file since it was opened; what to tell the person.</summary>
     public (bool Saved, string Said) Save(ClaimsPrincipal user, OpenedSettings edited)
@@ -40,20 +97,28 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine)
 
         if (VersionNow() != edited.Version)
             return (false, "The settings were changed since you opened them - by another page, or at the service's own "
-                           + $"desktop (last written {File.GetLastWriteTime(engine.SettingsFile):yyyy-MM-dd HH:mm}). "
-                           + "Nothing was saved; open them again and make your change there.");
+                           + "desktop (last written "
+                           + File.GetLastWriteTime(engine.SettingsFile).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
+                           + "). Nothing was saved; open them again and make your change there.");
+
+        // On a copy: the page keeps what it sent, which must go on holding no secret if this is refused.
+        var copy = edited.Copy.Clone();
+        // The file is the one the page opened (its version is), so each secret left alone is found in it.
+        if (copy.RestoreSecrets(AppSettings.Load(engine.SettingsFile)) is { Count: > 0 } missing)
+            return (false, NotSaved + string.Join(", ", missing) + " could not be found in the settings as they are now. "
+                           + "Open them again and make your change there.");
 
         // Validated before it is written: a configuration that cannot be built, written anyway, takes the service down
         // at its next start, which reads the same file (SettingsSave says the same for the window).
-        if (edited.Copy.Validate() is { Count: > 0 } problems)
-            return (false, "Not saved - " + string.Join(" ", problems));
+        if (copy.Validate() is { Count: > 0 } problems)
+            return (false, NotSaved + string.Join(" ", problems));
 
-        if (!edited.Copy.Save(engine.SettingsFile, replaceUnreadable: true))
-            return (false, "Not saved - " + (edited.Copy.LastSaveError ?? "the file could not be written."));
+        if (!copy.Save(engine.SettingsFile, replaceUnreadable: true))
+            return (false, NotSaved + (copy.LastSaveError ?? "the file could not be written."));
 
         engine.Reload();
         users.Audit(admin.Name, "settings saved",
-            $"{edited.Copy.Providers.Count} provider(s), {edited.Copy.Workers.Count} worker(s)"
+            $"{copy.Providers.Count} provider(s), {copy.Workers.Count} worker(s)"
             + (engine.Problem is { } problem ? "; " + problem : ""));
         return (true, engine.Problem is { } still
             ? "Saved. " + still
@@ -62,12 +127,16 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine)
 
     /// <summary>
     /// Connects to an MCP server as the page has it and lists its tools: what it offers, or why it could not be
-    /// reached. An Admin's - a stdio server is a program the service STARTS, as its own account.
+    /// reached. An Admin's - a stdio server is a program the service STARTS, as its own account. Credentials the page
+    /// left as they were are the ones kept for it, which the page never held.
     /// </summary>
     public async Task<string> TestMcpAsync(ClaimsPrincipal user, McpServerConfig config, CancellationToken ct)
     {
         if (Admin(user) is null)
             return NotAdmin(user);
+        var kept = new AppSettings { McpServers = [config.Clone()] };
+        kept.RestoreSecrets(AppSettings.Load(engine.SettingsFile));
+        config = kept.McpServers[0];
         if (config.Validate() is { } problem)
             return problem;
         try
@@ -86,6 +155,32 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine)
             // was built from.
             return $"Could not connect ({ex.GetType().Name}). Check the command or address, the credentials, and that the server runs.";
         }
+    }
+
+    /// <summary>
+    /// A provider asked as the settings page asks it (IProviderCalls), as the service: only for an Admin still, and with
+    /// the key kept for it where the page's box was left empty - the page never holds one, and asked with none a
+    /// provider that is fine was drawn red.
+    /// </summary>
+    private sealed class AsTheAdmin(ServerSettings settings, ClaimsPrincipal user) : IProviderCalls
+    {
+        public Task<ProviderStatus> CheckAsync(ProviderConfig provider, string? model)
+            => settings.Admin(user) is null
+                ? Task.FromResult(new ProviderStatus(ProviderHealth.Unknown, settings.NotAdmin(user), [], DateTimeOffset.UtcNow))
+                : DirectProviderCalls.Instance.CheckAsync(settings.WithKeptKey(provider), model);
+
+        public Task<List<string>> ModelsAsync(ProviderConfig provider)
+            => settings.Admin(user) is null
+                ? throw new InvalidOperationException(settings.NotAdmin(user))
+                : DirectProviderCalls.Instance.ModelsAsync(settings.WithKeptKey(provider));
+    }
+
+    /// <summary>The provider as typed, with the key kept for it put back where the box was left empty.</summary>
+    private ProviderConfig WithKeptKey(ProviderConfig typed)
+    {
+        var kept = new AppSettings { Providers = [typed.Clone()] };
+        kept.RestoreSecrets(AppSettings.Load(engine.SettingsFile));
+        return kept.Providers[0];
     }
 
     /// <summary>The file's content, as a version: what a save compares against.</summary>

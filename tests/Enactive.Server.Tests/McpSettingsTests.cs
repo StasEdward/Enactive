@@ -23,7 +23,7 @@ public sealed class McpSettingsTests : IDisposable
         _users.Add("ada", "correct horse battery", Role.Admin);
         _users.Add("alice", "correct horse battery", Role.Operator);
         _engine = new ServerEngine(_root, new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
-        _settings = new ServerSettings(_users, _engine);
+        _settings = new ServerSettings(_users, _engine, new WorkspaceRoots([]));
 
         var settings = AppSettings.Load(_engine.SettingsFile);
         settings.McpServers.Add(new McpServerConfig
@@ -65,10 +65,30 @@ public sealed class McpSettingsTests : IDisposable
     [Fact]
     public void The_page_is_told_the_names_never_the_values()
     {
-        var said = McpServerForm.NamesSet(_settings.Open(As("ada")).Opened!.Copy.McpServers.Single());
+        var copy = _settings.Open(As("ada")).Opened!.Copy.McpServers.Single();
+        var said = McpServerForm.NamesSet(copy);
 
         Assert.Contains("Authorization", said);
         Assert.DoesNotContain("tk-very-secret", said);
+        // Nor does the copy the page edits hold them, to be drawn by a box bound to the wrong field.
+        Assert.Equal("", copy.Headers["Authorization"]);
+    }
+
+    /// <summary>
+    /// "Remove its environment and headers" on the page's copy removes them: the copy holds a handle for the credentials
+    /// it never saw, and a save put back whatever a handle named - the box removed nothing.
+    /// </summary>
+    [Fact]
+    public void The_box_removes_them_from_the_page_s_copy_too()
+    {
+        var opened = _settings.Open(As("ada")).Opened!;
+        var server = opened.Copy.McpServers.Single();
+
+        Assert.Null(new McpServerForm { ClearCredentials = true, Timeout = "60" }.ApplyTo(server));
+        Assert.True(_settings.Save(As("ada"), opened).Saved);
+
+        Assert.Empty(Saved().Headers);
+        Assert.Equal("", Saved().SecretsProtected);
     }
 
     [Fact]

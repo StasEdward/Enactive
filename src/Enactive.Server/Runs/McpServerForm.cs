@@ -49,6 +49,9 @@ internal sealed class McpServerForm
             config.Environment = new();
             config.Headers = new();
             config.CredentialsUnavailable = false;
+            // The stored form too: the page's copy holds a handle there for the credentials it never saw, and a save
+            // puts back whatever a handle names (AppSettings.RestoreSecrets) - the box would have removed nothing.
+            config.SecretsProtected = "";
         }
         if (NewEnvironment.Trim().Length > 0)
         {

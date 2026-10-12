@@ -78,6 +78,14 @@ internal sealed class ServerEngine : IDisposable
         get { lock (_gate) return _now.Settings; }
     }
 
+    /// <summary>
+    /// The tools the service's engine registers, built from its settings as they are now (EngineComposition.Tools, as the
+    /// window's Settings asks): a deny list or a role's tools ticked against a hand-kept list named tools nobody had
+    /// (TemplateEditViewModel, WorkerTools). One place, for the template editor and the settings' Team alike.
+    /// </summary>
+    public IReadOnlyList<string> ToolNames()
+        => EngineComposition.Tools(Settings ?? new AppSettings()).Definitions.Select(d => d.Name).ToList();
+
     /// <summary>"Allow (workspace)" as the service remembers it: per person (ApprovalStore, rule 5), in its own data folder.</summary>
     public ApprovalStore Approvals { get; }
 

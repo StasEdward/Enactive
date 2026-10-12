@@ -220,12 +220,7 @@ internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunCo
     private PermissionPolicy PolicyOf(WorkspaceEntry known)
         => EngineComposition.PolicyFor(engine.Settings ?? new AppSettings(), known.Autonomy);
 
-    /// <summary>
-    /// The tools the service's engine registers, built from its settings as they are now (EngineComposition.Tools, as the
-    /// window's Settings asks): a deny list typed against a hand-kept list restricted tools nobody had (TemplateEditViewModel).
-    /// </summary>
-    private IReadOnlyList<string> ToolNames()
-        => EngineComposition.Tools(engine.Settings ?? new AppSettings()).Definitions.Select(d => d.Name).ToList();
+    private IReadOnlyList<string> ToolNames() => engine.ToolNames();
 
     /// <summary>
     /// Where a draft may be saved, the one offered first. A template with a file of its own is offered its own
