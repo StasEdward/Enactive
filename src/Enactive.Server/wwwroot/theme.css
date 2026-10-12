@@ -220,8 +220,10 @@ main > label input:not([type="checkbox"]), main > label select, main > label tex
 .btn.destructive:hover { color: #fff; background: var(--danger); }
 
 /* Last, and for every .btn: each variant above repaints the background, and a disabled .primary that kept its ember
-   looked exactly like itself - so a button that was working looked as pressable as one that was not. */
-.btn:disabled, .btn[aria-disabled="true"] { color: var(--text-faint); background: var(--scrim); border-color: var(--border); cursor: default; }
+   looked exactly like itself - so a button that was working looked as pressable as one that was not. As heavy as the
+   heaviest variant (.btn.go:hover is a class, a class and a state) and later, so it wins under the pointer too: Run
+   pressed went green again under the finger that pressed it while its run went on, and looked ready for another. */
+.btn:is(:disabled, [aria-disabled="true"]):is(*, :hover, :active) { color: var(--text-faint); background: var(--scrim); border-color: var(--border); cursor: default; }
 
 /* ── Tabs: text with an underline; the underline says where you ARE, which is not an action (so --info, not ember) ── */
 
@@ -823,7 +825,9 @@ main.bare { max-width: none; min-height: 100vh; box-sizing: border-box; display:
    made of the same parts, not the window squeezed into 390 px: the rail is a bar along the bottom, the Runs column a
    drawer opened from the top bar, the status column under the run, and a list beside its detail stacked over it. What
    can be touched is 40 px high at least - a finger is not a pointer. */
-@media (width < 900px) {
+/* max-width rather than the range syntax (width < 900px): iOS Safari before 16.4 ignores a range query, and an iPhone
+   still on it got the desktop squeezed into its screen. 899.98 so that 900 itself is wide, as the range said. */
+@media (max-width: 899.98px) {
   /* The bottom bar's height over the safe area: a 40 px item, 6 px above and below it, and its top line. */
   :root { --bottom-bar: 53px; }
 
@@ -874,7 +878,12 @@ main.bare { max-width: none; min-height: 100vh; box-sizing: border-box; display:
 
   /* A run: the status column - the question with it - under the run's views rather than beside them. */
   .run-body { grid-template-columns: minmax(0, 1fr); }
-  .run-view { padding-right: 0; }
+  .run-view { padding-right: 0; min-height: 0; }
+  /* The views and Current action as tall as what they hold: the window's fixed 240 and 130 px, stacked over the status
+     column, pushed a waiting question two screens down. */
+  .run-views { grid-template-rows: auto auto; }
+  /* And the question first in the status column, right under the run: what the run waits for is not under its figures. */
+  .status-scroll > .decision { order: -1; }
   .status-column { padding: 12px 0; border-top: 1px solid var(--border); }
   .tabs { height: auto; overflow-x: auto; }
   .past-run .task-header { flex-wrap: wrap; }
@@ -900,6 +909,11 @@ main.bare { max-width: none; min-height: 100vh; box-sizing: border-box; display:
   .settings-nav-group { flex-basis: 100%; margin: 6px 0 2px; }
   .settings-pane, .settings-foot, .settings-screen > .said { padding-left: 16px; padding-right: 16px; }
   .settings-editor-columns, .settings-pair { grid-template-columns: minmax(0, 1fr); }
+
+  /* The audit as wide as its columns need, scrolling in its box (.audit-scroll): squeezed into the screen, a path in
+     Detail broke one character to a line. */
+  .audit-table { width: max-content; min-width: 100%; }
+  .audit-detail { min-width: 28ch; }
 
   /* The template editor's rows, two to a line. */
   .check-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }

@@ -32,8 +32,9 @@
                 @* Tapping anywhere else closes it, as the workspace switcher's popup does. *@
                 <div class="rail-away" @onclick="CloseMore"></div>
             }
+            @* A disclosure of links, not a menu: aria-haspopup announced a menu, whose keys and items it does not have. *@
             <button type="button" class="@("rail-item rail-more-button" + (lowIsHere ? " on" : ""))" aria-label="More sections" title="More sections"
-                    aria-haspopup="true" aria-expanded="@(_moreOpen ? "true" : "false")" aria-controls="rail-more-items" @onclick="ToggleMore">
+                    aria-expanded="@(_moreOpen ? "true" : "false")" aria-controls="rail-more-items" @onclick="ToggleMore">
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" /></svg>
             </button>
             <div class="rail-low" id="rail-more-items">

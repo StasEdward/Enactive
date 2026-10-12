@@ -144,6 +144,8 @@ public sealed class NarrowScreenTests : ComponentHost
         // The scrim held with the drawer: held alone, the drawer made its own scrim inert, and a tap went through it.
         var held = (ElementReference)DialogScript.Invocations.Single(i => i.Identifier == "hold").Arguments[1]!;
         Assert.Equal(frame, held.Id);
+        // And the panel named as where the focus goes when a dialog opened in it closes and what opened that is gone.
+        Assert.Equal(panel, ((ElementReference)DialogScript.Invocations.Single(i => i.Identifier == "hold").Arguments[2]!).Id);
         var focused = JSInterop.VerifyFocusAsyncInvoke();
         Assert.Equal(panel, ((ElementReference)focused.Arguments[0]!).Id);
         Assert.Equal("-1", drawer.Find($"#{DrawerState.Id}").GetAttribute("tabindex"));
@@ -152,6 +154,27 @@ public sealed class NarrowScreenTests : ComponentHost
 
         drawer.WaitForAssertion(() => DialogScript.VerifyInvoke("release"));
         Assert.Null(drawer.Find($"#{DrawerState.Id}").GetAttribute("tabindex"));
+    }
+
+    /// <summary>
+    /// Opened, closed and left within one round trip - a tap on the bottom bar while the drawer was still taking hold: the
+    /// hold reached the page, the release queued behind it saw the drawer gone and was never sent, and the page stayed
+    /// inert until it was reloaded.
+    /// </summary>
+    [Fact]
+    public async Task A_drawer_left_while_its_hold_is_on_its_way_gives_the_page_back()
+    {
+        var hold = DialogScript.SetupVoid("hold", _ => true);
+        var drawer = RenderDrawer(open: false);
+        drawer.Render(p => p.Add(d => d.Open, true));
+        drawer.WaitForAssertion(() => DialogScript.VerifyInvoke("hold"));
+        drawer.Render(p => p.Add(d => d.Open, false));
+
+        var leaving = DisposeComponentsAsync();
+        hold.SetVoidResult();
+        await leaving;
+
+        DialogScript.VerifyInvoke("release");
     }
 
     [Fact]
@@ -214,6 +237,8 @@ public sealed class NarrowScreenTests : ComponentHost
         Assert.Equal("More sections", more.GetAttribute("aria-label"));
         Assert.Equal("rail-more-items", more.GetAttribute("aria-controls"));
         Assert.Equal("false", more.GetAttribute("aria-expanded"));
+        // A disclosure of links: aria-haspopup announced a menu, whose keys it does not have.
+        Assert.Null(more.GetAttribute("aria-haspopup"));
         // Each of them with its name in words, for More's list.
         Assert.Equal(["Environment", "Settings", "Accounts", "Audit"],
             rail.FindAll("#rail-more-items .rail-text").Select(e => e.TextContent.Trim()));

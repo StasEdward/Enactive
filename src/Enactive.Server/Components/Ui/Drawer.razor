@@ -61,6 +61,7 @@
         try
         {
             await before;
+            // Gone: DisposeAsync lets go once this chain has run, whatever it held - so nothing more is held from here.
             if (_disposed)
                 return;
             _script ??= await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Ui/Dialog.razor.js");
@@ -69,8 +70,11 @@
                 await _script.InvokeVoidAsync("release", _key);
                 return;
             }
-            // The page held first, while the focus is still on the button that opened the drawer: that is where it goes back.
-            await _script.InvokeVoidAsync("hold", _key, _frame);
+            if (_disposed)
+                return;
+            // The page held first, while the focus is still on the button that opened the drawer: that is where it goes
+            // back. The panel is where the focus goes when a dialog opened in it closes and what opened that is gone.
+            await _script.InvokeVoidAsync("hold", _key, _frame, _panel);
             if (_held && !_disposed)
                 await _panel.FocusAsync();
         }
@@ -87,12 +91,14 @@
 
     public async ValueTask DisposeAsync()
     {
-        var held = _held;
         _disposed = true;
         try
         {
             await _last;
-            if (held && _script is not null)
+            // Let go whether or not this drawer thinks it is open: opened, closed and left within one round trip, the
+            // hold had reached the page while the release queued behind it saw the drawer gone and was never sent, and
+            // the page stayed inert until it was reloaded. A release of a key not held does nothing.
+            if (_script is not null)
                 await _script.InvokeVoidAsync("release", _key);
             if (_script is not null)
                 await _script.DisposeAsync();

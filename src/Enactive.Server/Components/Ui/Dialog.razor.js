@@ -6,8 +6,11 @@
 // The dialogs open now, by key: what had the focus before each, and what each made inert.
 const shown = new Map();
 
-/** Makes everything but the dialog inert, and remembers what had the focus. */
-export function hold(key, dialog) {
+/**
+ * Makes everything but the dialog inert, and remembers what had the focus. `home` (the dialog itself unless given) is
+ * where the focus goes when a hold opened over this one ends and what opened that one is gone.
+ */
+export function hold(key, dialog, home) {
   // A dialog not on the page (closed before this ran) holds nothing: held for it, the page stayed inert for good.
   if (!(dialog instanceof Element) || !dialog.isConnected) return;
   // The connection's state stays in reach: its Reload is the one way back when the connection is lost (ReconnectState).
@@ -24,7 +27,7 @@ export function hold(key, dialog) {
     }
   };
   visit(document.body);
-  shown.set(key, { opener: document.activeElement, inerted });
+  shown.set(key, { opener: document.activeElement, inerted, home: home instanceof HTMLElement ? home : dialog });
 }
 
 /** Gives the page back, and the focus to what had it - unless that is gone (the row a question deleted). */
@@ -33,5 +36,15 @@ export function release(key) {
   if (!held) return;
   shown.delete(key);
   for (const element of held.inerted) element.inert = false;
-  if (held.opener instanceof HTMLElement && held.opener.isConnected && !held.opener.closest('[inert]')) held.opener.focus();
+  // The body is nothing to go back to: it is where the focus is when what had it was taken off the page before the
+  // dialog opened (Add folder… closes the switcher it was in).
+  const opener = held.opener;
+  if (opener instanceof HTMLElement && opener !== document.body && opener.isConnected && !opener.closest('[inert]')) {
+    opener.focus();
+    return;
+  }
+  // What opened it is gone: into the hold still open, the newest, rather than nowhere - left on the page's body, Escape
+  // and Tab no longer reached the drawer under the dialog.
+  const under = [...shown.values()].pop();
+  if (under && under.home.isConnected) under.home.focus();
 }

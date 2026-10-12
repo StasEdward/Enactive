@@ -747,7 +747,8 @@ test('on a phone the runs screen stacks and a run can be started and answered', 
   await expect(button).toHaveAttribute('aria-expanded', 'false');
   await expect(button).toBeFocused();
 
-  // A dialog opened in the drawer takes its own Escape: the drawer stays, and its scrim closes it.
+  // A dialog opened in the drawer takes its own Escape: the drawer stays, with the focus back in it - what opened the
+  // dialog (Add folder…, in the switcher) is gone - so the next Escape reaches the drawer.
   await button.click();
   await runsColumn(page).getByRole('button', { name: /^Workspace:/ }).click();
   await page.getByRole('button', { name: 'Add folder…' }).click();
@@ -755,6 +756,13 @@ test('on a phone the runs screen stacks and a run can be started and answered', 
   await expect(browse).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(browse).toBeHidden();
+  await expect(runsColumn(page)).toBeVisible();
+  await expect(page.locator('#workspace-drawer')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(runsColumn(page)).toBeHidden();
+
+  // The scrim closes it too.
+  await button.click();
   await expect(runsColumn(page)).toBeVisible();
   await page.locator('.drawer-scrim').click({ position: { x: 370, y: 400 } });
   await expect(runsColumn(page)).toBeHidden();
@@ -779,7 +787,24 @@ test('on a phone the runs screen stacks and a run can be started and answered', 
   const status = await page.getByRole('complementary', { name: 'Status' }).boundingBox();
   expect(status.y).toBeGreaterThanOrEqual(views.y + views.height - 1);
   expect(Math.abs(status.x - views.x)).toBeLessThan(2);
+  // The question first in that column, ahead of its figures, and within reach of the top of the page: under the window's
+  // fixed heights it was two screens down.
+  const top = (locator) => locator.evaluate((e) => e.getBoundingClientRect().top + window.scrollY);
+  const asked = await top(question(page));
+  expect(asked).toBeLessThan(await top(page.locator('.status-column .tiles-grid')));
+  expect(asked).toBeLessThan(1.5 * 844);
+  // The run's views as tall as what they hold, not the window's fixed 240 and 130 px stretched over a phone.
+  const slack = await page.getByRole('tabpanel').evaluate((e) =>
+    e.getBoundingClientRect().height - [...e.children].reduce((sum, c) => sum + c.getBoundingClientRect().height, 0));
+  expect(slack).toBeLessThan(40);
+  expect((await page.getByRole('region', { name: 'Current action' }).boundingBox()).height).toBeLessThan(130);
   await fitsAcross(page);
+
+  // Run is greyed while the run goes, under the finger too: a pointer over it painted it green, as ready for another.
+  const runButton = page.getByRole('button', { name: 'Run', exact: true });
+  await expect(runButton).toBeDisabled();
+  await runButton.hover();
+  await expect(runButton).toHaveCSS('background-color', 'rgba(0, 0, 0, 0.13)');
 
   // Away by the bottom bar, and back to the run through the drawer's RUNNING list - which closes the drawer.
   await sections(page).getByRole('link', { name: /^Inbox/ }).click();
@@ -797,32 +822,20 @@ test('on a phone the runs screen stacks and a run can be started and answered', 
   await context.close();
 });
 
-test('on a phone every section fits the screen across, and the foot of the rail is behind More', async ({ browser }) => {
-  const { context, page } = await signedInOnPhone(browser, 'ada');
+/**
+ * Walks the given sections from the bottom bar - those behind More through it - and checks each fits the screen across,
+ * once it has drawn what it shows.
+ */
+async function walkOnPhone(page, places, behindMore) {
   const bar = sections(page);
-  // Each section, and what says it has drawn what it shows: its width is measured with its content in it.
-  const shown = {
-    'Runs': () => page.getByLabel('Task', { exact: true }),
-    'Timeline · project memory': () => page.getByRole('region', { name: 'Project Memory' }).getByText(/PROJECT MEMORY — /),
-    'Templates · a saved task': () => page.getByRole('region', { name: 'Templates', exact: true }),
-    'Schedules · run it on a day and a time': () => page.getByRole('region', { name: 'Schedules', exact: true }),
-    'Inbox': () => page.locator('.inbox-bar'),
-    'Proposals': () => page.getByRole('heading', { name: 'Proposed changes' }),
-    'Global log': () => page.getByRole('list', { name: 'Lines' }),
-    'Environment': () => page.getByRole('region', { name: 'Environment' }).getByText(/Host: /),
-    'Settings': () => page.getByRole('navigation', { name: 'Settings sections' }),
-    'Accounts': () => page.getByRole('list', { name: 'Accounts' }),
-    'Audit': () => page.getByRole('table', { name: 'Audit trail' })
-  };
   const more = bar.getByRole('button', { name: 'More sections' });
-  const behindMore = ['Environment', 'Settings', 'Accounts', 'Audit'];
   // Drawn as the bar's other items are, not as a button: with a button's fill it looked pressed before it was touched.
   await expect(more).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-
-  for (const [name, ready] of Object.entries(shown)) {
+  for (const [name, ready] of Object.entries(places)) {
     // The Inbox is named with its count when something is unread.
     const item = bar.getByRole('link', { name: name === 'Inbox' ? /^Inbox/ : name, exact: name !== 'Inbox', includeHidden: true });
-    if (behindMore.includes(name)) {
+    const hidden = behindMore.includes(name);
+    if (hidden) {
       await expect(item).toBeHidden();
       await more.click();
       await expect(more).toHaveAttribute('aria-expanded', 'true');
@@ -830,14 +843,51 @@ test('on a phone every section fits the screen across, and the foot of the rail 
     await item.click();
     await expect(item).toHaveAttribute('aria-current', 'page');
     await expect(ready()).toBeVisible();
-    if (behindMore.includes(name)) {
+    if (hidden) {
       // Closed by the choice, and the "you are here" mark on More, which holds it.
       await expect(more).toHaveAttribute('aria-expanded', 'false');
       await expect(more).toHaveClass(/\bon\b/);
     }
     await fitsAcross(page);
   }
-  // The audit's five columns scroll in a box of their own, as long details and addresses grow them past the screen.
-  await expect(page.getByRole('table', { name: 'Audit trail' }).locator('xpath=..')).toHaveCSS('overflow-x', 'auto');
+}
+
+/** Each section and what says it has drawn what it shows: its width is measured with its content in it. */
+const everyonesPlaces = (page) => ({
+  'Runs': () => page.getByRole('region', { name: 'Command bar' }),
+  'Timeline · project memory': () => page.getByRole('region', { name: 'Project Memory' }).getByText(/PROJECT MEMORY — /),
+  'Templates · a saved task': () => page.getByRole('region', { name: 'Templates', exact: true }),
+  'Schedules · run it on a day and a time': () => page.getByRole('region', { name: 'Schedules', exact: true }),
+  'Inbox': () => page.locator('.inbox-bar'),
+  'Proposals': () => page.getByRole('heading', { name: 'Proposed changes' }),
+  'Global log': () => page.getByRole('list', { name: 'Lines' }),
+  'Environment': () => page.getByRole('region', { name: 'Environment' }).getByText(/Host: /)
+});
+
+test('on a phone every section fits the screen across, and the foot of the rail is behind More', async ({ browser }) => {
+  const { context, page } = await signedInOnPhone(browser, 'ada');
+  await walkOnPhone(page, {
+    ...everyonesPlaces(page),
+    'Settings': () => page.getByRole('navigation', { name: 'Settings sections' }),
+    'Accounts': () => page.getByRole('list', { name: 'Accounts' }),
+    'Audit': () => page.getByRole('table', { name: 'Audit trail' })
+  }, ['Environment', 'Settings', 'Accounts', 'Audit']);
+
+  // The audit's five columns as wide as they need, scrolling in a box of their own while the page does not: squeezed
+  // into the screen, a path in Detail broke one character to a line.
+  const box = page.getByRole('table', { name: 'Audit trail' }).locator('xpath=..');
+  const { scroll, client } = await box.evaluate((e) => ({ scroll: e.scrollWidth, client: e.clientWidth }));
+  expect(scroll).toBeGreaterThan(client);
+  const detail = await box.locator('td.audit-detail').evaluateAll((cells) => Math.min(...cells.map((c) => c.getBoundingClientRect().width)));
+  expect(detail).toBeGreaterThanOrEqual(150);
+  await fitsAcross(page);
+  await context.close();
+});
+
+test('on a phone a viewer reaches each of her sections, the environment behind More', async ({ browser }) => {
+  const { context, page } = await signedInOnPhone(browser, 'vera');
+  // Hers: no Settings, Accounts or Audit, and nothing to start a run with on the Runs screen.
+  await expect(sections(page).getByRole('link', { name: 'Settings', exact: true, includeHidden: true })).toHaveCount(0);
+  await walkOnPhone(page, everyonesPlaces(page), ['Environment']);
   await context.close();
 });
