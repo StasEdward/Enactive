@@ -124,6 +124,25 @@ public sealed class LogTests : ComponentHost
     }
 
     /// <summary>
+    /// An Admin demoted while the page is open ticks Capture: the service refuses, the hub stays where it was, the status
+    /// says why, and the box is drawn unticked - drawn one way, a refused tick stayed ticked in the browser over capture that
+    /// was off. What the browser's own box shows is tests/server-e2e's to see: bUnit holds only what the page drew.
+    /// </summary>
+    [Fact]
+    public void A_refused_capture_is_drawn_unticked()
+    {
+        var log = Log("ada");
+        log.WaitForAssertion(() => Assert.Contains(Offered(log), o => o.StartsWith("Capture raw wire")));
+        Users.SetRole("ada", Role.Operator);
+
+        Act(() => log.Find(".log-check input[type=checkbox]").Change(true));
+
+        Assert.Equal(LogLevel.Debug, Hub.MinLevel);
+        Assert.DoesNotContain(Users.AuditTrail(10), a => a.Action == "raw wire capture on");
+        log.WaitForAssertion(() => Assert.False(log.Find(".log-check input[type=checkbox]").HasAttribute("checked")));
+    }
+
+    /// <summary>
     /// Clear empties this page's view and nothing else: the service's log is everybody's, and the window's Clear - which
     /// empties its own hub - emptied every other open log page, and the next analysis' material, with it.
     /// </summary>
@@ -222,6 +241,35 @@ public sealed class LogTests : ComponentHost
 
         viewer.FindAll("button").Single(b => b.TextContent.Trim() == "Source").Click();
         Assert.Equal(result.Answer, viewer.Find("pre.viewer-text").TextContent);
+    }
+
+    /// <summary>
+    /// The analysis' buttons as LogAnalysisWindow has them: Copy says it copies the Markdown whichever view is showing, Close
+    /// is the primary button, and "Copied." stands beside what the answer cost rather than in its place.
+    /// </summary>
+    [Fact]
+    public void The_analysis_s_copy_says_what_it_copies_close_is_primary_and_copied_keeps_the_cost()
+    {
+        JSInterop.SetupVoid("navigator.clipboard.writeText", _ => true).SetVoidResult();
+        var result = new LogAnalysisResult("All fine.", "a-model", 10, 10, 4000, 200);
+
+        var viewer = Render<TextViewer>(p => p.Add(v => v.Title, "Log analysis").Add(v => v.Text, result.Answer)
+            .Add(v => v.Note, result.Cost).Add(v => v.CopyLabel, "Copy")
+            .Add(v => v.CopyTip, "Copies the answer as Markdown, whichever view is showing.").Add(v => v.CloseIsPrimary, true)
+            .Add(v => v.OnClose, () => { }));
+
+        var copy = viewer.FindAll("button").Single(b => b.TextContent.Trim() == "Copy");
+        Assert.Equal("Copies the answer as Markdown, whichever view is showing.", copy.GetAttribute("title"));
+        Assert.Contains("primary", viewer.FindAll("button").Single(b => b.TextContent.Trim() == "Close").ClassList);
+
+        copy.Click();
+
+        viewer.WaitForAssertion(() =>
+        {
+            var status = viewer.Find(".viewer-status").TextContent;
+            Assert.Contains("Copied.", status);
+            Assert.Contains("4,200 tokens", status);
+        });
     }
 
     /// <summary>A model's answer that quotes markup shows the markup it quoted: text goes in as text.</summary>

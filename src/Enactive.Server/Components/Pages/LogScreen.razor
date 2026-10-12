@@ -41,7 +41,10 @@
             </label>
             @if (_canCapture)
             {
-                <label class="log-check"><input type="checkbox" checked="@vm.CaptureRaw" @onchange="e => vm.CaptureRaw = e.Value is true" />
+                @* Bound both ways, not drawn one way: a switch the service refuses leaves the view model where it was, and drawn
+                   one way the page drew nothing new - the box stayed ticked in the browser over capture that was off. Bound,
+                   the page takes the box's ticked state as what it last drew, so drawing the view model's puts it back. *@
+                <label class="log-check"><input type="checkbox" @bind:get="vm.CaptureRaw" @bind:set="on => vm.CaptureRaw = on" />
                     Capture raw wire (Trace)</label>
             }
             <input type="search" class="log-search" aria-label="Search" placeholder="search… (#2 = one step)" value="@vm.SearchText"
@@ -94,6 +97,7 @@
         @* The window's LogAnalysisWindow, on the page: what was read above the answer, the answer rendered, its Markdown one
            click away (Source), Copy hands over the Markdown whichever is showing, and what it cost beside the buttons. *@
         <TextViewer Title="Log analysis" Lead="@analysis.Provenance" Text="@analysis.Answer" Note="@analysis.Cost" CopyLabel="Copy"
+                    CopyTip="Copies the answer as Markdown, whichever view is showing." CloseIsPrimary="true"
                     SourceTip="Show the model's answer as it was written, in Markdown." OnClose="() => _analysis = null">
             <Rendered><MarkdownView Text="@analysis.Answer" /></Rendered>
         </TextViewer>
@@ -120,6 +124,13 @@
         _problem = problem;
         if (log is null)
             return;
+        // The page can be gone by now: disposed while it waited for who is signed in. DisposeAsync found no view model to
+        // detach then, so one kept here would follow the hub, and its clock run, for a page nobody has.
+        if (_gone)
+        {
+            log.Detach();
+            return;
+        }
         _log = log;
         _log.PropertyChanged += Changed;
         _log.RowsAppended += Appended;
@@ -185,6 +196,10 @@
 
     private static bool Gone(Exception e) => e is JSDisconnectedException or OperationCanceledException or ObjectDisposedException;
 
+    // Capture is not turned off here: it outlives the Admin's page on purpose, as it outlives the window's log window (which
+    // only detaches), until an Admin turns it off or the service restarts - an Admin may turn it on, leave, and come back to
+    // what it recorded. Nobody is left unaware of it: every log page's status line says the hub's level, and the audit trail
+    // names who turned it on.
     public async ValueTask DisposeAsync()
     {
         _gone = true;

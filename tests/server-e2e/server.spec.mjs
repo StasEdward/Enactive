@@ -477,6 +477,24 @@ test('an admin captures the raw wire, and an operator is offered the analysis bu
   await context.close();
 });
 
+test('an admin demoted while the log is open is refused the capture, and the box shows it off', async ({ browser }) => {
+  setRole('bob', 'Admin');
+  try {
+    const { context, page } = await signedIn(browser, 'bob');
+    await page.goto('/log');
+    const capture = page.getByRole('checkbox', { name: 'Capture raw wire (Trace)' });
+    await expect(capture).not.toBeChecked();
+    setRole('bob', 'Operator');
+
+    // A click, not check(): check() insists the box stays ticked, and the point is that it does not.
+    await capture.click();
+    await expect(capture).not.toBeChecked();
+    await context.close();
+  } finally {
+    setRole('bob', 'Operator');
+  }
+});
+
 test('the timeline and the environment show the workspace in the viewer', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'vera');
   await page.getByRole('link', { name: 'Timeline · project memory', exact: true }).click();

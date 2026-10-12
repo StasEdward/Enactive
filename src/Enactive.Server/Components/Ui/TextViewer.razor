@@ -52,6 +52,12 @@ else
     /// <summary>The copy button's words: the viewer's "Copy all", the analysis' "Copy".</summary>
     [Parameter] public string CopyLabel { get; set; } = "Copy all";
 
+    /// <summary>What the copy button says it hands over, as its tooltip; none, nothing.</summary>
+    [Parameter] public string? CopyTip { get; set; }
+
+    /// <summary>Close drawn as the dialog's primary button - the analysis window's way of closing (LogAnalysisWindow).</summary>
+    [Parameter] public bool CloseIsPrimary { get; set; }
+
     /// <summary>What Source says it shows: a file as it is on disk, an answer as the model wrote it.</summary>
     [Parameter] public string SourceTip { get; set; } = "Show the file exactly as it is on disk.";
 
@@ -85,13 +91,10 @@ else
 
     private RenderFragment Buttons => __builder =>
     {
-        if (_copied)
+        // Both, when there are both: "Copied." in place of what the analysis cost took the cost off the screen for good.
+        if (_copied || Note is { Length: > 0 })
         {
-            <span class="hint viewer-status">Copied.</span>
-        }
-        else if (Note is { Length: > 0 } note)
-        {
-            <span class="hint viewer-status">@note</span>
+            <span class="hint viewer-status">@(string.Join(" · ", new[] { _copied ? "Copied." : null, Note }.Where(s => !string.IsNullOrEmpty(s))))</span>
         }
         if (Rendered is not null && Problem is null)
         {
@@ -100,11 +103,11 @@ else
         }
         if (Problem is null)
         {
-            <button type="button" class="btn" @onclick="CopyAsync">@CopyLabel</button>
+            <button type="button" class="btn" title="@CopyTip" @onclick="CopyAsync">@CopyLabel</button>
         }
         if (!Inline || OnClose.HasDelegate)
         {
-            <button type="button" class="btn" @onclick="OnClose">Close</button>
+            <button type="button" class="@(CloseIsPrimary ? "btn primary" : "btn")" @onclick="OnClose">Close</button>
         }
     };
 
