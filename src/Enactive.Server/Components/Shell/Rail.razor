@@ -69,27 +69,18 @@
                 var inbox = item.Href == "/inbox" && _unread > 0;
                 var label = inbox ? $"Inbox — {_unread.ToString(CultureInfo.InvariantCulture)} unread" : item.Label;
             }
-            @if (where.Now is null)
-            {
-                @* No page yet: drawn, so the rail is the whole window's, but not a link to nothing. *@
-                <span class="rail-item disabled" role="link" aria-disabled="true" data-rail="@item.Href"
-                      aria-label="@(label + " (coming)")" title="@(label + " (coming)")">@Icon(item)</span>
-            }
-            else
-            {
-                <a class="@("rail-item" + (on ? " on" : ""))" href="@where.Now" data-rail="@item.Href" aria-label="@label" title="@label"
-                   aria-current="@(on ? "page" : null)">
-                    @Icon(item)
-                    @if (inbox)
-                    {
-                        <span class="badge">@_unread.ToString(CultureInfo.InvariantCulture)</span>
-                    }
-                    @if (item.Href == "/proposals" && _proposed)
-                    {
-                        <span class="dot"></span>
-                    }
-                </a>
-            }
+            <a class="@("rail-item" + (on ? " on" : ""))" href="@where.Now" data-rail="@item.Href" aria-label="@label" title="@label"
+               aria-current="@(on ? "page" : null)">
+                @Icon(item)
+                @if (inbox)
+                {
+                    <span class="badge">@_unread.ToString(CultureInfo.InvariantCulture)</span>
+                }
+                @if (item.Href == "/proposals" && _proposed)
+                {
+                    <span class="dot"></span>
+                }
+            </a>
         </text>;
 
     private static RenderFragment Icon(RailItem item) =>

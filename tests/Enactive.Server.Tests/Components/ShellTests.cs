@@ -173,6 +173,21 @@ public sealed class ShellTests : ComponentHost
         }
     }
 
+    /// <summary>Every section the rail shows is a link: none is drawn as a section to come any more.</summary>
+    [Fact]
+    public void Every_section_is_a_link()
+    {
+        SignIn("ada");
+
+        var rail = RenderedRail();
+
+        Assert.All(rail.FindAll("nav [data-rail]"), item =>
+        {
+            Assert.Equal("A", item.TagName);
+            Assert.False(string.IsNullOrEmpty(item.GetAttribute("href")));
+        });
+    }
+
     /// <summary>
     /// The log, the Timeline and the Environment lead to their own pages. The log led to the old page at /logs, and the
     /// Timeline and the Environment were shown disabled while they had none.

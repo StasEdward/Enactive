@@ -137,8 +137,6 @@ pre, code, .path { font-family: var(--font-mono); }
   margin-bottom: 2px; border-radius: 6px; color: var(--text-faint); text-decoration: none; }
 .rail-item:hover { color: var(--text); background: var(--card-fill); }
 .rail-item.on { color: var(--ember-500); background: color-mix(in srgb, var(--ember-500) 16%, transparent); }
-.rail-item.disabled { color: var(--ink-500); cursor: default; }
-.rail-item.disabled:hover { color: var(--ink-500); background: transparent; }
 .rail-item .badge { position: absolute; top: 1px; right: 0; min-width: 14px; padding: 0 4px; box-sizing: border-box; border-radius: 7px;
   background: var(--ember-500); color: #fff; font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; }
 .rail-item .dot { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--ember-500); }

@@ -50,17 +50,17 @@ internal sealed record RailItem(string Href, string Label, string Icon, Role Nee
 /// <summary>
 /// Where each rail item leads TODAY, while the desktop's pages are being rebuilt for the web. The rail is built for the
 /// final addresses (<see cref="RailItem.Href"/>); an item whose page is not there yet would be a link to nothing, so it
-/// leads to the page that does the job now, or - with no page at all - is shown disabled. Each task that builds a page
-/// changes its row to the new address, and when every row is the item's own this table goes.
+/// leads to the page that does the job now. Each page built changes its row to the new address, and when every row is the
+/// item's own this table goes.
 ///
 /// <para>An item is marked "you are here" by <c>Active</c>, never by an address another item shares: both would light up
 /// on it.</para>
 /// </summary>
 internal static class RailAddresses
 {
-    /// <param name="Now">Relative to the page's base; null when there is no page yet.</param>
+    /// <param name="Now">Relative to the page's base.</param>
     /// <param name="Active">Path prefixes (relative, no leading slash) that put the item in "you are here"; "" is the root page only.</param>
-    internal sealed record Where(string? Now, string[] Active);
+    internal sealed record Where(string Now, string[] Active);
 
     // Rows marked TEMPORARY lead somewhere other than their Href today.
     private static readonly Dictionary<string, Where> Table = new()
