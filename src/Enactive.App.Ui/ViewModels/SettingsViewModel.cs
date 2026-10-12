@@ -173,6 +173,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private const int SectionAiProviders = 4;
     private const int SectionAiTeam = 5;
     private const int SectionAiPhases = 6;
+    private const int SectionRemote = 9;
 
     private int _section = SectionGeneral;
 
@@ -263,6 +264,14 @@ internal sealed partial class SettingsViewModel : ObservableObject
     public RelayCommand ShowAiTeamCommand { get; }
     public RelayCommand ShowAiPhasesCommand { get; }
 
+    // ── Remote access: the window's own pane (IHostSettingsPane) ──────────────
+    public bool IsRemote => _section == SectionRemote;
+
+    public RelayCommand ShowRemoteCommand { get; }
+
+    /// <summary>A pane only this host has, or null: what Save waits for and lets write itself into the settings.</summary>
+    private readonly IHostSettingsPane? _hostPane;
+
     /// <param name="workspaceRoot">
     /// The workspace open in the main window, or null. Templates need it: a template saved "for this
     /// workspace" lives in its .enactive folder, and with no workspace open that scope does not exist
@@ -274,22 +283,27 @@ internal sealed partial class SettingsViewModel : ObservableObject
     /// called "create_directory", which restricted nothing at all.
     /// </param>
     /// <param name="startup">
-    /// Where "start with Windows" is read and changed. Null means the real Run key; anything that
-    /// builds this view model outside the app passes its own, so the registry of the machine it runs
-    /// on is left alone.
+    /// Where "start with Windows" is read and changed: the window passes the real Run key, and anything
+    /// else that builds this view model passes its own, so the registry of the machine it runs on is
+    /// left alone. Null is a host that has no start-up of its own to offer - the service, which Windows
+    /// starts as a service: nothing is read or changed, and nothing is said about it either.
+    /// </param>
+    /// <param name="hostPane">
+    /// Makes the pane only this host has, over the working copy this edits - the window's Remote access.
+    /// Null for a host with none.
     /// </param>
     public SettingsViewModel(
         AppSettings settings, Action<AppSettings> onSaved,
         string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null,
-        IStartupEntry? startup = null)
+        IStartupEntry? startup = null, Func<AppSettings, IHostSettingsPane>? hostPane = null)
     {
         _working = settings.Clone();
         _onSaved = onSaved;
-        _startup = startup ?? StartupEntry.System;
+        _startup = startup ?? NoStartupEntry.Instance;
         ToolNames = toolNames ?? Array.Empty<string>();
         InitializeMcp();
         InitializeTemplates(workspaceRoot);
-        InitializeRemote();
+        _hostPane = hostPane?.Invoke(_working);
         InitializeSmtp();
         InitializeWeb();
         InitializeWritableRoots();
@@ -319,7 +333,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
         // Read from the system, not from settings.json: the Run key is the truth, and a copy would
         // drift the first time the user removed it in Task Manager.
         _startupLoad = LoadStartupAsync();
-        _startupNote = _startup.Supported
+        _startupNote = _startup.Supported || startup is null
             ? string.Empty
             : "Only Windows starts programs this way; this desktop does not.";
 
@@ -335,6 +349,11 @@ internal sealed partial class SettingsViewModel : ObservableObject
         ShowAiProvidersCommand = new RelayCommand(() => Section = SectionAiProviders);
         ShowAiTeamCommand = new RelayCommand(() => Section = SectionAiTeam);
         ShowAiPhasesCommand = new RelayCommand(() => Section = SectionAiPhases);
+        ShowRemoteCommand = new RelayCommand(() =>
+        {
+            Section = SectionRemote;
+            _hostPane?.Shown();
+        });
 
         foreach (var component in BuildInfo.Components())
             Components.Add(component);
@@ -349,9 +368,13 @@ internal sealed partial class SettingsViewModel : ObservableObject
 
         AddWorkerCommand = new RelayCommand(AddWorker);
 
-        SaveCommand = new AsyncRelayCommand(SaveAsync, () => !RemoteBusy);
+        SaveCommand = new AsyncRelayCommand(SaveAsync, () => !HostPaneBusy);
+        if (_hostPane is not null)
+            _hostPane.BusyChanged += SaveCommand.RaiseCanExecuteChanged;
         CancelCommand = new RelayCommand(() => CloseRequested?.Invoke());
     }
+
+    private bool HostPaneBusy => _hostPane?.Busy == true;
 
     public event Action? CloseRequested;
 
@@ -554,7 +577,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
     {
         // Disabled while a connection code is applied; checked here too, because a disabled button is
         // a promise the window keeps, and a key press or a second binding is not bound by it.
-        if (RemoteBusy)
+        if (HostPaneBusy)
             return;
 
         await _startupLoad;
@@ -588,7 +611,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
             : ShellCommandPolicy.Follow;
         _working.CloseToTray = CloseToTray;
 
-        SaveRemote();
+        _hostPane?.Save(_working);
         SaveSmtp();
         SaveWeb();
 

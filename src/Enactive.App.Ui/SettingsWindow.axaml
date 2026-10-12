@@ -272,9 +272,11 @@
                                Text="" />
                 </StackPanel>
 
-                <!-- Scrolls: the trusted list grows with every device added. -->
+                <!-- Scrolls: the trusted list grows with every device added. The pane is its own view
+                     model (RemoteSettingsViewModel), set on RemotePane by the window: the rest of the
+                     settings are shared with the service, which has no Remote access. -->
                 <ScrollViewer Classes="gutter" IsVisible="{Binding IsRemote}">
-                <StackPanel Margin="12" Spacing="6">
+                <StackPanel x:Name="RemotePane" x:DataType="vm:RemoteSettingsViewModel" Margin="12" Spacing="6">
                     <TextBlock Classes="label" Text="Remote access" />
                     <TextBlock Classes="hint" TextWrapping="Wrap"
                                Text="Lets you start tasks on this computer from a phone. This computer connects out to the gateway and holds the connection open; nothing listens for incoming connections here, and no port needs opening." />

@@ -150,6 +150,13 @@ internal sealed partial class SettingsViewModel
 
     }
 
+    /// <summary>The pane's complaint and what the tool will do, recomputed after an edit that changes either.</summary>
+    private void Revalidate()
+    {
+        SmtpProblem = SmtpValidation();
+        OnPropertyChanged(nameof(SmtpState));
+    }
+
     /// <summary>The recipients as typed, one per line, blanks dropped.</summary>
     private List<string> RecipientLines()
         => SmtpRecipients
