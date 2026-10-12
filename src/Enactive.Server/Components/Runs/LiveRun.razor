@@ -73,7 +73,7 @@
                         break;
                     default:
                         IReadOnlyList<Enactive.Core.Diagnostics.LogEntry> lines = run.Session.RunId is { } runId ? Logs.OfRun(_user!, runId) : [];
-                        <p class="hint">@(run.Session.RunId is { } shown ? "Filtered to run " + shown.ToString("N")[..6] : "No run yet.")</p>
+                        <p class="hint">@RunFigures.LogHeader(run.Session.RunId)</p>
                         <div class="run-log">
                             @foreach (var entry in lines)
                             {
@@ -204,9 +204,7 @@
         }
     }
 
-    private static IReadOnlyList<string> TabNames(LiveRunView view)
-        // The tab carries its own count, so an empty run does not advertise "Artifacts (0)".
-        => ["Execution", view.Artifacts.Count == 0 ? "Artifacts" : $"Artifacts ({view.Artifacts.Count.ToString(CultureInfo.InvariantCulture)})", "Log"];
+    private static IReadOnlyList<string> TabNames(LiveRunView view) => ["Execution", RunFigures.ArtifactsTab(view.Artifacts.Count), "Log"];
 
     /// <summary>From its turn to its end (or now), as the window's stopwatch runs from Run; an em dash while it waits in the line.</summary>
     private static string Elapsed(ServerRun run)

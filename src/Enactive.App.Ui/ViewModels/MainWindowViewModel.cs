@@ -552,7 +552,7 @@ internal sealed class MainWindowViewModel : ObservableObject
     public int ArtifactCount => Artifacts.Count;
 
     /// <summary>The tab carries its own count, so an empty run does not advertise "Artifacts (0)".</summary>
-    public string ArtifactsTabLabel => Artifacts.Count == 0 ? "Artifacts" : $"Artifacts ({Artifacts.Count})";
+    public string ArtifactsTabLabel => RunFigures.ArtifactsTab(Artifacts.Count);
 
     /// <summary>Tile text. A tile shows a value under a label, so the number arrives ready to draw.</summary>
     public string ArtifactCountText => Artifacts.Count.ToString();
@@ -577,13 +577,9 @@ internal sealed class MainWindowViewModel : ObservableObject
     public int PromptTokens { get; private set; }
     public int CompletionTokens { get; private set; }
 
-    public string TokensText => PromptTokens + CompletionTokens == 0
-        ? "—"
-        : TokenCounts.Compact(PromptTokens + CompletionTokens);
+    public string TokensText => RunFigures.Tokens(RunFigures.Reported(PromptTokens, CompletionTokens));
 
-    public string TokensDetail => PromptTokens + CompletionTokens == 0
-        ? "nothing reported"
-        : $"{TokenCounts.Compact(PromptTokens)} in · {TokenCounts.Compact(CompletionTokens)} out";
+    public string TokensDetail => RunFigures.TokensDetail(RunFigures.Reported(PromptTokens, CompletionTokens));
 
     public void AddUsage(int promptTokens, int completionTokens,
         string? providerId = null, ModelReach where = ModelReach.Unknown)

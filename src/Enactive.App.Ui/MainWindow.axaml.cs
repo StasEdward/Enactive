@@ -101,7 +101,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     /// <summary>See where it is started: the badge against work this process did not do.</summary>
     private DispatcherTimer? _inboxPoll;
 
-    // The strip at the foot of the window (RepoBarViewModel): local git every half minute while nothing runs, GitHub at
+    // The strip at the foot of the window (RepoBar): local git every half minute while nothing runs, GitHub at
     // most every two minutes - it is a network call, and a strip is not worth a rate limit.
     private DispatcherTimer? _repoPoll;
 
@@ -1105,7 +1105,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
         private void UpdateProgress()
         {
-            var progress = _feed.StepsTotal > 0 ? $"{_feed.StepsDone} / {_feed.StepsTotal} steps" : "—";
+            var progress = RunFigures.Steps(_feed.StepsDone, _feed.StepsTotal);
             Live(() => _vm.StatusProgress = progress);
 
             // The one place step counts change, so the one place the live row has to be told. The row

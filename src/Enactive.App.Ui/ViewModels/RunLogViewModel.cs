@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using Enactive.Application.Mvvm;
+using Enactive.Application.Projections;
 using Enactive.Core.Diagnostics;
 using Enactive.Workspace;
 
@@ -24,7 +25,7 @@ internal sealed class RunLogViewModel : ObservableObject
     private Guid? _runId;
     private sealed record Selection(Guid Id);
     private Selection? _selection;
-    private string _header = "No run yet.";
+    private string _header = RunFigures.LogHeader(null);
 
     public RunLogViewModel(LogHub hub)
     {
@@ -55,7 +56,7 @@ internal sealed class RunLogViewModel : ObservableObject
         Volatile.Write(ref _selection, new Selection(runId));
         _pending.Clear();
         Rows.Clear();
-        Header = "Filtered to run " + runId.ToString("N")[..6];
+        Header = RunFigures.LogHeader(runId);
 
         // The run has usually said a few things before the UI got here, so start from the backlog
         // rather than only from what arrives next.

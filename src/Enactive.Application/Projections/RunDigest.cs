@@ -62,13 +62,11 @@ internal sealed record RunDigest(
             // Retry re-runs this specification as it was, or - for a typed run - the request, recorded as a value.
             CanRetry: spec is not null || !string.IsNullOrWhiteSpace(request),
             // Null usage: the run predates the counting, or the provider never reported - not zero, and not shown as it.
-            TokensText: record.Usage is { } u ? TokenCounts.Compact(u.Total) : "—",
-            TokensDetail: record.Usage is { } u2
-                ? $"{TokenCounts.Compact(u2.PromptTokens)} in · {TokenCounts.Compact(u2.CompletionTokens)} out"
-                : "nothing reported",
+            TokensText: RunFigures.Tokens(record.Usage),
+            TokensDetail: RunFigures.TokensDetail(record.Usage),
             ToolCalls: record.Events.Count(e => e.Kind == nameof(EventKind.ToolInvoked)),
             ElapsedText: Duration(record.FinishedAt - record.StartedAt),
-            StepsText: cards.Count == 0 ? "—" : $"{done} / {cards.Count} steps",
+            StepsText: RunFigures.Steps(done, cards.Count),
             // What it was ALLOWED to do, as recorded. A run from before this was kept says so, rather than showing
             // today's level and passing it off as history.
             HasSettings: settings is not null,

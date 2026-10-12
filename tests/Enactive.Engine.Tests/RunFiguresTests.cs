@@ -53,4 +53,62 @@ public sealed class RunFiguresTests
             System.Globalization.CultureInfo.CurrentCulture = before;
         }
     }
+
+    /// <summary>
+    /// The TOKENS tile and its tooltip, for a live run (counts so far) and a finished one (its recorded usage): an em dash
+    /// and "nothing reported" where nothing was reported - a different fact from zero - else the total and the split.
+    /// </summary>
+    [Fact]
+    public void Tokens_are_said_as_the_tile_says_them()
+    {
+        Assert.Null(RunFigures.Reported(0, 0));
+        Assert.Equal(("—", "nothing reported"), (RunFigures.Tokens(null), RunFigures.TokensDetail(null)));
+        var used = RunFigures.Reported(1200, 300);
+        Assert.Equal(("1.5k", "1.2k in · 300 out"), (RunFigures.Tokens(used), RunFigures.TokensDetail(used)));
+    }
+
+    [Theory]
+    [InlineData(0, 0, "—")]
+    [InlineData(1, 3, "1 / 3 steps")]
+    [InlineData(3, 3, "3 / 3 steps")]
+    public void Steps_are_said_as_the_status_column_says_them(int done, int total, string said)
+        => Assert.Equal(said, RunFigures.Steps(done, total));
+
+    [Theory]
+    [InlineData(0, "Artifacts")]
+    [InlineData(2, "Artifacts (2)")]
+    public void The_artifacts_tab_carries_its_count_only_when_there_is_one(int count, string said)
+        => Assert.Equal(said, RunFigures.ArtifactsTab(count));
+
+    [Fact]
+    public void The_log_tab_says_which_run_it_is_filtered_to()
+    {
+        Assert.Equal("No run yet.", RunFigures.LogHeader(null));
+        Assert.Equal("Filtered to run 0f1e2d", RunFigures.LogHeader(Guid.Parse("0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0")));
+    }
+
+    /// <summary>The model figures read the same whatever the server's culture, as the token counts do.</summary>
+    [Fact]
+    public void The_model_figures_read_the_same_in_every_culture()
+    {
+        var before = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("ru-RU");
+            var run = Guid.NewGuid();
+            var performance = new ModelPerformance();
+            performance.ShowRun(run);
+            performance.Add(new Enactive.Core.Chat.ModelCallMetrics("ollama", "qwen", 12_345, 2_500, null, 2.5, 0.25, null, run));
+
+            var row = Assert.Single(performance.Rows);
+            Assert.Equal("≈ 1,000.0 T/s", row.Speed);
+            Assert.Equal("Tokens  12,345 in / 2,500 out", row.Tokens);
+            Assert.Equal("Request avg  2.50 s   ·   1 calls", row.Requests);
+            Assert.Equal("First delta avg  0.25 s", row.First);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = before;
+        }
+    }
 }

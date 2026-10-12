@@ -1,6 +1,5 @@
 namespace Enactive.Server.Components.Runs;
 
-using System.Globalization;
 using Enactive.Application.Projections;
 using Enactive.Core.History;
 
@@ -47,17 +46,13 @@ public sealed record LiveRunView(
 {
     public static readonly LiveRunView Empty = new("", null, 0, 0, [], "", "", false, false, 0, [], 0, 0, [], [], [], 0);
 
-    /// <summary>The tile, as the window's: an em dash when nothing was reported - a different fact from zero.</summary>
-    public string TokensText => PromptTokens + CompletionTokens == 0 ? "—" : TokenCounts.Compact(PromptTokens + CompletionTokens);
+    /// <summary>The tile, as the window's (RunFigures).</summary>
+    public string TokensText => RunFigures.Tokens(RunFigures.Reported(PromptTokens, CompletionTokens));
 
-    public string TokensDetail => PromptTokens + CompletionTokens == 0
-        ? "nothing reported"
-        : $"{TokenCounts.Compact(PromptTokens)} in · {TokenCounts.Compact(CompletionTokens)} out";
+    public string TokensDetail => RunFigures.TokensDetail(RunFigures.Reported(PromptTokens, CompletionTokens));
 
-    /// <summary>The steps line under the tiles, as the window's StatusProgress.</summary>
-    public string Progress => StepsTotal > 0
-        ? string.Create(CultureInfo.InvariantCulture, $"{StepsDone} / {StepsTotal} steps")
-        : "—";
+    /// <summary>The steps line under the tiles, as the window's StatusProgress (RunFigures).</summary>
+    public string Progress => RunFigures.Steps(StepsDone, StepsTotal);
 }
 
 /// <summary>
