@@ -1,0 +1,13 @@
+{
+  "profiles": {
+    "ServerHarness": {
+      "commandName": "Project",
+      "commandLineArgs": "--data %TEMP%/enactive-harness --port 8444",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:8444"
+    }
+  }
+}
