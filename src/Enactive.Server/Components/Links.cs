@@ -17,9 +17,6 @@ internal static class Links
         return query.Count == 0 ? "/" : "/?" + string.Join("&", query);
     }
 
-    /// <summary>The old address of a workspace's history, which the service redirects to <see cref="Runs"/>.</summary>
-    public static string History(string workspace) => "history?ws=" + Uri.EscapeDataString(workspace);
-
     /// <summary>A past run on the Runs screen: its workspace by its id (WorkspaceIds), and the run's.</summary>
     public static string PastRun(Guid workspace, Guid runId) => $"history/{workspace}/{runId}";
 

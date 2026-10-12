@@ -79,8 +79,7 @@
   --font-mono: Consolas, Menlo, monospace;
 }
 
-/* ── Base elements, and the rules of the pages not yet rebuilt ────────────────────────────────────────────────────
-   (these were wwwroot/app.css; each goes when the page that uses it is replaced) */
+/* ── Base elements ──────────────────────────────────────────────────────────────────────────────────────────────── */
 
 body { margin: 0; font-family: var(--font-sans); background: var(--bg); color: var(--text); line-height: 1.45; }
 a { color: var(--accent-text); }
@@ -153,34 +152,14 @@ main { padding: 16px; max-width: 1100px; }
 .drawer-scrim { position: fixed; inset: 0; z-index: 40; background: var(--dialog-scrim); }
 
 button { font: inherit; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); border-radius: var(--radius-sm); padding: 6px 12px; cursor: pointer; }
-button[type="submit"], .answers button:first-child { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+button[type="submit"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 input, textarea { font: inherit; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 8px; box-sizing: border-box; }
 
 .said { color: var(--danger); }
-.where, .state, .subtitle { color: var(--text-muted); }
-.state, .where { margin-left: 8px; }
-
-.list { list-style: none; padding: 0; margin: 0; }
-.list li { padding: 6px 0; border-bottom: 1px solid var(--border); }
-.list li.local { color: var(--success); }
-
-
-.question { border: 2px solid var(--accent); border-radius: var(--radius); padding: 12px; margin: 12px 0; background: var(--bg-card); }
-.question pre { white-space: pre-wrap; max-height: 320px; overflow: auto; }
-.answers { display: flex; gap: 8px; flex-wrap: wrap; }
-
 .cards { padding-left: 0; list-style: none; }
-.entries { margin: 4px 0 0; padding-left: 18px; font-family: var(--font-mono); font-size: 0.85rem; }
-
-
-.file { white-space: pre-wrap; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; overflow: auto; }
-
-.answers .cancel { align-self: center; }
 .body { white-space: pre-wrap; max-width: 760px; }
 th { text-align: left; color: var(--text-muted); font-weight: normal; }
 select { font: inherit; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px; }
-main > label { display: block; margin: 4px 0; }
-main > label input:not([type="checkbox"]), main > label select, main > label textarea { display: block; width: 100%; max-width: 720px; }
 
 /* ── Text, as Styles/Controls.axaml sets it ─────────────────────────────────────────────────────────────────────── */
 
@@ -199,11 +178,6 @@ main > label input:not([type="checkbox"]), main > label select, main > label tex
 .btn.primary { color: #fff; font-weight: 600; background: var(--ember-500); border-color: var(--ember-500); }
 .btn.primary:hover { background: var(--ember-400); border-color: var(--ember-400); }
 .btn.primary:active { background: var(--ember-600); border-color: var(--ember-600); }
-
-/* The outline peer of .primary: same colour and weight, plainly a peer and not the same button twice. */
-.btn.accent { color: var(--ember-300); font-weight: 600; background: transparent; border-color: var(--ember-500); }
-.btn.accent:hover { color: #fff; background: var(--ember-500); }
-.btn.accent:active { color: #fff; background: var(--ember-600); border-color: var(--ember-600); }
 
 /* Go starts a run. Its own green, solid with white text, so the deep step of the ramp: the bright green a finished run
    uses is unreadable under white. */
