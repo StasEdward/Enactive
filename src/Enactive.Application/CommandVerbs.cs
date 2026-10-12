@@ -17,3 +17,21 @@ public static class CommandVerbs
     public static string Prefix(string? input, string verb)
         => string.IsNullOrWhiteSpace(input) ? verb + " " : verb + " " + input;
 }
+
+/// <summary>
+/// What the Run button says over it. Moved from the window (MainWindowViewModel.RunTip) for the service's bar: it wrote
+/// the idle line by hand, and once the bar and the run shared a page it said "Run this here" over a button greyed by
+/// the run going under it.
+/// </summary>
+public static class RunButton
+{
+    /// <summary>
+    /// Why Run is greyed, when it is (<paramref name="busy"/>): a run holds the foreground, and once a person can walk away
+    /// from it the reason stops being obvious - the run holding Run may be in a workspace that is not on screen.
+    /// </summary>
+    public static string Tip(bool busy)
+        => busy
+            ? "A run is already in progress. Enactive runs one foreground run at a time, and that "
+              + "run may be in another workspace. Run in background is not held by it."
+            : "Run this here, and watch it.";
+}

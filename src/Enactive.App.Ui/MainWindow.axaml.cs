@@ -1119,14 +1119,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 });
         }
 
-        private static string FormatElapsed(TimeSpan span)
-        {
-            if (span.TotalHours >= 1)
-                return $"{(int)span.TotalHours}h {span.Minutes}m {span.Seconds}s";
-            if (span.TotalMinutes >= 1)
-                return $"{span.Minutes}m {span.Seconds}s";
-            return $"{span.Seconds}s";
-        }
+        private static string FormatElapsed(TimeSpan span) => RunElapsed.Format(span);
 
         private void AddArtifact(WorkEvent ev)
         {

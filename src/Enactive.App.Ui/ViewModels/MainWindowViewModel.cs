@@ -93,9 +93,7 @@ internal sealed class DiffLineViewModel
     public DiffLineViewModel(string text)
     {
         Text = text;
-        Kind = text.StartsWith('+') ? DiffLineKind.Added
-             : text.StartsWith('-') ? DiffLineKind.Removed
-             : DiffLineKind.Context;
+        Kind = DiffLines.Kind(text);
     }
 
     public string Text { get; }
@@ -515,8 +513,8 @@ internal sealed class MainWindowViewModel : ObservableObject
     /// </summary>
     public PastRunViewModel? PastRun { get => _pastRun; private set => Set(ref _pastRun, value); }
 
-    /// <summary>The workspace's repository, at the foot of the window (RepoBarViewModel).</summary>
-    public RepoBarViewModel Repo { get; } = new();
+    /// <summary>The workspace's repository, at the foot of the window (RepoBar).</summary>
+    public RepoBar Repo { get; } = new();
 
     public bool IsViewingPast
     {
@@ -684,11 +682,7 @@ internal sealed class MainWindowViewModel : ObservableObject
     /// can walk away from it the reason stops being obvious: the thing occupying Run may be
     /// happening in a workspace that is not on screen.
     /// </summary>
-    public string RunTip
-        => IsBusy
-            ? "A run is already in progress. Enactive runs one foreground run at a time, and that "
-              + "run may be in another workspace. Run in background is not held by it."
-            : "Run this here, and watch it.";
+    public string RunTip => RunButton.Tip(IsBusy);
 
     /// <summary>Shows the agent pill, unless it already says exactly this.</summary>
     public void SetAgent(string label, AgentKind kind)

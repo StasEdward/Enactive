@@ -28,7 +28,14 @@ internal sealed class RunPanel(Func<string?, ModelReach> reachOf)
     /// </summary>
     public int Artifacts => _artifacts.Count;
 
+    /// <summary>
+    /// The files counted in <see cref="Artifacts"/>, in the order first written - a host's Artifacts tab. With the count
+    /// alone a second host could show the tile but not the list behind it, and would have folded the events again for it.
+    /// </summary>
+    public IReadOnlyList<string> ArtifactPaths => _artifactPaths;
+
     private readonly HashSet<string> _artifacts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<string> _artifactPaths = new();
 
     /// <summary>Folds one event in. True when a figure changed, so a host redraws only for events that matter.</summary>
     public bool Apply(WorkEvent ev)
@@ -57,7 +64,10 @@ internal sealed class RunPanel(Func<string?, ModelReach> reachOf)
                                ? ev.Summary[(ev.Summary.IndexOf(": ", StringComparison.Ordinal) + 2)..]
                                : ev.Summary);
                 // A repeated write to a known path says nothing new.
-                return _artifacts.Add(path);
+                if (!_artifacts.Add(path))
+                    return false;
+                _artifactPaths.Add(path);
+                return true;
 
             default:
                 return false;

@@ -1,9 +1,10 @@
-namespace Enactive.App.Ui.Tests;
+namespace Enactive.Engine.Tests;
 
-using Enactive.App.Ui.ViewModels;
+using Enactive.Application.Projections;
 using Enactive.Workspace;
+using Xunit;
 
-/// <summary>The strip at the foot of the window, as its view model says it.</summary>
+/// <summary>The strip at the foot of the window, as the window and the service both say it (RepoBar).</summary>
 public sealed class RepoBarTests
 {
     private static RepoStatus Repo(string? branch = "refactor_v2", int? ahead = 2, int? behind = 0, int added = 120, int removed = 45, int untracked = 3)
@@ -12,7 +13,7 @@ public sealed class RepoBarTests
     [Fact]
     public void Without_a_repository_there_is_no_strip()
     {
-        var bar = new RepoBarViewModel();
+        var bar = new RepoBar();
         bar.Show(null);
 
         Assert.False(bar.IsVisible);
@@ -22,7 +23,7 @@ public sealed class RepoBarTests
     [Fact]
     public void A_repository_is_said_in_a_line()
     {
-        var bar = new RepoBarViewModel();
+        var bar = new RepoBar();
         bar.Show(Repo());
 
         Assert.True(bar.IsVisible);
@@ -36,7 +37,7 @@ public sealed class RepoBarTests
     [InlineData(1, 1, "↑1 ↓1")]
     public void How_far_from_its_upstream(int? ahead, int? behind, string said)
     {
-        var bar = new RepoBarViewModel();
+        var bar = new RepoBar();
         bar.Show(Repo(ahead: ahead, behind: behind));
 
         Assert.Equal(said, bar.Sync);
@@ -45,7 +46,7 @@ public sealed class RepoBarTests
     [Fact]
     public void Nothing_changed_is_said_so_and_a_detached_head_too()
     {
-        var bar = new RepoBarViewModel();
+        var bar = new RepoBar();
         bar.Show(Repo(branch: null, added: 0, removed: 0, untracked: 0));
 
         Assert.Equal(("detached", "no changes"), (bar.Branch, bar.Changes));
@@ -54,7 +55,7 @@ public sealed class RepoBarTests
     [Fact]
     public void The_pull_request_and_its_checks()
     {
-        var bar = new RepoBarViewModel();
+        var bar = new RepoBar();
         bar.Show(Repo());
         bar.ShowPullRequest(new PullRequestStatus(52, "https://github.com/StasEdward/Enactive/pull/52", 10625, 4540, CiState.Failing));
 
@@ -65,7 +66,7 @@ public sealed class RepoBarTests
     [Fact]
     public void The_changes_come_in_parts()
     {
-        var bar = new RepoBarViewModel();
+        var bar = new RepoBar();
         bar.Show(Repo(added: 46, removed: 45, untracked: 4));
         Assert.Equal(("+46", "−45", "· 4 new", ""), (bar.Added, bar.Removed, bar.NewFiles, bar.NoChanges));
 
@@ -83,7 +84,7 @@ public sealed class RepoBarTests
     [Fact]
     public void A_different_branch_forgets_the_pull_request()
     {
-        var bar = new RepoBarViewModel();
+        var bar = new RepoBar();
         bar.Show(Repo());
         bar.ShowPullRequest(new PullRequestStatus(52, "https://github.com/x/y/pull/52", 1, 1, CiState.Passing));
 

@@ -104,4 +104,22 @@ public sealed class RunPanelTests
 
         Assert.Single(panel.Performance.Rows);
     }
+
+    /// <summary>
+    /// The files themselves, for a host's Artifacts tab: one per path, in the order they were first written. With only a
+    /// count a second host could show the tile but not the list behind it, and would have folded the events again for it.
+    /// </summary>
+    [Fact]
+    public void The_artifacts_are_listed_once_each_in_the_order_first_written()
+    {
+        var panel = new RunPanel(ReachOf);
+        Func<string, WorkEvent> wrote = path => Event(EventKind.ArtifactProduced, "Wrote: " + path,
+            WorkEventPayload.ArtifactPayload("document", path));
+
+        panel.Apply(wrote("report.md"));
+        panel.Apply(wrote("notes.md"));
+        panel.Apply(wrote("REPORT.md"));
+
+        Assert.Equal(["report.md", "notes.md"], panel.ArtifactPaths);
+    }
 }

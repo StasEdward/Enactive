@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui.ViewModels;
+namespace Enactive.Application.Projections;
 
 using System.Globalization;
 using Enactive.Application.Mvvm;
@@ -8,8 +8,11 @@ using Enactive.Workspace;
 /// The strip at the foot of the window: the workspace's repository, its branch, how far it is from its upstream, what is
 /// changed and not committed - and the branch's pull request with its checks, when GitHub can be asked. What a person sees
 /// of the folder's history without leaving the window. Read-only: nothing here changes the repository.
+///
+/// <para>Moved from the window (it was RepoBarViewModel), unchanged, so the service's live run shows the same strip from
+/// the same reading of the repository - a second copy of what "↑2 ↓1" or "no changes" means would drift.</para>
 /// </summary>
-internal sealed class RepoBarViewModel : ObservableObject
+internal sealed class RepoBar : ObservableObject
 {
     private RepoStatus? _repo;
     private PullRequestStatus? _pullRequest;
