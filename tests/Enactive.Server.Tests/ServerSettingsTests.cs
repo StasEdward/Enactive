@@ -172,6 +172,9 @@ public sealed class ServerSettingsTests : IDisposable
 
         Assert.Equal("Bearer sk-kept-key", provider.Authorization);
         Assert.Contains("qwen", editor.FetchedModels);
+        // The kept key went where the page pointed it: said in the audit trail, with where and by whom - never the key.
+        var entry = Assert.Single(_users.AuditTrail(), e => e.Action == "provider checked");
+        Assert.Equal(("ada", $"box: {provider.BaseUrl} - its models listed (with the credentials kept for it)"), (entry.Account, entry.Detail));
 
         var (operatorView, refused) = _settings.Edit(As("alice"), null, _ => { });
         Assert.Null(operatorView);

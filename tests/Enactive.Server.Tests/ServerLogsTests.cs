@@ -82,6 +82,23 @@ public sealed class ServerLogsTests : IDisposable
         log.Detach();
     }
 
+    /// <summary>
+    /// Export from a view the page has not yet told where to hand it is refused, never written: the view model's own
+    /// fallback writes into the log folder of the machine it runs on, which on the service is the server's disk.
+    /// </summary>
+    [Fact]
+    public async Task Export_is_never_written_on_the_service_s_disk()
+    {
+        await Logged();
+        var view = _logs.View(As("vera"), NoClock).View!;
+
+        view.ExportCommand.Execute(null);
+
+        await Until(() => view.Status.StartsWith("Export failed", StringComparison.Ordinal));
+        Assert.Contains("gives the export to your browser", view.Status);
+        view.Detach();
+    }
+
     [Fact]
     public void An_account_disabled_reads_nothing()
     {

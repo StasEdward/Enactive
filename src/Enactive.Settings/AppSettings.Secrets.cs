@@ -286,6 +286,15 @@ public sealed partial class AppSettings
         return missing;
     }
 
+    /// <summary>
+    /// Whether this copy names a kept secret - a handle <see cref="RestoreSecrets"/> would put the secret back for, a
+    /// provider's key or header, an MCP server's credentials, the mail password. A host that then uses the secret where a
+    /// person pointed it (a provider's address, an MCP server's command) asks this first, to record that it did.
+    /// </summary>
+    public bool NamesKeptSecrets()
+        => Secrets().Any(s => s.Stored().StartsWith(KeptPrefix, StringComparison.Ordinal))
+           || Providers.Any(p => p.Headers.Values.Any(v => v.StartsWith(KeptPrefix, StringComparison.Ordinal)));
+
     /// <summary>Whether a secret is kept in this stored form - the ciphertext, or a handle for it: what a page says instead.</summary>
     public static bool IsKept(string stored) => !string.IsNullOrEmpty(stored);
 

@@ -26,7 +26,13 @@ internal sealed class ServerLogs(UserStore users, ServerEngine engine)
     {
         if (ServerAuth.StillValid(users, user) is not { Role: >= Role.Viewer } account)
             return (null, "Your session has ended. Sign in again.");
-        var view = new LogWindowViewModel(engine.Log, drain, new AsThePerson(this, engine, user));
+        var view = new LogWindowViewModel(engine.Log, drain, new AsThePerson(this, engine, user))
+        {
+            // Export hands the text to the page, which gives it to the browser. Left unset - a page that has not set it yet,
+            // or a host that forgot - the view model's fallback wrote the file into the log folder of the machine it runs
+            // on: the service's disk, at a Viewer's click. Refused here unless the page hands it on.
+            ExportTo = (_, _) => throw new InvalidOperationException("the page gives the export to your browser, and this one has not said how.")
+        };
         if (account.Role >= Role.Operator)
             view.Analyse = async (text, ct) =>
             {

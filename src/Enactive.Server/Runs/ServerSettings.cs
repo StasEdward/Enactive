@@ -137,15 +137,20 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
     /// </summary>
     public async Task<string> TestMcpAsync(ClaimsPrincipal user, McpServerConfig config, CancellationToken ct)
     {
-        if (Admin(user) is null)
+        if (Admin(user) is not { } admin)
             return NotAdmin(user);
         // Kept credentials follow the command or address as the page has it now - an Admin's to change, who can start
         // any program as the service anyway (see WithKeptKey): never on the page is the guarantee.
         var kept = new AppSettings { McpServers = [config.Clone()] };
+        var usesKept = kept.NamesKeptSecrets();
         kept.RestoreSecrets(AppSettings.Load(engine.SettingsFile));
         config = kept.McpServers[0];
         if (config.Validate() is { } problem)
             return problem;
+        if (usesKept)
+            AuditKeptUse(admin, "MCP server tested", config.Id,
+                // The command without its arguments: they are the person's to type and may hold what they should not.
+                config.Transport == McpTransportKind.Stdio ? config.Command : config.Url);
         try
         {
             // Started in the data folder unless the server names its own: the service has no "current" project.
@@ -172,14 +177,14 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
     private sealed class AsTheAdmin(ServerSettings settings, ClaimsPrincipal user) : IProviderCalls
     {
         public Task<ProviderStatus> CheckAsync(ProviderConfig provider, string? model)
-            => settings.Admin(user) is null
+            => settings.Admin(user) is not { } admin
                 ? Task.FromResult(new ProviderStatus(ProviderHealth.Unknown, settings.NotAdmin(user), [], DateTimeOffset.UtcNow))
-                : DirectProviderCalls.Instance.CheckAsync(settings.WithKeptKey(provider), model);
+                : DirectProviderCalls.Instance.CheckAsync(settings.WithKeptKey(provider, admin, "provider checked"), model);
 
         public Task<List<string>> ModelsAsync(ProviderConfig provider)
-            => settings.Admin(user) is null
+            => settings.Admin(user) is not { } admin
                 ? throw new InvalidOperationException(settings.NotAdmin(user))
-                : DirectProviderCalls.Instance.ModelsAsync(settings.WithKeptKey(provider));
+                : DirectProviderCalls.Instance.ModelsAsync(settings.WithKeptKey(provider, admin, "provider checked", " - its models listed"));
     }
 
     /// <summary>
@@ -190,12 +195,23 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
     /// SMTP host on Save. Accepted: an Admin can already run any program as the service's account (a stdio MCP server
     /// is one), so what this guards is that a secret is never on a page, not that an Admin can never use one.</para>
     /// </summary>
-    private ProviderConfig WithKeptKey(ProviderConfig typed)
+    private ProviderConfig WithKeptKey(ProviderConfig typed, Account admin, string action, string what = "")
     {
         var kept = new AppSettings { Providers = [typed.Clone()] };
+        var usesKept = kept.NamesKeptSecrets();
         kept.RestoreSecrets(AppSettings.Load(engine.SettingsFile));
+        if (usesKept)
+            AuditKeptUse(admin, action, typed.Id, typed.BaseUrl + what);
         return kept.Providers[0];
     }
+
+    /// <summary>
+    /// A kept secret used where an Admin pointed it - a provider's address, an MCP server's command or address - is
+    /// audited with what it was sent to, never the secret: the Admin may point it anywhere (see above), and then the trail
+    /// says where it went and by whose hand. Unaudited, a key sent to a host of somebody's choosing left no trace.
+    /// </summary>
+    private void AuditKeptUse(Account admin, string action, string id, string endpoint)
+        => users.Audit(admin.Name, action, $"{id}: {endpoint} (with the credentials kept for it)");
 
     /// <summary>The file's content, as a version: what a save compares against.</summary>
     private string VersionNow()

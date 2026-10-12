@@ -129,5 +129,26 @@ public sealed class McpSettingsTests : IDisposable
 
         Assert.Contains("role does not include", await _settings.TestMcpAsync(As("alice"), server, CancellationToken.None));
         Assert.StartsWith("Could not connect", await _settings.TestMcpAsync(As("ada"), server, CancellationToken.None));
+        // Typed in full, nothing kept was used: nothing to record.
+        Assert.DoesNotContain(_users.AuditTrail(), e => e.Action == "MCP server tested");
+    }
+
+    /// <summary>
+    /// The credentials kept for a server go wherever an Admin points it now - an Admin may do that - and the audit trail
+    /// says where they went, and who sent them, never what they were.
+    /// </summary>
+    [Fact]
+    public async Task A_test_with_the_credentials_kept_for_a_server_is_audited_with_where_they_went()
+    {
+        var server = _settings.Open(As("ada")).Opened!.Copy.McpServers.Single();
+        server.Url = "http://127.0.0.1:1/elsewhere";
+        server.TimeoutSeconds = 5;
+
+        await _settings.TestMcpAsync(As("ada"), server, CancellationToken.None);
+
+        var entry = Assert.Single(_users.AuditTrail(), e => e.Action == "MCP server tested");
+        Assert.Equal("ada", entry.Account);
+        Assert.Equal("tracker: http://127.0.0.1:1/elsewhere (with the credentials kept for it)", entry.Detail);
+        Assert.DoesNotContain("tk-very-secret", entry.Detail);
     }
 }
