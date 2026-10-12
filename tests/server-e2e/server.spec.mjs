@@ -431,12 +431,60 @@ test('an operator writes a template and schedules it, and the schedule says when
 test('a viewer reads the service log, narrowed, and is offered no model to ask', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'vera');
   await page.getByRole('link', { name: 'Global log', exact: true }).click();
-  await expect(page.locator('pre.log')).toContainText('Application started');
-  await expect(page.getByRole('button', { name: /Ask a model/ })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/log$/);
+  const lines = page.getByRole('list', { name: 'Lines' });
+  const status = page.getByRole('status').filter({ hasText: / shown · / });
+  // Narrowed first: the list draws only the lines in view, and it opens on the newest.
+  const search = page.getByRole('searchbox', { name: 'Search' });
+  await search.fill('Application started');
+  await expect(lines).toContainText('Application started');
+  await expect(page.getByRole('button', { name: 'AI Analyze' })).toHaveCount(0);
+  await expect(page.getByText('Capture raw wire (Trace)')).toHaveCount(0);
 
-  await page.getByLabel('Containing').fill('no line says this');
-  await page.getByRole('button', { name: 'Show' }).click();
-  await expect(page.getByText('0 entries')).toBeVisible();
+  await search.fill('no line says this');
+  await expect(status).toContainText(/^0 shown · /);
+
+  // Clear is this page's: the view empties, and the service's log is there again for the next page that opens it.
+  await search.fill('Application started');
+  await expect(lines).toContainText('Application started');
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await expect(lines.getByRole('button')).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('searchbox', { name: 'Search' }).fill('Application started');
+  await expect(page.getByRole('list', { name: 'Lines' })).toContainText('Application started');
+  await context.close();
+});
+
+test('an admin captures the raw wire, and an operator is offered the analysis but not the capture', async ({ browser }) => {
+  const operator = await signedIn(browser, 'alice');
+  await operator.page.goto('/log');
+  await expect(operator.page.getByRole('button', { name: 'AI Analyze' })).toBeVisible();
+  await expect(operator.page.getByText('Capture raw wire (Trace)')).toHaveCount(0);
+  await operator.context.close();
+
+  const { context, page } = await signedIn(browser, 'ada');
+  await page.goto('/log');
+  const capture = page.getByRole('checkbox', { name: 'Capture raw wire (Trace)' });
+  const status = page.getByRole('status').filter({ hasText: / shown · / });
+  await capture.check();
+  await expect(status).toContainText('hub level ≥ Trace');
+  // Off again, back to the level the service runs at: the scenarios after this one read the log as it normally is.
+  await capture.uncheck();
+  await expect(status).toContainText('hub level ≥ Debug');
+  await context.close();
+});
+
+test('the timeline and the environment show the workspace in the viewer', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'vera');
+  await page.getByRole('link', { name: 'Timeline · project memory', exact: true }).click();
+  await expect(page).toHaveURL(/\/timeline$/);
+  const timeline = page.getByRole('region', { name: 'Project Memory' });
+  await expect(timeline).toContainText('PROJECT MEMORY — ');
+  await expect(timeline.getByRole('button', { name: 'Copy all' })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Environment', exact: true }).click();
+  await expect(page).toHaveURL(/\/environment$/);
+  await expect(page.getByRole('region', { name: 'Environment' })).toContainText('Host: ');
   await context.close();
 });
 

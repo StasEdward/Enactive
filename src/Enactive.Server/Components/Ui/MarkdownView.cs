@@ -40,7 +40,9 @@ public sealed class MarkdownView : ComponentBase
                 // Below the viewer's own title: a model that starts at "#" must not outrank the dialog it is shown in.
                 builder.OpenElement(0, "h" + Math.Clamp(block.Level + 2, 3, 6).ToString(CultureInfo.InvariantCulture));
                 builder.AddAttribute(1, "class", "md-heading");
-                Spans(builder, 2, block.Spans);
+                builder.OpenRegion(2);
+                Spans(builder, block.Spans);
+                builder.CloseRegion();
                 builder.CloseElement();
                 break;
             case BlockKind.Code:
@@ -64,7 +66,9 @@ public sealed class MarkdownView : ComponentBase
                 builder.AddAttribute(34, "aria-hidden", "true");
                 builder.AddContent(35, block.Kind == BlockKind.Numbered ? block.Marker ?? "•" : "•");
                 builder.CloseElement();
-                Spans(builder, 36, block.Spans);
+                builder.OpenRegion(36);
+                Spans(builder, block.Spans);
+                builder.CloseRegion();
                 builder.CloseElement();
                 break;
             case BlockKind.Table:
@@ -72,7 +76,9 @@ public sealed class MarkdownView : ComponentBase
                 break;
             default:
                 builder.OpenElement(40, "p");
-                Spans(builder, 41, block.Spans);
+                builder.OpenRegion(41);
+                Spans(builder, block.Spans);
+                builder.CloseRegion();
                 builder.CloseElement();
                 break;
         }
@@ -89,7 +95,9 @@ public sealed class MarkdownView : ComponentBase
             {
                 // The first row is the header: the parser required the separator under it to call this a table at all.
                 builder.OpenElement(3, r == 0 ? "th" : "td");
-                Spans(builder, 4, cell);
+                builder.OpenRegion(4);
+                Spans(builder, cell);
+                builder.CloseRegion();
                 builder.CloseElement();
             }
             builder.CloseElement();
@@ -97,10 +105,9 @@ public sealed class MarkdownView : ComponentBase
         builder.CloseElement();
     }
 
-    /// <summary>Styled runs of text, in a region of their own at <paramref name="sequence"/> among their siblings.</summary>
-    private static void Spans(RenderTreeBuilder builder, int sequence, IReadOnlyList<MarkdownSpan> spans)
+    /// <summary>Styled runs of text. Called inside a region of its caller's, so its sequence numbers are its own.</summary>
+    private static void Spans(RenderTreeBuilder builder, IReadOnlyList<MarkdownSpan> spans)
     {
-        builder.OpenRegion(sequence);
         foreach (var span in spans)
         {
             var element = span.Style switch
@@ -119,6 +126,5 @@ public sealed class MarkdownView : ComponentBase
             builder.AddContent(2, span.Text);
             builder.CloseElement();
         }
-        builder.CloseRegion();
     }
 }
