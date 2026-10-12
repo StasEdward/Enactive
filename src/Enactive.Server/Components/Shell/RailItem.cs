@@ -66,13 +66,13 @@ internal static class RailAddresses
     private static readonly Dictionary<string, Where> Table = new()
     {
         ["/"] = new("/", ["", "runs"]),
-        ["/timeline"] = new(null, ["timeline"]),                                          // TEMPORARY: no page yet
+        ["/timeline"] = new("timeline", ["timeline"]),
         ["/templates"] = new("templates", ["templates"]),
         ["/schedules"] = new("schedules", ["schedules"]),
         ["/inbox"] = new("inbox", ["inbox"]),
         ["/proposals"] = new("proposals", ["proposals"]),
-        ["/log"] = new("logs", ["log", "logs"]),                                         // TEMPORARY: /logs today
-        ["/environment"] = new(null, ["environment"]),                                    // TEMPORARY: no page yet
+        ["/log"] = new("log", ["log"]),
+        ["/environment"] = new("environment", ["environment"]),
         ["/settings"] = new("admin/settings", ["settings", "admin/settings"]),           // TEMPORARY: /admin/settings today
         ["/accounts"] = new("admin/users", ["accounts", "admin/users"]),                 // TEMPORARY: /admin/users today
         ["/audit"] = new("admin/audit", ["audit", "admin/audit"]),                       // TEMPORARY: /admin/audit today

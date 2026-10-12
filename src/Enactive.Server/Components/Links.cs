@@ -63,6 +63,12 @@ internal static class Links
         return workspace is { } ws ? $"{path}?ws={ws}" : path;
     }
 
+    /// <summary>The Timeline - a workspace's project memory - on a workspace by its id (WorkspaceIds); none, the one used last.</summary>
+    public static string Timeline(Guid? workspace) => workspace is { } ws ? $"timeline?ws={ws}" : "timeline";
+
+    /// <summary>The Environment - the service's machine as a workspace sees it - on a workspace by its id; none, the one used last.</summary>
+    public static string Environment(Guid? workspace) => workspace is { } ws ? $"environment?ws={ws}" : "environment";
+
     /// <summary>One run's set of proposed changes: its workspace by its id (WorkspaceIds), the set by the run's id.</summary>
     public static string Proposals(Guid workspace, string set) => $"proposals/{workspace}/{Uri.EscapeDataString(set)}";
 }

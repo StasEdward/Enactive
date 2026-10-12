@@ -197,6 +197,9 @@ internal static class ServerApp
             })
             .RequireAuthorization(nameof(Role.Viewer));
 
+        // The old log page's address: the log is at /log now, as the rail names it.
+        app.MapGet("/logs", () => Results.LocalRedirect("/log")).RequireAuthorization(nameof(Role.Viewer));
+
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
         return app;
     }
@@ -249,6 +252,10 @@ internal static class ServerApp
         services.AddSingleton<Runs.ServerSettings>();
         services.AddSingleton<Runs.ServerLibrary>();
         services.AddSingleton<Runs.ServerLogs>();
+        // The Timeline and Environment pages (ServerReports): the environment is the service's own machine, probed as the
+        // window probes its own.
+        services.AddSingleton<Enactive.Application.ProbeEnvironment>(new Enactive.Workspace.EnvironmentProbe().ProbeFullAsync);
+        services.AddSingleton<Runs.ServerReports>();
         // The live run's page moves its clock every second while the run goes (Runs/LiveRun).
         services.AddSingleton(Components.Runs.LiveRunClock.EverySecond);
         services.AddHostedService<Runs.RunsStopWithTheService>();

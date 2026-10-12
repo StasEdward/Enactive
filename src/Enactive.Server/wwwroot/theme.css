@@ -194,8 +194,6 @@ main > label input:not([type="checkbox"]), main > label select, main > label tex
 fieldset label input:not([type="checkbox"]), fieldset label select, fieldset label textarea { display: block; width: 100%; max-width: 720px; }
 .start.wide { max-width: 960px; }
 .start.wide textarea { font-family: var(--font-mono); font-size: 0.85rem; }
-.file.log { white-space: pre; font-size: 0.8rem; max-height: 70vh; }
-.sources label { font-size: 0.85rem; color: var(--text-muted); }
 
 /* ── Text, as Styles/Controls.axaml sets it ─────────────────────────────────────────────────────────────────────── */
 
@@ -671,3 +669,52 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .schedule-problems { padding: 8px 10px; border-radius: 4px; background: var(--scrim); color: var(--warning); white-space: pre-line; }
 .schedule-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin: 4px 0 0; }
 .schedules-where { margin: 8px 0 0; }
+
+/* ── The log (Pages/LogScreen.razor; LogWindow.axaml): the toolbar, the source chips, the lines in their level's colour,
+   the chosen line's payload under them, and the status line. ─────────────────────────────────────────────────────── */
+.log-screen { display: grid; grid-template-rows: auto auto minmax(0, 1fr) 190px auto; gap: 6px; height: calc(100vh - 80px); min-width: 0; }
+.log-toolbar, .log-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.log-sources { gap: 4px; }
+.log-field, .log-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-body); }
+.log-field select { width: 110px; }
+.log-search { width: 200px; }
+.log-label { font-size: 13px; color: var(--text-body); margin-right: 2px; }
+.log-rows { min-height: 0; overflow: auto; font-family: var(--font-mono); font-size: 12px; background: var(--input-fill);
+  border: 1px solid var(--border); border-radius: 4px; }
+/* One line per row, a fixed 18 px high: the list draws only the rows in view (Virtualize), and that needs their height. */
+.log-rows .log-line { display: block; width: 100%; height: 18px; padding: 0 6px; margin: 0; border: 0; border-radius: 0; background: transparent;
+  font: inherit; line-height: 18px; text-align: left; overflow: hidden; cursor: pointer; }
+.log-rows .log-line:hover { background: var(--card-fill); }
+.log-rows .log-line.selected { background: var(--card-fill-active); }
+.log-detail { width: 100%; height: 100%; box-sizing: border-box; resize: none; font-family: var(--font-mono); font-size: 12px; white-space: pre;
+  overflow: auto; background: var(--input-fill); color: var(--text-body); border-color: var(--border); }
+.log-status { margin: 0; }
+
+/* The viewer drawn in the page (TextViewer Inline): the Timeline and the Environment, whose screen IS the document. */
+.report-top { display: grid; gap: 6px; max-width: 320px; margin: 0 0 10px; }
+.viewer-inline { display: grid; gap: 8px; min-width: 0; }
+.viewer-title { font-size: 15px; margin: 0; }
+.viewer-inline .viewer-text { max-height: calc(100vh - 240px); }
+.viewer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.viewer-lead { margin: 0 0 10px; }
+
+/* An answer in Markdown (Ui/MarkdownView), as the window's MarkdownRender draws it: sizes close together, so a document whose
+   author started at level three does not read as a footnote; code on the input ground, as the viewer's text. */
+.markdown { color: var(--text-body); font-size: 13px; overflow-wrap: anywhere; }
+.markdown p { margin: 0 0 6px; }
+.markdown .md-heading { color: var(--text); margin: 14px 0 4px; }
+.markdown h3.md-heading { font-size: 17px; }
+.markdown h4.md-heading { font-size: 15px; }
+.markdown h5.md-heading, .markdown h6.md-heading { font-size: 14px; }
+.markdown .md-item { display: flex; gap: 6px; }
+.markdown .md-marker { flex: none; color: var(--text-muted); }
+.markdown .md-indent-1 { padding-left: 18px; }
+.markdown .md-indent-2 { padding-left: 36px; }
+.markdown .md-indent-3 { padding-left: 54px; }
+.markdown .md-indent-4 { padding-left: 72px; }
+.markdown code, .markdown .md-code { font-family: var(--font-mono); font-size: 12px; background: var(--input-fill); border-radius: 3px; }
+.markdown code { padding: 0 3px; }
+.markdown .md-code { margin: 6px 0; padding: 8px; white-space: pre; overflow: auto; }
+.markdown hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+.markdown .md-table { border-collapse: collapse; margin: 6px 0; }
+.markdown .md-table th, .markdown .md-table td { padding: 2px 8px; border: 1px solid var(--border); }

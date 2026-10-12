@@ -262,7 +262,7 @@ public sealed partial class SignInTests : IAsyncLifetime
     {
         // The old addresses too: what a workspace's id is, is not told to somebody who has not signed in.
         foreach (var address in new[] { "/", "/history?ws=x", "/workspaces", "/history/run?ws=x&id=x", "/file?ws=x&path=y", "/library/template?ws=x",
-                     "/library?ws=x", "/library/schedule?ws=x&id=x" })
+                     "/library?ws=x", "/library/schedule?ws=x&id=x", "/logs" })
         {
             var response = await NewBrowser().GetAsync(address);
             Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
@@ -403,6 +403,19 @@ public sealed partial class SignInTests : IAsyncLifetime
         var elsewhere = Uri.EscapeDataString(Path.Combine(_root, "elsewhere"));
         Assert.Equal("/schedules", (await browser.GetAsync($"/library?ws={elsewhere}")).Headers.Location!.OriginalString);
         Assert.Equal("/schedules", (await browser.GetAsync($"/library/schedule?ws={elsewhere}&id={schedule}")).Headers.Location!.OriginalString);
+    }
+
+    /// <summary>The old log page's address lands on the log, at the address the rail names it by.</summary>
+    [Fact]
+    public async Task The_old_log_address_lands_on_the_log()
+    {
+        var browser = NewBrowser();
+        await SignInAsync(browser, "alice", Password);
+
+        var old = await browser.GetAsync("/logs");
+
+        Assert.Equal(HttpStatusCode.Redirect, old.StatusCode);
+        Assert.Equal("/log", old.Headers.Location!.OriginalString);
     }
 
     [Fact]

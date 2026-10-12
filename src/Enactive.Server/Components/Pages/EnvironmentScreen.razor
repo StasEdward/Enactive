@@ -1,0 +1,19 @@
+@page "/environment"
+@using Enactive.Application
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@inject ServerReports Reports
+
+<PageTitle>Environment - Enactive</PageTitle>
+
+@* The window's Environment (MainWindow.ShowEnvironmentAsync): the machine the workspace's runs go on - here the service's -
+   probed as the window probes its own, its summary and a snapshot, in the viewer. *@
+<WorkspaceReport Title="@WorkspaceReports.EnvironmentTitle" Ws="@Ws" Href="@(row => Links.Environment(row.Id))" Read="Reports.EnvironmentAsync" />
+
+@code {
+    /// <summary>
+    /// The workspace, by its id (WorkspaceIds); none, the one used last. Read as text: an address is typed by people, and
+    /// one that is not an id says "not known" rather than failing the page.
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "ws")] private string? Ws { get; set; }
+}

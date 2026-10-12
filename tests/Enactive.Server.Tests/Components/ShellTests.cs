@@ -72,7 +72,7 @@ public sealed class ShellTests : ComponentHost
         SignIn("ada");
         var names = Names(RenderedRail());
 
-        Assert.Equal(ForEveryone.Concat(ForAdmins).Select(n => n + (n.StartsWith("Timeline") || n == "Environment" ? " (coming)" : "")), names);
+        Assert.Equal(ForEveryone.Concat(ForAdmins), names);
     }
 
     [Fact]
@@ -174,22 +174,21 @@ public sealed class ShellTests : ComponentHost
     }
 
     /// <summary>
-    /// A section with no page yet is shown, but is not a link: a click that led to a page that does not exist was
-    /// the dead end the rail must not have.
+    /// The log, the Timeline and the Environment lead to their own pages. The log led to the old page at /logs, and the
+    /// Timeline and the Environment were shown disabled while they had none.
     /// </summary>
     [Fact]
-    public void A_section_with_no_page_yet_is_disabled_and_says_so()
+    public void Log_timeline_and_environment_lead_to_their_own_pages()
     {
-        SignIn("alice");
+        SignIn("vera");
 
         var rail = RenderedRail();
 
-        foreach (var href in new[] { "/timeline", "/environment" })
+        foreach (var (href, now) in new[] { ("/log", "log"), ("/timeline", "timeline"), ("/environment", "environment") })
         {
             var item = rail.Find($"[data-rail='{href}']");
-            Assert.Null(item.GetAttribute("href"));
-            Assert.Equal("true", item.GetAttribute("aria-disabled"));
-            Assert.EndsWith(" (coming)", item.GetAttribute("aria-label"));
+            Assert.Equal(now, item.GetAttribute("href"));
+            Assert.Null(item.GetAttribute("aria-disabled"));
         }
     }
 
@@ -217,7 +216,9 @@ public sealed class ShellTests : ComponentHost
     [InlineData("http://localhost/templates/digest?ws=0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/templates")]
     [InlineData("http://localhost/schedules?ws=0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/schedules")]
     [InlineData("http://localhost/schedules/0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f?ws=0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/schedules")]
-    [InlineData("http://localhost/logs", "/log")]
+    [InlineData("http://localhost/log", "/log")]
+    [InlineData("http://localhost/timeline?ws=0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/timeline")]
+    [InlineData("http://localhost/environment", "/environment")]
     [InlineData("http://localhost/admin/settings", "/settings")]
     [InlineData("http://localhost/admin/users", "/accounts")]
     public void The_section_you_are_in_is_marked(string address, string marked)

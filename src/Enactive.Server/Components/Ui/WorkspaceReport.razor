@@ -1,0 +1,87 @@
+@using System.Security.Claims
+@using Enactive.Application
+@using Enactive.Server.Components.Runs
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerHistory History
+@inject WorkspaceIds Ids
+
+@* A report the window shows a workspace as, in its viewer (ViewerWindow) - the Timeline, the Environment - as a screen: the
+   workspace chosen in the switcher, as on the Runs screen, and the report under it with Copy all. No Source: the window
+   shows these as their own text, with no rendering to switch from (ViewerWindow.Show with no file name). What it says is
+   the service's to read (ServerReports), which checks the person and the folder at each read. *@
+
+<div class="report-screen">
+    <div class="report-top">
+        <PanelHeader Text="WORKSPACE" />
+        <WorkspaceSwitcher Rows="_switcher" Current="_switcher.FirstOrDefault(r => r.IsCurrent)" Href="Href" />
+    </div>
+
+    @if (_problem is { } problem)
+    {
+        <p class="said">@problem</p>
+    }
+    else if (_reading)
+    {
+        @* Said while it is read: the probe takes seconds, and an empty viewer read as an empty report. *@
+        <p class="hint" role="status">Reading…</p>
+    }
+    else
+    {
+        <TextViewer Title="@Title" Text="@(_text ?? "")" Inline="true" />
+    }
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The report's title, as the window's viewer has it.</summary>
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+    /// <summary>The address the switcher leads to for a workspace: this same screen on it.</summary>
+    [Parameter, EditorRequired] public Func<SwitcherRow, string> Href { get; set; } = default!;
+
+    /// <summary>Reads the report for a known workspace as the person: its text, or why not.</summary>
+    [Parameter, EditorRequired] public Func<ClaimsPrincipal, string, CancellationToken, Task<(string? Text, string? Problem)>> Read { get; set; } = default!;
+
+    /// <summary>The workspace's id as the address has it (?ws=); none, the one used last.</summary>
+    [Parameter] public string? Ws { get; set; }
+
+    private IReadOnlyList<SwitcherRow> _switcher = [];
+    private string? _text;
+    private string? _problem;
+    private bool _reading;
+
+    // The workspace the report was read for. Read again only when another workspace is chosen, never on a redraw or a
+    // parameter set that names the same one: the environment is probed on the service's machine (git, docker, wsl), a
+    // read that takes seconds, and a page that probed on every render kept the machine busy for nothing.
+    private string? _readFor;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var user = (await Auth).User;
+        var known = History.Workspaces(user);
+        Guid? wanted = Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null;
+        var selected = WorkspaceColumnState.Choose(known, wanted, Ids);
+        _switcher = WorkspaceColumnState.Switcher(known, selected, Ids);
+
+        if (selected is null)
+        {
+            (_readFor, _reading) = (null, false);
+            // The window's words with no workspace; an address that named one the service does not know says that instead.
+            (_text, _problem) = wanted is null
+                ? ((string?)WorkspaceReports.NoWorkspace, (string?)null)
+                : (null, "The service does not know that workspace.");
+            return;
+        }
+        if (string.Equals(_readFor, selected.RootPath, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var root = _readFor = selected.RootPath;
+        (_text, _problem, _reading) = (null, null, true);
+        var (text, problem) = await Read(user, root, CancellationToken.None);
+        // Kept only if it is still the workspace shown: another chosen while this one was probed is the one to show.
+        if (ReferenceEquals(_readFor, root))
+            (_text, _problem, _reading) = (text, problem, false);
+    }
+}

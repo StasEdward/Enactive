@@ -27,6 +27,7 @@ internal sealed class ServerEngine : IDisposable
     public ServerEngine(string dataFolder, LogHub log)
     {
         _log = log;
+        NormalLogLevel = log.MinLevel;
         SettingsFile = Path.Combine(dataFolder, "settings.json");
         Approvals = new ApprovalStore(Path.Combine(dataFolder, "permissions.json"));
         Workspaces = WorkspaceRegistry.Load(filePath: Path.Combine(dataFolder, "workspaces.json"));
@@ -99,6 +100,13 @@ internal sealed class ServerEngine : IDisposable
 
     /// <summary>The log the engine writes to - the service's one log.</summary>
     public LogHub Log => _log;
+
+    /// <summary>
+    /// The level the service's log was opened at, which raw-wire capture goes back to when it is turned off. Read from
+    /// the hub as it was built rather than written here again: two places that each knew the level would drift, and
+    /// capture turned off would leave the log at some other level than the service runs at.
+    /// </summary>
+    public Core.Diagnostics.LogLevel NormalLogLevel { get; }
 
     public void Dispose() => _http.Dispose();
 }
