@@ -51,8 +51,10 @@ internal sealed class ServerEngine : IDisposable
             problem = "The service has no engine to run on: " + string.Join(" ", missing)
                       + " An Admin sets the providers and models on the settings page.";
         else
-            // "Allow for this session" outlives a rebuilt engine, as the window's does a saved settings.
-            engine = EngineComposition.Build(settings, _http, _log, Current?.Session ?? new SessionApprovals()) with { Approvals = Approvals };
+            // "Allow for this session" outlives a rebuilt engine, as the window's does a saved settings. Each model call's
+            // figures go to the run whose flow made it (ServerRunScope): the engine is one, the runs on it several.
+            engine = EngineComposition.Build(settings, _http, _log, Current?.Session ?? new SessionApprovals(),
+                metrics: ServerRunScope.Report) with { Approvals = Approvals };
         lock (_gate)
             _now = (engine, problem, settings);
     }

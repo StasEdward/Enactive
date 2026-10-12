@@ -4,7 +4,7 @@ namespace Enactive.Server.Runs;
 internal static class RunState
 {
     public static string Title(ServerRun run)
-        => run.Session.Read((feed, _, _) => feed.Title) is { Length: > 0 } title ? title : run.Prompt;
+        => run.Session.Read((feed, _, _, _) => feed.Title) is { Length: > 0 } title ? title : run.Prompt;
 
     public static string Of(ServerRun run)
     {
@@ -15,9 +15,9 @@ internal static class RunState
         if (run.Ended.IsCompleted)
             return run.CancelledBy is { } who ? $"Cancelled by {who}"
                 : run.Session.Failure is { } failure ? "Stopped: " + failure
-                : run.Session.Read((feed, _, _) => feed.Phase) ?? "Ended";
+                : run.Session.Read((feed, _, _, _) => feed.Phase) ?? "Ended";
         if (run.Questions.Pending is not null)
             return "Waiting for an answer";
-        return run.Session.Read((feed, _, _) => feed.Phase) ?? "Running";
+        return run.Session.Read((feed, _, _, _) => feed.Phase) ?? "Running";
     }
 }

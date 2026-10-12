@@ -2,6 +2,7 @@ namespace Enactive.Server.Runs;
 
 using System.Threading.Channels;
 using Enactive.Application.Projections;
+using Enactive.Core.Chat;
 using Enactive.Core.Events;
 using Enactive.Core.History;
 
@@ -34,17 +35,23 @@ internal sealed class RunSession
     private readonly List<Subscription> _watchers = new();
     private readonly RunFeed _feed;
     private readonly RunActivity _activity = new();
+    private readonly RunPanel _panel;
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private long _seq;
 
     /// <summary>The events have ended and the watchers been taken to be told; under <see cref="_gate"/>.</summary>
     private bool _over;
 
-    public RunSession(string workspace, string owner, string title, int tailCapacity = 4096)
+    /// <param name="reachOf">
+    /// Where a provider runs, by its id, for the panel's split of the work (ModelReaches over the service's settings);
+    /// null, every provider Unknown - a run with no settings to say it (a test's, a scripted one).
+    /// </param>
+    public RunSession(string workspace, string owner, string title, Func<string?, ModelReach>? reachOf = null, int tailCapacity = 4096)
     {
         Workspace = workspace;
         Owner = owner;
         _feed = new RunFeed(title);
+        _panel = new RunPanel(reachOf ?? (_ => ModelReach.Unknown));
         _tailCapacity = tailCapacity;
     }
 
@@ -76,14 +83,40 @@ internal sealed class RunSession
     }
 
     /// <summary>
-    /// Reads the run's fold as it stands, with the number of the newest event folded in - the point to subscribe from.
-    /// Under the session's lock: the fold is changed by the drain as events arrive, and a page must not read it half-way.
-    /// Keep <paramref name="read"/> short; copy what is needed out of it.
+    /// Who has the run open now: the names given to the live subscriptions, each once however many tabs, in order. A
+    /// subscription leaves it when it is unsubscribed, dropped for falling behind, or ended with the run - a name kept
+    /// after its page was gone would say somebody is watching who is not.
     /// </summary>
-    public T Read<T>(Func<RunFeed, RunActivity, long, T> read)
+    public IReadOnlyList<string> Watchers
+    {
+        get
+        {
+            lock (_gate)
+                return _watchers.Select(w => w.Watcher).OfType<string>().Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal).ToList();
+        }
+    }
+
+    /// <summary>
+    /// Reads the run's fold as it stands - the cards, the activity, the status column's figures - with the number of the
+    /// newest event folded in, the point to subscribe from. Under the session's lock: the fold is changed by the drain as
+    /// events arrive, and a page must not read it half-way. Keep <paramref name="read"/> short; copy what is needed out
+    /// of it.
+    /// </summary>
+    public T Read<T>(Func<RunFeed, RunActivity, RunPanel, long, T> read)
     {
         lock (_gate)
-            return read(_feed, _activity, _seq);
+            return read(_feed, _activity, _panel, _seq);
+    }
+
+    /// <summary>
+    /// A model call this run made, for the panel's speed figures: from the engine's callback, found by the run's flow
+    /// (ServerRunScope). Under the lock: the call is reported on the engine's thread while a page may be reading.
+    /// </summary>
+    public void AddMetrics(ModelCallMetrics m)
+    {
+        lock (_gate)
+            _panel.Add(m);
     }
 
     /// <summary>
@@ -130,12 +163,19 @@ internal sealed class RunSession
         List<Subscription>? dropped = null;
         lock (_gate)
         {
-            RunId ??= ev.RunId;
+            if (RunId is null)
+            {
+                RunId = ev.RunId;
+                // The speed figures show one run's calls and keep others' aside (ModelPerformance): without being told
+                // which run this is they showed none, and a call reported before this first event waits there till now.
+                _panel.Performance.ShowRun(ev.RunId);
+            }
             if (ev.Kind is EventKind.TaskCompleted or EventKind.TaskFailed)
                 Outcome = ev.Outcome() ?? (ev.Kind == EventKind.TaskCompleted ? RunOutcomeKind.Completed : RunOutcomeKind.Failed);
             var entry = new JournalEntry(++_seq, ev);
             _feed.Apply(ev);
             _activity.Apply(ev);
+            _panel.Apply(ev);
 
             _tail.Enqueue(entry);
             if (_tail.Count > _tailCapacity)
@@ -154,9 +194,10 @@ internal sealed class RunSession
     /// - the page read its fold too long ago - the subscription starts <see cref="Subscription.Behind"/>, and the page
     /// reads the fold again.
     /// </summary>
-    public Subscription Subscribe(long afterSeq)
+    /// <param name="watcher">Whose page it is, for <see cref="Watchers"/>; null for one that does not say.</param>
+    public Subscription Subscribe(long afterSeq, string? watcher = null)
     {
-        var subscription = new Subscription();
+        var subscription = new Subscription(watcher);
         lock (_gate)
         {
             var oldest = _tail.Count > 0 ? _tail.Peek().Seq : _seq + 1;
@@ -187,8 +228,11 @@ internal sealed class RunSession
     }
 
     /// <summary>One watcher's feed of events.</summary>
-    public sealed class Subscription
+    public sealed class Subscription(string? watcher = null)
     {
+        /// <summary>Whose page it is, or null.</summary>
+        public string? Watcher { get; } = watcher;
+
         private readonly Channel<JournalEntry> _channel = Channel.CreateBounded<JournalEntry>(
             new BoundedChannelOptions(SubscriberBuffer) { SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
 

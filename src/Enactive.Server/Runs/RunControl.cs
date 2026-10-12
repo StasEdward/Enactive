@@ -2,6 +2,7 @@ namespace Enactive.Server.Runs;
 
 using System.Security.Claims;
 using Enactive.Application;
+using Enactive.Application.Projections;
 using Enactive.Core.Context;
 using Enactive.Core.History;
 using Enactive.Core.Inbox;
@@ -17,8 +18,9 @@ internal sealed class ServerRun
 {
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    /// <param name="reachOf">Where a provider runs, for the run's panel (IRunExecutor.ReachOf); null, Unknown for all.</param>
     public ServerRun(string owner, string workspace, string prompt, RunQueue.Ticket ticket, Guid? taskId = null,
-        RunCheckpoint? resume = null, Core.Templates.ResolvedTaskSpec? spec = null)
+        RunCheckpoint? resume = null, Core.Templates.ResolvedTaskSpec? spec = null, Func<string?, ModelReach>? reachOf = null)
     {
         TaskId = taskId;
         Resume = resume;
@@ -27,7 +29,7 @@ internal sealed class ServerRun
         Workspace = workspace;
         Prompt = prompt;
         Ticket = ticket;
-        Session = new RunSession(workspace, owner, RunLauncher.Title(prompt));
+        Session = new RunSession(workspace, owner, RunLauncher.Title(prompt), reachOf);
         Questions.Changed += () => Changed?.Invoke();
     }
 
@@ -85,6 +87,13 @@ internal interface IRunExecutor
 
     SessionApprovals Session { get; }
     ApprovalStore Approvals { get; }
+
+    /// <summary>
+    /// Where a provider runs, by its id - this machine or a cloud - for each run's panel (ModelWorkSplit). Only the
+    /// engine's settings know a provider's address; a stand-in with none (a test's, the harness's) leaves every provider
+    /// Unknown, which is what the panel shows for a provider it cannot place.
+    /// </summary>
+    Func<string?, ModelReach> ReachOf => _ => ModelReach.Unknown;
 
     Task ExecuteAsync(ServerRun run, IDecisionHandler decisions, CancellationToken ct);
 }
@@ -170,7 +179,8 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
                 due.Hold.Dispose();
                 return new(null, "The service is stopping.");
             }
-            run = new ServerRun("schedule: " + due.Schedule.Name, root, due.Spec.Goal, queue.Enqueue(root), spec: due.Spec)
+            run = new ServerRun("schedule: " + due.Schedule.Name, root, due.Spec.Goal, queue.Enqueue(root), spec: due.Spec,
+                reachOf: executor.ReachOf)
             {
                 Scheduled = due
             };
@@ -219,7 +229,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         {
             if (_stopping)
                 return new(null, "The service is stopping; start the run again when it is back.");
-            run = new ServerRun(account!.Name, root, prompt.Trim(), queue.Enqueue(root), taskId, resume, spec);
+            run = new ServerRun(account!.Name, root, prompt.Trim(), queue.Enqueue(root), taskId, resume, spec, executor.ReachOf);
             _runs.Add(run);
             var finished = _runs.Where(r => r.Ended.IsCompleted).ToList();
             foreach (var old in finished.Take(Math.Max(0, finished.Count - KeepFinished)))
@@ -412,8 +422,16 @@ internal sealed class EngineExecutor(ServerEngine engine, ServerStaging staging)
     public SessionApprovals Session => engine.Current?.Session ?? new SessionApprovals();
     public ApprovalStore Approvals => engine.Approvals;
 
+    /// <summary>The settings as they are when asked - a provider's address saved since the run began is the one it has now.</summary>
+    public Func<string?, ModelReach> ReachOf
+        => id => engine.Settings is { } settings ? ModelReaches.Of(settings, id) : ModelReach.Unknown;
+
     public async Task ExecuteAsync(ServerRun run, IDecisionHandler decisions, CancellationToken ct)
     {
+        // First, before anything is composed: the engine is the service's one and reports every model call through one
+        // callback, while several runs go at once. The callback finds the run by this flow (ServerRunScope) - set
+        // here, it is this run's for all the engine does on its behalf, and gone when this method returns.
+        ServerRunScope.Current = run.Session;
         var composed = engine.Current ?? throw new InvalidOperationException(engine.Problem ?? "There is no engine to run on.");
         var workspace = WorkspaceInfo.Adopt(run.Workspace);
         var saved = engine.Workspaces.Find(run.Workspace) ?? engine.Workspaces.Touch(run.Workspace);

@@ -81,18 +81,20 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        _run = Runs.Find((await Auth).User, Id);
+        var user = (await Auth).User;
+        _run = Runs.Find(user, Id);
         if (_run is null)
             return;
 
         _run.Changed += OnRunChanged;
         // Reads where the run stands, follows it from there, and redraws as it goes (RunFollower).
-        _follower = new RunFollower(_run.Session, () => (_view = Read()).Seq, () => InvokeAsync(StateHasChanged));
+        // Named, so the others with the run open see who else is watching it.
+        _follower = new RunFollower(_run.Session, () => (_view = Read()).Seq, () => InvokeAsync(StateHasChanged), user.Identity?.Name);
         _follower.Start();
     }
 
     private View Read()
-        => _run!.Session.Read((feed, activity, seq) => new View(
+        => _run!.Session.Read((feed, activity, _, seq) => new View(
             feed.Cards.Select(c => new CardView(c.Title, c.Status, c.Activity, c.Tally)).ToList(),
             activity.CurrentAction, seq));
 

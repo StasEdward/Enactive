@@ -5,7 +5,8 @@ namespace Enactive.Server.Runs;
 /// at most ten times a second. Dropped for falling behind, it reads again and subscribes afresh, which is also what a
 /// reopened tab does. Kept out of the page so what it does when the page leaves can be tested without one.
 /// </summary>
-internal sealed class RunFollower(RunSession session, Func<long> read, Func<Task> redraw) : IDisposable
+/// <param name="watcher">Whose page it is, named among the run's watchers (RunSession.Watchers) while it follows.</param>
+internal sealed class RunFollower(RunSession session, Func<long> read, Func<Task> redraw, string? watcher = null) : IDisposable
 {
     /// <summary>A reply arrives one event per token, and a page redrawn for each is a browser kept busy for nothing.</summary>
     public static readonly TimeSpan Throttle = TimeSpan.FromMilliseconds(100);
@@ -21,7 +22,7 @@ internal sealed class RunFollower(RunSession session, Func<long> read, Func<Task
     {
         if (_leaving.IsCancellationRequested)
             return;
-        _subscription = session.Subscribe(read());
+        _subscription = session.Subscribe(read(), watcher);
         Following = ListenAsync(_subscription, _leaving.Token);
     }
 
