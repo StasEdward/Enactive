@@ -1,7 +1,8 @@
 # Enactive can run as a service on the local network, with a web UI
 
-Status: **proposed**, 2026-10-11; amended the same day after review (trust model, ownership per workspace, staging,
-several people at once, security at the action, plan). The implementation plan is
+Status: **accepted**, 2026-10-12 - implemented through phase 3 of the plan on branch `feature/application-layer`,
+not yet in master. Proposed 2026-10-11 and amended the same day after review (trust model, ownership per workspace,
+staging, several people at once, security at the action, plan). The implementation plan is
 [plans/server-web-ui-implementation-plan.md](../../plans/server-web-ui-implementation-plan.md).
 
 Enactive is used from one machine: the desktop window is the only host with the whole interface. Using it

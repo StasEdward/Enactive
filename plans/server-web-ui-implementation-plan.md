@@ -2,9 +2,9 @@
 
 Date: 2026-10-11 (revised the same day after review)
 
-Status: phase 0 done in code (2026-10-11, branch `feature/application-layer`); the ADR amendments below are made.
-Implements [ADR 0002](../Docs/adr/0002-server-with-web-ui.md) (proposed). The review's findings are folded in
-below.
+Status: phases 0-3 done in code (2026-10-12, branch `feature/application-layer`, not merged to master - it goes in
+when the product is ready, decided 2026-10-12); phase 4 is optional and not planned. The ADR amendments below are
+made. Implements [ADR 0002](../Docs/adr/0002-server-with-web-ui.md). The review's findings are folded in below.
 
 ## Objective
 
@@ -319,8 +319,17 @@ rewritten after every change) and `Reopen`s it later with the same apply rules; 
 web run stages only with one. `ServerStaging` keeps a browser run's under `.enactive/staging/<run>` with its owner,
 files an inbox item when proposals wait, lets anybody signed in read them (the Proposals page, with diffs) and an
 Operator apply or reject each once the run has ended, audited; the folder goes when every proposal is decided.
-*Not done:* a retention for proposals nobody decides (they wait, listed with their age); a scheduled run still
-cannot stage (nobody watches it - RunComposer's rule stands).
+*Not done:* a scheduled run still cannot stage (nobody watches it - RunComposer's rule stands).
+
+*Status 2026-10-12, later:* proposals nobody decides are dropped after server.json's `ProposalsKeptDays` (30 by
+default, 0 keeps them; `StagingRetention`), said in the inbox and the audit trail. A review of the web UI found ten
+defects, all fixed with a test each - among them a drive named as a WorkspaceRoot refusing every folder, deleting a
+history file through a junction, schedules not held to the roots, an inbox answer spent on a run that was then
+refused, and the framework's host filter answering ahead of the subnet check (`NetworkGate` checks the Host now).
+master's "the app runs its own schedules" is merged in through the one `DueSchedules` (Enactive.Application): the
+window, `--due`, `--due-all` and the service take a due schedule by the same steps, the workspace lease included.
+The engine's own words write numbers invariantly (`Invariant`), the same on every machine. Browser tests
+(`tests/server-e2e`, 15 scenarios) pass.
 
 ## Phase 4 - desktop as a client (optional)
 
@@ -356,3 +365,6 @@ work. Not planned further.
 1. `feature/application-layer`: 0.1 → 0.6, merged to master.
 2. ADR amendments 1-7 (one PR on `Docs/adr/0002-server-with-web-ui.md`).
 3. `feature/server`: 1.1 → 1.5 (the slice), re-estimate, then 1.6 → phase 3. One PR per numbered step.
+
+*As it went:* phases 0-3 were done on one branch, `feature/application-layer`, with master merged into it as it
+moved; it goes to master in one piece when the product is ready (2026-10-12), not step by step.
