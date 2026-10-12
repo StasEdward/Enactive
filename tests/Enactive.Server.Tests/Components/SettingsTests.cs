@@ -23,6 +23,7 @@ public sealed class SettingsTests : ComponentHost
     private const string MailPassword = "mail-page-must-never-see";
     private const string Token = "tk-page-must-never-see";
     private const string Variable = "env-page-must-never-see";
+    private const string Header = "hdr-page-must-never-see";
 
     private readonly string _roots = Path.Combine(Path.GetTempPath(), "enactive-settings-roots", Guid.NewGuid().ToString("N"));
 
@@ -45,7 +46,8 @@ public sealed class SettingsTests : ComponentHost
     private void StoreSecrets()
     {
         var settings = AppSettings.Load(Engine.SettingsFile);
-        settings.Providers.Add(new ProviderConfig { Id = "cloud", Kind = ProviderKind.Anthropic, BaseUrl = "https://api.example.com", ApiKey = Key, Models = ["big"] });
+        settings.Providers.Add(new ProviderConfig { Id = "cloud", Kind = ProviderKind.Anthropic, BaseUrl = "https://api.example.com", ApiKey = Key, Models = ["big"],
+            Headers = new() { ["x-api-key"] = Header } });
         settings.Smtp.Host = "mail.example.com";
         settings.Smtp.Password = MailPassword;
         settings.McpServers.Add(new McpServerConfig
@@ -133,7 +135,7 @@ public sealed class SettingsTests : ComponentHost
     {
         StoreSecrets();
         var stored = AppSettings.Load(Engine.SettingsFile);
-        string[] secrets = [Key, MailPassword, Token, Variable, stored.Providers.Single(p => p.Id == "cloud").ApiKeyProtected,
+        string[] secrets = [Key, MailPassword, Token, Variable, Header, stored.Providers.Single(p => p.Id == "cloud").ApiKeyProtected,
             stored.Smtp.PasswordProtected, stored.McpServers.Single().SecretsProtected];
 
         var screen = Screen("ada");
@@ -153,6 +155,7 @@ public sealed class SettingsTests : ComponentHost
         Card(screen, "cloud").QuerySelector("button[title='Edit']")!.Click();
         screen.WaitForAssertion(() => Assert.Contains("A key is stored.", screen.Find("[role='dialog']").TextContent));
         Assert.Equal("", screen.Find("#provider-key").GetAttribute("value") ?? "");
+        Assert.Contains("Set: x-api-key: …", screen.Find("[role='dialog']").TextContent);
         seen.Add(screen.Markup);
         screen.Find("[role='dialog'] .dialog-actions").QuerySelectorAll("button").Single(b => b.TextContent.Trim() == "Cancel").Click();
 
@@ -163,6 +166,8 @@ public sealed class SettingsTests : ComponentHost
         seen.Add(screen.Markup);
 
         Assert.All(seen, markup => Assert.All(secrets, secret => Assert.DoesNotContain(secret, markup)));
+        // Nor the handles the copy holds in their place: a name for a secret is not for the page either.
+        Assert.All(seen, markup => Assert.DoesNotContain("kept:", markup));
     }
 
     /// <summary>

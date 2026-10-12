@@ -101,7 +101,9 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
                            + File.GetLastWriteTime(engine.SettingsFile).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
                            + "). Nothing was saved; open them again and make your change there.");
 
-        // On a copy: the page keeps what it sent, which must go on holding no secret if this is refused.
+        // On a copy: the page keeps what it sent, which must go on holding no secret if this is refused. What is kept
+        // follows the page's other fields - the mail password a changed SMTP host, a key a changed address; see
+        // WithKeptKey for why an Admin may do that.
         var copy = edited.Copy.Clone();
         // The file is the one the page opened (its version is), so each secret left alone is found in it.
         if (copy.RestoreSecrets(AppSettings.Load(engine.SettingsFile)) is { Count: > 0 } missing)
@@ -134,6 +136,8 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
     {
         if (Admin(user) is null)
             return NotAdmin(user);
+        // Kept credentials follow the command or address as the page has it now - an Admin's to change, who can start
+        // any program as the service anyway (see WithKeptKey): never on the page is the guarantee.
         var kept = new AppSettings { McpServers = [config.Clone()] };
         kept.RestoreSecrets(AppSettings.Load(engine.SettingsFile));
         config = kept.McpServers[0];
@@ -175,7 +179,14 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
                 : DirectProviderCalls.Instance.ModelsAsync(settings.WithKeptKey(provider));
     }
 
-    /// <summary>The provider as typed, with the key kept for it put back where the box was left empty.</summary>
+    /// <summary>
+    /// The provider as typed, with the key and headers kept for it put back where the page left them alone.
+    ///
+    /// <para>They go wherever the page now points: a kept key follows an Admin's changed base URL, as kept MCP
+    /// credentials follow a changed command or address (<see cref="TestMcpAsync"/>) and the kept mail password a changed
+    /// SMTP host on Save. Accepted: an Admin can already run any program as the service's account (a stdio MCP server
+    /// is one), so what this guards is that a secret is never on a page, not that an Admin can never use one.</para>
+    /// </summary>
     private ProviderConfig WithKeptKey(ProviderConfig typed)
     {
         var kept = new AppSettings { Providers = [typed.Clone()] };

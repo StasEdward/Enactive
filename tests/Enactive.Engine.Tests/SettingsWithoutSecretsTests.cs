@@ -23,11 +23,20 @@ public sealed class SettingsWithoutSecretsTests : IDisposable
         try { Directory.Delete(_folder, recursive: true); } catch { /* a temp folder */ }
     }
 
-    /// <summary>Settings on disk with one of each secret a page edits, read back as a host reads them.</summary>
+    /// <summary>
+    /// Settings on disk with one of each kind of secret - a provider's key and a key in its header, the legacy Anthropic
+    /// key, the remote token, the mail password, an MCP server's credentials - read back as a host reads them.
+    /// </summary>
     private AppSettings Stored()
     {
         var settings = new AppSettings();
-        settings.Providers.Add(new ProviderConfig { Id = "cloud", Kind = ProviderKind.Anthropic, BaseUrl = "https://api.example.com", ApiKey = "sk-very-secret", Models = ["big"] });
+        settings.Providers.Add(new ProviderConfig
+        {
+            Id = "cloud", Kind = ProviderKind.Anthropic, BaseUrl = "https://api.example.com", ApiKey = "sk-very-secret", Models = ["big"],
+            Headers = new() { ["Authorization"] = "Bearer provider-hdr-very-secret" }
+        });
+        settings.AnthropicApiKey = "legacy-very-secret";
+        settings.RemoteAccess.Token = "remote-very-secret";
         settings.Smtp.Host = "mail.example.com";
         settings.Smtp.Password = "mail-very-secret";
         settings.McpServers.Add(new McpServerConfig
@@ -40,26 +49,34 @@ public sealed class SettingsWithoutSecretsTests : IDisposable
         return AppSettings.Load(File);
     }
 
-    private static readonly string[] Secrets = ["sk-very-secret", "mail-very-secret", "env-very-secret", "header-very-secret"];
+    /// <summary>The secrets encrypted on disk.</summary>
+    private static readonly string[] Secrets = ["sk-very-secret", "legacy-very-secret", "remote-very-secret", "mail-very-secret",
+        "env-very-secret", "header-very-secret"];
+
+    /// <summary>A provider's header, which is in the clear on disk, as it always was - and still never on a page.</summary>
+    private const string ProviderHeader = "provider-hdr-very-secret";
 
     [WindowsFact]
     public void A_copy_for_a_page_holds_no_secret_and_not_their_stored_forms_either()
     {
         var loaded = Stored();
-        var stored = new[] { loaded.Providers[0].ApiKeyProtected, loaded.Smtp.PasswordProtected, loaded.McpServers[0].SecretsProtected };
+        var stored = new[] { loaded.Providers[0].ApiKeyProtected, loaded.AnthropicApiKeyProtected, loaded.RemoteAccess.TokenProtected,
+            loaded.Smtp.PasswordProtected, loaded.McpServers[0].SecretsProtected };
+        Assert.All(stored, s => Assert.NotEqual("", s));
 
         var copy = loaded.WithoutSecrets();
 
         var everything = System.Text.Json.JsonSerializer.Serialize(copy) + string.Join("|",
-            copy.Providers[0].ApiKey, copy.Smtp.Password, string.Join(",", copy.McpServers[0].Environment.Values),
-            string.Join(",", copy.McpServers[0].Headers.Values));
-        Assert.All(Secrets, secret => Assert.DoesNotContain(secret, everything));
+            copy.Providers[0].ApiKey, copy.AnthropicApiKey, copy.RemoteAccess.Token, copy.Smtp.Password,
+            string.Join(",", copy.McpServers[0].Environment.Values), string.Join(",", copy.McpServers[0].Headers.Values));
+        Assert.All(Secrets.Append(ProviderHeader), secret => Assert.DoesNotContain(secret, everything));
         Assert.All(stored, ciphertext => Assert.DoesNotContain(ciphertext, everything));
-        // What a page may say of them: that each is kept, and the names of a server's credentials.
+        // What a page may say of them: that each is kept, and the names of a server's credentials and a provider's headers.
         Assert.True(AppSettings.IsKept(copy.Providers[0].ApiKeyProtected));
         Assert.True(AppSettings.IsKept(copy.Smtp.PasswordProtected));
         Assert.Equal(["TOKEN"], copy.McpServers[0].Environment.Keys);
         Assert.Equal(["Authorization"], copy.McpServers[0].Headers.Keys);
+        Assert.Equal(["Authorization"], copy.Providers[0].Headers.Keys);
     }
 
     /// <summary>Opened, something else changed, saved: a key nobody could see to type back is still there.</summary>
@@ -75,6 +92,9 @@ public sealed class SettingsWithoutSecretsTests : IDisposable
         var saved = AppSettings.Load(File);
         Assert.Equal(7, saved.KeepRuns);
         Assert.Equal("sk-very-secret", saved.Providers[0].ApiKey);
+        Assert.Equal("Bearer " + ProviderHeader, saved.Providers[0].Headers["Authorization"]);
+        Assert.Equal("legacy-very-secret", saved.AnthropicApiKey);
+        Assert.Equal("remote-very-secret", saved.RemoteAccess.Token);
         Assert.Equal("mail-very-secret", saved.Smtp.Password);
         Assert.Equal("env-very-secret", saved.McpServers[0].Environment["TOKEN"]);
         Assert.Equal("Bearer header-very-secret", saved.McpServers[0].Headers["Authorization"]);
@@ -156,5 +176,80 @@ public sealed class SettingsWithoutSecretsTests : IDisposable
         copy.RestoreSecrets(AppSettings.Load(File));
         Assert.True(copy.Save(File, replaceUnreadable: true), copy.LastSaveError);
         Assert.Equal(unreadable, AppSettings.Load(File).Smtp.PasswordProtected);
+    }
+
+    /// <summary>
+    /// A provider's headers on the copy: left alone they are saved as they were; replaced, the new ones; removed, none -
+    /// and a header whose handle names nothing any more is dropped and named, never written as its handle.
+    /// </summary>
+    [WindowsFact]
+    public void A_provider_s_headers_are_kept_replaced_or_removed()
+    {
+        var left = Stored().WithoutSecrets();
+        Assert.Empty(left.RestoreSecrets(AppSettings.Load(File)));
+        Assert.Equal("Bearer " + ProviderHeader, left.Providers[0].Headers["Authorization"]);
+
+        var replaced = Stored().WithoutSecrets();
+        replaced.Providers[0].Headers = new() { ["api-key"] = "new-value" };
+        replaced.RestoreSecrets(AppSettings.Load(File));
+        Assert.Equal(new Dictionary<string, string> { ["api-key"] = "new-value" }, replaced.Providers[0].Headers);
+
+        var removed = Stored().WithoutSecrets();
+        removed.Providers[0].Headers = new();
+        removed.RestoreSecrets(AppSettings.Load(File));
+        Assert.Empty(removed.Providers[0].Headers);
+
+        var gone = Stored().WithoutSecrets();
+        var handle = gone.Providers[0].Headers["Authorization"];
+        var missing = gone.RestoreSecrets(new AppSettings());
+        Assert.Contains("the header 'Authorization' of provider 'cloud'", missing);
+        Assert.DoesNotContain(handle, System.Text.Json.JsonSerializer.Serialize(gone));
+    }
+
+    /// <summary>
+    /// A handle names a secret of its own kind only: one moved into another kind's place - the mail password's handle
+    /// as a provider's key - is not put back there, so a page cannot have the service pour one secret into another slot.
+    /// </summary>
+    [WindowsFact]
+    public void A_handle_names_a_secret_of_its_own_kind_only()
+    {
+        var copy = Stored().WithoutSecrets();
+        copy.Providers[0].ApiKeyProtected = copy.Smtp.PasswordProtected;
+
+        var missing = copy.RestoreSecrets(AppSettings.Load(File));
+
+        Assert.Contains("the API key for provider 'cloud'", missing);
+        Assert.Equal("", copy.Providers[0].ApiKey);
+        Assert.Equal("mail-very-secret", copy.Smtp.Password);
+    }
+
+    /// <summary>
+    /// A key with no stored form yet - an older file's legacy Anthropic key, read into a provider on load and not saved
+    /// since - is given a handle too: with none, the copy blanked it and its first save from a page dropped it.
+    /// </summary>
+    [WindowsFact]
+    public void A_key_read_from_an_older_file_and_never_saved_is_kept()
+    {
+        System.IO.Directory.CreateDirectory(_folder);
+        System.IO.File.WriteAllText(File, """
+        {
+          "BaseUrl": "http://localhost:11434/v1",
+          "Model": "qwen",
+          "AnthropicApiKey": "sk-legacy-never-saved"
+        }
+        """);
+        var loaded = AppSettings.Load(File);
+        Assert.Equal(("sk-legacy-never-saved", ""), (loaded.Providers.Single(p => p.Id == "anthropic").ApiKey,
+            loaded.Providers.Single(p => p.Id == "anthropic").ApiKeyProtected));
+
+        var copy = loaded.WithoutSecrets();
+        Assert.True(AppSettings.IsKept(copy.Providers.Single(p => p.Id == "anthropic").ApiKeyProtected));
+        Assert.Empty(copy.RestoreSecrets(AppSettings.Load(File)));
+        Assert.True(copy.Save(File, replaceUnreadable: true), copy.LastSaveError);
+
+        var saved = AppSettings.Load(File);
+        Assert.Equal("sk-legacy-never-saved", saved.Providers.Single(p => p.Id == "anthropic").ApiKey);
+        Assert.Equal("sk-legacy-never-saved", saved.AnthropicApiKey);
+        Assert.DoesNotContain("sk-legacy-never-saved", System.IO.File.ReadAllText(File));
     }
 }

@@ -178,6 +178,37 @@ public sealed class ServerSettingsTests : IDisposable
         Assert.Contains("role does not include", refused);
     }
 
+    /// <summary>
+    /// A provider's headers through the page's editor: named, never valued; left alone they are saved as they were, new
+    /// ones replace them, and Remove takes them away. A key in Authorization is a provider's key like any other.
+    /// </summary>
+    [Fact]
+    public async Task A_provider_s_headers_are_named_kept_replaced_and_removed_through_the_page()
+    {
+        var stored = AppSettings.Load(_engine.SettingsFile);
+        stored.Providers.Add(new ProviderConfig { Id = "box", BaseUrl = "http://127.0.0.1:1/v1", Headers = new() { ["Authorization"] = "Bearer hdr-very-secret" } });
+        Assert.True(stored.Save(_engine.SettingsFile, replaceUnreadable: true));
+
+        async Task<Dictionary<string, string>> ApplyAndSave(Action<ProviderEditViewModel> edit)
+        {
+            var (view, _) = _settings.Edit(As("ada"), null, _ => { });
+            var editor = new ProviderEditViewModel(view!.Providers.Single(p => p.Name == "box").Config, () => { }, view.ProviderCalls);
+            Assert.EndsWith(": …", editor.HeaderNames);
+            Assert.DoesNotContain("hdr-", editor.HeadersText + editor.HeaderNames);
+            edit(editor);
+            editor.SaveCommand.Execute(null);
+            await view.SaveCommand.ExecuteAsync();
+            return AppSettings.Load(_engine.SettingsFile).Providers.Single(p => p.Id == "box").Headers;
+        }
+
+        Assert.Equal("Bearer hdr-very-secret", (await ApplyAndSave(_ => { }))["Authorization"]);
+        Assert.Equal(new Dictionary<string, string> { ["api-key"] = "hdr-new" },
+            await ApplyAndSave(e => e.NewHeadersText = "api-key: hdr-new"));
+        // Put back, then removed.
+        await ApplyAndSave(e => e.NewHeadersText = "Authorization: Bearer hdr-very-secret");
+        Assert.Empty(await ApplyAndSave(e => e.ForgetHeaders = true));
+    }
+
     [Fact]
     public void The_workspace_roots_are_an_admin_s_to_read()
     {

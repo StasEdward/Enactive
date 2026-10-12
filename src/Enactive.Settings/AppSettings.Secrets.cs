@@ -8,6 +8,10 @@ using Enactive.Secrets;
 /// <summary>
 /// One secret the settings hold: what it is called, where its encrypted form is kept, and what it is in memory.
 /// </summary>
+/// <param name="Kind">
+/// Which kind of secret it is - a provider's key, the SMTP password - whatever it belongs to. A copy's handle names a
+/// secret of its own kind only (<see cref="AppSettings.RestoreSecrets"/>).
+/// </param>
 /// <param name="Name">What it is, for a sentence: "the SMTP password".</param>
 /// <param name="Stored">The form that reaches disk - encrypted, or what an older build left there.</param>
 /// <param name="Plain">The form used in memory; "" when there is none.</param>
@@ -24,7 +28,16 @@ using Enactive.Secrets;
 /// Puts back, from the decrypted value of the secret it was made from, what <see cref="Blank"/> removed and nobody has
 /// typed over since (<see cref="AppSettings.RestoreSecrets"/>).
 /// </param>
+/// <param name="BlankInTheClear">
+/// Removes, from a page's copy, what goes with the secret and is kept in the clear on disk: a provider's header values,
+/// which carry its key as often as the key box does (Authorization: Bearer, api-key). Null where there is nothing.
+/// </param>
+/// <param name="RestoreInTheClear">
+/// Puts back what <see cref="BlankInTheClear"/> removed and nobody replaced, from the settings read again; answers what
+/// it could not find, which stays removed.
+/// </param>
 internal sealed record SettingsSecret(
+    string Kind,
     string Name,
     Func<string> Stored,
     Action<string> Store,
@@ -35,7 +48,9 @@ internal sealed record SettingsSecret(
     Action Blank,
     Action<string> FillBlank,
     Func<bool>? Unavailable = null,
-    Action? CannotRead = null);
+    Action? CannotRead = null,
+    Action? BlankInTheClear = null,
+    Func<AppSettings, IEnumerable<string>>? RestoreInTheClear = null);
 
 public sealed partial class AppSettings
 {
@@ -55,22 +70,28 @@ public sealed partial class AppSettings
         var secrets = new List<SettingsSecret>();
 
         foreach (var provider in Providers)
-            secrets.Add(Text($"the API key for provider '{provider.Id}'",
+            secrets.Add(Text("provider key", $"the API key for provider '{provider.Id}'",
                 () => provider.ApiKeyProtected, v => provider.ApiKeyProtected = v,
                 () => provider.ApiKey, v => provider.ApiKey = v,
                 $"The API key for provider '{provider.Id}' cannot be decrypted. Its encrypted value will be preserved "
                 + "on save; enter a replacement key to use it here.",
                 $"The API key for provider '{provider.Id}' is stored UNENCRYPTED in settings.json. It will be "
-                + "encrypted the next time settings are saved."));
+                + "encrypted the next time settings are saved.") with
+            {
+                // The headers stay in the clear on disk and in the window, as they always were; only a page's copy goes
+                // without their values. A page that showed them showed a key put in Authorization in full.
+                BlankInTheClear = () => provider.Headers = provider.Headers.ToDictionary(h => h.Key, h => HeaderHandle(h.Key, h.Value)),
+                RestoreInTheClear = from => RestoreHeaders(provider, from)
+            });
 
-        secrets.Add(Text("the legacy Anthropic key",
+        secrets.Add(Text("legacy anthropic key", "the legacy Anthropic key",
             () => AnthropicApiKeyProtected, v => AnthropicApiKeyProtected = v,
             () => AnthropicApiKey, v => AnthropicApiKey = v,
             "The legacy Anthropic key cannot be decrypted. Its encrypted value will be preserved on save.",
             "The stored Anthropic API key is UNENCRYPTED in settings.json. It will be encrypted the next time "
             + "settings are saved."));
 
-        secrets.Add(Text("the remote access device token",
+        secrets.Add(Text("remote token", "the remote access device token",
             () => RemoteAccess.TokenProtected, v => RemoteAccess.TokenProtected = v,
             () => RemoteAccess.Token, v => RemoteAccess.Token = v,
             // DPAPI ciphertext bound to a user and machine that no longer exist will never open again, so this is
@@ -83,7 +104,7 @@ public sealed partial class AppSettings
             + "time settings are saved. Anyone who can read that file can connect as this computer, so consider "
             + "revoking it and connecting again with a new connection code."));
 
-        secrets.Add(Text("the SMTP password",
+        secrets.Add(Text("smtp password", "the SMTP password",
             () => Smtp.PasswordProtected, v => Smtp.PasswordProtected = v,
             () => Smtp.Password, v => Smtp.Password = v,
             "The SMTP password cannot be decrypted. Its encrypted value will be preserved on save; enter a "
@@ -92,7 +113,7 @@ public sealed partial class AppSettings
             + "are saved."));
 
         foreach (var server in McpServers)
-            secrets.Add(new SettingsSecret($"the credentials for MCP server '{server.Id}'",
+            secrets.Add(new SettingsSecret("mcp credentials", $"the credentials for MCP server '{server.Id}'",
                 () => server.SecretsProtected, v => server.SecretsProtected = v,
                 // Its environment and headers together, as one value: they are encrypted and lost together.
                 () => server.Environment.Count == 0 && server.Headers.Count == 0
@@ -139,9 +160,9 @@ public sealed partial class AppSettings
 
         return secrets;
 
-        static SettingsSecret Text(string name, Func<string> stored, Action<string> store, Func<string> plain,
+        static SettingsSecret Text(string kind, string name, Func<string> stored, Action<string> store, Func<string> plain,
             Action<string> use, string unreadable, string unencrypted)
-            => new(name, stored, store, plain, value => { use(value); return value.Length > 0; }, unreadable, unencrypted,
+            => new(kind, name, stored, store, plain, value => { use(value); return value.Length > 0; }, unreadable, unencrypted,
                 Blank: () => use(""),
                 FillBlank: value =>
                 {
@@ -153,12 +174,47 @@ public sealed partial class AppSettings
     /// <summary>What a stored form is called in a copy that holds no secret (<see cref="WithoutSecrets"/>).</summary>
     private const string KeptPrefix = "kept:";
 
-    // A key of this process's own: a handle names a stored secret to the settings it was made from and says nothing
-    // about it to anybody else - not even whether two copies opened at different times hold the same one.
+    // A key of this process's own: a handle names a stored secret to the settings it was made from and cannot be turned
+    // back into it, nor worked out from a guess at it by anybody without the key. Within one process the same secret
+    // always has the same handle, so two copies, or two slots, holding one secret can be seen to; after a restart no
+    // handle matches any more.
     private static readonly byte[] HandleKey = RandomNumberGenerator.GetBytes(32);
 
-    private static string Handle(string stored)
-        => KeptPrefix + Convert.ToHexString(HMACSHA256.HashData(HandleKey, Encoding.UTF8.GetBytes(stored)));
+    /// <summary>
+    /// The handle of a secret of this kind, by its stored form - or, for one that has none yet, by its plaintext: a key
+    /// read from an older file's legacy field into a provider on load and not saved since has only that, and a copy that
+    /// gave it no handle lost it on its first save.
+    /// </summary>
+    private static string Handle(SettingsSecret secret, string stored, string plain)
+        => Handle(secret.Kind, stored.Length > 0 ? "stored\0" + stored : "plain\0" + plain);
+
+    private static string Handle(string kind, string what)
+        => KeptPrefix + Convert.ToHexString(HMACSHA256.HashData(HandleKey, Encoding.UTF8.GetBytes(kind + "\0" + what)));
+
+    private static string HeaderHandle(string name, string value) => Handle("provider header", name + "\0" + value);
+
+    /// <summary>A provider's headers with each value a page's copy left as a handle put back; what could not be found.</summary>
+    private static IEnumerable<string> RestoreHeaders(ProviderConfig provider, AppSettings from)
+    {
+        var kept = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var header in from.Providers.SelectMany(p => p.Headers))
+            kept.TryAdd(HeaderHandle(header.Key, header.Value), header.Value);
+
+        var missing = new List<string>();
+        var restored = new Dictionary<string, string>();
+        foreach (var (name, value) in provider.Headers)
+        {
+            if (!value.StartsWith(KeptPrefix, StringComparison.Ordinal))
+                restored[name] = value;
+            else if (kept.TryGetValue(value, out var original))
+                restored[name] = original;
+            else
+                // Dropped, never written as the handle: a header that says "kept:..." is a header nobody sent.
+                missing.Add($"the header '{name}' of provider '{provider.Id}'");
+        }
+        provider.Headers = restored;
+        return missing;
+    }
 
     /// <summary>
     /// A copy that holds no secret at all, for a host whose pages edit the settings - the service's, where the copy a
@@ -173,13 +229,20 @@ public sealed partial class AppSettings
     public AppSettings WithoutSecrets()
     {
         var copy = Clone();
+        // Only handles in it, for the secrets that cannot be decrypted (CannotDecrypt): never their ciphertext.
+        copy._unreadableSecrets = new HashSet<string>(StringComparer.Ordinal);
         foreach (var secret in copy.Secrets())
         {
+            var (stored, plain) = (secret.Stored(), secret.Plain());
             secret.Blank();
-            if (secret.Stored() is { Length: > 0 } stored)
-                secret.Store(Handle(stored));
+            secret.BlankInTheClear?.Invoke();
+            if (stored.Length == 0 && plain.Length == 0)
+                continue;
+            var handle = Handle(secret, stored, plain);
+            secret.Store(handle);
+            if (_unreadableSecrets.Contains(stored))
+                copy._unreadableSecrets.Add(handle);
         }
-        copy._unreadableSecrets = new HashSet<string>(_unreadableSecrets.Select(Handle), StringComparer.Ordinal);
         return copy;
     }
 
@@ -195,17 +258,20 @@ public sealed partial class AppSettings
     /// </returns>
     public IReadOnlyList<string> RestoreSecrets(AppSettings from)
     {
+        // By kind as well as by value: a handle only ever names a secret of its own kind.
         var kept = new Dictionary<string, SettingsSecret>(StringComparer.Ordinal);
         foreach (var secret in from.Secrets())
-            if (secret.Stored() is { Length: > 0 } stored)
-                kept.TryAdd(Handle(stored), secret);
+            if ((secret.Stored(), secret.Plain()) is var (stored, plain) && (stored.Length > 0 || plain.Length > 0))
+                kept.TryAdd(Handle(secret, stored, plain), secret);
 
         var missing = new List<string>();
         foreach (var secret in Secrets())
         {
+            if (secret.RestoreInTheClear?.Invoke(from) is { } lost)
+                missing.AddRange(lost);
             if (!secret.Stored().StartsWith(KeptPrefix, StringComparison.Ordinal))
                 continue;
-            if (!kept.TryGetValue(secret.Stored(), out var original))
+            if (!kept.TryGetValue(secret.Stored(), out var original) || original.Kind != secret.Kind)
             {
                 // Never written as it is: a handle on disk would be a secret replaced by a name for it.
                 secret.Store("");

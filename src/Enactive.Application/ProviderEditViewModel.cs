@@ -179,6 +179,33 @@ internal sealed class ProviderEditViewModel : ObservableObject
     /// <summary>See ProviderConfig.SendReasoningBack.</summary>
     public bool SendReasoningBack { get => _sendReasoningBack; set => Set(ref _sendReasoningBack, value); }
     public string HeadersText { get => _headersText; set => Set(ref _headersText, value); }
+
+    private string _newHeadersText = string.Empty;
+    private bool _forgetHeaders;
+
+    /// <summary>
+    /// The headers' names, never their values - what a host whose pages are not handed the headers says instead of
+    /// <see cref="HeadersText"/>: a key put in Authorization or api-key is the provider's key, and on such a host's copy
+    /// (AppSettings.WithoutSecrets) the values are handles anyway. The window shows <see cref="HeadersText"/>.
+    /// </summary>
+    public string HeaderNames => _config.Headers.Count == 0
+        ? "none set"
+        : string.Join(", ", _config.Headers.Keys.Select(name => name + ": …"));
+
+    /// <summary>
+    /// Header-Name: value per line, replacing every header the provider has when anything is typed - on a host that
+    /// shows names only, the one way to change a value. Empty: the headers stay as they are. The window never sets it.
+    /// </summary>
+    public string NewHeadersText { get => _newHeadersText; set => Set(ref _newHeadersText, value); }
+
+    /// <summary>Takes every header away on Apply; new ones typed above are still added. The window never sets it.</summary>
+    public bool ForgetHeaders { get => _forgetHeaders; set => Set(ref _forgetHeaders, value); }
+
+    /// <summary>The headers as Apply writes them: the box's, or none when removed - or what was typed as new, over either.</summary>
+    private Dictionary<string, string> AppliedHeaders()
+        => NewHeadersText.Trim().Length > 0 ? ModelFetch.ParseHeaders(NewHeadersText)
+            : ForgetHeaders ? new Dictionary<string, string>()
+            : ModelFetch.ParseHeaders(HeadersText);
     public string ModelsText { get => _modelsText; set => Set(ref _modelsText, value); }
     public string Status { get => _status; set => Set(ref _status, value); }
 
@@ -248,7 +275,7 @@ internal sealed class ProviderEditViewModel : ObservableObject
         BaseUrl = baseUrl,
         ApiKey = ApiKey,
         ApiKeyProtected = ApiKey.Length == 0 && !ForgetKey ? _config.ApiKeyProtected : "",
-        Headers = ModelFetch.ParseHeaders(HeadersText)
+        Headers = AppliedHeaders()
     };
 
     private async Task FetchModelsAsync()
@@ -309,7 +336,7 @@ internal sealed class ProviderEditViewModel : ObservableObject
             : double.TryParse(temperature, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var t)
               && t is >= 0 and <= 2 ? t.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
         _config.SendReasoningBack = SendReasoningBack;
-        _config.Headers = ModelFetch.ParseHeaders(HeadersText);
+        _config.Headers = AppliedHeaders();
         _config.Models = ModelLines();
         _onSaved();
         CloseRequested?.Invoke();

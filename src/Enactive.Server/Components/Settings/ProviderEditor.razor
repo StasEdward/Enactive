@@ -6,9 +6,9 @@
    on the right, a field only one kind of provider reads shown for that kind only (ProviderEditViewModel.Shows*). Apply
    puts the change into the settings' copy; it is written when the settings are saved.
 
-   The key is the one place it differs. This page is never handed a stored key, so the box opens empty, an empty box
-   keeps the key kept for the provider, and Remove takes it away; Test and Fetch ask with the kept key, as the service
-   (ServerSettings). *@
+   The key and the headers are where it differs. This page is never handed a stored key or a header's value, so the key
+   box opens empty, an empty box keeps the key kept for the provider, and Remove takes it away; the headers are named
+   and replaced or removed whole. Test and Fetch ask with what is kept, as the service (ServerSettings). *@
 
 <Dialog Title="Provider" Class="dialog-wide" OnClose="() => Editor.CancelCommand.Execute(null)">
     <ChildContent>
@@ -43,8 +43,14 @@
                     <label class="check"><input type="checkbox" @bind="Editor.ForgetKey" /> Remove the stored key</label>
                 }
 
-                <label class="label" for="provider-headers">Headers</label>
-                <textarea id="provider-headers" rows="3" placeholder="extra headers — one Header-Name: value per line" @bind="Editor.HeadersText"></textarea>
+                @* Names only, as the MCP editor has them: a key put in Authorization or api-key is the provider's key, and
+                   this page is never handed one (ServerSettings). New lines replace them all; Remove takes them away. *@
+                <p class="label">Headers</p>
+                <p class="hint settings-stored">Set: @Editor.HeaderNames</p>
+                <label class="label" for="provider-headers">New headers, Header-Name: value per line (replaces them)</label>
+                <textarea id="provider-headers" rows="2" autocomplete="off" placeholder="extra headers — one Header-Name: value per line"
+                          @bind="Editor.NewHeadersText"></textarea>
+                <label class="check"><input type="checkbox" @bind="Editor.ForgetHeaders" /> Remove its headers</label>
 
                 <label class="label" for="provider-models">Models</label>
                 <textarea id="provider-models" rows="6" placeholder="models — one per line" @bind="Editor.ModelsText"></textarea>
