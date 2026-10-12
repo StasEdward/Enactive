@@ -323,6 +323,33 @@ public sealed partial class SignInTests : IAsyncLifetime
         Assert.Equal($"/?ws={id}", (await browser.GetAsync($"/history/run?ws={Uri.EscapeDataString(folder)}&id=x")).Headers.Location!.OriginalString);
     }
 
+    /// <summary>
+    /// A set's old address (the workspace by its path, the set in a query) lands on the set's page, the workspace named by its
+    /// id. A path the service does not know - or no set - lands on the list, and no path is looked up on the disk.
+    /// </summary>
+    [Fact]
+    public async Task An_old_proposals_address_lands_on_the_set_by_the_workspace_s_id()
+    {
+        var folder = Path.Combine(_root, "project");
+        Directory.CreateDirectory(folder);
+        _app.Services.GetRequiredService<Runs.ServerEngine>().Workspaces.Touch(folder);
+        var id = Enactive.Core.Context.WorkspaceInfo.For(folder).Id;
+        var set = Guid.NewGuid().ToString("N");
+        var browser = NewBrowser();
+        Assert.StartsWith("https://localhost/signin", (await browser.GetAsync("/proposals/view?ws=x&set=y")).Headers.Location!.ToString());
+        await SignInAsync(browser, "alice", Password);
+
+        var known = await browser.GetAsync($"/proposals/view?ws={Uri.EscapeDataString(folder)}&set={set}");
+        Assert.Equal(HttpStatusCode.Redirect, known.StatusCode);
+        Assert.Equal($"/proposals/{id}/{set}", known.Headers.Location!.OriginalString);
+
+        var elsewhere = Uri.EscapeDataString(Path.Combine(_root, "elsewhere"));
+        Assert.Equal("/proposals", (await browser.GetAsync($"/proposals/view?ws={elsewhere}&set={set}")).Headers.Location!.OriginalString);
+        Assert.Equal("/proposals", (await browser.GetAsync($"/proposals/view?ws={Uri.EscapeDataString(folder)}")).Headers.Location!.OriginalString);
+        // Not an address a set is named in: only a run's id, so no name walks out of the folder.
+        Assert.Equal("/proposals", (await browser.GetAsync($"/proposals/view?ws={Uri.EscapeDataString(folder)}&set=..")).Headers.Location!.OriginalString);
+    }
+
     [Fact]
     public async Task Health_answers_without_signing_in()
         => Assert.Equal(HttpStatusCode.OK, (await NewBrowser().GetAsync("/health")).StatusCode);

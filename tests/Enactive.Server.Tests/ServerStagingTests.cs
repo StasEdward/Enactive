@@ -189,4 +189,68 @@ public sealed class ServerStagingTests : IDisposable
         Assert.False(Directory.Exists(waiting));
         Assert.True(Directory.Exists(writing));
     }
+
+    // ── what the rail and the pages listen to ───────────────────────────────
+
+    /// <summary>
+    /// Anything that changes what waits says so: a run that begins to keep proposals, one that ends, a decision, a drop. The
+    /// rail's dot listens; read only at a navigation it kept saying "waiting" after the last change was applied on a page
+    /// that does not navigate.
+    /// </summary>
+    [Fact]
+    public async Task What_waits_changing_is_said_to_whoever_listens()
+    {
+        var said = 0;
+        _staging.Changed += () => said++;
+
+        var folder = Begin(_staging);
+        Assert.Equal(1, said);
+        using (var store = new StagingArtifactStore(_workspace, folder))
+        {
+            await store.CreateAsync("notes.md", ArtifactKind.FileSet, "notes", s => s.WriteAsync(Encoding.UTF8.GetBytes("new\n")).AsTask(), CancellationToken.None);
+            await EndAsync(_staging, folder, store);
+        }
+        Assert.Equal(2, said);
+
+        var change = _staging.Open(As("alice"), _workspace, Path.GetFileName(folder)).Files.Single().Id;
+        // Not said for what changed nothing: a role that may not decide, a change that is not there.
+        await _staging.ActAsync(As("vera"), _workspace, Path.GetFileName(folder), change, apply: true, CancellationToken.None);
+        await _staging.ActAsync(As("alice"), _workspace, Path.GetFileName(folder), Guid.NewGuid(), apply: true, CancellationToken.None);
+        Assert.Equal(2, said);
+
+        await _staging.ActAsync(As("alice"), _workspace, Path.GetFileName(folder), change, apply: false, CancellationToken.None);
+        Assert.Equal(3, said);
+
+        var later = await StagedAsync();
+        said = 0;
+        await _staging.ExpireAsync(DateTimeOffset.Now.AddDays(31), TimeSpan.FromDays(30), CancellationToken.None);
+        Assert.Equal(1, said);
+        Assert.False(Directory.Exists(later));
+    }
+
+    /// <summary>
+    /// Said after the action's lock is let go: a listener that reads or decides again in answer - as a page redrawing from
+    /// the service does - waited on the one the action still held, for ever.
+    /// </summary>
+    [Fact]
+    public async Task A_listener_may_decide_in_answer_without_waiting_on_the_action_that_woke_it()
+    {
+        // Two proposals, so the set is still kept (and its gate taken) when the listener decides the second.
+        var folder = Begin(_staging);
+        using (var store = new StagingArtifactStore(_workspace, folder))
+        {
+            await store.CreateAsync("notes.md", ArtifactKind.FileSet, "notes", s => s.WriteAsync(Encoding.UTF8.GetBytes("new\n")).AsTask(), CancellationToken.None);
+            await store.CreateAsync("todo.md", ArtifactKind.FileSet, "todo", s => s.WriteAsync(Encoding.UTF8.GetBytes("one\n")).AsTask(), CancellationToken.None);
+            await EndAsync(_staging, folder, store);
+        }
+        var id = Path.GetFileName(folder);
+        var files = _staging.Open(As("alice"), _workspace, id).Files;
+        string? answer = null;
+        _staging.Changed += () =>
+            answer ??= Task.Run(() => _staging.ActAsync(As("alice"), _workspace, id, files[1].Id, apply: false, CancellationToken.None)).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+
+        await _staging.ActAsync(As("alice"), _workspace, id, files[0].Id, apply: false, CancellationToken.None);
+
+        Assert.StartsWith("Rejected: todo.md.", answer);
+    }
 }

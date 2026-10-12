@@ -109,17 +109,21 @@ internal static class ServerApp
                 return Results.LocalRedirect("/signin");
             });
 
-        // A kept proposal applied or rejected (ServerStaging checks the role and the run's end), back to its page.
-        app.MapPost("/proposals/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerStaging staging) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var (workspace, set) = (form["ws"].ToString(), form["set"].ToString());
-            var said = await staging.ActAsync(context.User, workspace, set,
-                Guid.TryParse(form["change"], out var change) ? change : Guid.Empty, form["act"] == "apply", context.RequestAborted);
-            return Results.LocalRedirect("/" + Components.Links.Proposals(workspace, set) + "&said=" + Uri.EscapeDataString(said));
-        });
+        // The old address of a set of proposed changes (the workspace by its path, the set in a query), which is the proposals
+        // page at /proposals/{workspace}/{set} now - the workspace by its id (WorkspaceIds), found only among the workspaces
+        // the service knows. A path it does not know, a folder whose path cannot be read, or a set that is not a run's id lands
+        // on the list: never a folder read off the disk, and no name walks out of the staging folder.
+        app.MapGet("/proposals/view", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids) =>
+            {
+                var workspace = history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known
+                    ? ids.TryIdOf(known.RootPath)
+                    : null;
+                var set = context.Request.Query["set"].ToString();
+                return Results.LocalRedirect(workspace is { } id && Guid.TryParseExact(set, "N", out _)
+                    ? "/" + Components.Links.Proposals(id, set)
+                    : "/proposals");
+            })
+            .RequireAuthorization(nameof(Role.Viewer));
 
         // The accounts page's changes: an Admin's, checked by AccountAdmin; the token here. Not at the page's own
         // address: a page also takes form posts, and two endpoints on one address was a 500 (found by tests/server-e2e).

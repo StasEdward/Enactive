@@ -33,6 +33,7 @@
     {
         Navigation.LocationChanged += OnLocationChanged;
         Inbox.Changed += OnInboxChanged;
+        Staging.Changed += OnInboxChanged;
         await LoadAsync();
     }
 
@@ -42,7 +43,8 @@
         => Reload();
 
     // And when the inbox is read, marked read or answered - on the Inbox page, which stays where it is, or by anybody
-    // else: Mark all read is no navigation, and the badge went on counting what was no longer unread.
+    // else: Mark all read is no navigation, and the badge went on counting what was no longer unread. The same for the
+    // proposals' dot: a change applied on its page is no navigation either, and the dot went on saying "waiting".
     private void OnInboxChanged() => Reload();
 
     private void Reload() => _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
@@ -102,5 +104,6 @@
     {
         Navigation.LocationChanged -= OnLocationChanged;
         Inbox.Changed -= OnInboxChanged;
+        Staging.Changed -= OnInboxChanged;
     }
 }

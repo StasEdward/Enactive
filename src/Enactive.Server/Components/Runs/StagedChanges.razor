@@ -1,0 +1,71 @@
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+
+@* The changes a run proposed and the service kept - the window's staged cards: the file, whether it is new, what became of it,
+   amber down the edge while it waits for a person, with its diff and - when the host says it may be decided - Apply and
+   Reject. Drawn once, for the run's Artifacts tab and for the proposals page; what to do with a press is the host's
+   (StagedSetState), so there is one Apply for both. *@
+
+<ul class="artifact-list">
+    @foreach (var file in Files)
+    {
+        var pending = !file.Applied && !file.Rejected;
+        <li class="@("card proposal " + Looks.Change(file.Applied, file.Rejected))">
+            <div class="proposal-head">
+                <div class="proposal-text">
+                    <span class="path">@file.Path</span>
+                    <span class="hint">@(file.IsNew ? "new file" : "changed")</span>
+                    <span class="proposal-state">@(file.Applied ? "applied" : file.Rejected ? "rejected" : "staged")</span>
+                </div>
+                <button type="button" class="btn small" aria-expanded="@(Shown(file.Id) ? "true" : "false")"
+                        @onclick="() => Toggle(file.Id)">Diff</button>
+                @if (CanDecide && pending)
+                {
+                    <button type="button" class="btn small" disabled="@Busy" @onclick="() => OnAct.InvokeAsync((file, true))">Apply</button>
+                    <button type="button" class="btn small" disabled="@Busy" @onclick="() => OnAct.InvokeAsync((file, false))">Reject</button>
+                }
+            </div>
+            @if (Shown(file.Id))
+            {
+                @if (file.Diff is { } diff)
+                {
+                    <DiffView Diff="@diff" />
+                }
+                else
+                {
+                    <p class="hint">Not shown as text: @file.Bytes.ToString(System.Globalization.CultureInfo.InvariantCulture) bytes.</p>
+                }
+            }
+        </li>
+    }
+</ul>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<StagedFile> Files { get; set; } = [];
+
+    /// <summary>Apply and Reject are offered on the changes that wait.</summary>
+    [Parameter] public bool CanDecide { get; set; }
+
+    /// <summary>A decision is on its way: the buttons are off, so a second press is not a second apply.</summary>
+    [Parameter] public bool Busy { get; set; }
+
+    /// <summary>A change and whether it is applied (false: rejected).</summary>
+    [Parameter] public EventCallback<(StagedFile File, bool Apply)> OnAct { get; set; }
+
+    /// <summary>
+    /// Every diff opens with the list, where it is the page's whole point (a set on a page of its own); the Artifacts tab
+    /// keeps them closed until asked, among the files the run wrote.
+    /// </summary>
+    [Parameter] public bool OpenDiffs { get; set; }
+
+    // The ones turned the other way from OpenDiffs.
+    private readonly HashSet<Guid> _toggled = new();
+
+    private bool Shown(Guid id) => OpenDiffs != _toggled.Contains(id);
+
+    private void Toggle(Guid id)
+    {
+        if (!_toggled.Remove(id))
+            _toggled.Add(id);
+    }
+}

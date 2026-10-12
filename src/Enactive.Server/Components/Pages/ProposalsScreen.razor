@@ -1,0 +1,143 @@
+@page "/proposals"
+@page "/proposals/{WorkspaceId:guid}/{Set}"
+@using Enactive.Application
+@using Enactive.Application.Projections
+@using Enactive.Core.History
+@using Enactive.Server.Components.Runs
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@implements IDisposable
+@inject ServerStaging Staging
+@inject ServerEngine Engine
+@inject WorkspaceIds Ids
+
+<PageTitle>Proposed changes - Enactive</PageTitle>
+
+@* What runs proposed instead of writing (a folder set to stage keeps its runs' changes): the list of every set that waits,
+   in every workspace the service knows, and one run's set with its diffs. The window shows these on a run's Artifacts tab;
+   here they also have an address of their own, because a person is sent to them (the rail's dot, a mail) and not to a run.
+   A set's changes are drawn, and applied or rejected, by the pieces the Artifacts tab uses (StagedChanges, StagedSetState).
+   A workspace in an address is its id, never its path. *@
+
+<div class="proposals-screen">
+    @if (WorkspaceId is null)
+    {
+        <h1 class="proposals-title">Proposed changes</h1>
+        <p class="hint">Runs in a folder set to stage changes propose them here instead of writing them. Nothing is written
+            until somebody applies it.</p>
+
+        @if (_sets.Count == 0)
+        {
+            <p class="hint">Nothing waits.</p>
+        }
+        else
+        {
+            <ul class="cards proposal-sets" aria-label="Proposed changes">
+                @foreach (var row in _sets)
+                {
+                    <li>
+                        <a class="@("card selectable proposal-set " + row.Look)" href="@row.Href">
+                            <span class="card-title">@row.Title</span>
+                            <span class="card-meta">@row.Meta</span>
+                        </a>
+                    </li>
+                }
+            </ul>
+        }
+    }
+    else
+    {
+        <p><a class="proposals-back" href="proposals">← Proposed changes</a></p>
+        @if (_state is not { } state)
+        {
+            return;
+        }
+        @if (state.Said is { Length: > 0 } said)
+        {
+            <p class="said" role="alert">@said</p>
+        }
+        @if (state.Set is not { } set)
+        {
+            <p class="said">@state.Problem</p>
+        }
+        else
+        {
+            <h1 class="proposals-title">@RunLauncher.Title(set.Prompt)</h1>
+            <p class="hint proposals-meta">@Meta(set, state)</p>
+            @if (set.Running)
+            {
+                <p class="hint">The run is still going; its proposals can be applied or rejected when it has ended.</p>
+            }
+            <StagedChanges Files="state.Files" CanDecide="state.CanDecide" Busy="state.Busy" OpenDiffs="true" OnAct="ActAsync" />
+        }
+    }
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The set's workspace by its id (WorkspaceIds); none on the list.</summary>
+    [Parameter] public Guid? WorkspaceId { get; set; }
+
+    /// <summary>The set, named by the run's id.</summary>
+    [Parameter] public string? Set { get; set; }
+
+    private sealed record Row(string Title, string Meta, string Href, string Look);
+
+    private IReadOnlyList<Row> _sets = [];
+    private StagedSetState? _state;
+    private (Guid?, string?) _read;
+
+    protected override void OnInitialized() => Staging.Changed += OnChanged;
+
+    // Read per address, not once: see Pages/_Imports.razor.
+    protected override async Task OnParametersSetAsync()
+    {
+        var user = (await Auth).User;
+        if (WorkspaceId is not { } id)
+        {
+            _state = null;
+            _read = (null, null);
+            LoadList(user);
+            return;
+        }
+        // The same address drawn again (an event of the circuit) does not read the set again, and so does not undo what the
+        // person has just decided, which StagedSetState keeps on screen.
+        if (_read == (id, Set))
+            return;
+        _read = (id, Set);
+        var state = new StagedSetState(Staging, user, Ids.Find(id)?.RootPath ?? "", Set ?? "");
+        state.Load();
+        _state = state;
+    }
+
+    private void LoadList(System.Security.Claims.ClaimsPrincipal user)
+        => _sets = Staging.List(user).Select(set => new Row(
+            RunLauncher.Title(set.Prompt),
+            $"{Engine.Workspaces.Find(set.Workspace)?.Name} · {set.Owner} · {InboxRows.When(set.Started)} · " +
+            (set.Running ? "the run is still going" : $"{set.Pending.ToString(System.Globalization.CultureInfo.InvariantCulture)} of {set.Total.ToString(System.Globalization.CultureInfo.InvariantCulture)} waiting"),
+            Ids.TryIdOf(set.Workspace) is { } id ? Links.Proposals(id, set.Id) : "proposals",
+            set.Running ? Looks.Phase(RunStandingKind.Running) : Looks.Change(applied: false, rejected: false))).ToList();
+
+    // Somebody decided a change, or a run began or ended: the list is read again. Only the list - a set on its page stays as
+    // its person left it, and its own decisions are drawn by StagedSetState.
+    private void OnChanged()
+    {
+        if (WorkspaceId is not null)
+            return;
+        _ = InvokeAsync(async () =>
+        {
+            LoadList((await Auth).User);
+            StateHasChanged();
+        });
+    }
+
+    // One string, so the words keep their single spaces whatever the markup around them breaks into lines.
+    private string Meta(StagedSet set, StagedSetState state)
+        => $"{Engine.Workspaces.Find(set.Workspace)?.Name} · started by {set.Owner}, {InboxRows.When(set.Started)} · " +
+           $"{state.Pending.ToString(System.Globalization.CultureInfo.InvariantCulture)} of {state.Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} waiting";
+
+    private Task ActAsync((StagedFile File, bool Apply) act) => _state!.ActAsync(act.File, act.Apply, CancellationToken.None);
+
+    public void Dispose() => Staging.Changed -= OnChanged;
+}

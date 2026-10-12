@@ -31,6 +31,6 @@ internal static class Links
     public static string Schedule(string workspace, Guid? id)
         => $"library/schedule?ws={Uri.EscapeDataString(workspace)}" + (id is null ? "" : $"&id={id}");
 
-    public static string Proposals(string workspace, string set)
-        => $"proposals/view?ws={Uri.EscapeDataString(workspace)}&set={Uri.EscapeDataString(set)}";
+    /// <summary>One run's set of proposed changes: its workspace by its id (WorkspaceIds), the set by the run's id.</summary>
+    public static string Proposals(Guid workspace, string set) => $"proposals/{workspace}/{Uri.EscapeDataString(set)}";
 }

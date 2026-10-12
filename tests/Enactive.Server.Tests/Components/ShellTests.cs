@@ -136,6 +136,44 @@ public sealed class ShellTests : ComponentHost
     }
 
     /// <summary>
+    /// The dot goes when the last waiting proposal is decided - on a page that does not navigate, and by anybody: it was read
+    /// only at a navigation, and kept saying "waiting" over a set that was applied a moment ago.
+    /// </summary>
+    [Fact]
+    public async Task The_proposals_dot_goes_when_the_last_waiting_change_is_decided()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "enactive-shell-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            Services.GetRequiredService<ServerEngine>().Workspaces.Touch(folder);
+            var staging = Services.GetRequiredService<ServerStaging>();
+            var run = Guid.NewGuid();
+            var kept = staging.Begin(folder, run, "alice", "tidy the notes");
+            using (var store = new StagingArtifactStore(folder, kept))
+            {
+                await store.CreateAsync("notes.md", Enactive.Core.Artifacts.ArtifactKind.FileSet, "notes",
+                    s => s.WriteAsync("new\n"u8.ToArray()).AsTask(), CancellationToken.None);
+                await staging.EndAsync(folder, kept, "tidy the notes", run, store);
+            }
+            SignIn("alice");
+            var rail = RenderedRail();
+            Assert.Single(rail.FindAll("[data-rail='/proposals'] .dot"));
+
+            var alice = ServerAuth.PrincipalOf(Users.Find("alice")!);
+            var change = staging.Open(alice, folder, run.ToString("N")).Files.Single().Id;
+            await staging.ActAsync(alice, folder, run.ToString("N"), change, apply: true, CancellationToken.None);
+
+            rail.WaitForAssertion(() => Assert.Empty(rail.FindAll("[data-rail='/proposals'] .dot")));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { Directory.Delete(folder, recursive: true); } catch { /* a temp folder */ }
+        }
+    }
+
+    /// <summary>
     /// A section with no page yet is shown, but is not a link: a click that led to a page that does not exist was
     /// the dead end the rail must not have.
     /// </summary>
@@ -174,7 +212,7 @@ public sealed class ShellTests : ComponentHost
     [InlineData("http://localhost/", "/")]
     [InlineData("http://localhost/runs/0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/")]
     [InlineData("http://localhost/inbox", "/inbox")]
-    [InlineData("http://localhost/proposals/view?ws=x&set=y", "/proposals")]
+    [InlineData("http://localhost/proposals/0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f/abc", "/proposals")]
     [InlineData("http://localhost/logs", "/log")]
     [InlineData("http://localhost/admin/settings", "/settings")]
     [InlineData("http://localhost/admin/users", "/accounts")]
