@@ -8,6 +8,8 @@ const shown = new Map();
 
 /** Makes everything but the dialog inert, and remembers what had the focus. */
 export function hold(key, dialog) {
+  // A dialog not on the page (closed before this ran) holds nothing: held for it, the page stayed inert for good.
+  if (!(dialog instanceof Element) || !dialog.isConnected) return;
   // The connection's state stays in reach: its Reload is the one way back when the connection is lost (ReconnectState).
   const keep = [dialog, document.getElementById('components-reconnect-modal')].filter(Boolean);
   const inerted = [];

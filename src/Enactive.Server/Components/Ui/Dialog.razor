@@ -39,25 +39,53 @@
     /// <summary>Escape, the scrim, or a Cancel the caller draws; nothing when the dialog may not be left now.</summary>
     [Parameter] public EventCallback OnClose { get; set; }
 
+    // The page held and the focus taken once the script has loaded - which can be after the dialog is gone: a double
+    // click whose second half lands on the scrim closes it while the import is still on its way. Holding the page then,
+    // for a dialog no longer there, left every control inert with nothing to release it, and focusing the missing dialog
+    // was an exception that took the connection down. So closing waits for the opening to finish (_opening), and the
+    // opening stops wherever it finds the dialog closed (_closed).
+    private Task? _opening;
+    private bool _closed;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender)
             return;
-        try
+        _opening = OpenAsync();
+        try { await _opening; }
+        catch (Exception e) when (Gone(e))
         {
-            _script = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Ui/Dialog.razor.js");
-            // The page held first, while the focus is still on what opened the dialog: that is where it goes back.
-            await _script.InvokeVoidAsync("hold", _titleId, _dialog);
+            // The page went away, or the dialog did, while it opened: nothing left to hold or to focus.
+        }
+    }
+
+    private async Task OpenAsync()
+    {
+        var script = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Ui/Dialog.razor.js");
+        if (_closed)
+        {
+            await script.DisposeAsync();
+            return;
+        }
+        _script = script;
+        // The page held first, while the focus is still on what opened the dialog: that is where it goes back.
+        await script.InvokeVoidAsync("hold", _titleId, _dialog);
+        if (!_closed)
             await _dialog.FocusAsync();
-        }
-        catch (JSDisconnectedException)
-        {
-            // The page went away while the dialog opened: nothing left to hold.
-        }
     }
 
     public async ValueTask DisposeAsync()
     {
+        _closed = true;
+        try
+        {
+            if (_opening is not null)
+                await _opening;
+        }
+        catch (Exception e) when (Gone(e))
+        {
+        }
+
         if (_script is null)
             return;
         try
@@ -65,11 +93,18 @@
             await _script.InvokeVoidAsync("release", _titleId);
             await _script.DisposeAsync();
         }
-        catch (JSDisconnectedException)
+        catch (Exception e) when (Gone(e))
         {
             // The page is gone, and the hold with it.
         }
     }
+
+    /// <summary>
+    /// What the script calls end in when the page or the dialog has gone: the connection lost or shutting down, or - for
+    /// a dialog closed while it opened - the element it was to focus no longer there.
+    /// </summary>
+    private bool Gone(Exception e)
+        => e is JSDisconnectedException or OperationCanceledException or ObjectDisposedException || (_closed && e is JSException);
 
     private Task CloseAsync() => OnClose.InvokeAsync();
 
