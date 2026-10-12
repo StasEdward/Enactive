@@ -21,13 +21,24 @@ async function signedIn(browser, name) {
   return { context, page };
 }
 
-/** Starts a run from the Runs page and waits for its own page. */
+/**
+ * The Runs screen on the folder "project": the command bar runs in the workspace the column shows, which is the one used
+ * last - another one once a test has added a folder - so it is picked in the switcher when it is not the one shown.
+ */
+async function onProject(page) {
+  const card = page.getByRole('button', { name: /^Workspace:/ });
+  if ((await card.getAttribute('aria-label')) === 'Workspace: project') return;
+  await card.click();
+  await page.locator('.switcher').getByRole('link', { name: /^project/ }).click();
+  await expect(page.getByRole('button', { name: 'Workspace: project' })).toBeVisible();
+}
+
+/** Starts a run from the Runs screen's command bar and waits for its own page. */
 async function startRun(page, task) {
-  // By role: the column's WORKSPACE card is labelled "Workspace: …" too, and a label alone names both.
-  await page.getByRole('combobox', { name: 'Workspace' }).selectOption(folder());
+  await onProject(page);
   // Exact: the rail's icons are named by their tooltips, and getByLabel reads those too ("Templates · a saved task").
   await page.getByLabel('Task', { exact: true }).fill(task);
-  // Exact: the history's rows have "Delete this run from the history" buttons beside it.
+  // Exact: the bar's "Run in background" and the history's "Delete this run from the history" are buttons beside it.
   await page.getByRole('button', { name: 'Run', exact: true }).click();
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
   return page.url();
@@ -121,12 +132,34 @@ test('a second run in the same folder waits, says why, and starts when the first
   await context.close();
 });
 
+test('the command bar takes the window\'s keys: Ctrl+K to focus, Ctrl+Enter a new line, Enter to run', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'alice');
+  await onProject(page);
+  const box = page.getByLabel('Task', { exact: true });
+  // From nowhere in particular: Ctrl+K is the page's, not the box's.
+  await page.evaluate(() => document.activeElement?.blur());
+  await expect(box).not.toBeFocused();
+  await page.keyboard.press('Control+k');
+  await expect(box).toBeFocused();
+
+  await page.keyboard.type('first line');
+  await page.keyboard.press('Control+Enter');
+  await page.keyboard.type('second line');
+  await expect(box).toHaveValue('first line\nsecond line');
+
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
+  await answerWhateverWaits(page);
+  await context.close();
+});
+
 test('a viewer reads runs and is offered nothing to do to them', async ({ browser }) => {
   const alice = await signedIn(browser, 'alice');
   const run = await startRun(alice.page, 'watched by vera');
   const vera = await signedIn(browser, 'vera');
 
   await expect(vera.page.getByLabel('Task', { exact: true })).toHaveCount(0);
+  await expect(vera.page.getByRole('button', { name: 'Run in background' })).toHaveCount(0);
   await vera.page.goto(run);
   await expect(vera.page.getByRole('heading', { name: 'Approve write_file' })).toBeVisible();
   await expect(vera.page.getByRole('button', { name: 'Cancel the run' })).toHaveCount(0);
