@@ -764,7 +764,10 @@ test('on a phone the runs screen stacks and a run can be started and answered', 
   await runsColumn(page).getByRole('button', { name: /^Workspace:/ }).click();
   await page.locator('.switcher').getByRole('link', { name: /^project/ }).click();
   await expect(runsColumn(page)).toBeHidden();
-  await expect(page).toHaveURL(/\?ws=/);
+  // Read in the drawer, closed: the bar empties its box when its workspace changes, so it is typed in once it has.
+  await expect(page.locator('#workspace-drawer .ws-card')).toHaveAttribute('aria-label', 'Workspace: project');
+  // And the page given back: typed into while still inert, the box took nothing.
+  await expect(page.locator('[inert]')).toHaveCount(0);
 
   await page.getByLabel('Task', { exact: true }).fill('asked on a phone');
   await page.getByRole('button', { name: 'Run', exact: true }).click();
@@ -813,6 +816,8 @@ test('on a phone every section fits the screen across, and the foot of the rail 
   };
   const more = bar.getByRole('button', { name: 'More sections' });
   const behindMore = ['Environment', 'Settings', 'Accounts', 'Audit'];
+  // Drawn as the bar's other items are, not as a button: with a button's fill it looked pressed before it was touched.
+  await expect(more).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 
   for (const [name, ready] of Object.entries(shown)) {
     // The Inbox is named with its count when something is unread.
@@ -832,5 +837,7 @@ test('on a phone every section fits the screen across, and the foot of the rail 
     }
     await fitsAcross(page);
   }
+  // The audit's five columns scroll in a box of their own, as long details and addresses grow them past the screen.
+  await expect(page.getByRole('table', { name: 'Audit trail' }).locator('xpath=..')).toHaveCSS('overflow-x', 'auto');
   await context.close();
 });

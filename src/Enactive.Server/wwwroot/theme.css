@@ -147,6 +147,8 @@ main { padding: 16px; max-width: 1100px; }
    group stands at the rail's foot as it always did. */
 .drawer-button, .rail-more-button, .rail-away, .rail-text { display: none; }
 .drawer-frame, .drawer, .rail-more, .rail-low { display: contents; }
+/* More is a button among links: without these it wore every button's border and fill, and looked pressed. */
+.rail-more-button { font: inherit; padding: 0; background: transparent; border: 0; cursor: pointer; }
 /* Under an open drawer, as under a dialog: the screen beneath reads as out of reach. */
 .drawer-scrim { position: fixed; inset: 0; z-index: 40; background: var(--dialog-scrim); }
 
