@@ -89,9 +89,10 @@ internal sealed record ZoneChoice(string Id, string Label)
 ///
 /// <para><b>It decides nothing.</b> What a schedule says about itself is
 /// <see cref="ScheduleWords"/>, and whether a draft can be saved is <see cref="ScheduleDrafts"/> —
-/// both in Core, both tested. This project is a WinExe no test project references, so a rule that
-/// ended up here would be a rule nothing checks; and the check that matters most is that the form
-/// and the RUNNER agree about what can run, which is only true if they call the same code.</para>
+/// both in Core, both tested. A rule that ended up here would be a rule only this form follows
+/// (it was written when this lived in the window, a WinExe nothing could test); and the check that
+/// matters most is that the form and the RUNNER agree about what can run, which is only true if they
+/// call the same code.</para>
 ///
 /// <para>The form cannot hold an invalid time: hours and minutes are spinners rather than a text
 /// box, so there is no "that is not a time" to report and no parsing rule living out here.</para>

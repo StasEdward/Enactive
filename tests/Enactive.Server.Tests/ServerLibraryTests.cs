@@ -213,7 +213,7 @@ public sealed class ServerLibraryTests : IDisposable
         return form;
     }
 
-    // ── the library page and the editor (Task 16) ──────────────────────────
+    // ── the library page and the editor ────────────────────────────────────
 
     /// <summary>
     /// Run from the library as the window runs one (TemplatesWindow → MainWindow.RunAsync): the template resolved with the
