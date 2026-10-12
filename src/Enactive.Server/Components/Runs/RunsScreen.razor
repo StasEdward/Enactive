@@ -3,7 +3,10 @@
 @page "/history/{WorkspaceId:guid}/{PastRunId:guid}"
 @attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = "Viewer")]
 @using Enactive.Server.Runs
+@using Enactive.Server.Components.Shell
+@using Enactive.Server.Components.Ui
 @using Microsoft.AspNetCore.Components.Authorization
+@implements IDisposable
 @inject IRunControl Runs
 @inject ServerHistory History
 @inject WorkspaceIds Ids
@@ -21,7 +24,11 @@
    on the past run, and the bar's Stop, are still the run in progress this screen showed last. *@
 
 <div class="runs-screen">
-    <WorkspaceColumn WorkspaceId="_wanted" Said="@Said" />
+    @* On a narrow screen the column is a drawer, opened from the top bar's button (DrawerState): beside a 390 px screen
+       there is no room for it, and above the bar it pushed the box and the run a screen down. *@
+    <Drawer Id="@DrawerState.Id" Open="Drawer?.IsOpen == true" OnClose="() => Drawer?.Close()">
+        <WorkspaceColumn WorkspaceId="_wanted" Said="@Said" />
+    </Drawer>
 
     <section class="runs-main">
         @* The window's command bar, on the workspace the column shows: Run starts there and opens the run here, and the
@@ -46,6 +53,27 @@
 
 @code {
     [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The layout's workspace drawer, which this screen's column is on a narrow screen.</summary>
+    [CascadingParameter] public DrawerState? Drawer { get; set; }
+
+    protected override void OnInitialized()
+    {
+        if (Drawer is null)
+            return;
+        Drawer.Changed += OnDrawerChanged;
+        Drawer.Offer(true);
+    }
+
+    private void OnDrawerChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        if (Drawer is null)
+            return;
+        Drawer.Changed -= OnDrawerChanged;
+        Drawer.Offer(false);
+    }
 
     /// <summary>The run shown under the bar, at /runs/{id}; null on the screen without one.</summary>
     [Parameter] public Guid? RunId { get; set; }

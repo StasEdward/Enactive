@@ -692,3 +692,145 @@ test('a connection given up on says so, and reload is the one thing that can be 
   await expect(bar.getByRole('button', { name: 'Reload' })).toBeHidden();
   await context.close();
 });
+
+// ── A phone ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** A phone's screen: 390 by 844 and touch, the page laid out at the device's width (App.razor's viewport meta). */
+const phone = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true };
+
+/** Signs in on a phone. The Runs column - its RUNS heading with it - is in the drawer there, so the bar says the screen is up. */
+async function signedInOnPhone(browser, name) {
+  const context = await browser.newContext({ baseURL: base(), ignoreHTTPSErrors: true, ...phone });
+  const page = await context.newPage();
+  await page.goto('/');
+  await expect(page).toHaveURL(/\/signin/);
+  await page.getByLabel('Name').fill(name);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(sections(page).getByRole('link', { name: 'Runs', exact: true })).toBeVisible();
+  return { context, page };
+}
+
+/** The rail, which is a bar along the bottom on a phone. Exact: the settings' own list is "Settings sections". */
+const sections = (page) => page.getByRole('navigation', { name: 'Sections', exact: true });
+
+const drawerButton = (page) => page.getByRole('button', { name: 'Workspace and runs' });
+
+const runsColumn = (page) => page.getByRole('complementary', { name: 'Runs column' });
+
+/** Nothing on the page is wider than the screen: a page that scrolls sideways takes the bars with it. */
+async function fitsAcross(page) {
+  const { scroll, inner } = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, inner: window.innerWidth }));
+  expect(scroll, `${page.url()} is ${scroll} px across on a ${inner} px screen`).toBeLessThanOrEqual(inner);
+}
+
+test('on a phone the runs screen stacks and a run can be started and answered', async ({ browser }) => {
+  const { context, page } = await signedInOnPhone(browser, 'alice');
+  // The bar at the foot of the screen, across it; the column out of the way, the command bar the screen.
+  const bar = await sections(page).boundingBox();
+  expect(bar.width).toBe(390);
+  expect(Math.round(bar.y + bar.height)).toBe(844);
+  await expect(runsColumn(page)).toBeHidden();
+  await expect(page.getByLabel('Task', { exact: true })).toBeVisible();
+  await fitsAcross(page);
+
+  // The column is a drawer from the top bar: open, it has the focus; Escape closes it and gives the focus back.
+  const button = drawerButton(page);
+  await expect(button).toHaveAttribute('aria-controls', 'workspace-drawer');
+  await expect(button).toHaveAttribute('aria-expanded', 'false');
+  await button.click();
+  await expect(button).toHaveAttribute('aria-expanded', 'true');
+  await expect(runsColumn(page)).toBeVisible();
+  await expect(page.locator('#workspace-drawer')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(runsColumn(page)).toBeHidden();
+  await expect(button).toHaveAttribute('aria-expanded', 'false');
+  await expect(button).toBeFocused();
+
+  // A dialog opened in the drawer takes its own Escape: the drawer stays, and its scrim closes it.
+  await button.click();
+  await runsColumn(page).getByRole('button', { name: /^Workspace:/ }).click();
+  await page.getByRole('button', { name: 'Add folder…' }).click();
+  const browse = page.getByRole('dialog', { name: 'Add folder' });
+  await expect(browse).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(browse).toBeHidden();
+  await expect(runsColumn(page)).toBeVisible();
+  await page.locator('.drawer-scrim').click({ position: { x: 370, y: 400 } });
+  await expect(runsColumn(page)).toBeHidden();
+
+  // Choosing the workspace in the drawer closes it.
+  await button.click();
+  await runsColumn(page).getByRole('button', { name: /^Workspace:/ }).click();
+  await page.locator('.switcher').getByRole('link', { name: /^project/ }).click();
+  await expect(runsColumn(page)).toBeHidden();
+  await expect(page).toHaveURL(/\?ws=/);
+
+  await page.getByLabel('Task', { exact: true }).fill('asked on a phone');
+  await page.getByRole('button', { name: 'Run', exact: true }).click();
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
+  const run = page.url();
+  await expect(question(page)).toContainText('Approve write_file');
+  // The status column, and the question in it, under the run's views rather than beside them.
+  const views = await page.getByRole('region', { name: 'Current action' }).boundingBox();
+  const status = await page.getByRole('complementary', { name: 'Status' }).boundingBox();
+  expect(status.y).toBeGreaterThanOrEqual(views.y + views.height - 1);
+  expect(Math.abs(status.x - views.x)).toBeLessThan(2);
+  await fitsAcross(page);
+
+  // Away by the bottom bar, and back to the run through the drawer's RUNNING list - which closes the drawer.
+  await sections(page).getByRole('link', { name: /^Inbox/ }).click();
+  await expect(page).toHaveURL(/\/inbox$/);
+  await expect(drawerButton(page)).toHaveCount(0);
+  await sections(page).getByRole('link', { name: 'Runs', exact: true }).click();
+  await drawerButton(page).click();
+  await openRunning(page, 'asked on a phone');
+  await expect(page).toHaveURL(run);
+  await expect(runsColumn(page)).toBeHidden();
+
+  await question(page).getByRole('button', { name: 'Allow', exact: true }).click();
+  await expect(question(page)).toBeHidden();
+  await expect(stop(page)).toBeDisabled();
+  await context.close();
+});
+
+test('on a phone every section fits the screen across, and the foot of the rail is behind More', async ({ browser }) => {
+  const { context, page } = await signedInOnPhone(browser, 'ada');
+  const bar = sections(page);
+  // Each section, and what says it has drawn what it shows: its width is measured with its content in it.
+  const shown = {
+    'Runs': () => page.getByLabel('Task', { exact: true }),
+    'Timeline · project memory': () => page.getByRole('region', { name: 'Project Memory' }).getByText(/PROJECT MEMORY — /),
+    'Templates · a saved task': () => page.getByRole('region', { name: 'Templates', exact: true }),
+    'Schedules · run it on a day and a time': () => page.getByRole('region', { name: 'Schedules', exact: true }),
+    'Inbox': () => page.locator('.inbox-bar'),
+    'Proposals': () => page.getByRole('heading', { name: 'Proposed changes' }),
+    'Global log': () => page.getByRole('list', { name: 'Lines' }),
+    'Environment': () => page.getByRole('region', { name: 'Environment' }).getByText(/Host: /),
+    'Settings': () => page.getByRole('navigation', { name: 'Settings sections' }),
+    'Accounts': () => page.getByRole('list', { name: 'Accounts' }),
+    'Audit': () => page.getByRole('table', { name: 'Audit trail' })
+  };
+  const more = bar.getByRole('button', { name: 'More sections' });
+  const behindMore = ['Environment', 'Settings', 'Accounts', 'Audit'];
+
+  for (const [name, ready] of Object.entries(shown)) {
+    // The Inbox is named with its count when something is unread.
+    const item = bar.getByRole('link', { name: name === 'Inbox' ? /^Inbox/ : name, exact: name !== 'Inbox', includeHidden: true });
+    if (behindMore.includes(name)) {
+      await expect(item).toBeHidden();
+      await more.click();
+      await expect(more).toHaveAttribute('aria-expanded', 'true');
+    }
+    await item.click();
+    await expect(item).toHaveAttribute('aria-current', 'page');
+    await expect(ready()).toBeVisible();
+    if (behindMore.includes(name)) {
+      // Closed by the choice, and the "you are here" mark on More, which holds it.
+      await expect(more).toHaveAttribute('aria-expanded', 'false');
+      await expect(more).toHaveClass(/\bon\b/);
+    }
+    await fitsAcross(page);
+  }
+  await context.close();
+});

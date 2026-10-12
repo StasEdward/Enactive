@@ -142,6 +142,14 @@ pre, code, .path { font-family: var(--font-mono); }
 .rail-item .dot { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--ember-500); }
 main { padding: 16px; max-width: 1100px; }
 
+/* What only a narrow screen draws (the block at the end of this file): the top bar's drawer button and the rail's More,
+   with the words under More's icons. On a wide screen the drawer is no box and its column stands in place, and More's
+   group stands at the rail's foot as it always did. */
+.drawer-button, .rail-more-button, .rail-away, .rail-text { display: none; }
+.drawer-frame, .drawer, .rail-more, .rail-low { display: contents; }
+/* Under an open drawer, as under a dialog: the screen beneath reads as out of reach. */
+.drawer-scrim { position: fixed; inset: 0; z-index: 40; background: var(--dialog-scrim); }
+
 button { font: inherit; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); border-radius: var(--radius-sm); padding: 6px 12px; cursor: pointer; }
 button[type="submit"], .answers button:first-child { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 input, textarea { font: inherit; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 8px; box-sizing: border-box; }
@@ -782,6 +790,7 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .admin-inline { display: flex; align-items: center; gap: 8px; }
 .admin-inline select { flex: 1; }
 .admin-state { flex: 1; font-size: 12px; color: var(--text-body); }
+.audit-scroll { overflow-x: auto; }
 .audit-table { border-collapse: collapse; width: 100%; font-size: 12px; }
 .audit-table th { padding: 4px 8px; font-size: 11px; font-weight: 700; color: var(--text-muted); border-bottom: 1px solid var(--border-strong); }
 .audit-table td { padding: 3px 8px; vertical-align: top; color: var(--text-body); border-bottom: 1px solid var(--border); }
@@ -804,3 +813,110 @@ main.bare { max-width: none; min-height: 100vh; box-sizing: border-box; display:
 .signin-brand { display: flex; align-items: center; gap: 8px; font-family: var(--font-display); font-weight: 600; font-size: 13px; color: var(--text); }
 .signin-brand img { width: 20px; height: 20px; }
 .signin-title { font-size: 20px; font-weight: 600; margin: 10px 0 2px; }
+
+/* ── Narrow screens ───────────────────────────────────────────────────────────────────────────────────────────────────
+   One width for every narrow rule, defined here and nowhere else: 900 px. Under it the 52 px rail, the Runs screen's
+   268 px column and a main area that holds the command bar (its box beside Run and Stop, 156, and the run's settings,
+   252) no longer fit side by side, and the page scrolled sideways, the bars with it. A phone gets a layout of its own
+   made of the same parts, not the window squeezed into 390 px: the rail is a bar along the bottom, the Runs column a
+   drawer opened from the top bar, the status column under the run, and a list beside its detail stacked over it. What
+   can be touched is 40 px high at least - a finger is not a pointer. */
+@media (width < 900px) {
+  /* The bottom bar's height over the safe area: a 40 px item, 6 px above and below it, and its top line. */
+  :root { --bottom-bar: 53px; }
+
+  /* The top bar: the drawer's button first. The host's name and the word "Connected" give way (the dot stays, and the
+     words for a lost connection still show), and a long name is cut, so the bar never pushes the page wider. */
+  .top { height: 48px; gap: 8px; padding: 0 8px 0 4px; }
+  .drawer-button { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 40px; height: 40px;
+    padding: 0; color: var(--text-muted); background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
+  .drawer-button:hover, .drawer-button[aria-expanded="true"] { color: var(--text); background: var(--card-fill); }
+  .host, .conn .conn-up { display: none; }
+  .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .top .pill, .signout { flex: none; }
+  .signout button { min-height: 40px; }
+
+  /* The rail, a bar along the bottom: in reach of a thumb on every screen, and clear of a phone's home indicator. The
+     page leaves room under it, so the last of every screen - the command bar's Run among it - can be scrolled above it. */
+  .shell { display: block; min-height: 0; padding-bottom: calc(var(--bottom-bar) + env(safe-area-inset-bottom)); }
+  .rail { position: fixed; z-index: 30; left: 0; right: 0; bottom: 0; flex-direction: row; justify-content: space-around;
+    width: auto; padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); border-right: 0; border-top: 1px solid var(--border); }
+  .rail-gap { display: none; }
+  .rail-item { flex: 1 1 0; width: auto; min-width: 40px; max-width: 56px; height: 40px; margin: 0; }
+  .rail-more { display: flex; position: relative; flex: 1 1 0; min-width: 40px; max-width: 56px; }
+  .rail-more-button { display: flex; max-width: none; }
+  /* More's list opens over the bar, on the darkest surface (as the workspace switcher's), each section with its name. */
+  .rail-low { display: none; }
+  .rail-more.open .rail-low { display: grid; position: absolute; right: 0; bottom: calc(100% + 10px); min-width: 200px; gap: 2px;
+    padding: 6px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 6px; }
+  .rail-low .rail-item { justify-content: flex-start; gap: 10px; max-width: none; padding: 0 10px; }
+  .rail-low .rail-text { display: inline; font-size: 13px; }
+  /* Under the bar's own items (a negative layer of the bar's), over the rest of the page: a tap anywhere else closes More. */
+  .rail-away { display: block; position: fixed; inset: 0; z-index: -1; }
+
+  /* The Runs column, a drawer over the screen from its left edge down to the bottom bar. */
+  .drawer { display: none; }
+  .drawer.open { display: block; position: fixed; z-index: 41; top: 0; left: 0; bottom: calc(var(--bottom-bar) + env(safe-area-inset-bottom));
+    width: min(300px, calc(100vw - 48px)); overflow-y: auto; background: var(--bg-elevated); border-right: 1px solid var(--border-strong); }
+  .runs-screen { display: block; min-height: 0; }
+  .runs-column { width: 100%; min-height: 100%; border-right: 0; }
+  .runs-column .switcher { width: 100%; }
+
+  /* The command bar: the box across the screen, Run and Stop under it, the run's settings under them. */
+  .bar-row { flex-wrap: wrap; gap: 8px; }
+  .bar-input { flex: 1 1 100%; }
+  .run-buttons { width: 100%; margin-left: 0; }
+  .run-pair .run, .run-pair .stop { flex: 1; width: auto; }
+  .bar-divider { display: none; }
+  .run-settings { width: 100%; }
+
+  /* A run: the status column - the question with it - under the run's views rather than beside them. */
+  .run-body { grid-template-columns: minmax(0, 1fr); }
+  .run-view { padding-right: 0; }
+  .status-column { padding: 12px 0; border-top: 1px solid var(--border); }
+  .tabs { height: auto; overflow-x: auto; }
+  .past-run .task-header { flex-wrap: wrap; }
+  .past-run .task-text { flex: 1 1 200px; }
+  .past-actions { flex: 1 1 100%; }
+  .past-buttons .btn { flex: 1; width: auto; }
+  .past-attempt { text-align: left; }
+  .timeline-row { grid-template-columns: auto minmax(0, 1fr); }
+  .timeline-summary { grid-column: 1 / -1; }
+
+  /* A list beside its detail (the Inbox, Templates, Schedules): the list over the detail, in a box of its own no taller
+     than 40% of the screen, so what was chosen starts on the first screen under it. */
+  .inbox-body, .templates-body, .schedules-body { grid-template-columns: minmax(0, 1fr); }
+  .inbox-list, .templates-list, .schedules-cards { max-height: 40vh; }
+  .inbox-detail { max-height: none; }
+  .inbox-run { overflow: visible; }
+
+  /* Settings: the sections over the one chosen, as one list that wraps. */
+  .settings-screen { display: block; min-height: 0; }
+  .settings-nav { flex-direction: row; flex-wrap: wrap; gap: 4px; padding: 8px 16px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .settings-nav-item { display: flex; align-items: center; margin: 0; }
+  .settings-nav-rule { display: none; }
+  .settings-nav-group { flex-basis: 100%; margin: 6px 0 2px; }
+  .settings-pane, .settings-foot, .settings-screen > .said { padding-left: 16px; padding-right: 16px; }
+  .settings-editor-columns, .settings-pair { grid-template-columns: minmax(0, 1fr); }
+
+  /* The template editor's rows, two to a line. */
+  .check-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .param-row .row-line, .param-row .row-line + .row-line { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+
+  /* The log: the lines a fixed half of the screen high (the list draws only the rows in view, and needs a box of a known
+     height), the search on a row of its own. */
+  .log-screen { height: auto; grid-template-rows: auto auto 50vh 160px auto; }
+  .log-search { flex: 1 1 100%; width: auto; }
+
+  /* A dialog within the screen's height, whatever the browser's own bars take of it. */
+  .dialog { max-height: calc(100dvh - 32px); padding: 16px; }
+  /* A hint's advice across the screen under its "?": 360 px wide from a mark near the right, it ran off the page. */
+  .hint-mark-text { position: fixed; left: 16px; right: 16px; top: auto; width: auto; }
+
+  .btn, .row-icon, .tab, .ws-card, .ws-row a, .folder, .settings-nav-item, .pill.attempts, .disclosure, .performance-head,
+  select, input:not([type="checkbox"], [type="radio"], [type="range"]) { min-height: 40px; }
+  .row-icon { min-width: 40px; }
+  /* The "?" stays 16 px to the eye and takes a 40 px touch. */
+  .hint-mark > summary { position: relative; }
+  .hint-mark > summary::after { content: ""; position: absolute; inset: -12px; }
+}

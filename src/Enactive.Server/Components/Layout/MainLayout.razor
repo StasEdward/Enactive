@@ -1,10 +1,24 @@
 @inherits LayoutComponentBase
 @using Enactive.Server.Components.Shell
+@implements IDisposable
+@inject NavigationManager Navigation
 
-<TopBar />
-<div class="shell">
-    <Rail />
-    <main>
-        @Body
-    </main>
-</div>
+@* The workspace drawer's state, for the top bar's button and the screen whose column it is. Fixed: it is one object for
+   the page's life, and each of them follows its Changed. *@
+<CascadingValue Value="_drawer" IsFixed="true">
+    <TopBar />
+    <div class="shell">
+        <Rail />
+        <main>
+            @Body
+        </main>
+    </div>
+</CascadingValue>
+
+@code {
+    private DrawerState _drawer = default!;
+
+    protected override void OnInitialized() => _drawer = new DrawerState(Navigation);
+
+    public void Dispose() => _drawer.Dispose();
+}

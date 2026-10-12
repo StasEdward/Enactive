@@ -1,0 +1,105 @@
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+@* A column that is a drawer on a narrow screen (theme.css): on a wide one it is not a box at all and its content stands
+   where it always did; on a narrow one it is hidden until opened from the top bar, then lies over the screen on the
+   dialog's scrim.
+
+   Open, it holds the page as a dialog does, with the dialog's own script (Dialog.razor.js): the focus goes into it, the
+   rest of the page is inert, and closing gives the focus back to the button that opened it. Without that hold Tab walked
+   the screen under the scrim, and a keyboard or a screen reader never learned that the drawer had opened. Escape and the
+   scrim close it; so does choosing something in it, which is a link (DrawerState). *@
+
+@* The scrim and the drawer held together: held alone, the drawer made its own scrim inert, and a tap on it went through
+   to the screen. No box of its own (theme.css). *@
+<div class="drawer-frame" @ref="_frame">
+    @if (Open)
+    {
+        @* Shown at any width while open: a drawer opened on a narrow screen that is then widened holds the page still, and
+           the scrim is what closes it there. *@
+        <div class="drawer-scrim" @onclick="CloseAsync"></div>
+    }
+    @* Focusable only while open: on a wide screen the box is not drawn, and a click in the column made it the focus. *@
+    <div id="@Id" class="@(Open ? "drawer open" : "drawer")" tabindex="@(Open ? "-1" : null)" @ref="_panel" @onkeydown="KeyAsync">
+        @ChildContent
+    </div>
+</div>
+
+@code {
+    // The key the script keeps this drawer's hold under, apart from any dialog's.
+    private readonly string _key = "drawer-" + Guid.NewGuid().ToString("N");
+
+    private ElementReference _frame;
+    private ElementReference _panel;
+    private IJSObjectReference? _script;
+    private bool _held;
+    private bool _disposed;
+
+    // One hold or release at a time, in the order asked: opened and closed again before the script had loaded, a release
+    // that overtook its hold left the page inert with the drawer shut.
+    private Task _last = Task.CompletedTask;
+
+    [Parameter, EditorRequired] public string Id { get; set; } = "";
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Escape or the scrim.</summary>
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Open == _held)
+            return Task.CompletedTask;
+        _held = Open;
+        _last = HoldAsync(_last, Open);
+        return _last;
+    }
+
+    private async Task HoldAsync(Task before, bool hold)
+    {
+        try
+        {
+            await before;
+            if (_disposed)
+                return;
+            _script ??= await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Ui/Dialog.razor.js");
+            if (!hold)
+            {
+                await _script.InvokeVoidAsync("release", _key);
+                return;
+            }
+            // The page held first, while the focus is still on the button that opened the drawer: that is where it goes back.
+            await _script.InvokeVoidAsync("hold", _key, _frame);
+            if (_held && !_disposed)
+                await _panel.FocusAsync();
+        }
+        catch (Exception e) when (e is JSDisconnectedException or OperationCanceledException or ObjectDisposedException
+                                      || (_disposed && e is JSException))
+        {
+            // The page went away while it held or let go: nothing left to hold.
+        }
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private Task KeyAsync(KeyboardEventArgs e) => e.Key == "Escape" && Open ? CloseAsync() : Task.CompletedTask;
+
+    public async ValueTask DisposeAsync()
+    {
+        var held = _held;
+        _disposed = true;
+        try
+        {
+            await _last;
+            if (held && _script is not null)
+                await _script.InvokeVoidAsync("release", _key);
+            if (_script is not null)
+                await _script.DisposeAsync();
+        }
+        catch (Exception e) when (e is JSDisconnectedException or OperationCanceledException or ObjectDisposedException or JSException)
+        {
+            // The page is gone, and the hold with it.
+        }
+    }
+}

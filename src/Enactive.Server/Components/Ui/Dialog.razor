@@ -10,11 +10,14 @@
    reaches it at once and Tab cannot leave it; closed, the focus goes back to what had it. Drawn over the screen but not
    in charge of it, Tab walked the rows behind the scrim - another row's Delete could be pressed while a question was
    open - and Escape did nothing until somebody clicked into the dialog. Escape and the scrim close it, as the window's
-   do, unless the caller's OnClose declines (busy doing what was asked). *@
+   do, unless the caller's OnClose declines (busy doing what was asked).
+
+   Its keys stop at it: a dialog opened from the narrow screen's drawer (the folder browser, a delete's question) sits in
+   the drawer, and the Escape that closed the dialog went on to close the drawer under it as well. *@
 
 <div class="dialog-scrim" @onclick="CloseAsync">
     <div class="@("dialog" + (Class is { Length: > 0 } ? " " + Class : ""))" role="dialog" aria-modal="true" aria-labelledby="@_titleId" tabindex="-1" @ref="_dialog"
-         @onclick:stopPropagation="true" @onkeydown="KeyAsync">
+         @onclick:stopPropagation="true" @onkeydown="KeyAsync" @onkeydown:stopPropagation="true">
         <h2 id="@_titleId" class="dialog-title">@Title</h2>
         @ChildContent
         @if (Actions is not null)

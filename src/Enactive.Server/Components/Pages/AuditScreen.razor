@@ -29,24 +29,28 @@
         }
         else
         {
-            <table class="audit-table" aria-label="Audit trail">
-                <thead>
-                    <tr><th scope="col">When</th><th scope="col">Account</th><th scope="col">Action</th><th scope="col">Detail</th><th scope="col">From</th></tr>
-                </thead>
-                <tbody>
-                    @foreach (var entry in _trail)
-                    {
-                        <tr>
-                            @* Invariant: the current culture's time separator made it "12.34.56" on one machine and "12:34:56" on another. *@
-                            <td class="audit-when">@entry.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)</td>
-                            <td>@entry.Account</td>
-                            <td>@entry.Action</td>
-                            <td class="audit-detail">@entry.Detail</td>
-                            <td class="audit-when">@entry.Remote</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
+            @* A box of its own that scrolls sideways: five columns do not fit a phone, and wider than the screen the table
+               made the whole page scroll sideways, the bars with it. *@
+            <div class="audit-scroll">
+                <table class="audit-table" aria-label="Audit trail">
+                    <thead>
+                        <tr><th scope="col">When</th><th scope="col">Account</th><th scope="col">Action</th><th scope="col">Detail</th><th scope="col">From</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entry in _trail)
+                        {
+                            <tr>
+                                @* Invariant: the current culture's time separator made it "12.34.56" on one machine and "12:34:56" on another. *@
+                                <td class="audit-when">@entry.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)</td>
+                                <td>@entry.Account</td>
+                                <td>@entry.Action</td>
+                                <td class="audit-detail">@entry.Detail</td>
+                                <td class="audit-when">@entry.Remote</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
             @if (_more)
             {
                 <p class="hint">The newest @Newest entries are shown. The older ones are kept in server.db, in the service's data folder.</p>
