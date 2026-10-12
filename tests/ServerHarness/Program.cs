@@ -63,6 +63,21 @@ File.WriteAllText(Path.Combine(project, "proposal.md"), "first draft\n");
         s => s.WriteAsync("second draft\n"u8.ToArray()).AsTask(), CancellationToken.None);
     await staging.EndAsync(project, folder, "redraft the proposal", null, store);
 }
+
+// A background run of "mail the digest" that stopped at a question nobody was there to answer, filed in the inbox as the
+// engine's BackgroundRunner files one: the question kept for its task (DecisionLedger), the run in the history, the item.
+{
+    var taskId = Guid.NewGuid();
+    new Enactive.Agents.DecisionLedger(project).Park(new DecisionRequest(taskId, "Approve send_email", "to the team",
+        [new("allow", "Allow"), new("deny", "Deny")], "allow", Subject: "send_email"));
+    var workspace = Enactive.Core.Context.WorkspaceInfo.For(project);
+    var at = DateTimeOffset.Now.AddMinutes(-5);
+    var runId = Guid.NewGuid();
+    await Enactive.Workspace.RunStoreFactory.Create(workspace).SaveAsync(new Enactive.Core.History.RunRecord(runId, taskId,
+        "mail the digest", "scripted", at, at.AddSeconds(3), "NeedsUser", [], [], []), CancellationToken.None);
+    await Enactive.Workspace.InboxStoreFactory.Create(workspace).AppendAsync(new Enactive.Core.Inbox.InboxItem(Guid.NewGuid(),
+        workspace.Id, "decision", "mail the digest", "Waiting for your decision", runId, "unread", at), CancellationToken.None);
+}
 await app.StartAsync();
 Console.WriteLine("ready");
 await app.WaitForShutdownAsync();

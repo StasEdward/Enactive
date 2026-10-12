@@ -427,6 +427,52 @@ test('a viewer reads a staged run\'s proposal, and an operator applies it to the
   await context.close();
 });
 
+/** The rail's Inbox icon, named by its tooltip: "Inbox", or "Inbox — 2 unread". */
+const inboxIcon = (page) => page.getByRole('navigation', { name: 'Sections' }).getByRole('link', { name: /^Inbox/ });
+
+/** How many the rail's Inbox icon says are unread. */
+async function unread(page) {
+  const name = await inboxIcon(page).getAttribute('aria-label');
+  return Number(/(\d+) unread/.exec(name)?.[1] ?? 0);
+}
+
+test('a question a background run stopped at is read in the inbox by a viewer and answered there by an operator', async ({ browser }) => {
+  // The harness filed it: "mail the digest" stopped at "Approve send_email" with nobody there to answer.
+  const vera = await signedIn(browser, 'vera');
+  await inboxIcon(vera.page).click();
+  await expect(vera.page).toHaveURL(/\/inbox$/);
+  await vera.page.getByRole('list', { name: 'Inbox items' }).getByRole('button', { name: /mail the digest/ }).click();
+  const veraSees = vera.page.getByRole('region', { name: 'Waiting for your decision' });
+  await expect(veraSees).toContainText('Approve send_email');
+  // Hers to read, not to answer - nor to mark read for everybody.
+  await expect(veraSees.getByRole('button')).toHaveCount(0);
+  await expect(vera.page.getByRole('button', { name: 'Mark all read' })).toHaveCount(0);
+  await vera.context.close();
+
+  const { context, page } = await signedIn(browser, 'alice');
+  await inboxIcon(page).click();
+  const before = await unread(page);
+  expect(before).toBeGreaterThan(0);
+  await page.getByRole('list', { name: 'Inbox items' }).getByRole('button', { name: /mail the digest/ }).click();
+  // Opened, it is read - and the rail's count follows at once, with no page to leave.
+  await expect.poll(() => unread(page)).toBe(before - 1);
+
+  const waiting = page.getByRole('region', { name: 'Waiting for your decision' });
+  await expect(waiting.getByRole('heading', { name: 'WAITING FOR YOUR DECISION' })).toBeVisible();
+  await waiting.getByRole('button', { name: 'Allow (recommended)' }).click();
+
+  // Carried on under the same task, opened where the Runs screen shows a run - which asks its own question, answered so
+  // the folder is free for the next scenario.
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
+  await answerWhateverWaits(page);
+
+  // And no longer waiting in the inbox.
+  await inboxIcon(page).click();
+  await page.getByRole('list', { name: 'Inbox items' }).getByRole('button', { name: /mail the digest/ }).click();
+  await expect(page.getByRole('region', { name: 'Waiting for your decision' })).toHaveCount(0);
+  await context.close();
+});
+
 test('a lost connection disables actions until it is back', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
   await startRun(page, 'connection lost');
