@@ -32,13 +32,20 @@
     protected override async Task OnInitializedAsync()
     {
         Navigation.LocationChanged += OnLocationChanged;
+        Inbox.Changed += OnInboxChanged;
         await LoadAsync();
     }
 
     // The counts are read again at each navigation: the layout outlives the page, and an inbox read or a proposal
     // applied on a page would otherwise leave its icon saying what was true when the window opened.
     private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
-        => _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
+        => Reload();
+
+    // And when the inbox is read, marked read or answered - on the Inbox page, which stays where it is, or by anybody
+    // else: Mark all read is no navigation, and the badge went on counting what was no longer unread.
+    private void OnInboxChanged() => Reload();
+
+    private void Reload() => _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
 
     private async Task LoadAsync()
     {
@@ -46,7 +53,7 @@
         _items = ServerAuth.RoleOf(user) is { } role ? RailItem.For(role) : [];
         if (_items.Count == 0)
             return;
-        _unread = (await Inbox.ListAsync(user, CancellationToken.None)).Count(e => e.Item.Status == "unread");
+        _unread = (await Inbox.ListAsync(user, CancellationToken.None)).Count(e => Enactive.Application.Projections.InboxRows.IsUnread(e.Item));
         _proposed = Staging.List(user).Count > 0;
     }
 
@@ -91,5 +98,9 @@
             }
         </svg>;
 
-    public void Dispose() => Navigation.LocationChanged -= OnLocationChanged;
+    public void Dispose()
+    {
+        Navigation.LocationChanged -= OnLocationChanged;
+        Inbox.Changed -= OnInboxChanged;
+    }
 }

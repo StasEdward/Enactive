@@ -38,6 +38,7 @@ public sealed class LooksTests
         classes.AddRange(Enum.GetValues<DiffLineKind>().Select(Looks.Diff));
         classes.AddRange(Enum.GetValues<Enactive.Core.Diagnostics.LogLevel>().Select(Looks.Log));
         classes.AddRange(Enum.GetValues<FeedEntryKind>().Select(Looks.Entry));
+        classes.AddRange(new[] { "result", "decision", "error", "anything else" }.Select(Looks.Inbox));
         classes.Add(Looks.Change(applied: false, rejected: false));
         classes.Add(Looks.Change(applied: true, rejected: false));
         classes.Add(Looks.Change(applied: false, rejected: true));
@@ -185,6 +186,33 @@ public sealed class LooksTests
             .Where(r => ToneHex(r.Class) != r.Window)
             .Select(r => $"{r.State}: {r.Class} is {ToneHex(r.Class)} in theme.css, {r.Window} in the window");
         Assert.Empty(differ);
+    }
+
+    /// <summary>
+    /// An inbox item's kind is a word kept on disk, not an enum, and Palette.InboxKind draws a word it does not know muted
+    /// rather than refusing it - an item filed by a newer build must still be listed. Looks.Inbox does the same, and every
+    /// arm, the fallback too, is the window's colour.
+    /// </summary>
+    [Fact]
+    public void An_inbox_item_s_kind_is_drawn_as_the_window_draws_it()
+    {
+        var text = File.ReadAllText(RepoRoot.Source("src", "Enactive.App.Ui", "Palette.cs"));
+        var start = text.IndexOf("InboxKind =", StringComparison.Ordinal);
+        Assert.True(start >= 0, "Palette.cs has no InboxKind.");
+        var block = text[start..text.IndexOf("});", start, StringComparison.Ordinal)];
+        var arms = Regex.Matches(block, "\"(?<kind>\\w+)\"\\s*=>\\s*Brand\\.(?<member>\\w+)")
+            .ToDictionary(m => m.Groups["kind"].Value, m => m.Groups["member"].Value);
+        var other = Regex.Match(block, @"_\s*=>\s*Brand\.(?<member>\w+)");
+        Assert.Equal(["decision", "error", "result"], arms.Keys.Order());
+        Assert.True(other.Success, "Palette.InboxKind has no `_ => Brand.X` arm in the shape this test reads.");
+
+        var rows = arms.Select(a => (Kind: a.Key, Class: Looks.Inbox(a.Key), Window: BrandHex(a.Value)))
+            // The kind as the store spells it, whatever its case, and a word nobody knows.
+            .Append((Kind: "RESULT", Class: Looks.Inbox("RESULT"), Window: BrandHex(arms["result"])))
+            .Append((Kind: "question", Class: Looks.Inbox("question"), Window: BrandHex(other.Groups["member"].Value)));
+
+        Assert.Empty(rows.Where(r => ToneHex(r.Class) != r.Window)
+            .Select(r => $"{r.Kind}: {r.Class} is {ToneHex(r.Class)} in theme.css, {r.Window} in the window"));
     }
 
     [Fact]

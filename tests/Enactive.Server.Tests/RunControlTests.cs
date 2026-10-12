@@ -454,6 +454,86 @@ public sealed class RunControlTests : IDisposable
         Assert.NotNull(Assert.Single(await inbox.ListAsync(As("vera"), CancellationToken.None)).Waiting);
     }
 
+    /// <summary>An item filed in a workspace's inbox, read or not, at a time of its own.</summary>
+    private static async Task<Guid> FiledAsync(string folder, string status = "unread")
+    {
+        var workspace = Enactive.Core.Context.WorkspaceInfo.For(folder);
+        var id = Guid.NewGuid();
+        await Enactive.Workspace.InboxStoreFactory.Create(workspace).AppendAsync(new Enactive.Core.Inbox.InboxItem(id, workspace.Id,
+            "result", "digest", "done", Guid.NewGuid(), status, DateTimeOffset.UtcNow), CancellationToken.None);
+        return id;
+    }
+
+    /// <summary>
+    /// Mark all read is the service's whole inbox, as the page lists it - every workspace the service knows, not one. Done
+    /// per workspace, the badge went on counting the items of every folder but the first.
+    /// </summary>
+    [Fact]
+    public async Task Mark_all_read_marks_every_workspace_s_items()
+    {
+        var other = Path.Combine(_root, "other");
+        Directory.CreateDirectory(other);
+        var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        engine.Workspaces.Touch(_workspace);
+        engine.Workspaces.Touch(other);
+        var inbox = new ServerInbox(_users, engine, _control);
+        await FiledAsync(_workspace);
+        await FiledAsync(other);
+        await FiledAsync(other);
+        var told = 0;
+        inbox.Changed += () => told++;
+
+        Assert.Null(await inbox.MarkAllReadAsync(As("alice"), CancellationToken.None));
+
+        var entries = await inbox.ListAsync(As("vera"), CancellationToken.None);
+        Assert.Equal(3, entries.Count);
+        Assert.All(entries, e => Assert.Equal("read", e.Item.Status));
+        // Whoever shows the count (the rail's badge) is told, rather than finding out at the next page.
+        Assert.Equal(1, told);
+    }
+
+    /// <summary>What is read is the service's, the same for everybody: a Viewer reads the inbox but does not change it.</summary>
+    [Fact]
+    public async Task A_viewer_marks_nothing_read()
+    {
+        var item = await FiledAsync(_workspace);
+        var inbox = InboxOf(_control);
+
+        Assert.Contains("role does not include", await inbox.MarkAllReadAsync(As("vera"), CancellationToken.None));
+        Assert.Contains("role does not include", await inbox.MarkReadAsync(As("vera"), _workspace, item, CancellationToken.None));
+
+        Assert.Equal("unread", Assert.Single(await inbox.ListAsync(As("vera"), CancellationToken.None)).Item.Status);
+    }
+
+    [Fact]
+    public async Task An_operator_marks_one_item_read_in_its_workspace()
+    {
+        var item = await FiledAsync(_workspace);
+        var left = await FiledAsync(_workspace);
+        var inbox = InboxOf(_control);
+
+        Assert.Null(await inbox.MarkReadAsync(As("alice"), _workspace, item, CancellationToken.None));
+        Assert.Contains("does not know", await inbox.MarkReadAsync(As("alice"), Path.Combine(_root, "elsewhere"), left, CancellationToken.None));
+
+        var entries = await inbox.ListAsync(As("alice"), CancellationToken.None);
+        Assert.Equal("read", entries.Single(e => e.Item.Id == item).Item.Status);
+        Assert.Equal("unread", entries.Single(e => e.Item.Id == left).Item.Status);
+    }
+
+    /// <summary>The item's run, as the inbox shows it: its header from the list, its timeline read for it alone.</summary>
+    [Fact]
+    public async Task An_item_carries_its_run_and_its_timeline_is_read_for_it()
+    {
+        var (_, itemId) = ParkedInTheInbox();
+        var inbox = InboxOf(_control);
+
+        var entry = Assert.Single(await inbox.ListAsync(As("vera"), CancellationToken.None));
+        Assert.Equal("mail the digest", entry.Run?.Title);
+        Assert.NotNull(await inbox.TimelineAsync(As("vera"), _workspace, entry.Item.RunId, CancellationToken.None));
+        Assert.Null(await inbox.TimelineAsync(As("vera"), Path.Combine(_root, "elsewhere"), entry.Item.RunId, CancellationToken.None));
+        Assert.Equal(itemId, entry.Item.Id);
+    }
+
     private RunCheckpoint Interrupted(params string[] statuses)
     {
         var checkpoint = new RunCheckpoint(Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,

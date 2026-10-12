@@ -1,0 +1,179 @@
+@page "/inbox"
+@using Enactive.Application.Projections
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerInbox Inbox
+@inject NavigationManager Navigation
+
+<PageTitle>Inbox - Enactive</PageTitle>
+
+@* The window's Inbox (InboxWindow.axaml): Refresh, Mark all read and Unread only over the list of what came in, 360 px,
+   newest first; the chosen item on the right - its title, kind and time, its summary, the question its run stopped at
+   (WAITING FOR YOUR DECISION, the whole action above its answers), then the run behind it: RUN, ARTIFACTS, DECISIONS.
+   What it shows and decides is InboxState's; this draws it. Over every workspace the service knows, where the window's
+   is the one open folder's - so the line under it says which folder the chosen item is from. *@
+
+@if (_state is not { } state)
+{
+    return;
+}
+
+<div class="inbox-screen">
+    <div class="inbox-bar">
+        <button type="button" class="btn" disabled="@_busy" @onclick="RefreshAsync">Refresh</button>
+        @if (state.CanOperate)
+        {
+            <button type="button" class="btn" disabled="@_busy" @onclick="MarkAllReadAsync">Mark all read</button>
+        }
+        <label class="inbox-unread-only">
+            <input type="checkbox" checked="@state.UnreadOnly" @onchange="UnreadOnlyChanged" /> Unread only
+        </label>
+        <span class="hint inbox-status" role="status">@state.Status</span>
+    </div>
+
+    @if (state.Said is { Length: > 0 } said)
+    {
+        <p class="said" role="alert">@said</p>
+    }
+
+    <div class="inbox-body">
+        <ul class="cards inbox-list" aria-label="Inbox items">
+            @foreach (var card in state.Items)
+            {
+                var on = ReferenceEquals(card, state.Selected);
+                @* The edge is what the item IS - a result, a question nobody was there to answer, an error. The ember dot
+                   is the one thing that changes when it is read. *@
+                <li>
+                    <button type="button" aria-current="@(on ? "true" : null)" @onclick="() => OpenAsync(card)"
+                            class="@($"card selectable inbox-item {Looks.Inbox(card.Row.Kind)}{(card.Row.IsUnread ? " unread" : "")}{(on ? " selected" : "")}")">
+                        <span class="inbox-item-head">
+                            @if (card.Row.IsUnread)
+                            {
+                                <span class="inbox-dot" role="img" aria-label="Unread" title="Unread"></span>
+                            }
+                            <span class="inbox-kind">@card.Row.Kind</span>
+                            <span class="card-meta">@card.Row.When</span>
+                        </span>
+                        <span class="inbox-item-title">@card.Row.Title</span>
+                    </button>
+                </li>
+            }
+        </ul>
+
+        @if (state.Selected is { } open)
+        {
+            <section class="inbox-detail" aria-label="Item">
+                @* The item's own header stays put: scrolling a long timeline should never cost the answer to "which
+                   item am I looking at". *@
+                <div class="inbox-head">
+                    <h1 class="inbox-title">@open.Row.Title</h1>
+                    <p class="hint">@InboxRows.Meta(open.Row)</p>
+                    <p class="inbox-summary">@open.Row.Summary</p>
+
+                    @if (state.Waiting is { } waiting)
+                    {
+                        @* The whole action, scrollable, above the answers: nobody can consent to what they were not
+                           shown. Answering carries the run on, as a run of the person who answered. *@
+                        <section class="inbox-question" aria-label="Waiting for your decision">
+                            <PanelHeader Text="WAITING FOR YOUR DECISION" />
+                            <p class="inbox-question-topic">@waiting.Topic</p>
+                            <p class="hint">@InboxRows.Asked(waiting)</p>
+                            <pre class="inbox-question-text">@waiting.FullText</pre>
+                            @if (state.CanOperate)
+                            {
+                                <div class="inbox-answers">
+                                    @foreach (var option in InboxRows.Options(waiting))
+                                    {
+                                        <button type="button" class="btn" disabled="@state.Busy"
+                                                @onclick="() => AnswerAsync(option.Id)">@option.Label</button>
+                                    }
+                                </div>
+                            }
+                        </section>
+                    }
+                    @if (state.Answered is { Length: > 0 } answered)
+                    {
+                        <p class="hint inbox-answered" role="status">@answered</p>
+                    }
+                </div>
+
+                <div class="inbox-run">
+                    <PanelHeader Text="RUN" />
+                    <p class="hint inbox-run-header">@InboxRows.RunHeader(open.Entry.Run)</p>
+
+                    @if (open.Entry.Run is { } run)
+                    {
+                        <div class="inbox-timeline">
+                            @foreach (var line in state.Timeline)
+                            {
+                                <div class="@("timeline-row " + Looks.Timeline(line.Tone))">
+                                    <span class="timeline-when">@line.When</span>
+                                    <span class="timeline-kind" title="@line.Kind">@line.Kind</span>
+                                    <span class="timeline-summary">@line.Summary</span>
+                                </div>
+                            }
+                        </div>
+
+                        <PanelHeader Text="ARTIFACTS" />
+                        <ul class="inbox-artifacts">
+                            @foreach (var artifact in run.Artifacts)
+                            {
+                                <li>@artifact</li>
+                            }
+                        </ul>
+
+                        <PanelHeader Text="DECISIONS" />
+                        <ul class="inbox-decisions">
+                            @foreach (var decision in run.Decisions)
+                            {
+                                <li>@decision</li>
+                            }
+                        </ul>
+                    }
+                </div>
+            </section>
+        }
+    </div>
+
+    <p class="hint inbox-where">@state.Selected?.Entry.Workspace</p>
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    private InboxState? _state;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = new InboxState(Inbox, (await Auth).User);
+        await state.RefreshAsync(CancellationToken.None);
+        _state = state;
+    }
+
+    private async Task RefreshAsync() => await WhileBusy(() => _state!.RefreshAsync(CancellationToken.None));
+
+    private async Task MarkAllReadAsync() => await WhileBusy(() => _state!.MarkAllReadAsync(CancellationToken.None));
+
+    private void UnreadOnlyChanged(ChangeEventArgs e) => _state!.UnreadOnly = e.Value is true;
+
+    private Task OpenAsync(InboxCard card) => _state!.OpenAsync(card, CancellationToken.None);
+
+    private async Task AnswerAsync(string optionId)
+    {
+        // Carried on: open it where the Runs screen shows a run. Not carried on: what the answer came to stays under it.
+        if (await _state!.AnswerAsync(optionId, CancellationToken.None) is { } run)
+            Navigation.NavigateTo($"runs/{run}");
+    }
+
+    /// <summary>A second Refresh or Mark all read while one is on its way would only read the inbox twice.</summary>
+    private async Task WhileBusy(Func<Task> act)
+    {
+        if (_busy)
+            return;
+        _busy = true;
+        try { await act(); }
+        finally { _busy = false; }
+    }
+}

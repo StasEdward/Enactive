@@ -105,6 +105,19 @@ internal static class Looks
         _ => throw Unknown(place)
     };
 
+    /// <summary>
+    /// An inbox item's edge and kind, as Palette.InboxKind: a result green, a question nobody was there to answer amber, an
+    /// error red. The kind is a word kept on disk, not an enum, and - unlike the tables above - one this does not know is
+    /// drawn muted rather than refused, as the window draws it: an item filed by a newer build must still be listed.
+    /// </summary>
+    public static string Inbox(string kind) => kind.ToLowerInvariant() switch
+    {
+        "result" => "tone-done",
+        "decision" => "tone-open",
+        "error" => "tone-failed",
+        _ => "tone-idle"
+    };
+
     /// <summary>A line of a run's timeline, by the kind of event it was.</summary>
     public static string Timeline(TimelineTone tone) => tone switch
     {

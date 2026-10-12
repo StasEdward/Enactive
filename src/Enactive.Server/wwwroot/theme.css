@@ -182,8 +182,6 @@ input, textarea { font: inherit; background: var(--bg-card); color: var(--text);
 .file { white-space: pre-wrap; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; overflow: auto; }
 
 .warning { color: var(--warning); margin: 4px 0; }
-.inbox li.unread strong::before { content: "● "; color: var(--accent); }
-.inbox .answers form { margin: 0; }
 button.secondary { background: var(--bg-card); color: var(--text); border-color: var(--border); }
 .answers .cancel { align-self: center; }
 .body { white-space: pre-wrap; max-width: 760px; }
@@ -553,3 +551,40 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 /* A written file's card: its path, what became of it under it, Review and Delete. */
 .artifact-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
 .artifact-status { overflow-wrap: anywhere; }
+
+/* ── The Inbox (Pages/InboxScreen.razor; InboxWindow.axaml): Refresh, Mark all read, Unread only and the count over the
+   list of what came in, 360 px | the chosen item, its header pinned over its run. ─────────────────────────────────── */
+
+.inbox-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
+.inbox-unread-only { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.inbox-status { margin-left: 8px; }
+.inbox-body { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 10px; align-items: start; }
+.inbox-list { margin: 0; padding: 0; list-style: none; max-height: calc(100vh - 150px); overflow: auto; }
+/* The edge is what the item IS (Looks.Inbox); the ember dot and the weight are the one thing reading it changes. */
+.inbox-item { font: inherit; display: grid; gap: 3px; width: 100%; box-sizing: border-box; text-align: left; color: var(--text); cursor: pointer; }
+.inbox-item-head { display: flex; align-items: center; gap: 6px; }
+.inbox-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.inbox-kind { font-size: 11px; color: var(--tone); }
+.inbox-item-title { font-size: 12.5px; color: var(--text); overflow-wrap: anywhere; }
+.inbox-item.unread .inbox-item-title { font-weight: 700; }
+.inbox-detail { display: flex; flex-direction: column; min-width: 0; max-height: calc(100vh - 150px); }
+.inbox-head { flex: none; display: grid; gap: 4px; margin: 0 0 8px; }
+.inbox-title { margin: 0; font-family: var(--font-sans); font-size: 16px; font-weight: 600; letter-spacing: normal; overflow-wrap: anywhere; }
+.inbox-head p { margin: 0; }
+.inbox-head .inbox-summary { margin-top: 6px; color: var(--text-body); overflow-wrap: anywhere; }
+/* Amber, as the window's: the run is stopped on a person - caution, not action. */
+.inbox-question { display: grid; gap: 6px; margin: 10px 0 0; padding: 10px; border: 1px solid var(--amber-400); border-radius: 6px; }
+.inbox-question-topic { font-weight: 600; overflow-wrap: anywhere; }
+.inbox-question-text { margin: 0; max-height: 220px; overflow: auto; font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap;
+  overflow-wrap: anywhere; }
+.inbox-answers { display: flex; flex-wrap: wrap; gap: 8px; }
+.inbox-run { flex: 1; min-height: 0; overflow: auto; display: grid; gap: 4px; align-content: start; padding-bottom: 12px; }
+.inbox-run .panel-row { margin: 12px 0 0; }
+.inbox-run .panel-row:first-child { margin-top: 0; }
+.inbox-run-header { margin: 0; }
+.inbox-timeline { display: grid; gap: 2px; margin-top: 6px; }
+.inbox-timeline .timeline-kind { color: var(--tone); }
+.inbox-artifacts, .inbox-decisions { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.inbox-artifacts li { margin: 1px 0; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.inbox-decisions li { margin: 1px 0; overflow-wrap: anywhere; }
+.inbox-where { margin: 8px 0 0; }

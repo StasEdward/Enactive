@@ -109,17 +109,6 @@ internal static class ServerApp
                 return Results.LocalRedirect("/signin");
             });
 
-        // The inbox's answer: a form post from a static page, with its antiforgery token checked here (as for sign-out),
-        // the person's role checked by the service. It goes on to the run's page.
-        app.MapPost("/inbox/answer", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerInbox inbox) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var (said, run) = await inbox.AnswerAsync(context.User, form["ws"].ToString(),
-                Guid.TryParse(form["item"], out var item) ? item : Guid.Empty, form["option"].ToString(), context.RequestAborted);
-            return run is { } id ? Results.LocalRedirect($"/runs/{id}") : Results.LocalRedirect("/inbox?said=" + Uri.EscapeDataString(said));
-        });
         // A kept proposal applied or rejected (ServerStaging checks the role and the run's end), back to its page.
         app.MapPost("/proposals/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerStaging staging) =>
         {
