@@ -44,6 +44,12 @@ async function startRun(page, task) {
   return page.url();
 }
 
+/**
+ * A name of this run of the test: what a scenario adds to the service - an account, a provider, a task - stays there, and
+ * the same test run again on the same service (--repeat-each) found its own leftovers in the way.
+ */
+const own = (name) => (test.info().repeatEachIndex === 0 ? name : `${name}${test.info().repeatEachIndex + 1}`);
+
 /** The service's own command line, on its data folder - as an administrator on the server would use it. */
 function setRole(name, role) {
   const done = spawnSync('dotnet', [process.env.E2E_SERVER_DLL, '--data', process.env.E2E_DATA, '--set-role', name, role],
@@ -127,6 +133,8 @@ test('another operator answers a run, and is offered no approval to leave in its
 
   await question(bob.page).getByRole('button', { name: 'Deny' }).click();
   await expect(question(alice.page)).toBeHidden();
+  // Her page says who answered her run's question, and how: the card only vanished, and nothing said why.
+  await expect(alice.page.getByText('Answered by bob: Deny.', { exact: true })).toBeVisible();
   await alice.context.close();
   await bob.context.close();
 });
@@ -166,11 +174,13 @@ test('two people answer one question at once and the second is told it was answe
   await Promise.all(pages.map((page) => question(page).getByRole('button', { name: 'Allow', exact: true }).click()));
   for (const gate of gates) gate.release();
 
-  // One answer is taken. The card goes from both pages, and the person whose answer came second is told why, in words.
+  // One answer is taken. The card goes from both pages, and the person whose answer was not taken is told, in words, who
+  // answered and with what - whether their press was refused or never got to the service's answer at all.
   for (const page of pages) await expect(question(page)).toBeHidden();
-  const told = (page) => page.getByRole('complementary', { name: 'Status' })
-    .getByText('That question has already been answered, or withdrawn.', { exact: true });
+  const told = (page) => page.getByRole('complementary', { name: 'Status' }).getByText(/^Answered by (alice|bob): Allow\.$/);
   await expect.poll(async () => (await told(alice.page).count()) + (await told(bob.page).count())).toBe(1);
+  const [taken, other] = (await told(alice.page).count()) === 1 ? ['bob', alice.page] : ['alice', bob.page];
+  await expect(told(other)).toHaveText(`Answered by ${taken}: Allow.`);
 
   // And the run went on once: it ended, and its step says the question was answered once.
   await expect(stop(alice.page)).toBeDisabled();
@@ -295,6 +305,7 @@ test('a past run is tried again from its page, and deleted after its question', 
   // The Runs screen's column lists the workspace's history; the run it just ran opens on the same screen, at its own
   // address, in the run's place.
   await page.goto('/');
+  await onProject(page);
   await page.getByRole('complementary', { name: 'Runs column' }).getByRole('link', { name: /kept in the history/ }).first().click();
   await expect(page).toHaveURL(/\/history\/[0-9a-f-]{36}\/[0-9a-f-]{36}$/);
   const past = page.getByRole('region', { name: 'Past run' });
@@ -322,6 +333,8 @@ test('a past run is tried again from its page, and deleted after its question', 
 
 test('a question in the runs column holds the keyboard until it is answered, then gives it back', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
+  // On "project", which has runs to delete: the Runs screen opens on the folder used last, another after the switcher's test.
+  await onProject(page);
   const opener = page.getByRole('complementary', { name: 'Runs column' })
     .getByRole('button', { name: 'Delete this run from the history' }).first();
   await opener.focus();
@@ -348,6 +361,7 @@ test('a question in the runs column holds the keyboard until it is answered, the
 });
 
 test('an admin adds an account on the accounts page, and it signs in', async ({ browser }) => {
+  const carlName = own('carl');
   const ada = await signedIn(browser, 'ada');
   await ada.page.getByRole('link', { name: 'Accounts' }).click();
   await expect(ada.page).toHaveURL(/\/accounts$/);
@@ -363,7 +377,7 @@ test('an admin adds an account on the accounts page, and it signs in', async ({ 
 
   await ada.page.getByRole('button', { name: 'Add', exact: true }).click();
   dialog = ada.page.getByRole('dialog', { name: 'Add an account' });
-  await dialog.getByLabel('Name').fill('carl');
+  await dialog.getByLabel('Name').fill(carlName);
   await dialog.getByLabel('Role').selectOption('Viewer');
   const first = dialog.getByLabel('Password (12 characters or more)');
   const again = dialog.getByLabel('Again');
@@ -374,17 +388,17 @@ test('an admin adds an account on the accounts page, and it signs in', async ({ 
   await expect(dialog.getByRole('alert')).toHaveText('The two passwords did not match; nothing was changed.');
   await expect(first).toHaveValue('');
   await expect(again).toHaveValue('');
-  await expect(dialog.getByLabel('Name')).toHaveValue('carl');
+  await expect(dialog.getByLabel('Name')).toHaveValue(carlName);
   await expect(first).toHaveAttribute('autocomplete', 'new-password');
 
   await first.fill(password);
   await again.fill(password);
   await dialog.getByRole('button', { name: 'Add', exact: true }).click();
-  await expect(ada.page.getByRole('main').getByRole('status')).toHaveText('Added carl (Viewer).');
+  await expect(ada.page.getByRole('main').getByRole('status')).toHaveText(`Added ${carlName} (Viewer).`);
   await expect(dialog).toBeHidden();
-  await expect(ada.page.getByRole('list', { name: 'Accounts' }).getByText('carl', { exact: true })).toBeVisible();
+  await expect(ada.page.getByRole('list', { name: 'Accounts' }).getByText(carlName, { exact: true })).toBeVisible();
 
-  const carl = await signedIn(browser, 'carl');
+  const carl = await signedIn(browser, carlName);
   await expect(carl.page.getByRole('link', { name: 'Accounts' })).toHaveCount(0);
   // The old address leads to the new one, which refuses a Viewer as every Admin page does.
   await carl.page.goto('/admin/users');
@@ -394,8 +408,8 @@ test('an admin adds an account on the accounts page, and it signs in', async ({ 
 
   await ada.page.getByRole('link', { name: 'Audit' }).click();
   await expect(ada.page).toHaveURL(/\/audit$/);
-  const added = ada.page.getByRole('row').filter({ hasText: 'account add' }).first();
-  await expect(added.getByRole('cell', { name: 'carl (Viewer)' })).toBeVisible();
+  const added = ada.page.getByRole('row').filter({ hasText: 'account add' }).filter({ hasText: `${carlName} (Viewer)` });
+  await expect(added.getByRole('cell', { name: `${carlName} (Viewer)`, exact: true })).toBeVisible();
   await ada.context.close();
   await carl.context.close();
 });
@@ -455,6 +469,7 @@ test('the workspace switcher adds a folder and switches to it, and nothing outsi
 });
 
 test('an admin adds a provider with its key on the settings page, and the key never comes back to a page', async ({ browser }) => {
+  const box = own('box');
   const { context, page } = await signedIn(browser, 'ada');
   // The rail's Settings opens the window's sections; Providers is under AI.
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
@@ -465,19 +480,19 @@ test('an admin adds a provider with its key on the settings page, and the key ne
   // Added in the window's provider editor, over the settings; Apply puts it into the copy, Save writes it.
   await page.getByRole('button', { name: 'Add', exact: true }).click();
   let editor = page.getByRole('dialog', { name: 'Provider' });
-  await editor.getByLabel('Id', { exact: true }).fill('box');
+  await editor.getByLabel('Id', { exact: true }).fill(box);
   await editor.getByLabel('Base URL').fill('http://127.0.0.1:8080/v1');
   await editor.getByLabel('API key').fill('sk-e2e-secret');
   await editor.getByLabel('Models', { exact: true }).fill('qwen');
   await editor.getByRole('button', { name: 'Apply' }).click();
-  await expect(page.getByRole('list', { name: 'Providers' }).getByText('box', { exact: true })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Providers' }).getByText(box, { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByText(/^Saved\./)).toBeVisible();
 
   // Opened again, the key is said to be kept - and is nowhere on the page, not even as the value of its box.
   await page.reload();
-  await expect(page.getByRole('list', { name: 'Providers' }).getByText('box', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Edit box' }).click();
+  await expect(page.getByRole('list', { name: 'Providers' }).getByText(box, { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: `Edit ${box}`, exact: true }).click();
   editor = page.getByRole('dialog', { name: 'Provider' });
   await expect(editor.getByText('A key is stored. Leave the box empty to keep it.')).toBeVisible();
   await expect(editor.getByLabel('API key')).toHaveValue('');
@@ -486,6 +501,7 @@ test('an admin adds a provider with its key on the settings page, and the key ne
 });
 
 test('an admin adds an MCP server with a token header, and the page names the header but never shows the token', async ({ browser }) => {
+  const tracker = own('tracker');
   const { context, page } = await signedIn(browser, 'ada');
   // The old address lands on the settings.
   await page.goto('/admin/settings');
@@ -495,17 +511,17 @@ test('an admin adds an MCP server with a token header, and the page names the he
 
   await page.getByRole('button', { name: 'Add', exact: true }).click();
   let editor = page.getByRole('dialog', { name: 'MCP server' });
-  await editor.getByLabel('Server ID').fill('tracker');
+  await editor.getByLabel('Server ID').fill(tracker);
   await editor.getByLabel('Transport').selectOption('Http');
   await editor.getByLabel('Endpoint').fill('https://mcp.example.com/');
   await editor.getByLabel(/New headers/).fill('Authorization: Bearer tk-e2e-secret');
   await editor.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(page.getByRole('list', { name: 'MCP servers' }).getByText('tracker', { exact: true })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'MCP servers' }).getByText(tracker, { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByText(/^Saved\./)).toBeVisible();
 
   await page.reload();
-  await page.getByRole('button', { name: 'Edit tracker' }).click();
+  await page.getByRole('button', { name: `Edit ${tracker}`, exact: true }).click();
   editor = page.getByRole('dialog', { name: 'MCP server' });
   await expect(editor.getByText('Set: Authorization: …')).toBeVisible();
   expect(await page.content()).not.toContain('tk-e2e-secret');
@@ -674,6 +690,8 @@ test('the timeline and the environment show the workspace in the viewer', async 
 
 
 test('a viewer reads a staged run\'s proposal, and an operator applies it to the file', async ({ browser }) => {
+  // What it reads the harness staged once, as it started: on the same service again (--repeat-each) the set is applied.
+  test.skip(test.info().repeatEachIndex > 0, 'reads the set the harness staged once; the first run of this test applied it');
   const viewer = await signedIn(browser, 'vera');
   await viewer.page.getByRole('link', { name: 'Proposals', exact: true }).click();
   await viewer.page.getByRole('link', { name: /redraft the proposal/ }).click();
@@ -705,6 +723,8 @@ async function unread(page) {
 }
 
 test('a question a background run stopped at is read in the inbox by a viewer and answered there by an operator', async ({ browser }) => {
+  // What it reads the harness filed once, as it started: on the same service again (--repeat-each) it is answered.
+  test.skip(test.info().repeatEachIndex > 0, 'reads the question the harness filed once; the first run of this test answered it');
   // The harness filed it: "mail the digest" stopped at "Approve send_email" with nobody there to answer.
   const vera = await signedIn(browser, 'vera');
   await inboxIcon(vera.page).click();
@@ -742,9 +762,10 @@ test('a question a background run stopped at is read in the inbox by a viewer an
 });
 
 test('a background run reaches the inbox and is carried on from there', async ({ browser }) => {
+  const task = own('digest in the background');
   const { context, page } = await signedIn(browser, 'alice');
   await onProject(page);
-  await page.getByLabel('Task', { exact: true }).fill('digest in the background');
+  await page.getByLabel('Task', { exact: true }).fill(task);
   await page.getByRole('button', { name: 'Run in background' }).click();
   // Started, and the page stays where it is: the bar is free for the next task, and nothing is asked here.
   await expect(page.getByLabel('Task', { exact: true })).toHaveValue('');
@@ -753,7 +774,7 @@ test('a background run reaches the inbox and is carried on from there', async ({
 
   // With nobody to ask, it stops at its question and says so in the inbox - once it has, which the inbox shows on Refresh.
   await inboxIcon(page).click();
-  const item = page.getByRole('list', { name: 'Inbox items' }).getByRole('button', { name: /digest in the background/ });
+  const item = page.getByRole('list', { name: 'Inbox items' }).getByRole('button').filter({ has: page.getByText(task, { exact: true }) });
   await expect(async () => {
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
     await expect(item).toBeVisible({ timeout: 1_000 });
