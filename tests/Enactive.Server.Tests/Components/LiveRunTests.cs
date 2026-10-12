@@ -291,10 +291,12 @@ public sealed class LiveRunTests : ComponentHost
 
         page.WaitForAssertion(() => Assert.Equal("Artifacts (1)", page.FindAll("[role=tab]")[1].TextContent.Trim()));
         page.FindAll("[role=tab]")[1].Click();
-        Assert.Equal("report.md", page.Find(".artifact .path").TextContent.Trim());
+        // Waited for: the page's dispatcher may be drawing the run when the click arrives, and the tab changes after it -
+        // read at once, it failed whenever the follower's redraw came first.
+        page.WaitForAssertion(() => Assert.Equal("report.md", page.Find(".artifact .path").TextContent.Trim()));
         page.FindAll(".artifact button").Single(b => b.TextContent.Trim() == "Review").Click();
 
-        var dialog = page.Find("[role=dialog]");
+        var dialog = page.WaitForElement("[role=dialog]");
         Assert.Equal("report.md", dialog.QuerySelector(".dialog-title")!.TextContent.Trim());
         Assert.Equal("# The disks\nall well\n", dialog.QuerySelector("pre")!.TextContent);
         dialog.QuerySelectorAll("button").Single(b => b.TextContent.Trim() == "Copy all").Click();
@@ -318,13 +320,15 @@ public sealed class LiveRunTests : ComponentHost
         var viewing = Open("vera", run);
         viewing.WaitForAssertion(() => Assert.Equal("Artifacts (1)", viewing.FindAll("[role=tab]")[1].TextContent.Trim()));
         viewing.FindAll("[role=tab]")[1].Click();
-        Assert.Equal(["Review"], viewing.FindAll(".artifact button").Select(b => b.TextContent.Trim()));
+        // Waited for: the page's dispatcher may be drawing the run when the click arrives, and the tab changes after it.
+        viewing.WaitForAssertion(() => Assert.Equal(["Review"], viewing.FindAll(".artifact button").Select(b => b.TextContent.Trim())));
 
         var page = Open("alice", run);
         page.WaitForAssertion(() => Assert.Equal("Artifacts (1)", page.FindAll("[role=tab]")[1].TextContent.Trim()));
         page.FindAll("[role=tab]")[1].Click();
+        page.WaitForAssertion(() => Assert.NotEmpty(page.FindAll(".artifact")));
         page.FindAll(".artifact button").Single(b => b.TextContent.Trim() == "Delete").Click();
-        var dialog = page.Find("[role=dialog]");
+        var dialog = page.WaitForElement("[role=dialog]");
         Assert.Equal("Delete “report.md”?", dialog.QuerySelector(".dialog-title")!.TextContent.Trim());
         dialog.QuerySelectorAll("button").Single(b => b.TextContent.Trim() == "Delete").Click();
 
