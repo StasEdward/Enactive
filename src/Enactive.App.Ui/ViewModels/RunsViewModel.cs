@@ -308,7 +308,7 @@ internal sealed class PastRunViewModel : ObservableObject
     public string ElapsedText { get; }
 
     /// <summary>A tab carries its own count, so a run that produced nothing does not advertise "(0)".</summary>
-    public string ArtifactsTabLabel => Artifacts.Count == 0 ? "Artifacts" : $"Artifacts ({Artifacts.Count})";
+    public string ArtifactsTabLabel => RunFigures.ArtifactsTab(Artifacts.Count);
 
     public int SelectedTab
     {
