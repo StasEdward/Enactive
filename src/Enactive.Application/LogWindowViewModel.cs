@@ -1,12 +1,12 @@
-namespace Enactive.App.Ui.ViewModels;
+namespace Enactive.Application;
 
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Text;
-using Avalonia.Threading;
-using Enactive.Application;
 using Enactive.Application.Mvvm;
 using Enactive.Agents;
+using Enactive.Core;
 using Enactive.Core.Diagnostics;
 using Enactive.Workspace;
 
@@ -52,6 +52,40 @@ internal sealed class SourceToggle : ObservableObject
 }
 
 /// <summary>
+/// What the log view changes beyond what it shows: the hub every line goes to, which is not the view's own.
+///
+/// <para>A seam because the two hosts own that hub differently. The window's is the person's at the machine, and its
+/// Clear and its raw-wire switch act on it directly (<see cref="HubChanges"/>). The service's hub is everybody's: a
+/// person's Clear emptying it would have emptied every other open log page, and the raw-wire switch changes what is
+/// recorded for everybody, so the service decides who may (an Admin) and puts it in the audit trail.</para>
+/// </summary>
+internal interface ILogHubChanges
+{
+    /// <summary>Whether the hub captures the raw wire (Trace) now - what the switch shows when the view opens.</summary>
+    bool Capturing { get; }
+
+    /// <summary>Turns raw-wire capture on or off. Null when done; otherwise why not, to show the person.</summary>
+    string? Capture(bool trace);
+
+    /// <summary>The view was cleared: what, if anything, goes with it beyond the view.</summary>
+    void Cleared();
+}
+
+/// <summary>The window's: the hub is the person's own, so Clear empties its ring and the switch sets its level.</summary>
+internal sealed class HubChanges(LogHub hub) : ILogHubChanges
+{
+    public bool Capturing => hub.MinLevel <= LogLevel.Trace;
+
+    public string? Capture(bool trace)
+    {
+        hub.MinLevel = trace ? LogLevel.Trace : LogLevel.Debug;
+        return null;
+    }
+
+    public void Cleared() => hub.Clear();
+}
+
+/// <summary>
 /// The global log: everything the hub has seen, filtered for display. It only observes — no filter
 /// here changes what the engine does. The one exception is the raw-wire switch, which raises the
 /// hub's own capture level and so does change what gets recorded from that moment on.
@@ -61,9 +95,10 @@ internal sealed class LogWindowViewModel : ObservableObject
     private const int MaxRetained = 20000;
 
     private readonly LogHub _hub;
+    private readonly ILogHubChanges _changes;
     private readonly List<LogRow> _all = new();
     private readonly ConcurrentQueue<LogEntry> _pending = new();
-    private readonly DispatcherTimer _drain;
+    private readonly IDisposable _drain;
     private CancellationTokenSource? _filterCancellation;
     private bool _detached;
     private int _revision;
@@ -79,26 +114,33 @@ internal sealed class LogWindowViewModel : ObservableObject
     private string _detailText = string.Empty;
     private LogRow? _selectedRow;
 
-    public LogWindowViewModel(LogHub hub)
+    /// <param name="drain">
+    /// Starts calling what it is given at the host's own pace, on the thread this view model lives on, until the returned
+    /// handle is disposed. The hub raises entries on its own pump thread; they are queued there and moved onto the view's
+    /// thread in batches, so a burst of tokens cannot flood it one entry at a time. The host owns the clock because the
+    /// thread is the host's: the window's dispatcher timer, a page's circuit.
+    /// </param>
+    /// <param name="changes">Where Clear and the raw-wire switch reach the hub; null, the hub itself (the window's).</param>
+    public LogWindowViewModel(LogHub hub, Func<Action, IDisposable> drain, ILogHubChanges? changes = null)
     {
         _hub = hub;
+        _changes = changes ?? new HubChanges(hub);
+        // What the switch shows is what the hub does: a view opened while capture is on says so, rather than offering to
+        // turn on what is already on.
+        _captureRaw = _changes.Capturing;
 
         foreach (var source in Enum.GetValues<LogSource>())
             Sources.Add(new SourceToggle(source, Rebuild));
 
-        ClearCommand = new RelayCommand(() => { _all.Clear(); _pending.Clear(); _revision++; _hub.Clear(); Rebuild(); });
-        ExportCommand = new RelayCommand(Export);
+        ClearCommand = new RelayCommand(() => { _all.Clear(); _pending.Clear(); _revision++; _changes.Cleared(); Rebuild(); });
+        ExportCommand = new RelayCommand(() => _ = ExportAsync());
         AnalyzeCommand = new RelayCommand(() => _ = AnalyzeAsync());
 
         foreach (var entry in _hub.Snapshot().TakeLast(MaxRetained))
             _all.Add(new LogRow(entry));
         Rebuild();
 
-        // The hub raises entries on its own pump thread; queue there, and move them onto the UI
-        // thread in batches, so a burst of tokens cannot flood the dispatcher one entry at a time.
-        _drain = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
-        _drain.Tick += (_, _) => DrainPending();
-        _drain.Start();
+        _drain = drain(DrainPending);
         _hub.Entry += OnEntry;
     }
 
@@ -142,9 +184,17 @@ internal sealed class LogWindowViewModel : ObservableObject
         get => _captureRaw;
         set
         {
-            if (!Set(ref _captureRaw, value))
+            if (_captureRaw == value)
                 return;
-            _hub.MinLevel = value ? LogLevel.Trace : LogLevel.Debug;
+            if (_changes.Capture(value) is { } refused)
+            {
+                // Said, and the switch stays where the hub is: a switch that moved over a refusal says capture is on
+                // while nothing is captured.
+                Status = refused;
+                OnPropertyChanged();
+                return;
+            }
+            Set(ref _captureRaw, value);
             if (value)
                 SelectedLevel = LogLevel.Trace.ToString();
             Rebuild();
@@ -177,6 +227,13 @@ internal sealed class LogWindowViewModel : ObservableObject
     /// </summary>
     public Func<string, CancellationToken, Task<LogAnalysisResult>>? Analyse { get; set; }
 
+    /// <summary>
+    /// Where Export hands the visible log: a file's name and its text. Null, a file in the log folder of this machine -
+    /// the window's, whose reader sits at it. A host whose reader is elsewhere (a browser) hands it on itself: written into
+    /// the service's own log folder, it was a file on a machine the person reading may never see.
+    /// </summary>
+    public Func<string, string, Task>? ExportTo { get; set; }
+
     /// <summary>Raised with the finished analysis; the window opens it.</summary>
     public event Action<LogAnalysisResult>? AnalysisReady;
 
@@ -197,7 +254,7 @@ internal sealed class LogWindowViewModel : ObservableObject
         _detached = true;
         _filterCancellation?.Cancel();
         _hub.Entry -= OnEntry;
-        _drain.Stop();
+        _drain.Dispose();
     }
 
     /// <summary>
@@ -290,7 +347,8 @@ internal sealed class LogWindowViewModel : ObservableObject
     {
         var sb = new StringBuilder();
         var run = entry.RunId is null ? "(none)" : RunToken(entry, 8);
-        sb.Append(entry.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff"))
+        // Invariant: under a culture whose time separator is not a colon the same instant read differently per machine.
+        sb.Append(entry.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture))
           .Append("  ").Append(entry.Level)
           .Append("  ").Append(entry.Source)
           .Append("  run=").Append(run);
@@ -302,13 +360,27 @@ internal sealed class LogWindowViewModel : ObservableObject
         return sb.ToString();
     }
 
-    private void Export()
+    /// <summary>
+    /// The name Export gives the file: when it was made, in the same digits on every machine - a regional calendar wrote
+    /// another year into it.
+    /// </summary>
+    public static string ExportName(DateTime now)
+        => $"export-{now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}.log";
+
+    private async Task ExportAsync()
     {
         try
         {
+            var name = ExportName(DateTime.Now);
+            if (ExportTo is { } handOn)
+            {
+                await handOn(name, Render());
+                Status = $"Exported {Rows.Count} rows → {name}";
+                return;
+            }
             var dir = FileLogSink.DefaultDirectory();
             Directory.CreateDirectory(dir);
-            var path = Path.Combine(dir, $"export-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+            var path = Path.Combine(dir, name);
             File.WriteAllText(path, Render());
             Status = $"Exported {Rows.Count} rows → {path}";
         }
@@ -330,7 +402,7 @@ internal sealed class LogWindowViewModel : ObservableObject
     /// tailing, but read later as a timeline it is wrong, so it is sorted by time (Seq breaks ties,
     /// being monotonic in the hub).</para>
     /// </summary>
-    private string Render()
+    public string Render()
     {
         return LogText.Render(Rows.Select(r => r.Entry));
     }
@@ -362,7 +434,7 @@ internal sealed class LogWindowViewModel : ObservableObject
         }
 
         IsAnalyzing = true;
-        Status = $"Reading {Rows.Count:N0} rows…";
+        Status = $"Reading {Invariant.N0(Rows.Count)} rows…";
         try
         {
             AnalysisReady?.Invoke(await Analyse(text, CancellationToken.None));

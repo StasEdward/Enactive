@@ -1,5 +1,6 @@
 namespace Enactive.Application;
 
+using System.Globalization;
 using System.Text;
 using Enactive.Core.Diagnostics;
 
@@ -21,7 +22,10 @@ internal static class LogText
         message = message.Replace("\r", " ").Replace("\n", " ");
         if (message.Length > 200)
             message = message[..200] + "…";
-        return $"{entry.At.ToLocalTime():HH:mm:ss.fff}  {Short(entry.Level)}  {entry.Source,-12} {run}{category}  {message}";
+        // The time in the same digits on every machine: a format's ":" is the culture's time separator, which is not a colon
+        // everywhere, and a line exported on one machine and read against another must say the same.
+        var at = entry.At.ToLocalTime().ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture);
+        return $"{at}  {Short(entry.Level)}  {entry.Source,-12} {run}{category}  {message}";
     }
 
     /// <summary>

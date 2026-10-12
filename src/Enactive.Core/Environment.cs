@@ -1,5 +1,6 @@
 namespace Enactive.Core.Context;
 
+using System.Globalization;
 using System.Text;
 
 // Environment awareness: the app knows the real world, not just a conversation.
@@ -102,7 +103,8 @@ public sealed record EnvironmentSnapshot(
     public string Describe()
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"Snapshot at {At.ToLocalTime():HH:mm:ss}");
+        // Invariant, as every number here: the culture's time separator and decimal mark made the same reading another text.
+        sb.AppendLine($"Snapshot at {At.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture)}");
         sb.AppendLine($"RAM in use: {Invariant.Format(RamPercent, "F0")}%" + (CpuPercent > 0 ? $"   CPU: {Invariant.Format(CpuPercent, "F0")}%" : ""));
         if (Containers.Count > 0)
         {
@@ -111,7 +113,7 @@ public sealed record EnvironmentSnapshot(
                 sb.AppendLine($"  {c.Name}: {c.State}" + (c.ExitCode is { } ec ? $" (exit {ec})" : ""));
         }
         foreach (var kv in Metrics)
-            sb.AppendLine($"  {kv.Key} = {kv.Value}");
+            sb.AppendLine($"  {kv.Key} = {Convert.ToString(kv.Value, CultureInfo.InvariantCulture)}");
         return sb.ToString().TrimEnd();
     }
 }

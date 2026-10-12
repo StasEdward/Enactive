@@ -1,9 +1,13 @@
-namespace Enactive.App.Ui;
+namespace Enactive.Application.Mvvm;
 
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 
+/// <summary>
+/// A list that takes a whole batch with one notification. The log's rows arrive by the thousand; one notification per row
+/// had the view re-measure for each of them.
+/// </summary>
 internal sealed class BatchObservableCollection<T> : ObservableCollection<T>
 {
     public void ReplaceWith(IEnumerable<T> values)

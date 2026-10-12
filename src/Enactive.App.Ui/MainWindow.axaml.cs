@@ -1688,24 +1688,11 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
         private async Task ShowEnvironmentAsync()
         {
-            var root = _vm.WorkspacePath;
-            if (string.IsNullOrWhiteSpace(root))
-            {
-                ShowViewer("Environment", "Set a workspace first.");
-                return;
-            }
-            try
-            {
-                // Looking at the environment is a read, so this only READS the workspace's id.
-                var ws = WorkspaceInfo.For(root);
-                var (info, snapshot) = await _envProbe.ProbeFullAsync(ws, CancellationToken.None);
-                _vm.EnvironmentSummary = info.OneLine();
-                ShowViewer("Environment", info.Summary() + "\n\n" + snapshot.Describe());
-            }
-            catch (Exception ex)
-            {
-                ShowViewer("Environment", "Probe failed: " + ex.Message);
-            }
+            // The report's words - with no workspace, and when the probe fails - are the service's page's too.
+            var report = await WorkspaceReports.EnvironmentAsync(_vm.WorkspacePath, _envProbe.ProbeFullAsync, CancellationToken.None);
+            if (report.OneLine is { } line)
+                _vm.EnvironmentSummary = line;
+            ShowViewer(WorkspaceReports.EnvironmentTitle, report.Text);
         }
 
         /// <summary>
@@ -2312,12 +2299,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         if (string.IsNullOrEmpty(workspacePath))
             return;
 
-        var workspace = WorkspaceInfo.For(workspacePath);
-        var runStore = RunStoreFactory.Create(workspace);
-        var memory = MemoryStoreFactory.Create(workspace);
-        var runs = await runStore.LoadSummariesAsync(CancellationToken.None);
-        var entries = await memory.LoadAllAsync(CancellationToken.None);
-        ShowViewer("Project Memory", ProjectMemory.Render(runs, entries, workspace.RootPath));
+        // The service's Timeline page reads it the same way and says the same when it cannot (WorkspaceReports).
+        ShowViewer(WorkspaceReports.TimelineTitle, await WorkspaceReports.TimelineAsync(workspacePath, CancellationToken.None));
     }
 
     // ── IDecisionPresenter: the inline approval card ─────────────────────────
