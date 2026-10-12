@@ -67,6 +67,14 @@ public sealed class WorkspaceIdsTests : IDisposable
         Assert.Null(_ids.Find(_ids.IdOf(stranger)));
     }
 
+    /// <summary>A path that cannot be read at all has no id to give - not an exception for the page or the redirect.</summary>
+    [Fact]
+    public void A_path_that_cannot_be_read_has_no_id_rather_than_an_exception()
+    {
+        Assert.Null(_ids.TryIdOf("bad\0path"));
+        Assert.Equal(_ids.IdOf(Folder("project")), _ids.TryIdOf(Path.Combine(_root, "project")));
+    }
+
     [Fact]
     public void A_known_folder_that_is_gone_is_skipped_not_thrown()
     {

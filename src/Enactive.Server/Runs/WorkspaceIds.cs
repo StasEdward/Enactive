@@ -14,6 +14,20 @@ internal sealed class WorkspaceIds(ServerEngine engine)
     /// <summary>The id a folder carries. Read only - <c>Adopt</c> would write an id file into somebody's project.</summary>
     public Guid IdOf(string root) => WorkspaceInfo.For(root).Id;
 
+    /// <summary>
+    /// The id a known folder carries, or null when its path cannot be read at all (a drive not mounted, a path no longer
+    /// valid, its id file not readable). The registry keeps such entries, and <see cref="IdOf"/> throws on them: an old
+    /// address or a switcher row naming one was a failed request or a page down, where it should be "no id to give".
+    /// </summary>
+    public Guid? TryIdOf(string root)
+    {
+        try { return IdOf(root); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>The known workspace whose folder carries <paramref name="id"/>, or null when no known one does.</summary>
     public WorkspaceEntry? Find(Guid id)
     {

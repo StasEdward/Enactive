@@ -242,16 +242,9 @@ internal sealed class WorkspaceColumnState(ServerHistory history, IRunControl ru
     private static bool SamePath(string a, string b)
         => string.Equals(WorkspaceRegistry.Normalise(a), WorkspaceRegistry.Normalise(b), StringComparison.OrdinalIgnoreCase);
 
-    private Guid IdOf(string root)
-    {
-        // A known folder whose path cannot be read at all still has its row - red, as missing - with no id to be chosen by:
-        // one such entry must not take the column down for every other workspace (as WorkspaceIds.Find steps over it).
-        try { return ids.IdOf(root); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            return Guid.Empty;
-        }
-    }
+    // A known folder whose path cannot be read at all still has its row - red, as missing - with no id to be chosen by:
+    // one such entry must not take the column down for every other workspace (as WorkspaceIds.Find steps over it).
+    private Guid IdOf(string root) => ids.TryIdOf(root) ?? Guid.Empty;
 
     private static bool Exists(string root)
     {

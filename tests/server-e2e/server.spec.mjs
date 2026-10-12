@@ -187,6 +187,33 @@ test('a past run is tried again from its page, and deleted after its question', 
   await context.close();
 });
 
+test('a question in the runs column holds the keyboard until it is answered, then gives it back', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'alice');
+  const opener = page.getByRole('complementary', { name: 'Runs column' })
+    .getByRole('button', { name: 'Delete this run from the history' }).first();
+  await opener.focus();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeFocused();
+
+  // Tab never reaches the rows behind the scrim: the page is inert while the question is open. (Past the dialog's last
+  // button it may leave the page for the browser's own controls, as a native modal dialog's does.)
+  const outsideTheDialog = () => page.evaluate(() => {
+    const at = document.activeElement;
+    return at !== document.body && !at.closest('[role=dialog]') && !at.closest('#components-reconnect-modal');
+  });
+  for (let i = 0; i < 6; i++) {
+    await page.keyboard.press('Tab');
+    expect(await outsideTheDialog()).toBe(false);
+  }
+
+  await dialog.focus();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(opener).toBeFocused();
+  await context.close();
+});
+
 test('an admin adds an account on the accounts page, and it signs in', async ({ browser }) => {
   const ada = await signedIn(browser, 'ada');
   await ada.page.getByRole('link', { name: 'Accounts' }).click();

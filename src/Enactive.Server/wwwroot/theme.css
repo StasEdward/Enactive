@@ -55,6 +55,9 @@
   --input-fill: rgb(0 0 0 / 22%);
   --input-fill-hover: rgb(0 0 0 / 14%);
   --scrim: rgb(0 0 0 / 13%);
+  /* The web's own: what lies under a dialog (Ui/Dialog.razor), dark enough that the screen reads as out of reach. The
+     window's dialogs are windows of their own and have none. */
+  --dialog-scrim: rgb(0 0 0 / 45%);
   --decision-fill: #2A1B05;
 
   /* The roles brand.css names, pointed at the desktop's surfaces (Bg, Surface, Card, Line, Text...). */
@@ -381,7 +384,7 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 /* ── Dialogs (Ui/Dialog.razor): over a scrim, on the darkest surface, buttons at the bottom right ────────────────── */
 
 .dialog-scrim { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center;
-  background: rgb(0 0 0 / 45%); }
+  background: var(--dialog-scrim); }
 .dialog { box-sizing: border-box; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; padding: 18px 20px;
   background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; }
 .dialog-title { font-size: 15px; margin: 0 0 10px; }

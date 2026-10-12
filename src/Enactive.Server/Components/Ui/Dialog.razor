@@ -1,10 +1,19 @@
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
 @* The window's modal dialog, on the page: a title, what it says, and its buttons - over the screen, which stays where it
    was underneath. A page asked its questions on pages of their own (ConfirmPage), so answering one lost the screen it
-   was asked from; here the question comes to the screen. Escape and the scrim close it, as the window's do, unless
-   the dialog is busy doing what was asked. *@
+   was asked from; here the question comes to the screen.
+
+   Modal as the window's is: open, it has the focus and the rest of the page is inert (Dialog.razor.js), so Escape
+   reaches it at once and Tab cannot leave it; closed, the focus goes back to what had it. Drawn over the screen but not
+   in charge of it, Tab walked the rows behind the scrim - another row's Delete could be pressed while a question was
+   open - and Escape did nothing until somebody clicked into the dialog. Escape and the scrim close it, as the window's
+   do, unless the caller's OnClose declines (busy doing what was asked). *@
 
 <div class="dialog-scrim" @onclick="CloseAsync">
-    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="@_titleId" tabindex="-1"
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="@_titleId" tabindex="-1" @ref="_dialog"
          @onclick:stopPropagation="true" @onkeydown="KeyAsync">
         <h2 id="@_titleId" class="dialog-title">@Title</h2>
         @ChildContent
@@ -16,8 +25,12 @@
 </div>
 
 @code {
-    // Unique per dialog, so the title names its own dialog even when one opens over another.
+    // Unique per dialog, so the title names its own dialog even when one opens over another - and the key its hold on the
+    // page is kept under by the script.
     private readonly string _titleId = "dialog-" + Guid.NewGuid().ToString("N");
+
+    private ElementReference _dialog;
+    private IJSObjectReference? _script;
 
     [Parameter, EditorRequired] public string Title { get; set; } = "";
     [Parameter] public RenderFragment? ChildContent { get; set; }
@@ -25,6 +38,38 @@
 
     /// <summary>Escape, the scrim, or a Cancel the caller draws; nothing when the dialog may not be left now.</summary>
     [Parameter] public EventCallback OnClose { get; set; }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+        try
+        {
+            _script = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Ui/Dialog.razor.js");
+            // The page held first, while the focus is still on what opened the dialog: that is where it goes back.
+            await _script.InvokeVoidAsync("hold", _titleId, _dialog);
+            await _dialog.FocusAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+            // The page went away while the dialog opened: nothing left to hold.
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_script is null)
+            return;
+        try
+        {
+            await _script.InvokeVoidAsync("release", _titleId);
+            await _script.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+            // The page is gone, and the hold with it.
+        }
+    }
 
     private Task CloseAsync() => OnClose.InvokeAsync();
 

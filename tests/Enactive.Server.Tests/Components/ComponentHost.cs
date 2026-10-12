@@ -42,7 +42,14 @@ public abstract class ComponentHost : BunitContext
         // real one (with the Viewer, Operator and Admin policies) does not replace it: a page asking whether the
         // person may do something failed before it was shown.
         Services.AddSingleton<IAuthorizationService, DefaultAuthorizationService>();
+        // A dialog's hold on the page is a script (Ui/Dialog.razor.js), which bUnit has no browser for: its calls are
+        // recorded, for a test to check they were made, and answer nothing.
+        DialogScript = JSInterop.SetupModule("./Components/Ui/Dialog.razor.js");
+        DialogScript.Mode = JSRuntimeMode.Loose;
     }
+
+    /// <summary>The dialog's script, as bUnit stands in for it: what was called on it.</summary>
+    internal BunitJSModuleInterop DialogScript { get; }
 
     /// <summary>The service's accounts, the real store.</summary>
     internal UserStore Users { get; }

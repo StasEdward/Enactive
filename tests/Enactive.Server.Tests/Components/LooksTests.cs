@@ -199,6 +199,18 @@ public sealed class LooksTests
             .Select(t => $"--{t.Value} is not {brand[t.Key]} in theme.css"));
     }
 
+    /// <summary>
+    /// A translucent colour is a token of the :root block, never written into a rule: one written in place (the dialog's
+    /// scrim was) is a shade no token names, which nothing holds to the rest of the palette.
+    /// </summary>
+    [Fact]
+    public void No_rule_writes_a_translucent_colour_of_its_own()
+    {
+        var rules = Theme.Value[(Theme.Value.IndexOf("\n}", Theme.Value.IndexOf(":root", StringComparison.Ordinal), StringComparison.Ordinal) + 2)..];
+
+        Assert.Empty(Regex.Matches(rules, @"rgba?\([^)]*\)").Select(m => m.Value));
+    }
+
     // ── reading the window's palette as text ────────────────────────────────
 
     private const string RunEdgeOther = "RunEdge._";

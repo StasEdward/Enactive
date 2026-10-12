@@ -163,10 +163,12 @@ internal static class ServerApp
         // The old addresses of a workspace's history and of the workspace list, which the Runs screen is now: a link in an
         // earlier mail or a bookmark still lands. The history named its workspace by its path; the Runs screen names it by
         // its id (WorkspaceIds), found only among the workspaces the service knows - a path it does not know lands on the
-        // Runs screen as it opens, not on a folder read off the disk. What the old page was told to say comes along.
+        // Runs screen as it opens, not on a folder read off the disk. What the old page was told to say comes along. A known
+        // folder whose path cannot be read (a drive not mounted) has no id to give, and lands there too (TryIdOf): read
+        // unguarded it was a 500 for an old link.
         app.MapGet("/history", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids) =>
             Results.LocalRedirect(Components.Links.Runs(
-                history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known ? ids.IdOf(known.RootPath) : null,
+                history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known ? ids.TryIdOf(known.RootPath) : null,
                 context.Request.Query["said"].ToString())))
             .RequireAuthorization(nameof(Role.Viewer));
         app.MapGet("/workspaces", () => Results.LocalRedirect("/")).RequireAuthorization(nameof(Role.Viewer));
