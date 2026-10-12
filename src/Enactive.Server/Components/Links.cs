@@ -23,8 +23,6 @@ internal static class Links
     /// <summary>A past run on the Runs screen: its workspace by its id (WorkspaceIds), and the run's.</summary>
     public static string PastRun(Guid workspace, Guid runId) => $"history/{workspace}/{runId}";
 
-    public static string Library(string workspace) => "library?ws=" + Uri.EscapeDataString(workspace);
-
     /// <summary>
     /// The Templates screen on a workspace, named by its id (WorkspaceIds) - with none, the one used last - opened on a
     /// template when <paramref name="template"/> names one, with what an action said, when one did.
@@ -55,8 +53,15 @@ internal static class Links
 
     public static string NewTemplate(Guid workspace) => $"templates/{NewTemplateId}?ws={workspace}";
 
-    public static string Schedule(string workspace, Guid? id)
-        => $"library/schedule?ws={Uri.EscapeDataString(workspace)}" + (id is null ? "" : $"&id={id}");
+    /// <summary>
+    /// The Schedules screen on a workspace, named by its id (WorkspaceIds) - with none, the one used last - opened on a
+    /// schedule when <paramref name="schedule"/> names one.
+    /// </summary>
+    public static string Schedules(Guid? workspace, Guid? schedule = null)
+    {
+        var path = schedule is { } id ? $"schedules/{id}" : "schedules";
+        return workspace is { } ws ? $"{path}?ws={ws}" : path;
+    }
 
     /// <summary>One run's set of proposed changes: its workspace by its id (WorkspaceIds), the set by the run's id.</summary>
     public static string Proposals(Guid workspace, string set) => $"proposals/{workspace}/{Uri.EscapeDataString(set)}";

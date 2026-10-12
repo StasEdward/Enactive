@@ -194,21 +194,21 @@ public sealed class WorkspaceColumnTests : ComponentHost
     }
 
     /// <summary>
-    /// The workspace list was the one way to a workspace's schedules, and it is gone: until they have a page of their own
-    /// (Task 17), the Runs screen leads to them for the workspace it shows - none was a page nothing linked to. Its
-    /// templates have theirs (the rail's Templates), so the link is the schedules' alone.
+    /// A workspace's templates and schedules are the rail's, each a screen with the workspace switcher of its own: the Runs
+    /// screen leads to neither. Its link to the schedules, kept while they had no screen, led to the old page by the
+    /// folder's path.
     /// </summary>
     [Fact]
-    public void The_workspace_shown_leads_to_its_schedules()
+    public void The_runs_screen_leaves_templates_and_schedules_to_the_rail()
     {
         Known("alpha");
         var beta = Known("beta");
 
         var screen = Screen("vera", $"/?ws={IdOf(beta)}", "beta");
 
-        var link = screen.FindAll("a").Single(a => a.TextContent.Trim() == "Schedules");
-        Assert.Equal("library?ws=" + Uri.EscapeDataString(beta), link.GetAttribute("href"));
+        Assert.DoesNotContain(screen.FindAll("a"), a => a.TextContent.Contains("Schedules", StringComparison.Ordinal));
         Assert.DoesNotContain(screen.FindAll("a"), a => a.TextContent.Contains("Templates", StringComparison.Ordinal));
+        Assert.DoesNotContain(screen.FindAll("a"), a => (a.GetAttribute("href") ?? "").StartsWith("library", StringComparison.Ordinal));
     }
 
     /// <summary>

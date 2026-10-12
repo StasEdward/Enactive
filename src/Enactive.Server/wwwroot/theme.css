@@ -644,3 +644,30 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .template-json { width: 100%; min-height: 60vh; box-sizing: border-box; font-family: var(--font-mono); font-size: 12px; }
 .template-status { margin: 0; color: var(--warning); white-space: pre-line; }
 .template-editor-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+
+/* ── Schedules (Pages/SchedulesScreen.razor; SchedulesWindow.axaml): the workspace over the schedules, 320 px | what the
+   chosen one will do and what came of it, or the form while one is written. ─────────────────────────────────────── */
+.schedules-top { display: grid; gap: 6px; max-width: 320px; margin: 0 0 10px; }
+/* Over everything, as the window's: not a detail of one schedule - while it shows, none of them will run. */
+.schedules-tick { margin: 0 0 10px; padding: 10px 12px; border-radius: 4px; border-left: 3px solid var(--danger); background: var(--scrim);
+  color: var(--warning); }
+.schedules-body { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 10px; align-items: start; }
+.schedules-cards { margin: 0; padding: 0; list-style: none; max-height: calc(100vh - 230px); overflow: auto; }
+.schedule-card { font: inherit; display: grid; gap: 2px; width: 100%; box-sizing: border-box; text-align: left; color: var(--text); cursor: pointer; }
+.schedule-card .card-title, .schedule-card .card-meta { white-space: normal; overflow-wrap: anywhere; }
+.schedule-next { margin-top: 3px; }
+.schedules-status { margin: 6px 0 0; }
+.schedules-list-actions { display: flex; gap: 8px; margin: 8px 0 0; }
+.schedule-detail, .schedule-form { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.schedule-detail p, .schedule-form p { margin: 0; }
+.schedule-approval { display: grid; gap: 4px; padding: 8px 10px; border-radius: 4px; background: var(--scrim); color: var(--text-body); overflow-wrap: anywhere; }
+.schedule-outcomes { margin: 0; padding: 0; list-style: none; }
+.schedule-outcome { display: grid; gap: 2px; margin: 0 0 6px; }
+.schedule-outcome-summary { color: var(--text-body); overflow-wrap: anywhere; }
+.schedule-field { display: grid; gap: 3px; }
+.schedule-field input:not([type="number"]), .schedule-field select { width: 100%; box-sizing: border-box; }
+.schedule-time { display: flex; align-items: center; gap: 8px; }
+.schedule-time input { width: 110px; }
+.schedule-problems { padding: 8px 10px; border-radius: 4px; background: var(--scrim); color: var(--warning); white-space: pre-line; }
+.schedule-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin: 4px 0 0; }
+.schedules-where { margin: 8px 0 0; }

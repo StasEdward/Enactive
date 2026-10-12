@@ -102,7 +102,7 @@ internal sealed class SchedulesViewModel : ObservableObject
     private readonly IScheduleChanges _changes;
     private readonly Func<DateTimeOffset> _now;
 
-    /// <summary>The tick's pulse (Heartbeat): null for the machine's own, which the console tick writes.</summary>
+    /// <summary>The tick's pulse (Heartbeat): null for the machine's own, beside the machine's schedules.</summary>
     private readonly string? _tickFile;
 
     /// <summary>
@@ -159,8 +159,9 @@ internal sealed class SchedulesViewModel : ObservableObject
         // Changes go where the host says (IScheduleChanges); the window's own go straight into the store.
         _changes = changes ?? new StoredScheduleChanges(_store);
         _now = now ?? (() => DateTimeOffset.Now);
-        // Whose tick: a host that asks the schedules itself (the service) says where its pulse is; read from the
-        // machine's, the service's page warned that nothing would run while its own scheduler ran them every minute.
+        // Whose tick: the pulse is kept beside the schedules it asks, and a host whose schedules are elsewhere (the
+        // service's data folder) says where. Read from the machine's, its page warned that nothing would run while its
+        // own scheduler ran them every minute.
         _tickFile = tickFile;
         _policy = new SchedulePolicy(settings);
 

@@ -3,6 +3,7 @@ namespace Enactive.Server.Runs;
 using Enactive.Application;
 using Enactive.Core.Context;
 using Enactive.Core.Inbox;
+using Enactive.Core.Schedules;
 using Enactive.Workspace;
 
 /// <summary>
@@ -37,6 +38,9 @@ internal sealed class ServerScheduler(ServerEngine engine, IRunControl runs, ILo
     /// <summary>One tick: each workspace's most overdue schedule into the line. What started, for a test to read.</summary>
     public async Task<IReadOnlyList<ServerRun>> TickAsync(DateTimeOffset now, CancellationToken ct)
     {
+        // Before anything is decided, as the console tick stamps it: the pulse says the schedules are being asked, not
+        // that one ran - a minute with nothing due is still a minute somebody looked.
+        Heartbeat.Stamp(now, engine.TickFile);
         var started = new List<ServerRun>();
         foreach (var root in engine.Schedules.Workspaces())
         {

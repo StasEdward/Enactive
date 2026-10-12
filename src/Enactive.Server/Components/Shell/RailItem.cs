@@ -53,8 +53,8 @@ internal sealed record RailItem(string Href, string Label, string Icon, Role Nee
 /// leads to the page that does the job now, or - with no page at all - is shown disabled. Each task that builds a page
 /// changes its row to the new address, and when every row is the item's own this table goes.
 ///
-/// <para>An item is marked "you are here" by <c>Active</c>, never by an address another item shares (Schedules leads to
-/// the Runs screen for now): both would light up on it.</para>
+/// <para>An item is marked "you are here" by <c>Active</c>, never by an address another item shares: both would light up
+/// on it.</para>
 /// </summary>
 internal static class RailAddresses
 {
@@ -68,9 +68,7 @@ internal static class RailAddresses
         ["/"] = new("/", ["", "runs"]),
         ["/timeline"] = new(null, ["timeline"]),                                          // TEMPORARY: no page yet
         ["/templates"] = new("templates", ["templates"]),
-        // TEMPORARY: the schedules need a workspace, and the workspace list they were reached from is the Runs screen's
-        // switcher now - so the Runs screen, until Schedules has a page of its own (Task 17).
-        ["/schedules"] = new("/", ["schedules", "library"]),   // "library" holds /library/schedule too
+        ["/schedules"] = new("schedules", ["schedules"]),
         ["/inbox"] = new("inbox", ["inbox"]),
         ["/proposals"] = new("proposals", ["proposals"]),
         ["/log"] = new("logs", ["log", "logs"]),                                         // TEMPORARY: /logs today

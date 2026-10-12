@@ -152,6 +152,18 @@ internal static class Looks
         _ => throw Unknown(edge)
     };
 
+    /// <summary>
+    /// A schedule's edge in the list, as Palette.Schedule: the colour says what its second line says, for the glance - muted
+    /// while it is off, red when it can never be timed, green when it has a next run.
+    /// </summary>
+    public static string Schedule(ScheduleState state) => state switch
+    {
+        ScheduleState.Off => "tone-idle",
+        ScheduleState.Untimed => "tone-failed",
+        ScheduleState.Scheduled => "tone-done",
+        _ => throw Unknown(state)
+    };
+
     /// <summary>A staged change: amber while it waits for a person or could not be applied, then what was done.</summary>
     public static string Change(bool applied, bool rejected) => (applied, rejected) switch
     {

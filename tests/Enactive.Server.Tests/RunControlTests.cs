@@ -843,6 +843,22 @@ public sealed class RunControlTests : IDisposable
         Assert.Contains(_users.AuditTrail(), e => e is { Account: "(scheduler)", Action: "scheduled run started" });
     }
 
+    /// <summary>
+    /// Every tick stamps the service's own pulse, beside its schedules, whether anything was due or not: the schedules page
+    /// reads it to say whether anything asks them, and the machine's pulse is a console tick's, which the service is not.
+    /// </summary>
+    [Fact]
+    public async Task A_tick_with_nothing_due_still_stamps_the_service_s_pulse()
+    {
+        var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        var now = DateTimeOffset.Now;
+
+        Assert.Empty(await new ServerScheduler(engine, _control, NullLogger<ServerScheduler>.Instance).TickAsync(now, CancellationToken.None));
+
+        Assert.Equal(Path.Combine(_root, "data", "tick.txt"), engine.TickFile);
+        Assert.Equal(now, Enactive.Core.Schedules.Heartbeat.LastSeen(engine.TickFile));
+    }
+
     /// <summary>Checked at the action: a folder outside the service's roots is refused whatever page asked for it.</summary>
     [Fact]
     public void A_run_outside_the_service_s_roots_is_refused()

@@ -3,7 +3,6 @@ namespace Enactive.Server.Runs;
 using System.Security.Claims;
 using Enactive.Application;
 using Enactive.Core.Context;
-using Enactive.Core.Inbox;
 using Enactive.Core.Permissions;
 using Enactive.Core.Schedules;
 using Enactive.Core.Templates;
@@ -11,20 +10,12 @@ using Enactive.Server.Accounts;
 using Enactive.Settings;
 using Enactive.Workspace;
 
-/// <summary>A schedule as the page lists it: when, what next, what it may do, and its last outcomes.</summary>
-internal sealed record ScheduleView(Schedule Schedule, string When, string Next, IReadOnlyList<string> MayDo, IReadOnlyList<InboxItem> Outcomes);
-
 /// <summary>
 /// What the template editor opens (TemplateEditViewModel's arguments): the draft, whether its id may still change, the
 /// libraries it may be saved to - the first is the one offered - and the tools the service's engine registers, for the
 /// deny and ask lists.
 /// </summary>
 internal sealed record TemplateDraft(TaskTemplate Template, bool IdEditable, IReadOnlyList<TemplateScope> Scopes, IReadOnlyList<string> ToolNames);
-
-/// <summary>What the schedule form filled in, as text - turned into a draft and checked here, not on the page.</summary>
-internal sealed record ScheduleForm(
-    Guid? Id, string Name, string Work, string Repeat, string Time, string? Day, string? Date, string Tier, bool RunLate,
-    string Parameters);
 
 /// <summary>
 /// A workspace's templates and schedules, kept from the browser by Operators (ADR 0002 §4: an Operator "edits
@@ -40,10 +31,6 @@ internal sealed record ScheduleForm(
 /// </summary>
 internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunControl runs)
 {
-    /// <summary>The templates seen from a workspace: its own, the service account's global ones, the built-ins.</summary>
-    public (IReadOnlyList<StoredTemplate> Templates, string? Problem) Templates(ClaimsPrincipal user, string root)
-        => Reading(user, root) is { } known ? (new TemplateStore(known.RootPath).Inventory(), null) : ([], Why(user, Role.Viewer));
-
     /// <summary>
     /// The library as the window shows it (TemplatesViewModel): this workspace's templates, the service account's global
     /// ones and the built-ins, each run's summary said against the folder's level as the service has it now - a template
@@ -131,107 +118,68 @@ internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunCo
 
     // ── schedules ───────────────────────────────────────────────────────────
 
-    public async Task<(IReadOnlyList<ScheduleView> Schedules, string? Problem)> SchedulesAsync(ClaimsPrincipal user, string root, CancellationToken ct)
-    {
-        if (Reading(user, root) is not { } known)
-            return ([], Why(user, Role.Viewer));
-        IReadOnlyList<InboxItem> inbox;
-        try { inbox = await InboxStoreFactory.Create(WorkspaceInfo.For(known.RootPath)).LoadAllAsync(ct); }
-        catch (Exception) when (!ct.IsCancellationRequested) { inbox = []; }
+    /// <summary>
+    /// The schedules as the window shows them (SchedulesViewModel): the list, what each will do, what came of it, and
+    /// the form - for a Viewer to read. Over the service's own schedules and settings, its tick's pulse (the warning that
+    /// nothing runs is about the service's scheduler, not a console tick) and, for what is saved, switched and deleted,
+    /// this service's checks: the form's changes come back here as the person (<see cref="SaveSchedule"/>,
+    /// <see cref="SwitchSchedule"/>, <see cref="DeleteSchedule"/>), so a page can only offer what this allows.
+    /// </summary>
+    public (SchedulesViewModel? Schedules, string? Problem) Schedules(ClaimsPrincipal user, string root)
+        => Reading(user, root) is { } known
+            ? (new SchedulesViewModel(known.RootPath, () => engine.Settings ?? new AppSettings(), engine.Schedules,
+                changes: new AsThePerson(this, user, known.RootPath), tickFile: engine.TickFile), null)
+            : (null, Why(user, Role.Viewer));
 
-        var now = DateTimeOffset.Now;
-        return (engine.Schedules.For(known.RootPath)
-            .Select(s => new ScheduleView(s, ScheduleWords.When(s.Timing), ScheduleWords.NextRun(s, now),
-                ScheduleWords.MayDo(s.Permissions), ScheduledOutcome.Of(inbox, s.Id)))
-            .ToList(), null);
-    }
-
-    /// <summary>Saves a schedule from the form, if the scheduler could run it; every reason it could not, at once.</summary>
-    public (bool Saved, string Said) SaveSchedule(ClaimsPrincipal user, string root, ScheduleForm form)
+    /// <summary>
+    /// Keeps a schedule the form made, if the scheduler could run it: checked again here (ScheduleDrafts - the
+    /// scheduler's own resolution), against this workspace and its templates as they are now, never trusted from the
+    /// page's check - that was a view of a moment ago, and a template deleted since is a schedule that fails at its hour.
+    /// Kept in the workspace this call names, whatever folder the schedule says. Every reason it was not, at once.
+    /// </summary>
+    public (bool Saved, string Said) SaveSchedule(ClaimsPrincipal user, string root, Schedule schedule)
     {
         if (Writing(user, root) is not { } known)
             return (false, Why(user, Role.Operator));
-        if (Timing(form) is not { } timing)
-            return (false, "The time is not a time of day (\"07:30\"), or a one-off has no date.");
 
-        var work = form.Work.StartsWith("template:", StringComparison.Ordinal)
-            ? ScheduledWork.FromTemplate(form.Work["template:".Length..], Parameters(form.Parameters))
-            : form.Work.StartsWith("run:", StringComparison.Ordinal) && Guid.TryParse(form.Work["run:".Length..], out var runId)
-                ? PastRun(known.RootPath, runId) is { } snapshot ? ScheduledWork.FromPastRun(snapshot) : null
-                : null;
-        if (work is null)
-            return (false, "Choose what it runs: a template, or a past run that came from one.");
+        // Its permissions are the form's tier with the settings' shell rule on top, asked of the settings as they are now
+        // (SchedulePolicy, which the form was given from this service): a schedule saved with the tier alone would run
+        // commands on a service whose settings say never to.
+        var draft = new ScheduleDraft(schedule.Name, known.RootPath, schedule.Work, schedule.Timing, schedule.Permissions,
+            schedule.Missed, schedule.Enabled, schedule.Id);
+        var checkedDraft = ScheduleDrafts.Check(draft, WorkspaceInfo.For(known.RootPath), DateTimeOffset.Now, new TemplateStore(known.RootPath).Find);
+        if (checkedDraft.Schedule is not { } kept)
+            return (false, string.Join(Environment.NewLine, checkedDraft.Problems));
 
-        // The tier with the settings' shell rule on top, from the settings as they are now (SchedulePolicy): a schedule
-        // saved with the tier alone would run commands on a service whose settings say never to.
-        var policy = new SchedulePolicy(() => engine.Settings ?? new AppSettings()).For(form.Tier);
-        var draft = new ScheduleDraft(form.Name.Trim(), known.RootPath, work, timing, policy,
-            form.RunLate ? MissedRun.RunLate : MissedRun.Skip, Enabled: true, Id: form.Id);
-        var templates = new TemplateStore(known.RootPath);
-        var checkedDraft = ScheduleDrafts.Check(draft, WorkspaceInfo.For(known.RootPath), DateTimeOffset.Now, templates.Find);
-        if (checkedDraft.Schedule is not { } schedule)
-            return (false, "Not saved - " + string.Join(" ", checkedDraft.Problems));
-
-        engine.Schedules.Save(schedule);
-        users.Audit(Who(user), form.Id is null ? "schedule added" : "schedule changed", $"{schedule.Name} in {known.RootPath}: {ScheduleWords.When(timing)}");
-        return (true, $"Saved '{schedule.Name}'. {ScheduleWords.NextRun(schedule, DateTimeOffset.Now)}");
+        var changed = engine.Schedules.For(known.RootPath).Any(s => s.Id == kept.Id);
+        engine.Schedules.Save(kept);
+        users.Audit(Who(user), changed ? "schedule changed" : "schedule added", $"{kept.Name} in {known.RootPath}: {ScheduleWords.When(kept.Timing)}");
+        return (true, $"Saved '{kept.Name}'. {ScheduleWords.NextRun(kept, DateTimeOffset.Now)}");
     }
 
-    public string SwitchSchedule(ClaimsPrincipal user, string root, Guid id, bool on)
+    /// <summary>Turns a schedule of this workspace on or off; what to tell the person.</summary>
+    public (bool Done, string Said) SwitchSchedule(ClaimsPrincipal user, string root, Guid id, bool on)
     {
         if (Writing(user, root) is not { } known)
-            return Why(user, Role.Operator);
+            return (false, Why(user, Role.Operator));
         if (engine.Schedules.For(known.RootPath).FirstOrDefault(s => s.Id == id) is not { } schedule)
-            return "There is no such schedule here.";
+            return (false, "There is no such schedule here.");
         engine.Schedules.Save(schedule with { Enabled = on });
         users.Audit(Who(user), on ? "schedule switched on" : "schedule switched off", $"{schedule.Name} in {known.RootPath}");
-        return on ? $"'{schedule.Name}' is on." : $"'{schedule.Name}' is off.";
+        return (true, on ? $"'{schedule.Name}' is on." : $"'{schedule.Name}' is off.");
     }
 
-    public string DeleteSchedule(ClaimsPrincipal user, string root, Guid id)
+    /// <summary>Forgets a schedule of this workspace; what to tell the person.</summary>
+    public (bool Done, string Said) DeleteSchedule(ClaimsPrincipal user, string root, Guid id)
     {
         if (Writing(user, root) is not { } known)
-            return Why(user, Role.Operator);
+            return (false, Why(user, Role.Operator));
         if (engine.Schedules.For(known.RootPath).FirstOrDefault(s => s.Id == id) is not { } schedule)
-            return "There is no such schedule here.";
+            return (false, "There is no such schedule here.");
         engine.Schedules.Remove(known.RootPath, id);
         users.Audit(Who(user), "schedule deleted", $"{schedule.Name} in {known.RootPath}");
-        return $"Deleted '{schedule.Name}'.";
+        return (true, $"Deleted '{schedule.Name}'.");
     }
-
-    /// <summary>The past runs a schedule can repeat: those from a template, whose task was recorded whole.</summary>
-    public async Task<IReadOnlyList<Core.History.RunSummary>> RepeatableAsync(ClaimsPrincipal user, string root, CancellationToken ct)
-    {
-        if (Reading(user, root) is not { } known)
-            return [];
-        var summaries = await RunStoreFactory.Create(WorkspaceInfo.For(known.RootPath)).LoadSummariesAsync(ct);
-        return summaries.Where(s => !string.IsNullOrWhiteSpace(s.Spec)).OrderByDescending(s => s.StartedAt).Take(20).ToList();
-    }
-
-    private string? PastRun(string root, Guid runId)
-        => RunStoreFactory.Create(WorkspaceInfo.For(root)).LoadSummariesAsync(CancellationToken.None).GetAwaiter().GetResult()
-            .FirstOrDefault(s => s.RunId == runId)?.Spec;
-
-    /// <summary>The form's time, as a timing in this machine's zone - the service's clock is the one that fires it.</summary>
-    private static ScheduleTiming? Timing(ScheduleForm form)
-    {
-        if (!TimeOnly.TryParse(form.Time, out var at))
-            return null;
-        return form.Repeat switch
-        {
-            "weekly" when Enum.TryParse<DayOfWeek>(form.Day, ignoreCase: true, out var day) => ScheduleTiming.Weekly(day, at),
-            "once" when DateOnly.TryParse(form.Date, out var date) => ScheduleTiming.Once(new DateTimeOffset(date.ToDateTime(at))),
-            "daily" => ScheduleTiming.Daily(at),
-            _ => null
-        };
-    }
-
-    /// <summary>"name=value" lines: the answers a template's parameters are given at the scheduled hour, when nobody is there to ask.</summary>
-    private static Dictionary<string, string> Parameters(string text)
-        => text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(line => line.Split('=', 2))
-            .Where(pair => pair.Length == 2 && pair[0].Trim().Length > 0)
-            .ToDictionary(pair => pair[0].Trim(), pair => pair[1].Trim());
 
     private WorkspaceEntry? Reading(ClaimsPrincipal user, string root)
         => ServerAuth.StillValid(users, user) is { Role: >= Role.Viewer } ? engine.Workspaces.Find(root) : null;
@@ -265,4 +213,21 @@ internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunCo
         => ServerAuth.StillValid(users, user) is not { } account ? "Your session has ended. Sign in again."
             : account.Role < needed ? $"Your role does not include {what}."
             : "The service does not know that folder as a workspace.";
+
+    /// <summary>
+    /// The schedules form's changes, as the person whose page it is: each goes through this service's check for them
+    /// (an Operator's) and its audit trail, and what it says when it refuses is what the form shows. On success the form
+    /// says what the window's says - nothing, the list shows it.
+    /// </summary>
+    private sealed class AsThePerson(ServerLibrary library, ClaimsPrincipal user, string root) : IScheduleChanges
+    {
+        public string? Save(Schedule schedule)
+            => library.SaveSchedule(user, root, schedule) is (false, var why) ? why : null;
+
+        public string? Switch(Schedule schedule, bool on)
+            => library.SwitchSchedule(user, root, schedule.Id, on) is (false, var why) ? why : null;
+
+        public string? Remove(Schedule schedule)
+            => library.DeleteSchedule(user, root, schedule.Id) is (false, var why) ? why : null;
+    }
 }

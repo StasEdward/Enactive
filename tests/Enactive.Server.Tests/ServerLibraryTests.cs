@@ -2,6 +2,7 @@ namespace Enactive.Server.Tests;
 
 using System.Security.Claims;
 using Enactive.Application;
+using Enactive.Core.Schedules;
 using Enactive.Server.Accounts;
 using Enactive.Server.Runs;
 using Enactive.Workspace;
@@ -28,6 +29,8 @@ public sealed class ServerLibraryTests : IDisposable
           "parameters": [ { "id": "topic", "name": "Topic", "type": "Text", "required": true } ] }
         """;
 
+    private const string Weekly = """{ "id": "weekly", "name": "Weekly", "goal": "Write the week." }""";
+
     public ServerLibraryTests()
     {
         _workspace = Path.Combine(_root, "project");
@@ -52,8 +55,13 @@ public sealed class ServerLibraryTests : IDisposable
 
     private ClaimsPrincipal As(string name) => ServerAuth.PrincipalOf(_users.Find(name)!);
 
-    private ScheduleForm Daily(string work, string parameters = "", string tier = "execute")
-        => new(null, "morning digest", work, "daily", "07:30", null, null, tier, false, parameters);
+    /// <summary>A schedule as a form makes one: every day at 07:30, its tier's policy from the service's settings.</summary>
+    private Schedule Daily(string template, IReadOnlyDictionary<string, string>? parameters = null, string? workspace = null)
+        => new(Guid.NewGuid(), workspace ?? _workspace, "morning digest", ScheduledWork.FromTemplate(template, parameters),
+            ScheduleTiming.Daily(new TimeOnly(7, 30)), new SchedulePolicy(() => _engine.Settings ?? new Enactive.Settings.AppSettings()).For("execute"),
+            DateTimeOffset.Now);
+
+    private static Dictionary<string, string> Topic => new() { ["topic"] = "the inbox" };
 
     [Fact]
     public void A_template_given_as_json_is_kept_in_the_workspace_library_and_audited()
@@ -81,64 +89,129 @@ public sealed class ServerLibraryTests : IDisposable
     public void A_viewer_reads_the_library_and_changes_nothing()
     {
         Assert.Contains("role does not include", _library.SaveTemplate(As("vera"), _workspace, Digest, TemplateScope.Workspace).Said);
-        Assert.NotEmpty(_library.Templates(As("vera"), _workspace).Templates);   // the built-ins at least
+        Assert.NotEmpty(_library.Library(As("vera"), _workspace).Library!.Templates);   // the built-ins at least
     }
 
     /// <summary>
-    /// Checked as the scheduler will check it at its hour: a template parameter nobody supplies is refused now, in
-    /// words, not at three in the morning.
+    /// Checked again by the service as the scheduler will check it at its hour - whatever the page's form found: a template
+    /// parameter nobody supplies is refused now, in words, not at three in the morning.
     /// </summary>
     [Fact]
     public void A_schedule_the_scheduler_could_not_run_is_refused_with_why()
     {
         _library.SaveTemplate(As("alice"), _workspace, Digest, TemplateScope.Workspace);
 
-        var (saved, said) = _library.SaveSchedule(As("alice"), _workspace, Daily("template:digest"));
+        var (saved, said) = _library.SaveSchedule(As("alice"), _workspace, Daily("digest"));
 
         Assert.False(saved);
         Assert.Contains("topic", said);
         Assert.Empty(_engine.Schedules.For(_workspace));
     }
 
+    /// <summary>
+    /// Saved in the workspace the call names, whatever folder the schedule says, and audited; switched and deleted by an
+    /// Operator, each audited too.
+    /// </summary>
     [Fact]
     public void A_schedule_with_its_parameters_is_saved_switched_and_deleted()
     {
         _library.SaveTemplate(As("alice"), _workspace, Digest, TemplateScope.Workspace);
 
-        var (saved, said) = _library.SaveSchedule(As("alice"), _workspace, Daily("template:digest", "topic=the inbox"));
+        var (saved, said) = _library.SaveSchedule(As("alice"), _workspace, Daily("digest", Topic, workspace: Path.Combine(_root, "elsewhere")));
 
         Assert.True(saved, said);
+        Assert.StartsWith("Saved 'morning digest'. Next run: ", said);
         var schedule = Assert.Single(_engine.Schedules.For(_workspace));
+        Assert.Equal(_workspace, schedule.WorkspaceRoot);
         Assert.Equal("the inbox", schedule.Work.Parameters["topic"]);
         Assert.Equal(new TimeOnly(7, 30), schedule.Timing.AtLocal);
 
-        _library.SwitchSchedule(As("alice"), _workspace, schedule.Id, on: false);
+        Assert.True(_library.SwitchSchedule(As("alice"), _workspace, schedule.Id, on: false).Done);
         Assert.False(_engine.Schedules.For(_workspace).Single().Enabled);
-        _library.DeleteSchedule(As("alice"), _workspace, schedule.Id);
+        Assert.True(_library.DeleteSchedule(As("alice"), _workspace, schedule.Id).Done);
         Assert.Empty(_engine.Schedules.For(_workspace));
+        foreach (var action in new[] { "schedule added", "schedule switched off", "schedule deleted" })
+            Assert.Contains(_users.AuditTrail(), e => e.Account == "alice" && e.Action == action);
     }
 
-    /// <summary>The tier with the settings' shell rule on top, from the settings as they are when it is saved.</summary>
+    /// <summary>
+    /// The window's form, from the service: its tier is given the settings' shell rule as the service's settings are when
+    /// it is saved (SchedulePolicy over the service's settings), and what it saves comes back through the service as the
+    /// person - an Operator's is kept and audited.
+    /// </summary>
     [Fact]
-    public void A_schedule_s_permissions_follow_the_settings_shell_rule()
+    public async Task The_form_saves_through_the_service_with_the_settings_shell_rule()
     {
         var settings = Enactive.Settings.AppSettings.Load(_engine.SettingsFile);
         settings.ShellCommands = Enactive.Settings.ShellCommandPolicy.Off;
         settings.Save(_engine.SettingsFile, replaceUnreadable: true);
         _engine.Reload();
-        _library.SaveTemplate(As("alice"), _workspace, Digest, TemplateScope.Workspace);
+        _library.SaveTemplate(As("alice"), _workspace, Weekly, TemplateScope.Workspace);
+        var form = await Opened("alice");
 
-        _library.SaveSchedule(As("alice"), _workspace, Daily("template:digest", "topic=the inbox", tier: "autonomous"));
+        form.NewCommand.Execute(null);
+        form.DraftName = "morning digest";
+        form.DraftWork = form.WorkChoices.Single(c => c.TemplateId == "weekly");
+        form.DraftTier = "autonomous";
+        form.SaveCommand.Execute(null);
 
+        Assert.False(form.IsEditing, form.Problems);
         var expected = Enactive.Settings.EngineComposition.PolicyFor(settings, 3);
         Assert.Equal(expected.AskBefore, Assert.Single(_engine.Schedules.For(_workspace)).Permissions.AskBefore);
         Assert.Equal(expected.Allow, _engine.Schedules.For(_workspace).Single().Permissions.Allow);
+        Assert.Contains(_users.AuditTrail(), e => e is { Account: "alice", Action: "schedule added" });
+    }
+
+    /// <summary>
+    /// A Viewer reads the schedules - the form's view model is theirs to read - and changes none: not by the service's
+    /// calls, and not through the form, whose changes come back to the service as them.
+    /// </summary>
+    [Fact]
+    public async Task A_viewer_reads_the_schedules_and_changes_none()
+    {
+        // A template that asks nothing: the form saves the work it chose with no answers (as the window's does), and its
+        // Save is to reach the service, not be stopped by the scheduler's own check on the way.
+        _library.SaveTemplate(As("alice"), _workspace, Weekly, TemplateScope.Workspace);
+        Assert.True(_library.SaveSchedule(As("alice"), _workspace, Daily("weekly")).Saved);
+        var id = _engine.Schedules.For(_workspace).Single().Id;
+
+        var form = await Opened("vera");
+
+        Assert.Equal("morning digest", Assert.Single(form.Schedules).Name);
+        Assert.Contains("role does not include", _library.SaveSchedule(As("vera"), _workspace, Daily("weekly")).Said);
+        Assert.Contains("role does not include", _library.SwitchSchedule(As("vera"), _workspace, id, on: false).Said);
+        Assert.Contains("role does not include", _library.DeleteSchedule(As("vera"), _workspace, id).Said);
+
+        form.ToggleEnabledCommand.Execute(null);
+        Assert.Contains("role does not include", form.Status);
+        form.DeleteCommand.Execute(null);
+        Assert.Contains("role does not include", form.Status);
+        form.EditCommand.Execute(null);
+        form.SaveCommand.Execute(null);
+        Assert.Contains("role does not include", form.Problems);
+
+        var kept = Assert.Single(_engine.Schedules.For(_workspace));
+        Assert.True(kept.Enabled);
+        Assert.Equal(id, kept.Id);
+        Assert.DoesNotContain(_users.AuditTrail(), e => e.Account == "vera");
     }
 
     [Fact]
-    public void A_time_that_is_not_one_is_refused()
-        => Assert.Contains("not a time", _library.SaveSchedule(As("alice"), _workspace,
-            new ScheduleForm(null, "x", "template:digest", "daily", "25:99", null, null, "execute", false, "")).Said);
+    public void Only_a_known_workspace_s_schedules_are_read()
+    {
+        var (form, problem) = _library.Schedules(As("vera"), Path.Combine(_root, "elsewhere"));
+
+        Assert.Null(form);
+        Assert.Contains("does not know that folder", problem);
+    }
+
+    private async Task<SchedulesViewModel> Opened(string who)
+    {
+        var (form, problem) = _library.Schedules(As(who), _workspace);
+        Assert.True(form is not null, problem);
+        await form.RefreshAsync();
+        return form;
+    }
 
     // ── the library page and the editor (Task 16) ──────────────────────────
 

@@ -1,0 +1,326 @@
+@page "/schedules"
+@page "/schedules/{ScheduleId:guid}"
+@using System.ComponentModel
+@using System.Globalization
+@using System.Security.Claims
+@using Enactive.Application
+@using Enactive.Server.Accounts
+@using Enactive.Server.Components.Runs
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@implements IDisposable
+@inject ServerLibrary Library
+@inject ServerHistory History
+@inject WorkspaceIds Ids
+
+<PageTitle>Schedules - Enactive</PageTitle>
+
+@* The window's schedules (SchedulesWindow.axaml) for one workspace: the list, 320 px, each with its edge - green with a next
+   run, muted when off, red when it can never be timed - and on the right what the chosen one will do and what came of it,
+   or the form while one is written. What it shows and decides is the window's own view model (SchedulesViewModel), built
+   by ServerLibrary for this workspace; this draws it. Its Save, Enable / Disable and Delete come back to ServerLibrary as
+   the person, which checks them again: a Viewer is offered none of them, and a page that sent one anyway is refused. The
+   workspace is chosen in the switcher, as on the Runs screen. *@
+
+<div class="schedules-screen">
+    <div class="schedules-top">
+        <PanelHeader Text="WORKSPACE" />
+        <WorkspaceSwitcher Rows="_switcher" Current="_switcher.FirstOrDefault(r => r.IsCurrent)" Href="@(row => Links.Schedules(row.Id))" />
+    </div>
+
+    @if (_problem is { } problem)
+    {
+        <p class="said">@problem</p>
+    }
+
+    @if (_schedules is { } vm)
+    {
+        @* Across the screen and above everything, as the window has it: while it shows, none of them will run at all. *@
+        @if (vm.HasTickWarning)
+        {
+            <p class="schedules-tick" role="alert">@vm.TickWarning</p>
+        }
+
+        <div class="schedules-body">
+            <section class="schedules-list" aria-label="Schedules">
+                <ul class="cards schedules-cards">
+                    @foreach (var item in vm.Schedules)
+                    {
+                        var chosen = ReferenceEquals(item, vm.Selected);
+                        <li>
+                            <button type="button" aria-current="@(chosen ? "true" : null)" @onclick="() => vm.Selected = item"
+                                    class="@($"card selectable schedule-card {Looks.Schedule(item.State)}{(chosen ? " selected" : "")}")">
+                                <span class="card-title">@item.Name</span>
+                                <span class="card-meta">@item.When</span>
+                                <span class="card-meta schedule-next">@item.Next</span>
+                            </button>
+                        </li>
+                    }
+                </ul>
+                <p class="hint schedules-status">@vm.Status</p>
+                <div class="schedules-list-actions">
+                    @if (_canOperate)
+                    {
+                        <button type="button" class="btn go" @onclick="() => vm.NewCommand.Execute(null)">New</button>
+                    }
+                    <button type="button" class="btn" @onclick="vm.RefreshAsync">Refresh</button>
+                </div>
+            </section>
+
+            @if (vm.IsEditing && _canOperate)
+            {
+                <section class="schedule-form" aria-label="Schedule form">
+                    <div class="schedule-field">
+                        <label class="label" for="s-name">Name</label>
+                        <p class="hint">What you will see in the Inbox when it reports back.</p>
+                        <input id="s-name" @bind="vm.DraftName" @bind:event="oninput" />
+                    </div>
+
+                    <div class="schedule-field">
+                        <label class="label" for="s-work">What it runs</label>
+                        <p class="hint">A template, resolved fresh each time it fires — or a past run, repeated exactly as it ran.</p>
+                        @* By its place in the list, not its label: two past runs of one title in one minute read the same. *@
+                        <select id="s-work" value="@WorkIndex(vm)" @onchange="e => ChooseWork(vm, e)">
+                            @for (var i = 0; i < vm.WorkChoices.Count; i++)
+                            {
+                                <option value="@i.ToString(CultureInfo.InvariantCulture)">@vm.WorkChoices[i].Label</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="schedule-field">
+                        <label class="label" for="s-repeat">How often</label>
+                        <select id="s-repeat" @bind="vm.DraftRepeat">
+                            @foreach (var repeat in vm.Repeats)
+                            {
+                                <option value="@repeat">@repeat</option>
+                            }
+                        </select>
+                    </div>
+
+                    @if (vm.IsWeekly)
+                    {
+                        <div class="schedule-field">
+                            <label class="label" for="s-day">Day</label>
+                            <select id="s-day" @bind="vm.DraftDay">
+                                @foreach (var day in vm.Days)
+                                {
+                                    <option value="@day">@day</option>
+                                }
+                            </select>
+                        </div>
+                    }
+
+                    @if (vm.IsOnce)
+                    {
+                        <div class="schedule-field">
+                            <label class="label" for="s-date">Date</label>
+                            <input id="s-date" type="date" value="@DateText(vm)" @onchange="e => ChooseDate(vm, e)" />
+                        </div>
+                    }
+
+                    @* Two numbers, as the window's two spinners: a time that cannot be typed wrongly needs no rule here to say
+                       it was typed wrongly - the view model clamps each to its range. *@
+                    <div class="schedule-field">
+                        <span class="label" id="s-time">Time</span>
+                        <div class="schedule-time" role="group" aria-labelledby="s-time">
+                            <input type="number" min="0" max="23" aria-label="Hour" @bind="vm.DraftHour" />
+                            <span>:</span>
+                            <input type="number" min="0" max="59" aria-label="Minute" @bind="vm.DraftMinute" />
+                        </div>
+                    </div>
+
+                    <div class="schedule-field">
+                        <label class="label" for="s-zone">Time zone</label>
+                        <p class="hint">A repeating time is a wall clock: it stays at the same hour when the clocks change.</p>
+                        <select id="s-zone" value="@vm.DraftZone.Id" @onchange="e => ChooseZone(vm, e)">
+                            @* A zone the schedule names that this machine does not list is still what it says. *@
+                            @if (!vm.Zones.Contains(vm.DraftZone))
+                            {
+                                <option value="@vm.DraftZone.Id">@vm.DraftZone.Label</option>
+                            }
+                            @foreach (var zone in vm.Zones)
+                            {
+                                <option value="@zone.Id">@zone.Label</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="schedule-field">
+                        <label class="label" for="s-tier">What it may do</label>
+                        <p class="hint">The same slider as a live run. Nobody is watching a scheduled run, so anything a tier would ask about is refused instead.</p>
+                        <select id="s-tier" @bind="vm.DraftTier">
+                            @foreach (var tier in vm.Tiers)
+                            {
+                                <option value="@tier">@tier</option>
+                            }
+                        </select>
+                    </div>
+
+                    <label class="check"><input type="checkbox" @bind="vm.DraftRunLate" /> If the machine was off, run it as soon as it is back</label>
+
+                    @* What Save would agree to, before it is agreed: a schedule is an approval given in advance, and the
+                       window's lines for a saved one, said of the form as it stands (SchedulesViewModel.DraftApproval). *@
+                    <h2 class="label">What this will do</h2>
+                    @if (vm.DraftApproval is { Count: > 0 } lines)
+                    {
+                        <div class="schedule-approval schedule-draft-approval">
+                            @foreach (var line in lines)
+                            {
+                                <p>@line</p>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="hint">Said here once the form can be saved; Save says what it still needs.</p>
+                    }
+
+                    @if (vm.HasProblems)
+                    {
+                        <p class="schedule-problems" role="alert">@vm.Problems</p>
+                    }
+
+                    <div class="schedule-actions">
+                        <button type="button" class="btn" @onclick="() => vm.CancelEditCommand.Execute(null)">Cancel</button>
+                        <button type="button" class="btn go" @onclick="() => vm.SaveCommand.Execute(null)">Save</button>
+                    </div>
+                </section>
+            }
+            else if (vm.Selected is not null)
+            {
+                <section class="schedule-detail" aria-label="Schedule">
+                    @* A schedule is an approval given in advance for every future run, so this is not a summary of it - it is
+                       the whole of what is agreed. Every line comes from ScheduleWords; nothing here picks. *@
+                    <h2 class="label">What this will do</h2>
+                    <div class="schedule-approval">
+                        @foreach (var line in vm.Approval)
+                        {
+                            <p>@line</p>
+                        }
+                    </div>
+
+                    <h2 class="label">What came of it</h2>
+                    @if (vm.HasNoOutcomes)
+                    {
+                        <p class="hint">Nothing yet — this schedule has not reported back.</p>
+                    }
+                    <ul class="cards schedule-outcomes">
+                        @foreach (var outcome in vm.Outcomes)
+                        {
+                            <li class="@($"card schedule-outcome {Looks.Inbox(outcome.Kind)}")">
+                                <span class="card-meta">@outcome.When</span>
+                                <span class="schedule-outcome-summary">@outcome.Summary</span>
+                            </li>
+                        }
+                    </ul>
+
+                    @if (_canOperate)
+                    {
+                        <div class="schedule-actions">
+                            <button type="button" class="btn" @onclick="() => vm.DeleteCommand.Execute(null)">Delete</button>
+                            <button type="button" class="btn" @onclick="() => vm.ToggleEnabledCommand.Execute(null)">@vm.EnableLabel</button>
+                            <button type="button" class="btn go" @onclick="() => vm.EditCommand.Execute(null)">Edit</button>
+                        </div>
+                    }
+                </section>
+            }
+        </div>
+
+        <p class="hint schedules-where">@vm.WorkspaceRoot</p>
+    }
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The schedule to open on - from an old address, or a link that names one.</summary>
+    [Parameter] public Guid? ScheduleId { get; set; }
+
+    /// <summary>
+    /// The workspace, by its id (WorkspaceIds); none, the one used last. Read as text and parsed here, as the Runs screen
+    /// does: an address is typed by people, and one that is not an id must say "not known" rather than fail the page.
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "ws")] private string? Ws { get; set; }
+
+    private ClaimsPrincipal _user = new();
+    private bool _canOperate;
+    private IReadOnlyList<SwitcherRow> _switcher = [];
+    private SchedulesViewModel? _schedules;
+    private string? _problem;
+
+    // Read per address, not once (Pages/_Imports.razor): choosing another workspace is a link to this same page.
+    protected override async Task OnParametersSetAsync()
+    {
+        _user = (await Auth).User;
+        // Offered only: ServerLibrary refuses every change to anybody else, whatever a page sent.
+        _canOperate = ServerAuth.RoleOf(_user) >= Role.Operator;
+
+        var known = History.Workspaces(_user);
+        Guid? wanted = Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null;
+        var selected = WorkspaceColumnState.Choose(known, wanted, Ids);
+        _switcher = WorkspaceColumnState.Switcher(known, selected, Ids);
+        if (selected is null)
+        {
+            Show(null);
+            _problem = wanted is null ? "The service knows no workspace yet. An Operator adds one on the Runs screen." : "The service does not know that workspace.";
+            return;
+        }
+
+        var (schedules, problem) = Library.Schedules(_user, selected.RootPath);
+        _problem = problem;
+        Show(schedules);
+        if (schedules is null)
+            return;
+
+        await schedules.RefreshAsync();
+        if (ScheduleId is { } named && schedules.Schedules.FirstOrDefault(s => s.Schedule.Id == named) is { } item)
+            schedules.Selected = item;
+    }
+
+    /// <summary>
+    /// The view model drawn: what changes in it is drawn again (INotifyPropertyChanged) - the list after a save, what came of
+    /// a schedule once the inbox is read - not only on the next event from this page.
+    /// </summary>
+    private void Show(SchedulesViewModel? schedules)
+    {
+        if (_schedules is not null)
+            _schedules.PropertyChanged -= Changed;
+        _schedules = schedules;
+        if (_schedules is not null)
+            _schedules.PropertyChanged += Changed;
+    }
+
+    private void Changed(object? sender, PropertyChangedEventArgs e) => _ = InvokeAsync(StateHasChanged);
+
+    private static string WorkIndex(SchedulesViewModel vm)
+        => vm.DraftWork is { } work ? vm.WorkChoices.IndexOf(work).ToString(CultureInfo.InvariantCulture) : "";
+
+    private static void ChooseWork(SchedulesViewModel vm, ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var at) && at >= 0 && at < vm.WorkChoices.Count)
+            vm.DraftWork = vm.WorkChoices[at];
+    }
+
+    private static void ChooseZone(SchedulesViewModel vm, ChangeEventArgs e)
+    {
+        if (vm.Zones.FirstOrDefault(z => z.Id == e.Value?.ToString()) is { } zone)
+            vm.DraftZone = zone;
+    }
+
+    /// <summary>The date input's own format (yyyy-MM-dd), whatever the culture: the browser reads no other.</summary>
+    private static string DateText(SchedulesViewModel vm)
+        => vm.DraftDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "";
+
+    /// <summary>
+    /// The day chosen, as the window's date picker hands it over: that day's midnight here - the view model reads only its
+    /// date, and puts the time and the zone on it itself. Emptied, the view model takes tomorrow.
+    /// </summary>
+    private static void ChooseDate(SchedulesViewModel vm, ChangeEventArgs e)
+        => vm.DraftDate = DateOnly.TryParseExact(e.Value?.ToString(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var day)
+            ? new DateTimeOffset(day.ToDateTime(TimeOnly.MinValue))
+            : null;
+
+    public void Dispose() => Show(null);
+}

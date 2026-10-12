@@ -183,26 +183,19 @@ internal static class ServerApp
             })
             .RequireAuthorization(nameof(Role.Viewer));
 
-        // A workspace's schedules (ServerLibrary checks the role and the rules), back to their page. Its templates are the
-        // Templates screen's (/templates), whose actions call ServerLibrary from the live page.
-        app.MapPost("/library/schedule/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerLibrary library) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var workspace = form["ws"].ToString();
-            Guid? id = Guid.TryParse(form["id"], out var parsed) ? parsed : null;
-            var said = form["act"].ToString() switch
+        // The old schedules page and a schedule's form (the workspace by its path, the schedule in a query): the Schedules
+        // screen, the workspace by its id, on the schedule when one is named. A path the service does not know is not looked
+        // up on the disk: the Schedules screen as it opens.
+        app.MapGet("/library", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids)
+                => Results.LocalRedirect("/" + Components.Links.Schedules(OldWorkspace(context, history, ids))))
+            .RequireAuthorization(nameof(Role.Viewer));
+        app.MapGet("/library/schedule", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids) =>
             {
-                "on" => library.SwitchSchedule(context.User, workspace, id ?? Guid.Empty, on: true),
-                "off" => library.SwitchSchedule(context.User, workspace, id ?? Guid.Empty, on: false),
-                "delete" => library.DeleteSchedule(context.User, workspace, id ?? Guid.Empty),
-                _ => library.SaveSchedule(context.User, workspace, new Runs.ScheduleForm(id, form["name"].ToString(),
-                    form["work"].ToString(), form["repeat"].ToString(), form["time"].ToString(), form["day"].ToString(),
-                    form["date"].ToString(), form["tier"].ToString(), form["runLate"] == "true", form["parameters"].ToString())).Said
-            };
-            return Results.LocalRedirect("/" + Components.Links.Library(workspace) + "&said=" + Uri.EscapeDataString(said));
-        });
+                var workspace = OldWorkspace(context, history, ids);
+                return Results.LocalRedirect("/" + Components.Links.Schedules(workspace,
+                    workspace is not null && Guid.TryParse(context.Request.Query["id"], out var schedule) ? schedule : null));
+            })
+            .RequireAuthorization(nameof(Role.Viewer));
 
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
         return app;
@@ -276,6 +269,13 @@ internal static class ServerApp
         // "Invalid Hostname" page; told every name is allowed, it passes everything on to the gate.
         services.Configure<Microsoft.AspNetCore.HostFiltering.HostFilteringOptions>(o => o.AllowedHosts = ["*"]);
     }
+
+    /// <summary>
+    /// The workspace an old address named by its path (<c>?ws=</c>), as its id - or null for a path the service does not
+    /// know, which is not looked up on the disk: an address is typed by people, and the new addresses name ids only.
+    /// </summary>
+    private static Guid? OldWorkspace(HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids)
+        => history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known ? ids.TryIdOf(known.RootPath) : null;
 
     private static string BuildVersion()
         => typeof(ServerApp).Assembly

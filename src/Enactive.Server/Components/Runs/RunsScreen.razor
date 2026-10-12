@@ -30,14 +30,6 @@
            screen, Run greyed, and Stop cancelled a run in another workspace. *@
         <CommandBar Workspace="_shown" OpenRun="RunId ?? (PastRunId is null ? null : _live)" />
 
-        @if (_shown is { } shown)
-        {
-            @* TEMPORARY (Task 17): a workspace's schedules were reached from the workspace list, which is this screen's
-               switcher now, and the rail's Schedules leads here until it has a page of its own - without this link the
-               schedules were a page nothing led to. Templates have theirs (/templates, the rail's Templates). *@
-            <p class="hint"><a href="@Links.Library(shown.RootPath)">Schedules</a></p>
-        }
-
         @if (PastRunId is { } past)
         {
             @if (_shown is { } workspace)

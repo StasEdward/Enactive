@@ -40,6 +40,7 @@ public sealed class LooksTests
         classes.AddRange(Enum.GetValues<Enactive.Core.Diagnostics.LogLevel>().Select(Looks.Log));
         classes.AddRange(Enum.GetValues<FeedEntryKind>().Select(Looks.Entry));
         classes.AddRange(Enum.GetValues<TemplateEdge>().Select(Looks.Template));
+        classes.AddRange(Enum.GetValues<ScheduleState>().Select(Looks.Schedule));
         classes.AddRange(new[] { "result", "decision", "error", "anything else" }.Select(Looks.Inbox));
         classes.Add(Looks.Change(applied: false, rejected: false));
         classes.Add(Looks.Change(applied: true, rejected: false));
@@ -75,6 +76,7 @@ public sealed class LooksTests
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Log((Enactive.Core.Diagnostics.LogLevel)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Entry((FeedEntryKind)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Template((TemplateEdge)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Schedule((ScheduleState)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Autonomy(4));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Autonomy(-1));
         // Applied and rejected at once is not a state a change is ever in.
@@ -173,6 +175,12 @@ public sealed class LooksTests
             [TemplateEdge.Global] = "TemplateEdge.Global",
             [TemplateEdge.Workspace] = "TemplateEdge.Workspace",
             [TemplateEdge.Selected] = "TemplateEdge.Selected"
+        }));
+        rows.AddRange(Rows(Looks.Schedule, new Dictionary<ScheduleState, string>
+        {
+            [ScheduleState.Off] = "ScheduleState.Off",
+            [ScheduleState.Untimed] = "ScheduleState.Untimed",
+            [ScheduleState.Scheduled] = "ScheduleState.Scheduled"
         }));
 
         // The phase pill is Brand.PhaseText's, a table in Brand.cs rather than an arm of Palette: done green, failed red,

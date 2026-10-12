@@ -32,6 +32,7 @@ internal sealed class ServerEngine : IDisposable
         Workspaces = WorkspaceRegistry.Load(filePath: Path.Combine(dataFolder, "workspaces.json"));
         Schedules = new Core.Schedules.ScheduleStore(Path.Combine(dataFolder, "schedules.json"));
         Markers = new Core.Schedules.RunMarkers(Path.Combine(dataFolder, "running"));
+        TickFile = Path.Combine(dataFolder, "tick.txt");
         Reload();
     }
 
@@ -84,6 +85,14 @@ internal sealed class ServerEngine : IDisposable
 
     /// <summary>The service account's schedules - the same file its own console tick would read.</summary>
     public Core.Schedules.ScheduleStore Schedules { get; }
+
+    /// <summary>
+    /// The pulse of whatever asks these schedules (Heartbeat), beside them - in the default data folder, the file a console
+    /// tick of the same account stamps too. The service's scheduler stamps it every minute and the schedules page reads it
+    /// to say whether anything is asking them: with no pulse from the scheduler, the page said none would run while the
+    /// service was running them.
+    /// </summary>
+    public string TickFile { get; }
 
     /// <summary>Which schedules are running now, shared with a console tick of the same account so neither runs one twice.</summary>
     public Core.Schedules.RunMarkers Markers { get; }
