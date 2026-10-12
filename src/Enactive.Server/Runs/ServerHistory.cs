@@ -226,14 +226,6 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
             ? composed.Workers.All.Select(w => (w.Id, w.Role)).ToList()
             : engine.Settings?.Workers.Select(w => (w.Id, w.Role)).ToList() ?? [];
 
-    /// <summary>The same rule as <c>ComposedEngine.WorkerIdFor</c>, over the settings' workers when there is no engine to ask: id first, then role.</summary>
-    private static string? WorkerIdFrom(IReadOnlyList<(string Id, string Name)> workers, string name)
-    {
-        var wanted = name.Trim();
-        return workers.Select(w => w.Id).FirstOrDefault(id => string.Equals(id, wanted, StringComparison.OrdinalIgnoreCase))
-               ?? workers.Where(w => string.Equals(w.Name.Trim(), wanted, StringComparison.OrdinalIgnoreCase)).Select(w => w.Id).FirstOrDefault();
-    }
-
     /// <summary>
     /// Saves a workspace's level, worker and staging; null when saved, else why not. A blank <paramref name="workerId"/> is
     /// the workspace's default worker.
@@ -262,7 +254,7 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         string? worker = null;
         if (!string.IsNullOrWhiteSpace(workerId))
         {
-            worker = engine.Current is { } composed ? composed.WorkerIdFor(workerId) : WorkerIdFrom(Workers(), workerId);
+            worker = WorkerNames.Resolve(Workers(), workerId);
             if (worker is null)
                 return $"There is no worker “{workerId.Trim()}” in the settings.";
         }
