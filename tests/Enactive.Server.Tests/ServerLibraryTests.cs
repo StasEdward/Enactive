@@ -171,6 +171,8 @@ public sealed class ServerLibraryTests : IDisposable
         var (id, said) = _library.RunTemplate(As("alice"), _workspace, "digest", new Dictionary<string, string>());
 
         Assert.Null(id);
+        // In the library's Problems words (TemplatesViewModel.ProblemsText): a line per problem.
+        Assert.StartsWith("• ", said);
         Assert.Contains("Topic", said);
         Assert.Empty(_runs.List(As("alice")));
     }
@@ -209,7 +211,8 @@ public sealed class ServerLibraryTests : IDisposable
     /// <summary>
     /// What the editor opens: a template's own file in its own library first, a built-in as a copy of the same id, a
     /// duplicate under an id nothing uses, a new one blank - the window's rules (TemplateDrafts) - with the tools this
-    /// service's engine registers for the deny and ask lists.
+    /// service's engine registers for the deny and ask lists. A draft with no file of its own yet - new, a duplicate, a
+    /// built-in's copy - is offered the libraries in the window's order, Global first (Ruling 16).
     /// </summary>
     [Fact]
     public void The_editor_opens_what_the_window_s_would()
@@ -224,9 +227,36 @@ public sealed class ServerLibraryTests : IDisposable
         Assert.Equal(("digest-copy", true), (copy.Template.Id, copy.IdEditable));
 
         var blank = _library.Draft(As("alice"), _workspace, null, copy: false).Draft!;
-        Assert.Equal(("", true, TemplateScope.Workspace), (blank.Template.Id, blank.IdEditable, blank.Scopes[0]));
+        Assert.Equal(("", true), (blank.Template.Id, blank.IdEditable));
 
         Assert.Contains("There is no template 'nothing' here.", _library.Draft(As("alice"), _workspace, "nothing", copy: false).Problem);
+    }
+
+    // A draft with no file of its own yet is offered the libraries in the window's order, Global first
+    // (TemplateSettingsViewModel.Edit; Ruling 16): one each for a new template, a duplicate and a built-in's copy.
+
+    [Fact]
+    public void A_new_template_is_offered_the_global_library_first_as_the_window_offers_it()
+        => Assert.Equal([TemplateScope.Global, TemplateScope.Workspace], _library.Draft(As("alice"), _workspace, null, copy: false).Draft!.Scopes);
+
+    [Fact]
+    public void A_duplicate_is_offered_the_global_library_first_as_the_window_offers_it()
+    {
+        _library.SaveTemplate(As("alice"), _workspace, Digest, TemplateScope.Workspace);
+
+        Assert.Equal([TemplateScope.Global, TemplateScope.Workspace], _library.Draft(As("alice"), _workspace, "digest", copy: true).Draft!.Scopes);
+    }
+
+    [Fact]
+    public void A_built_in_s_copy_is_offered_the_global_library_first_as_the_window_offers_it()
+    {
+        // A built-in no file shadows here (the runner's own global library may shadow some): opened as a copy of its id.
+        var builtin = new TemplateStore(_workspace).Inventory().First(t => t.IsBuiltin).Template.Id;
+
+        var customised = _library.Draft(As("alice"), _workspace, builtin, copy: false).Draft!;
+
+        Assert.Equal((builtin, false, true), (customised.Template.Id, customised.Template.Builtin, customised.IdEditable));
+        Assert.Equal([TemplateScope.Global, TemplateScope.Workspace], customised.Scopes);
     }
 
     /// <summary>The engine, stood in for: a run begins and ends with no step.</summary>

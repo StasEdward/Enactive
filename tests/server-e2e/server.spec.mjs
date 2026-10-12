@@ -388,6 +388,9 @@ test('an operator writes a template and schedules it, and the schedule says when
   // The JSON tab is the same template: what the form says, in the store's own words.
   await page.getByRole('tab', { name: 'JSON' }).click();
   await expect(page.getByLabel('The template, as JSON')).toHaveValue(/"Id": "topic"/);
+  // Into the workspace's library, chosen: a new template is offered the global one first, as the window offers it, and
+  // that is the service account's own, shared by every workspace.
+  await page.getByLabel('Kept in').selectOption('Workspace');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
 
   // Back in the library, on the template saved: what it asks for, and what it will be asked to do.

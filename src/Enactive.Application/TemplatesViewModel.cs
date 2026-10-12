@@ -227,6 +227,13 @@ internal sealed class TemplatesViewModel : ObservableObject
         return result.Spec;
     }
 
+    /// <summary>
+    /// Why a template cannot run as filled in, one "• " line per problem - the Problems box's words, and the service's
+    /// when it refuses a run from the library (ServerLibrary.RunTemplate), so the two say it the same way.
+    /// </summary>
+    public static string ProblemsText(IEnumerable<TemplateProblem> problems)
+        => string.Join("\n", problems.Select(p => "• " + p.Message));
+
     private void Revalidate()
     {
         if (Selected is null)
@@ -240,9 +247,7 @@ internal sealed class TemplatesViewModel : ObservableObject
         var values = Parameters.ToDictionary(p => p.Id, p => p.Supplied, StringComparer.OrdinalIgnoreCase);
         var result = TemplateResolution.Resolve(Selected.Template, _workspace, _workspacePolicy, values);
 
-        Problems = result.Ok
-            ? string.Empty
-            : string.Join("\n", result.Problems.Select(p => "• " + p.Message));
+        Problems = result.Ok ? string.Empty : ProblemsText(result.Problems);
 
         // A workspace is not optional: a run happens in a folder, and resolving one against an empty
         // path would produce a specification pointing at nothing.

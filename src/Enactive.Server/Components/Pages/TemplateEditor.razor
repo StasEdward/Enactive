@@ -203,6 +203,7 @@ else if (_editor is { } t)
             return;
         }
         _root = workspace.RootPath;
+        // A known folder whose id cannot be read is Guid.Empty: its links name no workspace, and lead to "not known".
         _workspaceId = Ids.TryIdOf(_root) ?? Guid.Empty;
 
         var (draft, problem) = Library.Draft(_user, _root, Id == Links.NewTemplateId ? null : Id, Copy == true);

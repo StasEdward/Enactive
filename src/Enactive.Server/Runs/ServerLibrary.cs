@@ -89,7 +89,7 @@ internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunCo
 
         var resolved = TemplateResolution.Resolve(template, WorkspaceInfo.For(known.RootPath), PolicyOf(known), answers);
         if (resolved.Spec is not { } spec)
-            return (null, string.Join(" ", resolved.Problems.Select(p => p.Message)));
+            return (null, TemplatesViewModel.ProblemsText(resolved.Problems));
 
         // A new task: the library starts one, where Retry and Run again are attempts at a task already begun.
         var (run, refusal) = runs.Again(user, known.RootPath, new Rerun(spec.Goal, spec, Guid.NewGuid()), "template run");
@@ -253,12 +253,13 @@ internal sealed class ServerLibrary(UserStore users, ServerEngine engine, IRunCo
         => EngineComposition.Tools(engine.Settings ?? new AppSettings()).Definitions.Select(d => d.Name).ToList();
 
     /// <summary>
-    /// Where a draft may be saved, the one offered first: a template's own library when it has one - offered another, Save
-    /// would write a second copy and leave the first in place - and otherwise the workspace's, with the project, as the
-    /// browser always offered it. The global library is the service account's, shared by every workspace on the service.
+    /// Where a draft may be saved, the one offered first (Ruling 16). A template with a file of its own is offered its own
+    /// library first: offered another, Save would write a second copy and leave the first where it was. A draft with no
+    /// file yet - a new template, a duplicate, a built-in's copy - is offered the window's order, Global first
+    /// (TemplateSettingsViewModel.Edit offers [Global, Workspace]), so the same choice reads the same in both.
     /// </summary>
     private static IReadOnlyList<TemplateScope> Scopes(TemplateScope? own)
-        => own == TemplateScope.Global ? [TemplateScope.Global, TemplateScope.Workspace] : [TemplateScope.Workspace, TemplateScope.Global];
+        => own == TemplateScope.Workspace ? [TemplateScope.Workspace, TemplateScope.Global] : [TemplateScope.Global, TemplateScope.Workspace];
 
     private string Why(ClaimsPrincipal user, Role needed, string what = "changing templates and schedules")
         => ServerAuth.StillValid(users, user) is not { } account ? "Your session has ended. Sign in again."
