@@ -226,6 +226,14 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
             ? composed.Workers.All.Select(w => (w.Id, w.Role)).ToList()
             : engine.Settings?.Workers.Select(w => (w.Id, w.Role)).ToList() ?? [];
 
+    /// <summary>The same rule as <c>ComposedEngine.WorkerIdFor</c>, over the settings' workers when there is no engine to ask: id first, then role.</summary>
+    private static string? WorkerIdFrom(IReadOnlyList<(string Id, string Name)> workers, string name)
+    {
+        var wanted = name.Trim();
+        return workers.Select(w => w.Id).FirstOrDefault(id => string.Equals(id, wanted, StringComparison.OrdinalIgnoreCase))
+               ?? workers.Where(w => string.Equals(w.Name.Trim(), wanted, StringComparison.OrdinalIgnoreCase)).Select(w => w.Id).FirstOrDefault();
+    }
+
     /// <summary>
     /// Saves a workspace's level, worker and staging; null when saved, else why not. A blank <paramref name="workerId"/> is
     /// the workspace's default worker.
@@ -248,14 +256,15 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
             return $"The level must be from 0 to {AutonomyTiers.Highest}.";
 
         // The worker is kept by id. One the settings no longer have would be saved and then quietly replaced by the
-        // default worker on every run, which reads as a choice that was ignored.
+        // default worker on every run, which reads as a choice that was ignored. A role name resolves to its id as a
+        // run resolves it (ComposedEngine.WorkerIdFor): the window saved role names until 2026-10-08, and a folder still
+        // holding one could not otherwise be saved again from a page that offers its stored worker.
         string? worker = null;
         if (!string.IsNullOrWhiteSpace(workerId))
         {
-            var wanted = workerId.Trim();
-            worker = Workers().Select(w => w.Id).FirstOrDefault(id => string.Equals(id, wanted, StringComparison.OrdinalIgnoreCase));
+            worker = engine.Current is { } composed ? composed.WorkerIdFor(workerId) : WorkerIdFrom(Workers(), workerId);
             if (worker is null)
-                return $"There is no worker “{wanted}” in the settings.";
+                return $"There is no worker “{workerId.Trim()}” in the settings.";
         }
 
         engine.Workspaces.SaveSettings(known.RootPath, autonomy, worker, stageChanges);

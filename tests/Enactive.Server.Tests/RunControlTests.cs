@@ -566,6 +566,20 @@ public sealed class RunControlTests : IDisposable
         Assert.Equal([("writer", "Writer"), ("coder", "Coder")], history.Workers());
     }
 
+    /// <summary>The window saved a worker's role name until 2026-10-08; such a folder must save again, and keep the id.</summary>
+    [Fact]
+    public void A_worker_named_by_its_role_is_saved_by_its_id()
+    {
+        var history = HistoryOf(out var engine, ("w-1", "Writer"), ("w-2", "Code Reviewer"));
+
+        Assert.Null(history.SaveSettings(As("alice"), _workspace, 2, " code reviewer ", false));
+        Assert.Equal("w-2", engine.Workspaces.Find(_workspace)!.WorkerId);
+
+        Assert.Null(history.SaveSettings(As("alice"), _workspace, 2, "Writer", false));
+        Assert.Equal("w-1", engine.Workspaces.Find(_workspace)!.WorkerId);
+        Assert.Contains(_users.AuditTrail(), e => e.Detail == $"{_workspace}: execute, worker w-1, staging off");
+    }
+
     [Fact]
     public void A_viewer_cannot_change_a_workspace_s_settings()
     {
