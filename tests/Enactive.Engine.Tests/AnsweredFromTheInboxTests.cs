@@ -66,15 +66,18 @@ public sealed class AnsweredFromTheInboxTests
         Assert.NotNull(waiting);
         Assert.Contains("draft.md", waiting.FullText, StringComparison.Ordinal);
 
-        var said = await decisions.AnswerAsync(waiting, filed, "allow");
+        var (said, recorded) = await decisions.AnswerAsync(waiting, filed, "allow");
         Assert.Contains("carries on in the background", said, StringComparison.Ordinal);
+        Assert.True(recorded);
         var (parked, item) = carriedOn!.Value;
         Assert.Equal(filed.Id, item.Id);
         Assert.Null(decisions.WaitingFor(run.TaskId));
 
         // A second answer - a double click, another window - authorises nothing and carries nothing on.
         carriedOn = null;
-        Assert.Contains("no longer waiting", await decisions.AnswerAsync(waiting, filed, "deny"), StringComparison.Ordinal);
+        var (late, lateRecorded) = await decisions.AnswerAsync(waiting, filed, "deny");
+        Assert.Contains("no longer waiting", late, StringComparison.Ordinal);
+        Assert.False(lateRecorded);
         Assert.Null(carriedOn);
 
         // Carried on the way the window does it: from the step boundary, answered.

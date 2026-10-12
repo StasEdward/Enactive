@@ -21,23 +21,25 @@ internal sealed class InboxDecisions(string workspaceRoot, Func<ParkedDecision, 
     /// <summary>
     /// Records the answer against exactly this question, and carries the run on. The ledger refuses
     /// an answer to a question that is no longer waiting - answered from somewhere else, or gone
-    /// with its run - and then nothing is carried on. Returns what to tell the person.
+    /// with its run - and then nothing is carried on. Returns what to tell the person, and whether THIS answer was the one
+    /// recorded: of two people answering at once only one is, and the other's answer must not be audited or mark the item
+    /// read as though it had been.
     /// </summary>
-    public async Task<string> AnswerAsync(ParkedDecision waiting, InboxItem item, string optionId)
+    public async Task<(string Said, bool Recorded)> AnswerAsync(ParkedDecision waiting, InboxItem item, string optionId)
     {
         var label = waiting.Options.FirstOrDefault(o => o.Id == optionId)?.Label ?? optionId;
         if (!_ledger.Answer(waiting.TaskId, waiting.RequestId, optionId))
-            return "This question is no longer waiting - it was answered already, or its run has ended.";
+            return ("This question is no longer waiting - it was answered already, or its run has ended.", false);
         if (carryOn is null)
-            return $"Answered '{label}'. Run the task again to carry it on.";
+            return ($"Answered '{label}'. Run the task again to carry it on.", true);
         try
         {
             await carryOn(waiting, item);
-            return $"Answered '{label}' - the run carries on in the background.";
+            return ($"Answered '{label}' - the run carries on in the background.", true);
         }
         catch (Exception ex)
         {
-            return $"Answered '{label}', but the run could not be carried on: {ex.Message}";
+            return ($"Answered '{label}', but the run could not be carried on: {ex.Message}", true);
         }
     }
 }

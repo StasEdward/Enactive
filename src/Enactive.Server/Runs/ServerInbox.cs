@@ -138,7 +138,11 @@ internal sealed class ServerInbox(UserStore users, KnownWorkspaces workspaces, I
                 throw new InvalidOperationException(refusal);
             carried = run.Id;
         });
-        var said = await inbox.AnswerAsync(waiting, entry.Item, optionId);
+        var (said, recorded) = await inbox.AnswerAsync(waiting, entry.Item, optionId);
+        // Only the answer that was recorded: the other of two people answering at once lost to it, and an audit line or a
+        // "read" in their name would say they decided a question somebody else did.
+        if (!recorded)
+            return (said, null);
         users.Audit(account.Name, "question answered in the inbox", $"{waiting.Topic}: {optionId}");
         await InboxStoreFactory.Create(WorkspaceInfo.For(known.RootPath)).MarkReadAsync(itemId, ct);
         Changed?.Invoke();

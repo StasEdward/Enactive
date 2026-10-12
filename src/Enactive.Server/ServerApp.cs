@@ -154,7 +154,8 @@ internal static class ServerApp
         services.AddSingleton<Runs.IRunControl>(sp => new Runs.RunControl(sp.GetRequiredService<UserStore>(),
             sp.GetRequiredService<Enactive.Application.RunQueue>(), sp.GetRequiredService<Runs.IRunExecutor>(),
             sp.GetRequiredService<ILogger<Runs.RunControl>>(), TimeSpan.FromMinutes(options.QuestionWaitMinutes),
-            sp.GetRequiredService<Runs.WorkspaceRoots>()));
+            sp.GetRequiredService<Runs.WorkspaceRoots>(),
+            (root, shown) => Runs.BarSettings.ChangedFor(sp.GetRequiredService<Runs.ServerEngine>(), root, shown)));
         services.AddSingleton(new Runs.WorkspaceRoots(options.WorkspaceRoots));
         // Every page's lookup of a workspace: known to the service and under the roots.
         services.AddSingleton<Runs.KnownWorkspaces>();

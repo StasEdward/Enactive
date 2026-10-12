@@ -135,13 +135,17 @@ internal sealed record StartResult(ServerRun? Run, string? Refusal);
 /// </summary>
 internal interface IRunControl
 {
-    StartResult Start(ClaimsPrincipal user, string workspace, string prompt);
+    /// <param name="shown">
+    /// The level, worker and staging the starting page showed; the start is refused when they are no longer what is saved
+    /// for the folder (BarSettings). Null for a start that showed none.
+    /// </param>
+    StartResult Start(ClaimsPrincipal user, string workspace, string prompt, BarSettings? shown = null);
 
     /// <summary>
     /// A run nobody will watch, as the window's "Run in background" starts one (BackgroundRun): in the same line and the
     /// same list as every run, its questions parked for the inbox rather than asked, and one inbox item when it ends.
     /// </summary>
-    StartResult StartBackground(ClaimsPrincipal user, string workspace, string prompt);
+    StartResult StartBackground(ClaimsPrincipal user, string workspace, string prompt, BarSettings? shown = null);
 
     /// <summary>
     /// Carries on an interrupted run from its last step boundary (crash recovery): its owner or any Operator, after
@@ -184,8 +188,12 @@ internal interface IRunControl
 
 /// <param name="parkQuestionsAfter">How long a question waits before the run stops at it for the inbox; null, never.</param>
 /// <param name="roots">Where runs from the browser may work; null for anywhere (a test's).</param>
+/// <param name="settingsChanged">
+/// Why the settings a page showed are no longer the folder's saved ones, or null (BarSettings.ChangedFor); null, never
+/// asked (a test's).
+/// </param>
 internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor executor, ILogger<RunControl> log,
-    TimeSpan? parkQuestionsAfter = null, WorkspaceRoots? roots = null) : IRunControl
+    TimeSpan? parkQuestionsAfter = null, WorkspaceRoots? roots = null, Func<string, BarSettings, string?>? settingsChanged = null) : IRunControl
 {
     private readonly object _gate = new();
     private readonly List<ServerRun> _runs = new();
@@ -196,11 +204,11 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
     /// <summary>How many finished runs stay listed here; older ones are read from the history (1.6).</summary>
     private const int KeepFinished = 50;
 
-    public StartResult Start(ClaimsPrincipal user, string workspace, string prompt)
-        => StartRun(user, workspace, prompt, null, null, "run started");
+    public StartResult Start(ClaimsPrincipal user, string workspace, string prompt, BarSettings? shown = null)
+        => StartRun(user, workspace, prompt, null, null, "run started", shown: shown);
 
-    public StartResult StartBackground(ClaimsPrincipal user, string workspace, string prompt)
-        => StartRun(user, workspace, prompt, null, null, "run started in the background", background: true);
+    public StartResult StartBackground(ClaimsPrincipal user, string workspace, string prompt, BarSettings? shown = null)
+        => StartRun(user, workspace, prompt, null, null, "run started in the background", background: true, shown: shown);
 
     public StartResult StartScheduled(DueRun due)
     {
@@ -258,12 +266,16 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
     }
 
     private StartResult StartRun(ClaimsPrincipal user, string workspace, string prompt, Guid? taskId, RunCheckpoint? resume, string action,
-        Core.Templates.ResolvedTaskSpec? spec = null, bool background = false)
+        Core.Templates.ResolvedTaskSpec? spec = null, bool background = false, BarSettings? shown = null)
     {
         if (string.IsNullOrWhiteSpace(prompt) && Allowed(user, Role.Operator) is not null)
             return new(null, "Say what the run is to do.");
         if (Check(user, workspace, out var account, out var root) is { } refused)
             return new(null, refused);
+        // What the person saw is what the run goes with: a level another Operator saved after the page read it would
+        // otherwise run unseen (BarSettings).
+        if (shown is not null && settingsChanged?.Invoke(root, shown) is { } changed)
+            return new(null, changed);
         // Refused here, where it was asked for, rather than as it is composed - by then it has taken a place in the line,
         // and its only word would be an inbox item saying it failed to start.
         if (background && executor.BackgroundRefusal(root, account!.Name) is { } notInTheBackground)

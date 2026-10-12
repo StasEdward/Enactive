@@ -141,7 +141,7 @@ internal sealed class InboxViewModel : ObservableObject
     {
         if (_waiting is not { } waiting || Selected is not { } item) return;
         ShowWaiting(null);   // one answer: the buttons go before anything can be clicked twice
-        DecisionStatus = await _decisions.AnswerAsync(waiting, item.Item, optionId);
+        (DecisionStatus, _) = await _decisions.AnswerAsync(waiting, item.Item, optionId);
     }
 
     public async Task RefreshAsync()

@@ -296,10 +296,7 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
     /// worker box lists: the engine's workers, or - with no engine to run on yet - the settings' own. Empty when there
     /// are none, and then the workspace's default worker is all there is to pick.
     /// </summary>
-    public IReadOnlyList<(string Id, string Name)> Workers()
-        => engine.Current is { } composed
-            ? composed.Workers.All.Select(w => (w.Id, w.Role)).ToList()
-            : engine.Settings?.Workers.Select(w => (w.Id, w.Role)).ToList() ?? [];
+    public IReadOnlyList<(string Id, string Name)> Workers() => engine.Workers();
 
     /// <summary>
     /// Saves a workspace's level, worker and staging; null when saved, else why not. A blank <paramref name="workerId"/> is

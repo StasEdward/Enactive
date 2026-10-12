@@ -441,6 +441,50 @@ public sealed class RunControlTests : IDisposable
         await _engine.ReleaseNextAsync();
     }
 
+    /// <summary>
+    /// Two people answer one question at once: the other's answer is recorded between this inbox reading the question as
+    /// waiting and recording its own. This one is told so - and is neither audited as having answered nor marks the item
+    /// read: it decided nothing.
+    /// </summary>
+    [Fact]
+    public async Task An_inbox_answer_that_lost_to_another_is_neither_audited_nor_marks_the_item_read()
+    {
+        var (parked, itemId) = ParkedInTheInbox();
+        var inbox = InboxOf(new AnsweredMeanwhile(_control,
+            () => new Enactive.Agents.DecisionLedger(_workspace).Answer(parked.TaskId, parked.RequestId, "deny")));
+
+        var (said, carried) = await inbox.AnswerAsync(As("bob"), _workspace, itemId, "allow", CancellationToken.None);
+
+        Assert.Contains("no longer waiting", said);
+        Assert.Null(carried);
+        Assert.DoesNotContain(_users.AuditTrail(), e => e.Action == "question answered in the inbox");
+        var items = await Enactive.Workspace.InboxStoreFactory.Create(Enactive.Core.Context.WorkspaceInfo.For(_workspace))
+            .LoadAllAsync(CancellationToken.None);
+        Assert.Equal("unread", Assert.Single(items, i => i.Id == itemId).Status);
+    }
+
+    /// <summary>The service's runs, with another person's answer recorded as the inbox asks whether a run could start.</summary>
+    private sealed class AnsweredMeanwhile(IRunControl inner, Func<bool> answerMeanwhile) : IRunControl
+    {
+        public string? Refusal(ClaimsPrincipal user, string workspace)
+        {
+            Assert.True(answerMeanwhile());
+            return inner.Refusal(user, workspace);
+        }
+
+        public TimeSpan? QuestionWait => inner.QuestionWait;
+        public StartResult Start(ClaimsPrincipal user, string workspace, string prompt, BarSettings? shown = null) => inner.Start(user, workspace, prompt, shown);
+        public StartResult StartBackground(ClaimsPrincipal user, string workspace, string prompt, BarSettings? shown = null) => inner.StartBackground(user, workspace, prompt, shown);
+        public Task<StartResult> ResumeAsync(ClaimsPrincipal user, string workspace, Guid runId) => inner.ResumeAsync(user, workspace, runId);
+        public StartResult Again(ClaimsPrincipal user, string workspace, Enactive.Application.Rerun again, string action) => inner.Again(user, workspace, again, action);
+        public StartResult StartScheduled(Enactive.Application.DueRun due) => inner.StartScheduled(due);
+        public Task<StartResult> ContinueAsync(ClaimsPrincipal user, string workspace, Enactive.Agents.ParkedDecision parked, string title) => inner.ContinueAsync(user, workspace, parked, title);
+        public IReadOnlyList<ServerRun> List(ClaimsPrincipal user) => inner.List(user);
+        public ServerRun? Find(ClaimsPrincipal user, Guid id) => inner.Find(user, id);
+        public string? Cancel(ClaimsPrincipal user, Guid id) => inner.Cancel(user, id);
+        public string? Answer(ClaimsPrincipal user, Guid id, Guid question, string choice) => inner.Answer(user, id, question, choice);
+    }
+
     [Fact]
     public async Task A_viewer_reads_the_inbox_but_cannot_answer_it()
     {

@@ -180,6 +180,48 @@ public sealed class CommandBarTests : ComponentHost
         Assert.Equal(["Writer", "Coder"], bar.FindAll("select.worker option").Select(o => o.TextContent.Trim()));
     }
 
+    /// <summary>
+    /// A run goes with the level the person saw. Another Operator raised it after this bar read it: Run is refused in words
+    /// that say what is saved now, the bar shows it, and the next Run - made knowing it - goes. Started with the saved
+    /// level, the first Run was a run at "Autonomous" from a bar that said "Suggest".
+    /// </summary>
+    [Fact]
+    public void Run_is_refused_when_the_level_was_changed_since_the_bar_read_it()
+    {
+        var workspace = Known("project", autonomy: 1);
+        var bar = Bar("alice", workspace);
+        Assert.Null(Services.GetRequiredService<ServerHistory>().SaveSettings(As("ada"), workspace.RootPath, 3, null, false));
+
+        bar.Find("textarea").Input("write the digest");
+        Button(bar, "Run").Click();
+
+        Assert.Equal($"The level was changed to “{Enactive.Agents.AutonomyTiers.Describe(3)}” since this page read it. "
+            + "The bar shows it now; run again to run with it.", Said(bar));
+        Assert.Empty(Runs.List(As("alice")));
+        Assert.Equal("3", bar.Find("input[type=range]").GetAttribute("value"));
+
+        Button(bar, "Run").Click();
+        Assert.Single(Runs.List(As("alice")));
+    }
+
+    /// <summary>
+    /// The worker and staging, as the level: what the bar showed against what is saved, each by the rule the bar reads it
+    /// by - a worker saved by its role name is the one shown, and none saved is the first listed.
+    /// </summary>
+    [Fact]
+    public void Settings_changed_since_a_page_read_them_are_said()
+    {
+        IReadOnlyList<(string Id, string Name)> workers = [("writer", "Writer"), ("coder", "Coder")];
+        var saved = BarSettings.Of(new WorkspaceEntry("w", "C:\\w", DateTimeOffset.Now, Autonomy: 2, WorkerId: "Coder", StageChanges: true), workers);
+
+        Assert.Null(saved.ChangedSince(new BarSettings(2, "coder", true), workers));
+        Assert.Equal("The worker was changed to “Coder” since this page read it. The bar shows it now; run again to run with it.",
+            saved.ChangedSince(new BarSettings(2, null, true), workers));
+        Assert.Equal("Stage changes was turned on since this page read it. The bar shows it now; run again to run with it.",
+            saved.ChangedSince(new BarSettings(2, "coder", false), workers));
+        Assert.Null(BarSettings.Of(null, workers).ChangedSince(new BarSettings(2, null, false), workers));
+    }
+
     [Fact]
     public void Run_starts_the_run_and_opens_it()
     {
@@ -424,8 +466,8 @@ public sealed class CommandBarTests : ComponentHost
         }
 
         public TimeSpan? QuestionWait => inner.QuestionWait;
-        public StartResult Start(System.Security.Claims.ClaimsPrincipal user, string workspace, string prompt) => inner.Start(user, workspace, prompt);
-        public StartResult StartBackground(System.Security.Claims.ClaimsPrincipal user, string workspace, string prompt) => inner.StartBackground(user, workspace, prompt);
+        public StartResult Start(System.Security.Claims.ClaimsPrincipal user, string workspace, string prompt, BarSettings? shown = null) => inner.Start(user, workspace, prompt, shown);
+        public StartResult StartBackground(System.Security.Claims.ClaimsPrincipal user, string workspace, string prompt, BarSettings? shown = null) => inner.StartBackground(user, workspace, prompt, shown);
         public Task<StartResult> ResumeAsync(System.Security.Claims.ClaimsPrincipal user, string workspace, Guid runId) => inner.ResumeAsync(user, workspace, runId);
         public StartResult Again(System.Security.Claims.ClaimsPrincipal user, string workspace, Enactive.Application.Rerun again, string action) => inner.Again(user, workspace, again, action);
         public StartResult StartScheduled(Enactive.Application.DueRun due) => inner.StartScheduled(due);

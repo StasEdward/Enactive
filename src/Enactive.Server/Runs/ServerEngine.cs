@@ -86,6 +86,16 @@ internal sealed class ServerEngine : IDisposable
     public IReadOnlyList<string> ToolNames()
         => EngineComposition.Tools(Settings ?? new AppSettings()).Definitions.Select(d => d.Name).ToList();
 
+    /// <summary>
+    /// The workers a run can be given, by id and the name the person knows them by - what the window's worker box lists:
+    /// the engine's workers, or - with no engine to run on yet - the settings' own. Here, where both the bar that shows
+    /// them and the start that checks what the bar showed (BarSettings) read them, so the two name the same worker.
+    /// </summary>
+    public IReadOnlyList<(string Id, string Name)> Workers()
+        => Current is { } composed
+            ? composed.Workers.All.Select(w => (w.Id, w.Role)).ToList()
+            : Settings?.Workers.Select(w => (w.Id, w.Role)).ToList() ?? [];
+
     /// <summary>"Allow (workspace)" as the service remembers it: per person (ApprovalStore, rule 5), in its own data folder.</summary>
     public ApprovalStore Approvals { get; }
 

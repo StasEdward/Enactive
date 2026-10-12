@@ -17,6 +17,7 @@ using Enactive.Workspace;
 internal sealed class CommandBarState(IRunControl runs, ServerHistory history, ClaimsPrincipal user)
 {
     private string _root = "";
+    private WorkspaceEntry? _workspace;
 
     /// <summary>What is typed in the box.</summary>
     public string Input { get; set; } = "";
@@ -69,16 +70,24 @@ internal sealed class CommandBarState(IRunControl runs, ServerHistory history, C
     public void Show(WorkspaceEntry? workspace)
     {
         _root = workspace?.RootPath ?? "";
-        Workers = history.Workers();
-        var saved = workspace is null ? null : history.Workspace(user, workspace.RootPath) ?? workspace;
-        AutonomyLevel = AutonomyTiers.Clamp(saved?.Autonomy ?? 2);
-        StageChanges = saved?.StageChanges ?? false;
-        // By the rule a run reads it by: the window saved a worker's role name until 2026-10-08, and read by id alone such
-        // a folder's worker was not found and the box fell back to the first - which the next save then wrote, changing the
-        // workspace's worker without anybody choosing to. None saved, or one gone, is the first, as the window's box is.
-        WorkerId = WorkerNames.Resolve(Workers.Select(w => (w.Id, w.Name)), saved?.WorkerId) ?? Workers.FirstOrDefault().Id;
+        _workspace = workspace;
+        Read(workspace);
         Said = null;
     }
+
+    private void Read(WorkspaceEntry? workspace)
+    {
+        Workers = history.Workers();
+        var saved = workspace is null ? null : history.Workspace(user, workspace.RootPath) ?? workspace;
+        // By the rule a run reads it by (BarSettings): the window saved a worker's role name until 2026-10-08, and read by
+        // id alone such a folder's worker was not found and the box fell back to the first - which the next save then
+        // wrote, changing the workspace's worker without anybody choosing to. None saved, or one gone, is the first, as
+        // the window's box is.
+        (AutonomyLevel, WorkerId, StageChanges) = BarSettings.Of(saved, Workers);
+    }
+
+    /// <summary>What the bar shows, which a start sends so that the run goes with what the person saw.</summary>
+    private BarSettings Shown => new(AutonomyLevel, WorkerId, StageChanges);
 
     /// <summary>A verb chip: the verb in front of what is typed.</summary>
     public void Prefix(string verb) => Input = CommandVerbs.Prefix(Input, verb);
@@ -86,7 +95,7 @@ internal sealed class CommandBarState(IRunControl runs, ServerHistory history, C
     /// <summary>Starts what is typed in the workspace, to be watched: the run's id, or null and why not in <see cref="Said"/>.</summary>
     public Guid? Run()
     {
-        var (run, refusal) = runs.Start(user, _root, Input);
+        var (run, refusal) = runs.Start(user, _root, Input, Shown);
         return Started(run, refusal);
     }
 
@@ -96,7 +105,7 @@ internal sealed class CommandBarState(IRunControl runs, ServerHistory history, C
     /// </summary>
     public bool RunInBackground()
     {
-        var (run, refusal) = runs.StartBackground(user, _root, Input);
+        var (run, refusal) = runs.StartBackground(user, _root, Input, Shown);
         return Started(run, refusal) is not null;
     }
 
@@ -104,7 +113,12 @@ internal sealed class CommandBarState(IRunControl runs, ServerHistory history, C
     {
         Said = run is null ? refusal : null;
         if (run is null)
+        {
+            // Read again: a refusal because the settings changed meanwhile must leave the bar showing what is saved now, so
+            // the next Run is the one the person sees - left as it was, every Run would be refused the same way.
+            Read(_workspace);
             return null;
+        }
         // Cleared once it is on its way, as the window's box is; a refused one keeps what was typed, to be run elsewhere.
         Input = "";
         return run.Id;
