@@ -105,6 +105,8 @@ public sealed class ApplicationLayerTests
     [InlineData(typeof(BuildInfo))]
     [InlineData(typeof(IHostSettingsPane))]
     [InlineData(typeof(NoStartupEntry))]
+    [InlineData(typeof(IProviderCalls))]
+    [InlineData(typeof(DirectProviderCalls))]
     public void Moved_types_come_from_the_application_assembly(Type type)
         => Assert.Equal("Enactive.Application", type.Assembly.GetName().Name);
 }
