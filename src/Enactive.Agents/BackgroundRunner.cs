@@ -12,7 +12,9 @@ using Enactive.Core.Inbox;
 public static class BackgroundRunner
 {
     public static async Task RunAsync(
-        IAsyncEnumerable<WorkEvent> recorded, IInboxStore inbox, WorkspaceInfo workspace, string title, CancellationToken ct)
+        IAsyncEnumerable<WorkEvent> recorded, IInboxStore inbox, WorkspaceInfo workspace, string title, CancellationToken ct,
+        // The schedule this run is for, when one started it: the schedules window lists a schedule's outcomes by it.
+        Guid? scheduleId = null)
     {
         var status = "Incomplete";
         var artifacts = 0;
@@ -66,7 +68,7 @@ public static class BackgroundRunner
         var line = InboxLines.For(status, artifacts, decisions, error);
 
         await inbox.AppendAsync(
-            new InboxItem(Guid.NewGuid(), workspace.Id, line.Kind, title, line.Summary, runId, "unread", DateTimeOffset.UtcNow),
+            new InboxItem(Guid.NewGuid(), workspace.Id, line.Kind, title, line.Summary, runId, "unread", DateTimeOffset.UtcNow, scheduleId),
             CancellationToken.None).ConfigureAwait(false);
     }
 }
