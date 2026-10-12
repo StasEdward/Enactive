@@ -385,6 +385,9 @@ test('an operator writes a template and schedules it, and the schedule says when
   await page.getByRole('button', { name: 'Add parameter' }).click();
   await page.getByLabel('id', { exact: true }).fill('topic');
   await page.getByLabel('Label shown to you').fill('Topic');
+  // With a default: the schedule's form is the window's, which gives a template no answers of its own - at its hour
+  // nobody is there to type one, so what the template asks must have one already.
+  await page.getByLabel('Default value (blank = none)').fill('the inbox');
   // The JSON tab is the same template: what the form says, in the store's own words.
   await page.getByRole('tab', { name: 'JSON' }).click();
   await expect(page.getByLabel('The template, as JSON')).toHaveValue(/"Id": "topic"/);
@@ -397,23 +400,31 @@ test('an operator writes a template and schedules it, and the schedule says when
   await expect(page.getByText("Saved 'Digest' to the workspace's library.")).toBeVisible();
   const template = page.getByRole('region', { name: 'Template' });
   await expect(template.getByText('Write the digest of {topic}.')).toBeVisible();
-  await expect(template.getByLabel('Topic')).toBeVisible();
-  await expect(template.getByRole('button', { name: 'Run', exact: true })).toBeDisabled();
+  await expect(template.getByLabel('Topic')).toHaveValue('the inbox');
+  await expect(template.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
 
-  // Its schedules are the Runs screen's link until they have a screen of their own (Task 17).
-  await page.getByRole('link', { name: 'Runs', exact: true }).click();
-  // On the Runs screen first: the Templates screen has a workspace card of its own, read before it was replaced.
-  await expect(page.getByRole('heading', { name: 'Runs' })).toBeVisible();
+  // Scheduled on the rail's Schedules, on the same workspace - the one used last.
+  await page.getByRole('link', { name: 'Schedules · run it on a day and a time', exact: true }).click();
+  // On the Schedules screen first: the Templates screen has a workspace card of its own, read before it was replaced.
+  await expect(page.getByRole('region', { name: 'Schedules', exact: true })).toBeVisible();
   await onProject(page);
-  await page.getByRole('link', { name: 'Schedules', exact: true }).click();
-  await page.getByRole('link', { name: 'New schedule…' }).click();
-  await page.getByLabel('Name', { exact: true }).fill('morning digest');
-  await page.getByRole('combobox', { name: 'Runs' }).selectOption({ label: 'Template · Digest' });
-  await page.getByLabel(/Parameters for a template/).fill('topic=the inbox');
-  await page.getByLabel('At', { exact: true }).fill('07:30');
-  await page.getByRole('button', { name: 'Save' }).click();
-  await expect(page.getByText(/Saved 'morning digest'. Next run: /)).toBeVisible();
-  await expect(page.locator('li', { hasText: 'morning digest' }).getByRole('button', { name: 'Switch off' })).toBeVisible();
+  await page.getByRole('button', { name: 'New', exact: true }).click();
+  const form = page.getByRole('region', { name: 'Schedule form' });
+  await form.getByLabel('Name', { exact: true }).fill('morning digest');
+  await form.getByLabel('What it runs').selectOption({ label: 'Template · Digest' });
+  await form.getByLabel('Hour').fill('7');
+  await form.getByLabel('Minute').fill('30');
+  await form.getByLabel('Minute').blur();
+  // Before it is saved, the form says what it will agree to - when it runs next among it.
+  await expect(form.getByText(/^Next run: /)).toBeVisible();
+  await expect(form.getByText(/^Every day at 07:30/)).toBeVisible();
+  await form.getByRole('button', { name: 'Save', exact: true }).click();
+
+  const card = page.getByRole('region', { name: 'Schedules', exact: true }).getByRole('button', { name: /morning digest/ });
+  await expect(card).toContainText(/Next run: /);
+  const schedule = page.getByRole('region', { name: 'Schedule', exact: true });
+  await expect(schedule.getByText('Nothing yet — this schedule has not reported back.')).toBeVisible();
+  await expect(schedule.getByRole('button', { name: 'Disable', exact: true })).toBeVisible();
   await context.close();
 });
 
