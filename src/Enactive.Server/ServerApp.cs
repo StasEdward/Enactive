@@ -110,22 +110,18 @@ internal static class ServerApp
 
         builder.Services.AddSingleton(sp => new NetworkGate(options.Subnets(), options.HostNames, sp.GetRequiredService<ILogger<NetworkGate>>()));
 
-        // Only the names the service is reached by, in the Host header. A name anyone can point at the service's
-        // address (DNS rebinding) would otherwise make a page of theirs same-origin with it.
-        builder.Services.AddHostFiltering(o =>
-        {
-            o.AllowedHosts = options.HostNames.ToList();
-            o.AllowEmptyHosts = false;
-        });
+        // The Host header is NetworkGate's, after the subnets. The framework's own host filter runs ahead of the whole
+        // pipeline when it has names to filter by, and answered a network the service does not answer with its
+        // "Invalid Hostname" page; told every name is allowed, it passes everything on to the gate.
+        builder.Services.Configure<Microsoft.AspNetCore.HostFiltering.HostFilteringOptions>(o => o.AllowedHosts = ["*"]);
 
         adjust?.Invoke(builder);
 
         var app = builder.Build();
 
-        // First, before anything answers: the subnets and the origin (NetworkGate), then the Host header.
+        // First, before anything answers: the subnets, the origin, the Host header (NetworkGate).
         var gate = app.Services.GetRequiredService<NetworkGate>();
         app.Use((context, next) => gate.InvokeAsync(context, _ => next()));
-        app.UseHostFiltering();
 
         // Browsers are told to come back over HTTPS only, for a year; the service never answers plain HTTP anyway.
         app.UseHsts();

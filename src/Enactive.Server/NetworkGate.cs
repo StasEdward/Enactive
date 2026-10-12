@@ -15,7 +15,14 @@ using System.Net;
 /// where it comes from (Origin) must come from one of the names the service is reached by. A request without one is
 /// a navigation or a non-browser client, which the cookie rules (SameSite=Strict) already keep to this site.</para>
 ///
-/// <para>Both refusals are a bare 403: the reason is for the log, not for the network being refused.</para>
+/// <para><b>The host.</b> The Host header must be one of those names too: a name somebody else points at the service's
+/// address (DNS rebinding) would otherwise make a page of theirs same-origin with it. Checked here, after the subnet,
+/// and not by the framework's host filter: that one runs ahead of the whole pipeline, and answered a network the
+/// service does not answer with its "Invalid Hostname" page.</para>
+///
+/// <para>The subnet and origin refusals are a bare 403: the reason is for the log, not for the network being refused.
+/// The host's is a 400 with one line - the client is on a network the service answers, and a person who opened it by
+/// another name (localhost, where HostNames names the machine) is told it is the name, not the service.</para>
 /// </summary>
 internal sealed class NetworkGate(IReadOnlyList<IPNetwork> subnets, IReadOnlyList<string> hostNames, ILogger<NetworkGate> log)
 {
@@ -55,6 +62,22 @@ internal sealed class NetworkGate(IReadOnlyList<IPNetwork> subnets, IReadOnlyLis
             return;
         }
 
+        var host = context.Request.Host;
+        if (!AcceptsHost(host))
+        {
+            // With the names it does answer: a service opened by a name server.json does not list looked broken, and
+            // the browser said only "Invalid Hostname".
+            log.LogWarning("Refused {Remote} {Path}: Host '{Host}' is not a name the service is reached by (HostNames in server.json: {HostNames}).",
+                remote, context.Request.Path, host.Value, string.Join(", ", hostNames));
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsync("Not a name this service is reached by. HostNames in its server.json says which are.");
+            return;
+        }
+
         await next(context);
     }
+
+    /// <summary>A Host header that names one of the names the service is reached by; the port is not the name.</summary>
+    public bool AcceptsHost(HostString host)
+        => host.HasValue && hostNames.Contains(host.Host, StringComparer.OrdinalIgnoreCase);
 }
