@@ -1,0 +1,292 @@
+@using Enactive.Application
+@using Enactive.Application.Projections
+@using Enactive.Core.History
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject NavigationManager Navigation
+@inject ServerHistory History
+@inject IRunControl Runs
+@inject WorkspaceIds Ids
+
+@* The window's context column (MainWindow.axaml, lines 153-457), top to bottom: WORKSPACE and its switcher; RUNS with
+   Refresh; RUNNING, each with Open; the filter and "Delete these N"; UNFINISHED, with carry on and forget; the history,
+   each row with its status edge, its "×N" attempts and its delete. What it shows and decides is WorkspaceColumnState's;
+   this draws it, and asks before anything that cannot be taken back, in the window's words. Row actions are visible,
+   as in the window: hidden until hover they would still take the click, and the question is what guards them. *@
+
+@if (_state is null)
+{
+    return;
+}
+
+<aside class="runs-column" aria-label="Runs column">
+    <div class="column-top">
+        <PanelHeader Text="WORKSPACE" />
+        <WorkspaceSwitcher Rows="State.Workspaces" Current="State.Current" Href="State.Href"
+                           OnAdd="@(State.CanOperate ? EventCallback.Factory.Create(this, OpenBrowser) : default)" />
+        @if (State.SelectedMissing)
+        {
+            <p class="missing-note">This folder is not on disk. Nothing will run here until you pick another one.</p>
+        }
+    </div>
+
+    <div class="column-rule"></div>
+
+    <PanelHeader Text="RUNS">
+        <button type="button" class="btn small" disabled="@_busy" @onclick="RefreshAsync">Refresh</button>
+    </PanelHeader>
+
+    @if (State.Said is { Length: > 0 } said)
+    {
+        <p class="said" role="alert">@said</p>
+    }
+    @if (State.Problem is { } problem)
+    {
+        <p class="said">@problem</p>
+    }
+
+    @if (State.Running.Count > 0)
+    {
+        @* What is happening now, above everything: a run is written to the history when it ENDS, so between Run and its
+           end it was in no list at all. *@
+        <section class="runs-running">
+            <PanelHeader Text="RUNNING" />
+            <ul class="cards">
+                @foreach (var run in State.Running)
+                {
+                    <li class="card" title="@run.Tooltip">
+                        <div class="card-text">
+                            <span class="card-title">@run.Title</span>
+                            <span class="card-meta">@run.Meta</span>
+                        </div>
+                        @* The window offers no Open on a background run - it has no live view there. The service keeps
+                           every run's feed in its session, so each one has a page to open. *@
+                        <a class="btn small" href="@($"runs/{run.Id}")">Open</a>
+                    </li>
+                }
+            </ul>
+        </section>
+    }
+
+    <div class="filter-row">
+        <select class="filter" aria-label="Which runs the list shows" title="Which runs the list shows" @onchange="FilterChanged">
+            @foreach (var filter in Enum.GetValues<RunFilter>())
+            {
+                <option value="@filter" selected="@(filter == State.Filter)">@WorkspaceColumnState.FilterNames[(int)filter]</option>
+            }
+        </select>
+        @if (State.CanOperate)
+        {
+            <button type="button" class="btn destructive small delete-shown" disabled="@(!State.CanDelete || _busy)"
+                    title="Forget every run listed below. This cannot be undone." @onclick="AskDeleteShown">@State.DeleteLabel</button>
+        }
+    </div>
+
+    @if (State.Unfinished.Count > 0)
+    {
+        @* Not history: an offer to carry on a run the process left before it ended - above the history, and only there
+           when there is one, which is normally never. *@
+        <section class="runs-unfinished">
+            <PanelHeader Text="UNFINISHED" />
+            <ul class="cards">
+                @foreach (var checkpoint in State.Unfinished)
+                {
+                    <li class="card" title="@RunRows.Tooltip(checkpoint)">
+                        <div class="card-text">
+                            <span class="card-title">@RunTitle.OneLine(checkpoint.Title)</span>
+                            <span class="card-meta">@RunRows.Meta(checkpoint)</span>
+                        </div>
+                        @if (State.CanOperate)
+                        {
+                            var tip = RunRows.ResumeTip(checkpoint);
+                            <button type="button" class="row-icon" aria-label="@tip" title="@tip" disabled="@_busy" @onclick="() => AskResume(checkpoint)">
+                                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M 8,5 L 19,12 L 8,19 Z" /></svg>
+                            </button>
+                            <button type="button" class="row-icon destructive" aria-label="Delete: it can no longer be resumed"
+                                    title="Delete: it can no longer be resumed" disabled="@_busy"
+                                    @onclick="() => AskAsync(ServerHistory.Act.Forget, checkpoint.RunId)">@Bin</button>
+                        }
+                    </li>
+                }
+            </ul>
+        </section>
+    }
+
+    <ul class="history cards">
+        @foreach (var row in State.Rows)
+        {
+            var run = row.Run;
+            <li class="@("card " + Looks.Run(RunStanding.Of(run.Status)) + (row.IsLead ? "" : " attempt"))" title="@RunRows.Tooltip(run)">
+                @if (row.IsLead && row.Attempts > 1)
+                {
+                    @* Twelve tries at one task were twelve rows and read as twelve pieces of work: one row that says
+                       twelve, which opens the others under it. *@
+                    <Pill Class="attempts" Title="Show the other attempts at this task" Expanded="State.IsExpanded(run)"
+                          OnClick="() => State.Toggle(run)">×@row.Attempts</Pill>
+                }
+                <a class="card-text" href="@Links.PastRun(State.Selected!.RootPath, run.RunId)">
+                    <span class="card-title">@RunTitle.For(run)</span>
+                    <span class="card-meta">@RunRows.Meta(run)</span>
+                </a>
+                @if (State.CanOperate)
+                {
+                    <button type="button" class="row-icon destructive" aria-label="Delete this run from the history"
+                            title="Delete this run from the history" disabled="@_busy"
+                            @onclick="() => AskAsync(ServerHistory.Act.DeleteRun, run.RunId)">@Bin</button>
+                }
+            </li>
+        }
+    </ul>
+
+    @if (State.Selected is not null && State.Problem is null)
+    {
+        <p class="hint column-status">@State.Status</p>
+    }
+</aside>
+
+@if (_question is { } question)
+{
+    <Dialog Title="@question.Headline" OnClose="Dismiss">
+        <ChildContent>
+            <p class="body">@question.Body</p>
+        </ChildContent>
+        <Actions>
+            <button type="button" class="@("btn " + _confirmLook)" disabled="@_busy" @onclick="@(() => AnswerAsync("confirm"))">@question.Confirm</button>
+            @if (question.Alternative is { } alternative)
+            {
+                <button type="button" class="btn" disabled="@_busy" @onclick="@(() => AnswerAsync("alternative"))">@alternative</button>
+            }
+            <button type="button" class="btn" disabled="@_busy" @onclick="Dismiss">@question.Cancel</button>
+        </Actions>
+    </Dialog>
+}
+
+@if (_browsing)
+{
+    <Dialog Title="Add folder" OnClose="CloseBrowser">
+        <ChildContent>
+            <FolderBrowser OnChosen="Add" Said="@_browseSaid" />
+        </ChildContent>
+        <Actions>
+            <button type="button" class="btn" @onclick="CloseBrowser">Cancel</button>
+        </Actions>
+    </Dialog>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The workspace the address names, by its id; null for the one used last. Guid.Empty names none.</summary>
+    [Parameter] public Guid? WorkspaceId { get; set; }
+
+    /// <summary>What an action that led here said (the address's "said").</summary>
+    [Parameter] public string? Said { get; set; }
+
+    private WorkspaceColumnState? _state;
+
+    private WorkspaceColumnState State => _state!;
+
+    // Read per address, not once (Pages/_Imports.razor): choosing another workspace is a link to this same screen. One
+    // state for the column's life, so the filter and the attempts opened stay as the person left them, as the window's.
+    protected override async Task OnParametersSetAsync()
+    {
+        var state = _state ?? new WorkspaceColumnState(History, Runs, Ids, (await Auth).User);
+        await state.LoadAsync(WorkspaceId, CancellationToken.None);
+        state.Said = Said;
+        _state = state;
+    }
+
+    // The question on screen, and what answering it does; one at a time, as the window's dialogs are.
+    private Question? _question;
+    private Func<string, Task>? _answer;
+    private string _confirmLook = "destructive";
+    private bool _busy;
+
+    private bool _browsing;
+    private string? _browseSaid;
+
+    private static readonly RenderFragment Bin =
+        @<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M 5,7 L 19,7 M 10,7 L 10,5 L 14,5 L 14,7 M 7,7 L 8,20 L 16,20 L 17,7 M 10.5,10 L 10.5,17 M 13.5,10 L 13.5,17" /></svg>;
+
+    private async Task RefreshAsync()
+    {
+        State.Said = null;
+        await State.RefreshAsync(CancellationToken.None);
+    }
+
+    private void FilterChanged(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<RunFilter>(e.Value?.ToString(), out var filter))
+            State.Filter = filter;
+    }
+
+    private void AskDeleteShown()
+    {
+        if (State.AskDeleteShown() is not { } question)
+            return;
+        // The runs the question counted, held now: what is deleted is what was shown when it was asked.
+        var asked = State.Shown.Select(r => r.RunId).ToList();
+        Ask(question, "destructive", _ => State.DeleteShownAsync(asked, CancellationToken.None));
+    }
+
+    private async Task AskAsync(string act, Guid id)
+    {
+        State.Said = null;
+        if (await State.AskAsync(act, id, CancellationToken.None) is { } question)
+            Ask(question, "destructive", choice => State.DoAsync(act, id, choice, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Carrying on is a person's decision, made knowing what runs twice: the step that was running starts again, and what
+    /// it did outside this machine may be done again (RunRecovery) - said before, not after.
+    /// </summary>
+    private void AskResume(RunCheckpoint checkpoint)
+        => Ask(new Question($"Resume “{RunTitle.OneLine(checkpoint.Title)}”?", RunRecovery.Warning(checkpoint), "Resume", "Cancel"), "go",
+            async _ =>
+            {
+                if (await State.ResumeAsync(checkpoint.RunId) is { } run)
+                    Navigation.NavigateTo($"runs/{run}");
+            });
+
+    private void Ask(Question question, string look, Func<string, Task> answer)
+        => (_question, _confirmLook, _answer) = (question, look, answer);
+
+    private async Task AnswerAsync(string choice)
+    {
+        if (_answer is not { } answer || _busy)
+            return;
+        // Busy while it is done: a second press is not a second delete.
+        _busy = true;
+        try { await answer(choice); }
+        finally
+        {
+            _busy = false;
+            Dismiss();
+        }
+    }
+
+    private void Dismiss()
+    {
+        if (_busy)
+            return;
+        (_question, _answer) = (null, null);
+    }
+
+    private void OpenBrowser() => (_browsing, _browseSaid) = (true, null);
+
+    private void CloseBrowser() => _browsing = false;
+
+    private void Add(string folder)
+    {
+        var (id, said) = State.AddWorkspace(folder);
+        if (id is null)
+        {
+            _browseSaid = said;
+            return;
+        }
+        // As the window does with a folder just added: the column switches to it.
+        _browsing = false;
+        Navigation.NavigateTo(Links.Runs(id, said));
+    }
+}

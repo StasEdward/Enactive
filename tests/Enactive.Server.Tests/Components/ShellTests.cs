@@ -155,6 +155,21 @@ public sealed class ShellTests : ComponentHost
         }
     }
 
+    /// <summary>
+    /// Templates and Schedules have no page of their own yet, and the workspace list they led to is gone (its switcher is
+    /// on the Runs screen): a link to an address with no page was the dead end the rail must not have.
+    /// </summary>
+    [Fact]
+    public void Templates_and_schedules_lead_to_the_runs_screen_until_their_pages_exist()
+    {
+        SignIn("alice");
+
+        var rail = RenderedRail();
+
+        Assert.Equal("/", rail.Find("[data-rail='/templates']").GetAttribute("href"));
+        Assert.Equal("/", rail.Find("[data-rail='/schedules']").GetAttribute("href"));
+    }
+
     [Theory]
     [InlineData("http://localhost/", "/")]
     [InlineData("http://localhost/runs/0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/")]

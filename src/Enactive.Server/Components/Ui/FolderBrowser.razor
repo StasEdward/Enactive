@@ -1,0 +1,70 @@
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerHistory History
+@inject WorkspaceRoots Roots
+
+@* Choosing a folder on the server for a workspace (ADR 0002 §10): the service's roots, and the folders below one of
+   them, never a box to type a path into - a typed path made every folder of the server one Run away from an agent with
+   a shell. What is listed comes from ServerHistory.Browse, which refuses anybody but an Operator and anything outside
+   the roots (WorkspaceRoots); choosing one is the caller's, through OnChosen. *@
+
+<p class="hint">The service runs tasks only in folders under its roots (server.json, WorkspaceRoots). Links that lead
+    elsewhere are not offered.</p>
+
+@if (_path is { Length: > 0 })
+{
+    <p class="path">@_path</p>
+}
+@if (_problem is not null)
+{
+    <p class="said" role="alert">@_problem</p>
+}
+@if (Said is { Length: > 0 })
+{
+    <p class="said" role="alert">@Said</p>
+}
+
+<div class="browse-actions">
+    @if (_path is { Length: > 0 })
+    {
+        <button type="button" class="btn" @onclick="UpAsync">↑ Up</button>
+        @if (_problem is null)
+        {
+            <button type="button" class="btn go" @onclick="ChooseAsync">Make this folder a workspace</button>
+        }
+    }
+</div>
+
+<ul class="folders">
+    @foreach (var folder in _folders)
+    {
+        <li><button type="button" class="folder" @onclick="() => OpenAsync(folder)">@(_path is { Length: > 0 } ? System.IO.Path.GetFileName(folder) : folder)</button></li>
+    }
+</ul>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The folder chosen, to be made a workspace.</summary>
+    [Parameter, EditorRequired] public EventCallback<string> OnChosen { get; set; }
+
+    /// <summary>What the service said of the last choice, when it did not take it.</summary>
+    [Parameter] public string? Said { get; set; }
+
+    private string? _path;
+    private IReadOnlyList<string> _folders = [];
+    private string? _problem;
+
+    protected override Task OnInitializedAsync() => OpenAsync(null);
+
+    private async Task OpenAsync(string? folder)
+    {
+        _path = folder;
+        (_folders, _problem) = History.Browse((await Auth).User, folder);
+    }
+
+    /// <summary>The parent, or the list of roots when the parent is not under one (WorkspaceRoots.Up).</summary>
+    private Task UpAsync() => OpenAsync(Roots.Up(_path ?? ""));
+
+    private Task ChooseAsync() => OnChosen.InvokeAsync(_path);
+}

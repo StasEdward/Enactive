@@ -259,7 +259,38 @@ public sealed partial class SignInTests : IAsyncLifetime
 
     [Fact]
     public async Task The_reading_pages_need_a_signed_in_person()
-        => Assert.Equal(HttpStatusCode.Redirect, (await NewBrowser().GetAsync("/workspaces")).StatusCode);
+    {
+        // The old addresses too: what a workspace's id is, is not told to somebody who has not signed in.
+        foreach (var address in new[] { "/", "/history?ws=x", "/workspaces" })
+        {
+            var response = await NewBrowser().GetAsync(address);
+            Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+            Assert.StartsWith("https://localhost/signin", response.Headers.Location!.ToString());
+        }
+    }
+
+    /// <summary>
+    /// A link in an earlier mail or a bookmark still lands: the history and the workspace list are the Runs screen now,
+    /// which names a workspace by its id, never its path. What the old page was told to say (an action's result) comes
+    /// along; a folder the service does not know is not looked up on the disk.
+    /// </summary>
+    [Fact]
+    public async Task An_old_history_address_lands_on_the_runs_screen_by_the_workspace_s_id()
+    {
+        var folder = Path.Combine(_root, "project");
+        Directory.CreateDirectory(folder);
+        _app.Services.GetRequiredService<Runs.ServerEngine>().Workspaces.Touch(folder);
+        var browser = NewBrowser();
+        await SignInAsync(browser, "alice", Password);
+
+        var known = await browser.GetAsync("/history?ws=" + Uri.EscapeDataString(folder) + "&said=" + Uri.EscapeDataString("Forgotten."));
+        Assert.Equal(HttpStatusCode.Redirect, known.StatusCode);
+        Assert.Equal($"/?ws={Enactive.Core.Context.WorkspaceInfo.For(folder).Id}&said=Forgotten.", known.Headers.Location!.OriginalString);
+
+        var unknown = await browser.GetAsync("/history?ws=" + Uri.EscapeDataString(Path.Combine(_root, "elsewhere")));
+        Assert.Equal("/", unknown.Headers.Location!.OriginalString);
+        Assert.Equal("/", (await browser.GetAsync("/workspaces")).Headers.Location!.OriginalString);
+    }
 
     [Fact]
     public async Task Health_answers_without_signing_in()

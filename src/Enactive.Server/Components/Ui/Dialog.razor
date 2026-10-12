@@ -1,0 +1,32 @@
+@* The window's modal dialog, on the page: a title, what it says, and its buttons - over the screen, which stays where it
+   was underneath. A page asked its questions on pages of their own (ConfirmPage), so answering one lost the screen it
+   was asked from; here the question comes to the screen. Escape and the scrim close it, as the window's do, unless
+   the dialog is busy doing what was asked. *@
+
+<div class="dialog-scrim" @onclick="CloseAsync">
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="@_titleId" tabindex="-1"
+         @onclick:stopPropagation="true" @onkeydown="KeyAsync">
+        <h2 id="@_titleId" class="dialog-title">@Title</h2>
+        @ChildContent
+        @if (Actions is not null)
+        {
+            <div class="dialog-actions">@Actions</div>
+        }
+    </div>
+</div>
+
+@code {
+    // Unique per dialog, so the title names its own dialog even when one opens over another.
+    private readonly string _titleId = "dialog-" + Guid.NewGuid().ToString("N");
+
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+
+    /// <summary>Escape, the scrim, or a Cancel the caller draws; nothing when the dialog may not be left now.</summary>
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private Task KeyAsync(KeyboardEventArgs e) => e.Key == "Escape" ? CloseAsync() : Task.CompletedTask;
+}

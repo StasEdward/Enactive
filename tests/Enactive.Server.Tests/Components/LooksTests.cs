@@ -6,6 +6,7 @@ using Enactive.Application.Projections;
 using Enactive.Core.History;
 using Enactive.Providers;
 using Enactive.Server.Components;
+using Enactive.Server.Components.Runs;
 using Enactive.Workspace;
 using Xunit.Sdk;
 
@@ -33,11 +34,12 @@ public sealed class LooksTests
         classes.AddRange(Enum.GetValues<CiState>().Select(Looks.Ci));
         classes.AddRange(Enum.GetValues<ProviderHealth>().Select(Looks.Health));
         classes.AddRange(Enumerable.Range(0, 4).Select(Looks.Autonomy));
+        classes.AddRange(Enum.GetValues<WorkspacePlace>().Select(Looks.Workspace));
         classes.Add(Looks.Change(applied: false, rejected: false));
         classes.Add(Looks.Change(applied: true, rejected: false));
         classes.Add(Looks.Change(applied: false, rejected: true));
 
-        Assert.All(classes, c => Assert.Matches(@"^(tone|tier)-[\w-]+$", c));
+        Assert.All(classes, c => Assert.Matches(@"^(tone|tier|edge)-[\w-]+$", c));
         // A class Looks hands out that the stylesheet does not define draws as no colour at all.
         var undefined = classes.Distinct().Where(c => !ToneTokens.Value.ContainsKey(c)).ToList();
         Assert.True(undefined.Count == 0, $"theme.css defines no rule for: {string.Join(", ", undefined)}");
@@ -61,6 +63,7 @@ public sealed class LooksTests
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Reach((ModelReach)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Ci((CiState)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Health((ProviderHealth)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Workspace((WorkspacePlace)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Autonomy(4));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Autonomy(-1));
         // Applied and rejected at once is not a state a change is ever in.
@@ -121,6 +124,13 @@ public sealed class LooksTests
             [ProviderHealth.Unreachable] = "ProviderHealth.Unreachable",
             [ProviderHealth.Unknown] = "ProviderHealth.Unknown",
             [ProviderHealth.Checking] = "ProviderHealth.Checking"
+        }));
+
+        rows.AddRange(Rows(Looks.Workspace, new Dictionary<WorkspacePlace, string>
+        {
+            [WorkspacePlace.Current] = "WorkspacePlace.Current",
+            [WorkspacePlace.Other] = "WorkspacePlace.Other",
+            [WorkspacePlace.Missing] = "WorkspacePlace.Missing"
         }));
 
         // The change is two flags here and an enum in the window: staged and refused wait for a person, then what was done.
@@ -213,7 +223,7 @@ public sealed class LooksTests
 
     /// <summary>The token each state class sets: <c>.tone-done { --tone: var(--success); }</c>, one rule on one line.</summary>
     private static readonly Lazy<Dictionary<string, string>> ToneTokens = new(() =>
-        Regex.Matches(Theme.Value, @"(?m)^\.(?<class>(?:tone|tier)-[\w-]+)\s*\{\s*--tone:\s*var\(--(?<token>[\w-]+)\)\s*;\s*\}")
+        Regex.Matches(Theme.Value, @"(?m)^\.(?<class>(?:tone|tier|edge)-[\w-]+)\s*\{\s*--tone:\s*var\(--(?<token>[\w-]+)\)\s*;\s*\}")
             .ToDictionary(m => m.Groups["class"].Value, m => m.Groups["token"].Value));
 
     private static string ToneHex(string cssClass)

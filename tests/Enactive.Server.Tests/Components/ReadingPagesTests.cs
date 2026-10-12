@@ -4,6 +4,7 @@ using Bunit;
 using Enactive.Core.Context;
 using Enactive.Core.History;
 using Enactive.Server.Components.Pages;
+using Enactive.Server.Components.Runs;
 using Enactive.Server.Runs;
 using Enactive.Workspace;
 using Microsoft.AspNetCore.Components;
@@ -65,8 +66,9 @@ public sealed class ReadingPagesTests : ComponentHost
     {
         var (root, run) = await KnownWorkspaceAsync();
 
-        Page<Workspaces>("/workspaces", "project");
-        Page<HistoryPage>("/history?ws=" + Uri.EscapeDataString(root), "digest the inbox");
+        // The Runs screen opens on the workspace used last, and names it in the switcher.
+        Assert.Contains("project", Page<RunsScreen>("/", "digest the inbox"));
+        Page<RunsScreen>($"/?ws={WorkspaceInfo.For(root).Id}", "digest the inbox");
 
         var page = Page<PastRunPage>($"/history/run?ws={Uri.EscapeDataString(root)}&id={run.RunId}", "digest the inbox");
         Assert.Contains("write_file digest.md", page);
@@ -82,7 +84,9 @@ public sealed class ReadingPagesTests : ComponentHost
     {
         Directory.CreateDirectory(Path.Combine(_folders, "elsewhere"));
 
-        Page<HistoryPage>("/history?ws=" + Uri.EscapeDataString(Path.Combine(_folders, "elsewhere")), "does not know that folder");
+        var elsewhere = Path.Combine(_folders, "elsewhere");
+
+        Page<RunsScreen>($"/?ws={WorkspaceInfo.For(elsewhere).Id}", "does not know that workspace");
     }
 
     /// <summary>
@@ -95,13 +99,13 @@ public sealed class ReadingPagesTests : ComponentHost
         var (root, _) = await KnownWorkspaceAsync();
         SignIn("vera");
         var navigation = Services.GetRequiredService<NavigationManager>();
-        navigation.NavigateTo("/history?ws=" + Uri.EscapeDataString(root));
-        var history = Render<HistoryPage>();
+        navigation.NavigateTo($"/?ws={WorkspaceInfo.For(root).Id}");
+        var history = Render<RunsScreen>();
         history.WaitForAssertion(() => Assert.Contains("digest the inbox", history.Markup));
 
-        navigation.NavigateTo("/history?ws=" + Uri.EscapeDataString(Path.Combine(_folders, "elsewhere")));
+        navigation.NavigateTo($"/?ws={WorkspaceInfo.For(Path.Combine(_folders, "elsewhere")).Id}");
 
-        history.WaitForAssertion(() => Assert.Contains("does not know that folder", history.Markup));
+        history.WaitForAssertion(() => Assert.Contains("does not know that workspace", history.Markup));
         Assert.DoesNotContain("digest the inbox", history.Markup);
     }
 

@@ -3,6 +3,7 @@ namespace Enactive.Server.Components;
 using Enactive.Application.Projections;
 using Enactive.Core.History;
 using Enactive.Providers;
+using Enactive.Server.Components.Runs;
 using Enactive.Workspace;
 
 /// <summary>
@@ -39,6 +40,18 @@ internal static class Looks
         RunStandingKind.Idle => "tone-idle",
         RunStandingKind.Running or RunStandingKind.Open => "tone-open",
         _ => throw Unknown(standing)
+    };
+
+    /// <summary>
+    /// A workspace's edge in the switcher and on the WORKSPACE card, as Palette.WorkspaceEdge: every row has one, so the
+    /// column is one to scan for "which of these is gone" - blue where you are, red where the folder is gone, grey else.
+    /// </summary>
+    public static string Workspace(WorkspacePlace place) => place switch
+    {
+        WorkspacePlace.Current => "edge-current",
+        WorkspacePlace.Missing => "edge-missing",
+        WorkspacePlace.Other => "edge-other",
+        _ => throw Unknown(place)
     };
 
     /// <summary>A line of a run's timeline, by the kind of event it was.</summary>

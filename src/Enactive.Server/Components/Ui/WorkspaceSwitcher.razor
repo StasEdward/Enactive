@@ -1,0 +1,78 @@
+@using Enactive.Server.Components.Runs
+
+@* The window's WORKSPACE card and its popup (MainWindow.axaml): the folder you are in, and on a click every workspace the
+   service knows, each with its edge - blue where you are, red where the folder is gone, grey else (Looks.Workspace) -
+   and Add folder…. Choosing one is a link to the Runs screen on it, by its id: an address, so it can be opened in
+   another tab and comes back on reload. *@
+
+<div class="switcher-anchor">
+    @if (Current is { } current)
+    {
+        <button type="button" class="@("ws-card edge " + Looks.Workspace(current.Place))"
+                title="@current.Entry.RootPath" aria-haspopup="true" aria-expanded="@_open" @onclick="Toggle">
+            <span class="ws-card-text">
+                <span class="@(current.Exists ? "ws-name" : "ws-name missing")">@current.Entry.Name</span>
+                <span class="path">@current.Entry.RootPath</span>
+            </span>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M 7,10 L 12,15 L 17,10" /></svg>
+        </button>
+    }
+    else
+    {
+        @* No workspace to show - none known yet, or the address named one the service does not know: the card still opens
+           the list, which is how one is chosen or added. *@
+        <button type="button" class="ws-card edge edge-other" aria-haspopup="true" aria-expanded="@_open" @onclick="Toggle">
+            <span class="ws-card-text"><span class="ws-name">Choose a folder</span></span>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M 7,10 L 12,15 L 17,10" /></svg>
+        </button>
+    }
+
+    @if (_open)
+    {
+        @* Clicking away closes it, as the window's light dismiss does. *@
+        <div class="switcher-away" @onclick="Close"></div>
+        <div class="switcher popup">
+            <h2 class="panel-header">WORKSPACES</h2>
+            @if (Rows.Count == 0)
+            {
+                <p class="hint">The service knows no folder yet.@(OnAdd.HasDelegate ? " Add one under its roots." : " An Operator adds one.")</p>
+            }
+            <ul class="ws-rows">
+                @foreach (var row in Rows)
+                {
+                    <li class="@("ws-row edge " + Looks.Workspace(row.Place) + (row.IsCurrent ? " current" : ""))">
+                        <a href="@Href(row)" @onclick="Close" aria-current="@(row.IsCurrent ? "true" : null)">
+                            <span class="@(row.Exists ? "ws-name" : "ws-name missing")">@row.Entry.Name</span>
+                            <span class="@(row.Exists ? "path" : "path missing")">@row.Detail</span>
+                        </a>
+                    </li>
+                }
+            </ul>
+            @if (OnAdd.HasDelegate)
+            {
+                <button type="button" class="btn add-folder" @onclick="AddAsync">Add folder…</button>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private bool _open;
+
+    [Parameter, EditorRequired] public IReadOnlyList<SwitcherRow> Rows { get; set; } = [];
+    [Parameter] public SwitcherRow? Current { get; set; }
+    [Parameter, EditorRequired] public Func<SwitcherRow, string> Href { get; set; } = _ => "/";
+
+    /// <summary>Add folder… - offered only when set (an Operator's; the service refuses it for anybody else).</summary>
+    [Parameter] public EventCallback OnAdd { get; set; }
+
+    private void Toggle() => _open = !_open;
+
+    private void Close() => _open = false;
+
+    private async Task AddAsync()
+    {
+        _open = false;
+        await OnAdd.InvokeAsync();
+    }
+}

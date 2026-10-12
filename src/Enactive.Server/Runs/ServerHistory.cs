@@ -43,7 +43,7 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
     {
         if (Workspace(user, root) is not { } known)
             return (null, Unknown(user));
-        return (await _history.LoadAsync(known.RootPath, ct), null);
+        return (await LoadAsync(known.RootPath, ct), null);
     }
 
     public async Task<(PastRun? Run, string? Problem)> OpenAsync(ClaimsPrincipal user, string root, Guid runId, CancellationToken ct)
@@ -51,7 +51,7 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         if (Workspace(user, root) is not { } known)
             return (null, Unknown(user));
 
-        var list = await _history.LoadAsync(known.RootPath, ct);
+        var list = await LoadAsync(known.RootPath, ct);
         if (list.Runs.FirstOrDefault(r => r.RunId == runId) is not { } summary)
             return (null, "There is no such run in this workspace.");
         var (record, problem) = await _history.OpenAsync(known.RootPath, summary, ct);
@@ -106,7 +106,7 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         switch (act)
         {
             case Act.DeleteRun:
-                var list = await _history.LoadAsync(known.RootPath, ct);
+                var list = await LoadAsync(known.RootPath, ct);
                 return list.Runs.FirstOrDefault(r => r.RunId == id) is { } run
                     ? (RunHistoryService.DeleteOne(run), null)
                     : (null, "There is no such run in this workspace.");
@@ -161,7 +161,7 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
             }
             case Act.DeleteRun:
             {
-                var list = await _history.LoadAsync(known.RootPath, ct);
+                var list = await LoadAsync(known.RootPath, ct);
                 if (list.Runs.FirstOrDefault(r => r.RunId == id) is not { } run)
                     return ("There is no such run in this workspace.", null);
                 if (await _history.DeleteAsync(known.RootPath, run, ct) is { } problem)
@@ -206,7 +206,7 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
             return (NotOperating(user), 0);
         var who = users.Find(user.Identity?.Name ?? "")!.Name;
 
-        var list = await _history.LoadAsync(known.RootPath, ct);
+        var list = await LoadAsync(known.RootPath, ct);
         if (list.Problem is { } unreadable)
             return (unreadable, 0);
         var ids = shown.ToHashSet();
@@ -217,7 +217,7 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         var refused = await _history.DeleteAsync(known.RootPath, doomed, ct);
         // Some could not be deleted, and the bulk delete does not say which: the history is read again, so only the runs
         // really gone are audited as deleted - an audit naming a run that is still there is a record that lies.
-        var gone = refused is null ? doomed : ConfirmedGone(doomed, await _history.LoadAsync(known.RootPath, ct));
+        var gone = refused is null ? doomed : ConfirmedGone(doomed, await LoadAsync(known.RootPath, ct));
         if (gone is null)
             return (refused + " The history could not be read again to tell which.", 0);
         foreach (var run in gone)
@@ -234,14 +234,25 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
 
     private async Task<Core.History.RunRecord?> RecordAsync(string root, Guid id, CancellationToken ct)
     {
-        var list = await _history.LoadAsync(root, ct);
+        var list = await LoadAsync(root, ct);
         return list.Runs.FirstOrDefault(r => r.RunId == id) is { } summary
             ? (await _history.OpenAsync(root, summary, ct)).Record
             : null;
     }
 
     private static async Task<Core.History.RunCheckpoint?> CheckpointAsync(string root, Guid runId, CancellationToken ct)
-        => (await new JsonCheckpointStore(WorkspaceInfo.For(root)).LoadAllAsync(ct)).FirstOrDefault(c => c.RunId == runId);
+        => Directory.Exists(root)
+            ? (await new JsonCheckpointStore(WorkspaceInfo.For(root)).LoadAllAsync(ct)).FirstOrDefault(c => c.RunId == runId)
+            : null;
+
+    /// <summary>
+    /// A known workspace's history - none when its folder is gone. Reading it anyway made the stores' folders under the
+    /// workspace's root, and so the workspace itself again, empty: a folder somebody had moved or deleted came back on
+    /// the server's disk because a page looked at it (found by WorkspaceColumnTests), and the Runs screen then offered to
+    /// run in it.
+    /// </summary>
+    private Task<HistoryList> LoadAsync(string root, CancellationToken ct)
+        => Directory.Exists(root) ? _history.LoadAsync(root, ct) : Task.FromResult(new HistoryList([], [], null));
 
     /// <summary>A known workspace, for an Operator whose account still speaks for them; null otherwise.</summary>
     private WorkspaceEntry? Operating(ClaimsPrincipal user, string root)

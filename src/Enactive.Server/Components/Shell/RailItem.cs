@@ -54,7 +54,7 @@ internal sealed record RailItem(string Href, string Label, string Icon, Role Nee
 /// changes its row to the new address, and when every row is the item's own this table goes.
 ///
 /// <para>An item is marked "you are here" by <c>Active</c>, never by an address another item shares (Templates and
-/// Schedules both lead to the workspace list for now): both would light up on it.</para>
+/// Schedules both lead to the Runs screen for now): all three would light up on it.</para>
 /// </summary>
 internal static class RailAddresses
 {
@@ -67,8 +67,10 @@ internal static class RailAddresses
     {
         ["/"] = new("/", ["", "runs"]),
         ["/timeline"] = new(null, ["timeline"]),                                          // TEMPORARY: no page yet
-        ["/templates"] = new("workspaces", ["templates", "library/template"]),           // TEMPORARY: the library needs a workspace
-        ["/schedules"] = new("workspaces", ["schedules", "library/schedule"]),           // TEMPORARY: the library needs a workspace
+        // TEMPORARY: the library needs a workspace, and the workspace list it was reached from is the Runs screen's
+        // switcher now - so the Runs screen, until Templates and Schedules have pages of their own (Tasks 16, 17).
+        ["/templates"] = new("/", ["templates", "library/template"]),
+        ["/schedules"] = new("/", ["schedules", "library/schedule"]),
         ["/inbox"] = new("inbox", ["inbox"]),
         ["/proposals"] = new("proposals", ["proposals"]),
         ["/log"] = new("logs", ["log", "logs"]),                                         // TEMPORARY: /logs today

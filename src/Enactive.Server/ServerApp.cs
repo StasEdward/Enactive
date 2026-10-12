@@ -109,8 +109,8 @@ internal static class ServerApp
                 return Results.LocalRedirect("/signin");
             });
 
-        // The inbox's answer and crash recovery's resume: form posts from static pages, with their antiforgery token
-        // checked here (as for sign-out), the person's role checked by the services. Each goes on to the run's page.
+        // The inbox's answer: a form post from a static page, with its antiforgery token checked here (as for sign-out),
+        // the person's role checked by the service. It goes on to the run's page.
         app.MapPost("/inbox/answer", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerInbox inbox) =>
         {
             if (!await antiforgery.IsRequestValidAsync(context))
@@ -120,19 +120,6 @@ internal static class ServerApp
                 Guid.TryParse(form["item"], out var item) ? item : Guid.Empty, form["option"].ToString(), context.RequestAborted);
             return run is { } id ? Results.LocalRedirect($"/runs/{id}") : Results.LocalRedirect("/inbox?said=" + Uri.EscapeDataString(said));
         });
-        app.MapPost("/runs/resume", async (HttpContext context, IAntiforgery antiforgery, Runs.IRunControl runs) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var workspace = form["ws"].ToString();
-            var (run, refusal) = await runs.ResumeAsync(context.User, workspace,
-                Guid.TryParse(form["run"], out var id) ? id : Guid.Empty);
-            return run is not null
-                ? Results.LocalRedirect($"/runs/{run.Id}")
-                : Results.LocalRedirect("/" + Components.Links.History(workspace) + "&said=" + Uri.EscapeDataString(refusal ?? ""));
-        });
-
         // A kept proposal applied or rejected (ServerStaging checks the role and the run's end), back to its page.
         app.MapPost("/proposals/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerStaging staging) =>
         {
@@ -173,14 +160,16 @@ internal static class ServerApp
             return Results.LocalRedirect("/admin/users?said=" + Uri.EscapeDataString(said));
         });
 
-        app.MapPost("/workspaces/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerHistory history) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var said = history.AddWorkspace(context.User, form["folder"].ToString());
-            return Results.LocalRedirect("/workspaces?said=" + Uri.EscapeDataString(said));
-        });
+        // The old addresses of a workspace's history and of the workspace list, which the Runs screen is now: a link in an
+        // earlier mail or a bookmark still lands. The history named its workspace by its path; the Runs screen names it by
+        // its id (WorkspaceIds), found only among the workspaces the service knows - a path it does not know lands on the
+        // Runs screen as it opens, not on a folder read off the disk. What the old page was told to say comes along.
+        app.MapGet("/history", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids) =>
+            Results.LocalRedirect(Components.Links.Runs(
+                history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known ? ids.IdOf(known.RootPath) : null,
+                context.Request.Query["said"].ToString())))
+            .RequireAuthorization(nameof(Role.Viewer));
+        app.MapGet("/workspaces", () => Results.LocalRedirect("/")).RequireAuthorization(nameof(Role.Viewer));
 
         // A workspace's templates and schedules (ServerLibrary checks the role and the rules), each back to its page.
         app.MapPost("/library/template/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerLibrary library) =>

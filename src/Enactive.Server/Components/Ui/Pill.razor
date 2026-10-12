@@ -1,0 +1,24 @@
+@* A pill states a fact (theme.css .pill), in the colour Looks gives it. One that does something - the "×N" of a task's
+   attempts, which opens them - is a button, so it can be reached and pressed without a pointer. *@
+
+@if (OnClick.HasDelegate)
+{
+    <button type="button" class="@Classes" title="@Title" aria-expanded="@Expanded" @onclick="OnClick">@ChildContent</button>
+}
+else
+{
+    <span class="@Classes" title="@Title">@ChildContent</span>
+}
+
+@code {
+    /// <summary>The look: a class from Looks (tone-*), and any of the caller's own.</summary>
+    [Parameter] public string? Class { get; set; }
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public EventCallback OnClick { get; set; }
+
+    /// <summary>For a pill that opens something: whether it is open now; null for one that does not.</summary>
+    [Parameter] public bool? Expanded { get; set; }
+
+    private string Classes => "pill" + (Class is { Length: > 0 } ? " " + Class : "");
+}

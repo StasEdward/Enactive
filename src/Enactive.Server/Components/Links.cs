@@ -3,6 +3,21 @@ namespace Enactive.Server.Components;
 /// <summary>The addresses of the reading pages, built in one place so a folder path is always escaped the same way.</summary>
 internal static class Links
 {
+    /// <summary>
+    /// The Runs screen on a workspace, named by its id (WorkspaceIds) - a path does not survive an address - with what an
+    /// action said, when one did; with no workspace, the Runs screen on the one used last.
+    /// </summary>
+    public static string Runs(Guid? workspace, string? said = null)
+    {
+        var query = new List<string>();
+        if (workspace is { } id)
+            query.Add($"ws={id}");
+        if (!string.IsNullOrEmpty(said))
+            query.Add("said=" + Uri.EscapeDataString(said));
+        return query.Count == 0 ? "/" : "/?" + string.Join("&", query);
+    }
+
+    /// <summary>The old address of a workspace's history, which the service redirects to <see cref="Runs"/>.</summary>
     public static string History(string workspace) => "history?ws=" + Uri.EscapeDataString(workspace);
 
     public static string PastRun(string workspace, Guid runId) => $"history/run?ws={Uri.EscapeDataString(workspace)}&id={runId}";

@@ -44,10 +44,9 @@ internal sealed class RunListItemViewModel
         // one line still has to read properly, and rewriting somebody's stored runs in place to fix
         // a display problem is the wrong trade.
         Title = RunTitle.For(record);
-        Meta = $"{Ago(record.StartedAt)} · {Outcome(record)}";
-
-        var elapsed = record.FinishedAt - record.StartedAt;
-        Tooltip = $"{Title}\n{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {record.Status} · {RunDigest.Duration(elapsed)}";
+        // The lines are the service's too (its Runs screen draws the same column): one place says them (RunRows).
+        Meta = RunRows.Meta(record);
+        Tooltip = RunRows.Tooltip(record);
     }
 
     public RunSummary Record { get; }
@@ -67,47 +66,6 @@ internal sealed class RunListItemViewModel
     public RelayCommand RemoveCommand { get; }
     public string Meta { get; }
     public string Tooltip { get; }
-
-    /// <summary>
-    /// How long ago, the way a person would say it. Days are counted on the CALENDAR, not in
-    /// 24-hour blocks: a run at 23:50 was "yesterday" by breakfast, not "9 h ago".
-    /// </summary>
-    private static string Ago(DateTimeOffset at)
-    {
-        var local = at.ToLocalTime();
-        var days = (DateTime.Today - local.Date).Days;
-
-        if (days == 1)
-            return "yesterday";
-        if (days > 1 && days < 7)
-            return $"{days} days ago";
-        if (days >= 7)
-            return local.ToString("MMM d");
-
-        var span = DateTimeOffset.Now - at;
-        if (span.TotalMinutes < 1)
-            return "just now";
-        if (span.TotalMinutes < 60)
-            return $"{(int)span.TotalMinutes} min ago";
-        return $"{(int)span.TotalHours} h ago";
-    }
-
-    /// <summary>
-    /// What came of it, in two or three words. A run that did not complete says how - failed,
-    /// blocked, waiting, not finished (RunStanding, in Core, where the words are tested); otherwise
-    /// what it produced is more use than how long it took, and the duration is in the run's own
-    /// header anyway.
-    /// </summary>
-    private static string Outcome(RunSummary record)
-    {
-        if (RunStanding.Word(record.Status) is { } word)
-            return word;
-
-        if (record.Artifacts.Count > 0)
-            return $"{record.Artifacts.Count} artifact{(record.Artifacts.Count == 1 ? "" : "s")}";
-
-        return RunDigest.Duration(record.FinishedAt - record.StartedAt);
-    }
 }
 
 /// <summary>
@@ -160,13 +118,10 @@ internal sealed class ResumableRunViewModel
     {
         Checkpoint = checkpoint;
         Title = RunTitle.OneLine(checkpoint.Title);
-        Meta = $"stopped {checkpoint.At.ToLocalTime():MMM d, HH:mm} · "
-               + $"{checkpoint.Finished} of {checkpoint.Steps.Count} steps done";
-        Tooltip = $"{checkpoint.Request}\n\nResume runs the {checkpoint.Remaining} step(s) that are left, "
-                  + "under the permissions this run started with. A step that was in progress when it "
-                  + "stopped is done again from its beginning.";
-        // The button is an icon beside the delete one, as on every other row here - so what it does is said on it.
-        ResumeTip = $"Resume: run the {checkpoint.Remaining} step(s) that are left";
+        // Said in one place for the window and the service's Runs screen (RunRows).
+        Meta = RunRows.Meta(checkpoint);
+        Tooltip = RunRows.Tooltip(checkpoint);
+        ResumeTip = RunRows.ResumeTip(checkpoint);
         ResumeCommand = new RelayCommand(() => resume(checkpoint));
         RemoveCommand = new RelayCommand(() => remove?.Invoke(checkpoint), () => remove is not null);
     }
