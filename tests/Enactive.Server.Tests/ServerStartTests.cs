@@ -52,6 +52,15 @@ public sealed class ServerStartTests : IDisposable
         Assert.Contains(problems, p => p.Contains("does not start without one"));
     }
 
+    /// <summary>Proposals are kept 30 days unless server.json says otherwise; 0 keeps them until decided, less is no number of days.</summary>
+    [Fact]
+    public void Proposals_are_kept_thirty_days_and_a_negative_number_of_days_is_refused()
+    {
+        Assert.Equal(30, Good().ProposalsKeptDays);
+        Assert.Empty((Good() with { ProposalsKeptDays = 0 }).Problems());
+        Assert.Contains((Good() with { ProposalsKeptDays = -1 }).Problems(), p => p.Contains("ProposalsKeptDays"));
+    }
+
     [Theory]
     [InlineData("localhost:8443")]
     [InlineData("10.0.0.5")]

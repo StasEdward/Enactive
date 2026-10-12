@@ -153,4 +153,40 @@ public sealed class ServerStagingTests : IDisposable
     [InlineData("not-a-run")]
     public void A_set_is_named_only_by_a_run_id(string id)
         => Assert.Contains("no longer kept", _staging.Open(As("alice"), _workspace, id).Problem);
+
+    // ── how long proposals are kept ─────────────────────────────────────────
+
+    /// <summary>
+    /// Proposals nobody decided in their time are dropped - the files stay as they are - and that is said where people
+    /// look: the inbox and the audit trail. They waited without end, a folder of bytes per forgotten run in the workspace.
+    /// </summary>
+    [Fact]
+    public async Task Proposals_nobody_decided_in_their_time_are_dropped_and_said()
+    {
+        var folder = await StagedAsync();
+
+        var dropped = await _staging.ExpireAsync(DateTimeOffset.Now.AddDays(31), TimeSpan.FromDays(30), CancellationToken.None);
+
+        Assert.Equal(1, dropped);
+        Assert.False(Directory.Exists(folder));
+        Assert.Equal("old\n", File.ReadAllText(Path.Combine(_workspace, "notes.md")));
+        Assert.Empty(_staging.List(As("vera")));
+        var items = await InboxStoreFactory.Create(WorkspaceInfo.For(_workspace)).LoadAllAsync(CancellationToken.None);
+        Assert.Contains(items, i => i.Summary.Contains("not decided in 30 days", StringComparison.Ordinal));
+        Assert.Contains(_users.AuditTrail(), e => e is { Account: "(service)", Action: "staged changes dropped" });
+    }
+
+    /// <summary>Within their time they stay; and a run still writing its proposals is never dropped from under it.</summary>
+    [Fact]
+    public async Task Proposals_within_their_time_and_a_run_still_writing_are_kept()
+    {
+        var waiting = await StagedAsync();
+        var writing = await StagedAsync(end: false);
+
+        Assert.Equal(0, await _staging.ExpireAsync(DateTimeOffset.Now.AddDays(29), TimeSpan.FromDays(30), CancellationToken.None));
+        Assert.Equal(1, await _staging.ExpireAsync(DateTimeOffset.Now.AddDays(31), TimeSpan.FromDays(30), CancellationToken.None));
+
+        Assert.False(Directory.Exists(waiting));
+        Assert.True(Directory.Exists(writing));
+    }
 }

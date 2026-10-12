@@ -59,6 +59,13 @@ internal sealed record ServerOptions
     /// </summary>
     public int QuestionWaitMinutes { get; init; } = 30;
 
+    /// <summary>
+    /// How long a run's proposed changes wait to be applied or rejected before they are dropped (ServerStaging): counted
+    /// from the run's start, the date the proposals page shows. Without one they waited for ever - a folder of bytes per
+    /// forgotten run in the workspace. 0 keeps them until somebody decides.
+    /// </summary>
+    public int ProposalsKeptDays { get; init; } = 30;
+
     private static readonly JsonSerializerOptions Json = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -132,6 +139,8 @@ internal sealed record ServerOptions
             problems.Add("MaxActiveRuns must be at least 1.");
         if (QuestionWaitMinutes < 1)
             problems.Add("QuestionWaitMinutes must be at least 1.");
+        if (ProposalsKeptDays < 0)
+            problems.Add("ProposalsKeptDays is a number of days, or 0 to keep proposals until they are decided.");
 
         return problems;
     }

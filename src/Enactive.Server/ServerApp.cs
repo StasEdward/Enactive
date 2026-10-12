@@ -103,6 +103,8 @@ internal static class ServerApp
         // The schedules, every minute (ServerScheduler).
         builder.Services.AddSingleton<Runs.ServerScheduler>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<Runs.ServerScheduler>());
+        // Proposed changes nobody decided in server.json's ProposalsKeptDays are dropped, and said (StagingRetention).
+        builder.Services.AddHostedService<Runs.StagingRetention>();
         // What arrives in the inbox, by mail, when server.json names who to tell (MailNotices).
         builder.Services.AddHostedService(sp => new Runs.MailNotices(sp.GetRequiredService<Runs.ServerEngine>(), options,
             sp.GetRequiredService<ServerFolders>(), sp.GetRequiredService<ILogger<Runs.MailNotices>>()));

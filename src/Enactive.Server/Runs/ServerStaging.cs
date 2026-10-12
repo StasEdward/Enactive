@@ -167,6 +167,53 @@ internal sealed class ServerStaging(UserStore users, ServerEngine engine)
         }
     }
 
+    /// <summary>
+    /// Drops the proposals nobody decided within <paramref name="keptFor"/> of their run's start - every known workspace,
+    /// never a run still writing - and says so in the workspace's inbox and the audit trail. The files are as they were:
+    /// a proposal is only ever a proposal until applied. How many sets were dropped.
+    /// </summary>
+    public async Task<int> ExpireAsync(DateTimeOffset now, TimeSpan keptFor, CancellationToken ct)
+    {
+        var dropped = 0;
+        foreach (var workspace in engine.Workspaces.Entries)
+        {
+            var root = Root(workspace.RootPath);
+            if (!Directory.Exists(root))
+                continue;
+            foreach (var folder in Directory.EnumerateDirectories(root))
+            {
+                var id = Path.GetFileName(folder);
+                if (Read(workspace.RootPath, id) is not { Running: false, Pending: > 0 } set || now - set.Started < keptFor)
+                    continue;
+
+                // Under the set's gate: a person applying one of them this moment finishes first, and is not undone.
+                var gate = _gates.GetOrAdd(folder, _ => new SemaphoreSlim(1, 1));
+                await gate.WaitAsync(ct);
+                try
+                {
+                    if (Read(workspace.RootPath, id) is not { Running: false, Pending: > 0 } still)
+                        continue;
+                    TryDelete(folder);
+                    if (Directory.Exists(folder))
+                        continue;   // tried again next time; said only once it is gone
+                    var days = (int)keptFor.TotalDays;
+                    users.Audit("(service)", "staged changes dropped",
+                        $"{workspace.Name}: {still.Pending} proposal(s) of {still.Owner}'s run \"{still.Prompt}\", not decided in {days} days");
+                    var info = WorkspaceInfo.For(workspace.RootPath);
+                    await InboxStoreFactory.Create(info).AppendAsync(new InboxItem(Guid.NewGuid(), info.Id, "result",
+                        still.Prompt, $"{still.Pending} proposed change(s) were not decided in {days} days and are dropped; the files are as they were",
+                        Guid.Empty, "unread", DateTimeOffset.UtcNow), ct);
+                    dropped++;
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            }
+        }
+        return dropped;
+    }
+
     /// <summary>A known workspace's proposal folder by its id - only a run id, so no name walks out of the folder.</summary>
     private (string Root, string Folder, string Name)? Locate(string workspace, string id)
     {
