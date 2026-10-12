@@ -17,6 +17,3 @@ internal enum CardTone { Pending, Running, Done, Failed, Skipped, Unverified, Ne
 /// could not be done (the file changed after the proposal was made) and the person still has to decide.
 /// </summary>
 internal enum ChangeState { Staged, Applied, Rejected, Refused }
-
-/// <summary>Whether a schedule will run: off, on but with no time it can ever be run at, or on with a next run.</summary>
-internal enum ScheduleState { Off, Untimed, Scheduled }

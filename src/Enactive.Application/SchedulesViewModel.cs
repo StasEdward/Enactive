@@ -1,7 +1,6 @@
-namespace Enactive.App.Ui.ViewModels;
+namespace Enactive.Application;
 
 using System.Collections.ObjectModel;
-using Enactive.Application;
 using Enactive.Agents;
 using Enactive.Application.Mvvm;
 using Enactive.Core.Context;

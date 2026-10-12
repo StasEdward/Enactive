@@ -1,7 +1,7 @@
 namespace Enactive.App.Ui;
 
 using Avalonia.Controls;
-using Enactive.App.Ui.ViewModels;
+using Enactive.Application;
 using Enactive.Settings;
 
 /// <summary>
