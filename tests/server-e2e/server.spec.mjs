@@ -213,24 +213,31 @@ test('a past run is tried again from its page, and deleted after its question', 
   await question(page).getByRole('button', { name: 'Allow', exact: true }).click();
   await expect(stop(page)).toBeDisabled();
 
-  // The Runs screen's column lists the workspace's history; the run it just ran is there once it has ended.
+  // The Runs screen's column lists the workspace's history; the run it just ran opens on the same screen, at its own
+  // address, in the run's place.
   await page.goto('/');
   await page.getByRole('complementary', { name: 'Runs column' }).getByRole('link', { name: /kept in the history/ }).first().click();
-  await expect(page.getByRole('heading', { name: 'kept in the history' })).toBeVisible();
-  const past = page.url();
+  await expect(page).toHaveURL(/\/history\/[0-9a-f-]{36}\/[0-9a-f-]{36}$/);
+  const past = page.getByRole('region', { name: 'Past run' });
+  await expect(past.getByRole('heading', { name: 'kept in the history' })).toBeVisible();
+  const address = page.url();
 
-  // Try again: a run of the same task starts, and asks its question again.
-  await page.getByRole('button', { name: 'Try again' }).click();
+  // Retry: a run of the same task starts, opens at its own address, and asks its question again.
+  await past.getByRole('button', { name: 'Retry' }).click();
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
   await question(page).getByRole('button', { name: 'Deny' }).click();
   await expect(stop(page)).toBeDisabled();
 
-  // Delete: the window's question, on a page, then the record goes.
-  await page.goto(past);
-  await page.getByRole('link', { name: 'Delete this run' }).click();
-  await expect(page.getByRole('heading', { name: /Delete the run/ })).toBeVisible();
-  await page.getByRole('button', { name: 'Delete', exact: true }).click();
-  await expect(page.getByText(/record is deleted/)).toBeVisible();
+  // Delete the file it wrote: the window's question, in a dialog on the screen, then the card says what became of it.
+  await page.goto(address);
+  await past.getByRole('tab', { name: /^Artifacts/ }).click();
+  const file = past.getByRole('listitem').filter({ hasText: 'digest.md' });
+  await file.getByRole('button', { name: 'Delete' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: 'Delete “digest.md”?' })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(file.getByText('deleted', { exact: true })).toBeVisible();
   await context.close();
 });
 

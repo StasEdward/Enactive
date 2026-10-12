@@ -11,7 +11,7 @@ using Enactive.Server.Runs;
 //
 // The real service on https://localhost:<port>, answering 127.0.0.0/8, with four accounts (ada the Admin, alice and bob
 // Operators, vera a Viewer, all with the password below) and a folder "project" in the data folder to run in. A run asks once
-// for write_file and ends when answered. Prints "ready" when it listens.
+// for write_file - allowed, it writes digest.md - and ends when answered. Prints "ready" when it listens.
 
 const string Password = "e2e password 1234";
 
@@ -91,6 +91,14 @@ internal sealed class AskingOnce(ApprovalStore approvals) : IRunExecutor
                 [new("allow", "Allow"), new("deny", "Deny")], "allow", Subject: "write_file",
                 Action: new(runId, Guid.NewGuid().ToString(), "write_file", """{"path":"digest.md"}""", run.Workspace)), ct);
             events.Writer.TryWrite(Ev(EventKind.DecisionResolved, "write_file: " + answer.OptionId));
+            // Allowed, the file is written and the run says so, as the engine's would: the run's Artifacts have a file to
+            // review and delete.
+            string[] wrote = answer.OptionId == "allow" ? ["digest.md"] : [];
+            foreach (var file in wrote)
+            {
+                await File.WriteAllTextAsync(Path.Combine(run.Workspace, file), "the digest", CancellationToken.None);
+                events.Writer.TryWrite(Ev(EventKind.ArtifactProduced, "Wrote: " + file, WorkEventPayload.ArtifactPayload("document", file)));
+            }
             events.Writer.TryWrite(Ev(EventKind.TaskCompleted, "Completed", WorkEventPayload.OutcomePayload(RunOutcomeKind.Completed)));
 
             // Into the folder's history, as the engine's recorder would: the history pages have something to read.
@@ -98,7 +106,7 @@ internal sealed class AskingOnce(ApprovalStore approvals) : IRunExecutor
             await Enactive.Workspace.RunStoreFactory.Create(Enactive.Core.Context.WorkspaceInfo.For(run.Workspace)).SaveAsync(
                 new Enactive.Core.History.RunRecord(runId, run.TaskId ?? Guid.NewGuid(), run.Prompt, "scripted", at, at, "Completed",
                     [new Enactive.Core.History.RunEventRecord(at, nameof(EventKind.IntentReceived), "Intent",
-                        Payload: WorkEventPayload.RequestPayload(run.Prompt))], [], []), CancellationToken.None);
+                        Payload: WorkEventPayload.RequestPayload(run.Prompt))], wrote, []), CancellationToken.None);
         }
         finally
         {
