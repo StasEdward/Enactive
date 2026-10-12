@@ -111,4 +111,32 @@ public sealed class RunFiguresTests
             System.Globalization.CultureInfo.CurrentCulture = before;
         }
     }
+
+    /// <summary>
+    /// Run again re-resolves the template as it stands now, so it is offered only while the template is in the library -
+    /// a button that fails when pressed is worse than none - and its tooltip says which version against which. The window
+    /// worked this out inside its past-run view model; the service's past run offers the same button.
+    /// </summary>
+    [Fact]
+    public void Run_again_is_offered_only_while_the_template_is_in_the_library()
+    {
+        var spec = new Enactive.Core.Templates.ResolvedTaskSpec("digest", 2, "Digest", Guid.NewGuid(), "project", @"C:\project",
+            "digest the inbox", new Dictionary<string, string>(), new Enactive.Core.Permissions.PermissionPolicy(Enactive.Core.Permissions.PermissionLevel.Autonomous, ["*"], []), [],
+            Enactive.Core.Templates.ExecutionLimits.None, null, false);
+
+        Assert.Equal(new RunAgainOffer(false, "This run did not come from a template."), RunAgainOffer.Of(null, null));
+        Assert.Equal(new RunAgainOffer(false, "Template 'digest' is no longer in this library."), RunAgainOffer.Of(spec, null));
+        Assert.Equal(new RunAgainOffer(true, "Re-resolve 'Morning digest' v3 — this run used v2."),
+            RunAgainOffer.Of(spec, new Enactive.Core.Templates.TaskTemplate("digest", "Morning digest", "digest the inbox", Version: 3)));
+    }
+
+    /// <summary>
+    /// A past run whose record rebuilds no step cards opens on its timeline, which is what such a record holds - on
+    /// Execution it showed an empty tab that read as a run that did nothing.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 2)]
+    [InlineData(3, 0)]
+    public void A_past_run_with_no_steps_opens_on_its_timeline(int steps, int tab)
+        => Assert.Equal(tab, PastRunTabs.Opening(steps));
 }

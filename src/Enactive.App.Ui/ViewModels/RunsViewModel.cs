@@ -214,16 +214,11 @@ internal sealed class PastRunViewModel : ObservableObject
         Subtitle = digest.Subtitle;
         CanRetry = digest.CanRetry;
 
-        // Run again re-resolves the template as it stands NOW. Only offered when the template is
-        // still there: a template that has been deleted or renamed has no current version, and a
-        // button that fails when pressed is worse than one that is not there.
-        var live = Spec is null ? null : currentTemplate?.Invoke();
-        CanRunAgain = live is not null;
-        RunAgainTooltip = Spec is null
-            ? "This run did not come from a template."
-            : live is null
-                ? $"Template '{Spec.TemplateId}' is no longer in this library."
-                : $"Re-resolve '{live.Name}' v{live.Version} — this run used v{Spec.TemplateVersion}.";
+        // Run again re-resolves the template as it stands NOW, so it is offered only while the template is still there -
+        // the service's past run offers the same button by the same rule (RunAgainOffer).
+        var again = RunAgainOffer.Of(Spec, Spec is null ? null : currentTemplate?.Invoke());
+        CanRunAgain = again.Can;
+        RunAgainTooltip = again.Tooltip;
 
         RetryCommand = new RelayCommand(() => RetryRequested?.Invoke(this), () => CanRetry);
         RunAgainCommand = new RelayCommand(() => RunAgainRequested?.Invoke(this), () => CanRunAgain);
@@ -257,17 +252,16 @@ internal sealed class PastRunViewModel : ObservableObject
         WorkerText = digest.WorkerText;
         StagingText = digest.StagingText;
 
-        ShowExecutionCommand = new RelayCommand(() => SelectedTab = 0);
-        ShowArtifactsCommand = new RelayCommand(() => SelectedTab = 1);
-        ShowTimelineCommand = new RelayCommand(() => SelectedTab = 2);
+        ShowExecutionCommand = new RelayCommand(() => SelectedTab = PastRunTabs.Execution);
+        ShowArtifactsCommand = new RelayCommand(() => SelectedTab = PastRunTabs.Artifacts);
+        ShowTimelineCommand = new RelayCommand(() => SelectedTab = PastRunTabs.Timeline);
 
         // A record that rebuilds no cards would show Execution as an empty tab claiming the run did
         // nothing, so it opens on the timeline instead - which is what such a record actually holds.
         // WHY there are none is Core's answer, not this window's: there are two reasons and they
         // send a person to two different places.
         NoStepsReason = digest.NoStepsReason;
-        if (Steps.Count == 0)
-            SelectedTab = 2;
+        SelectedTab = PastRunTabs.Opening(Steps.Count);
     }
 
     public RunRecord Record { get; }
@@ -323,9 +317,9 @@ internal sealed class PastRunViewModel : ObservableObject
         }
     }
 
-    public bool IsExecutionTab => _selectedTab == 0;
-    public bool IsArtifactsTab => _selectedTab == 1;
-    public bool IsTimelineTab => _selectedTab == 2;
+    public bool IsExecutionTab => _selectedTab == PastRunTabs.Execution;
+    public bool IsArtifactsTab => _selectedTab == PastRunTabs.Artifacts;
+    public bool IsTimelineTab => _selectedTab == PastRunTabs.Timeline;
 
     public RelayCommand ShowExecutionCommand { get; }
     public RelayCommand ShowArtifactsCommand { get; }
