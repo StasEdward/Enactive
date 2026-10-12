@@ -38,17 +38,14 @@ internal static class ServerApp
         // Into the Application log as "Enactive", the source the installer registers; left to the default it is the
         // assembly's name, which nothing registered, and the service's own entries were lost.
         builder.Services.Configure<Microsoft.Extensions.Logging.EventLog.EventLogSettings>(s => s.SourceName = ServiceName);
-        builder.Services.AddSingleton(options);
-        builder.Services.AddSingleton(new ServerFolders(dataFolder));
+        // Before the services, as it always was: the authentication state provider of ServerAuth must be the one
+        // registered last, and the components' own registrations are not to land after it.
+        builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+        AddServices(builder.Services, options, dataFolder);
 
-        // One log for the process: the service's own lines and the engine's, kept recent in memory for the log page and
-        // written to the daily file. They were two - the page would have shown the engine and not the request that
-        // started its run.
-        var logFile = new FileLogSink(Path.Combine(dataFolder, "logs", "server"));
-        var log = new LogHub(minLevel: Enactive.Core.Diagnostics.LogLevel.Debug, downstream: [logFile]);
-        builder.Services.AddSingleton(logFile);
-        builder.Services.AddSingleton(log);
-        builder.Logging.AddProvider(new FileLoggerProvider(log));
+        // The log file's provider, from the one log AddServices registered: the service's own lines go where the
+        // engine's do.
+        builder.Services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider>(sp => new FileLoggerProvider(sp.GetRequiredService<LogHub>()));
         // The framework says every request at Information - a line per page, script and hub message - which would push
         // the runs out of the log the page keeps. Its warnings and errors still come through; the host's start and stop do.
         builder.Logging.AddFilter("Microsoft.AspNetCore", Microsoft.Extensions.Logging.LogLevel.Warning);
@@ -67,55 +64,6 @@ internal static class ServerApp
                 kestrel.Listen(endpoint, listen => listen.UseHttps(certificate
                     ?? throw new InvalidOperationException("The service does not listen without a certificate.")));
         });
-
-        // The keys that protect sign-in cookies and the antiforgery tokens: in the service's data folder, encrypted
-        // for its account. Left to the default they went into the profile's ASP.NET folder, apart from everything else
-        // the service keeps and from its backups.
-        builder.Services.AddDataProtection()
-            .SetApplicationName(ServiceName)
-            .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataFolder, "keys")))
-            .ProtectKeysWithDpapi();
-
-        builder.Services.AddRazorComponents().AddInteractiveServerComponents();
-
-        // The accounts and the audit log (server.db), signing in, the roles (ServerAuth).
-        ServerAuth.Add(builder.Services, new UserStore(dataFolder));
-
-        // Runs: the engine (built when first asked for, from the service account's settings), the line of runs, and
-        // the one interface every action on a run goes through (IRunControl) - which checks who is asking.
-        builder.Services.AddSingleton(sp => new Runs.ServerEngine(dataFolder, sp.GetRequiredService<LogHub>()));
-        builder.Services.AddSingleton(new Enactive.Application.RunQueue(options.MaxActiveRuns));
-        builder.Services.AddSingleton<Runs.ServerStaging>();
-        builder.Services.AddSingleton<Runs.IRunExecutor>(sp => new Runs.EngineExecutor(sp.GetRequiredService<Runs.ServerEngine>(),
-            sp.GetRequiredService<Runs.ServerStaging>()));
-        builder.Services.AddSingleton<Runs.IRunControl>(sp => new Runs.RunControl(sp.GetRequiredService<UserStore>(),
-            sp.GetRequiredService<Enactive.Application.RunQueue>(), sp.GetRequiredService<Runs.IRunExecutor>(),
-            sp.GetRequiredService<ILogger<Runs.RunControl>>(), TimeSpan.FromMinutes(options.QuestionWaitMinutes),
-            sp.GetRequiredService<Runs.WorkspaceRoots>()));
-        builder.Services.AddSingleton(new Runs.WorkspaceRoots(options.WorkspaceRoots));
-        builder.Services.AddSingleton<Runs.ServerHistory>();
-        builder.Services.AddSingleton<Runs.ServerInbox>();
-        builder.Services.AddSingleton<AccountAdmin>();
-        builder.Services.AddSingleton<Runs.ServerSettings>();
-        builder.Services.AddSingleton<Runs.ServerLibrary>();
-        builder.Services.AddSingleton<Runs.ServerLogs>();
-        builder.Services.AddHostedService<Runs.RunsStopWithTheService>();
-        // The schedules, every minute (ServerScheduler).
-        builder.Services.AddSingleton<Runs.ServerScheduler>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<Runs.ServerScheduler>());
-        // Proposed changes nobody decided in server.json's ProposalsKeptDays are dropped, and said (StagingRetention).
-        builder.Services.AddHostedService<Runs.StagingRetention>();
-        // What arrives in the inbox, by mail, when server.json names who to tell (MailNotices).
-        builder.Services.AddHostedService(sp => new Runs.MailNotices(sp.GetRequiredService<Runs.ServerEngine>(), options,
-            sp.GetRequiredService<ServerFolders>(), sp.GetRequiredService<ILogger<Runs.MailNotices>>()));
-        builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(30));
-
-        builder.Services.AddSingleton(sp => new NetworkGate(options.Subnets(), options.HostNames, sp.GetRequiredService<ILogger<NetworkGate>>()));
-
-        // The Host header is NetworkGate's, after the subnets. The framework's own host filter runs ahead of the whole
-        // pipeline when it has names to filter by, and answered a network the service does not answer with its
-        // "Invalid Hostname" page; told every name is allowed, it passes everything on to the gate.
-        builder.Services.Configure<Microsoft.AspNetCore.HostFiltering.HostFilteringOptions>(o => o.AllowedHosts = ["*"]);
 
         adjust?.Invoke(builder);
 
@@ -268,6 +216,72 @@ internal static class ServerApp
 
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
         return app;
+    }
+
+    /// <summary>
+    /// Every service the application keeps, registered on any container: the pipeline's Build adds them to the web
+    /// host, and the component tests to bUnit's, so a page under test gets the services it has on the server - a copy of
+    /// the list in a test would pass while the real one lacked a service. What needs the web host itself (Kestrel, the
+    /// log providers, the static assets, the Razor components' endpoints) stays in Build.
+    /// </summary>
+    internal static void AddServices(IServiceCollection services, ServerOptions options, string dataFolder)
+    {
+        services.AddSingleton(options);
+        services.AddSingleton(new ServerFolders(dataFolder));
+
+        // One log for the process: the service's own lines and the engine's, kept recent in memory for the log page and
+        // written to the daily file. They were two - the page would have shown the engine and not the request that
+        // started its run.
+        var logFile = new FileLogSink(Path.Combine(dataFolder, "logs", "server"));
+        var log = new LogHub(minLevel: Enactive.Core.Diagnostics.LogLevel.Debug, downstream: [logFile]);
+        services.AddSingleton(logFile);
+        services.AddSingleton(log);
+        // The keys that protect sign-in cookies and the antiforgery tokens: in the service's data folder, encrypted
+        // for its account. Left to the default they went into the profile's ASP.NET folder, apart from everything else
+        // the service keeps and from its backups.
+        services.AddDataProtection()
+            .SetApplicationName(ServiceName)
+            .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataFolder, "keys")))
+            .ProtectKeysWithDpapi();
+
+        // The accounts and the audit log (server.db), signing in, the roles (ServerAuth).
+        ServerAuth.Add(services, new UserStore(dataFolder));
+
+        // Runs: the engine (built when first asked for, from the service account's settings), the line of runs, and
+        // the one interface every action on a run goes through (IRunControl) - which checks who is asking.
+        services.AddSingleton(sp => new Runs.ServerEngine(dataFolder, sp.GetRequiredService<LogHub>()));
+        services.AddSingleton(new Enactive.Application.RunQueue(options.MaxActiveRuns));
+        services.AddSingleton<Runs.ServerStaging>();
+        services.AddSingleton<Runs.IRunExecutor>(sp => new Runs.EngineExecutor(sp.GetRequiredService<Runs.ServerEngine>(),
+            sp.GetRequiredService<Runs.ServerStaging>()));
+        services.AddSingleton<Runs.IRunControl>(sp => new Runs.RunControl(sp.GetRequiredService<UserStore>(),
+            sp.GetRequiredService<Enactive.Application.RunQueue>(), sp.GetRequiredService<Runs.IRunExecutor>(),
+            sp.GetRequiredService<ILogger<Runs.RunControl>>(), TimeSpan.FromMinutes(options.QuestionWaitMinutes),
+            sp.GetRequiredService<Runs.WorkspaceRoots>()));
+        services.AddSingleton(new Runs.WorkspaceRoots(options.WorkspaceRoots));
+        services.AddSingleton<Runs.ServerHistory>();
+        services.AddSingleton<Runs.ServerInbox>();
+        services.AddSingleton<AccountAdmin>();
+        services.AddSingleton<Runs.ServerSettings>();
+        services.AddSingleton<Runs.ServerLibrary>();
+        services.AddSingleton<Runs.ServerLogs>();
+        services.AddHostedService<Runs.RunsStopWithTheService>();
+        // The schedules, every minute (ServerScheduler).
+        services.AddSingleton<Runs.ServerScheduler>();
+        services.AddHostedService(sp => sp.GetRequiredService<Runs.ServerScheduler>());
+        // Proposed changes nobody decided in server.json's ProposalsKeptDays are dropped, and said (StagingRetention).
+        services.AddHostedService<Runs.StagingRetention>();
+        // What arrives in the inbox, by mail, when server.json names who to tell (MailNotices).
+        services.AddHostedService(sp => new Runs.MailNotices(sp.GetRequiredService<Runs.ServerEngine>(), options,
+            sp.GetRequiredService<ServerFolders>(), sp.GetRequiredService<ILogger<Runs.MailNotices>>()));
+        services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(30));
+
+        services.AddSingleton(sp => new NetworkGate(options.Subnets(), options.HostNames, sp.GetRequiredService<ILogger<NetworkGate>>()));
+
+        // The Host header is NetworkGate's, after the subnets. The framework's own host filter runs ahead of the whole
+        // pipeline when it has names to filter by, and answered a network the service does not answer with its
+        // "Invalid Hostname" page; told every name is allowed, it passes everything on to the gate.
+        services.Configure<Microsoft.AspNetCore.HostFiltering.HostFilteringOptions>(o => o.AllowedHosts = ["*"]);
     }
 
     private static string BuildVersion()
