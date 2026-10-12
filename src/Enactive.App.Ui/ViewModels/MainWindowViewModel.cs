@@ -3,6 +3,7 @@ namespace Enactive.App.Ui.ViewModels;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using Enactive.Agents;
+using Enactive.Application;
 using Enactive.Application.Projections;
 using Enactive.Core.History;
 using Enactive.Workspace;
@@ -198,7 +199,8 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     public MainWindowViewModel()
     {
-        foreach (var verb in new[] { "Fix", "Build", "Investigate", "Explain", "Refactor" })
+        // The verbs and what a chip does are the service's bar's too (CommandVerbs).
+        foreach (var verb in CommandVerbs.All)
             Verbs.Add(new VerbChipViewModel(verb, PrefixInput));
 
         RunCommand = new RelayCommand(() => RunRequested?.Invoke(), () => !IsBusy);
@@ -700,7 +702,7 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     private void PrefixInput(string verb)
     {
-        InputText = string.IsNullOrWhiteSpace(InputText) ? verb + " " : verb + " " + InputText;
+        InputText = CommandVerbs.Prefix(InputText, verb);
         InputFocusRequested?.Invoke();
     }
 
