@@ -100,11 +100,18 @@
                                   Said="@(_saidFor == question.Request.Id ? _said : null)" Busy="_answering"
                                   OnAnswer="choice => AnswerAsync(question.Request.Id, choice)" />
                 }
+                else if (AnsweredElsewhere(run) is { } answered)
+                {
+                    @* The question this page showed was answered from another page - another person's, or this person's
+                       other tab. Two people who press at once each expect their answer to count; the second press is
+                       often dropped unseen (its card was gone by the time it was dispatched), and the card just
+                       vanished under their pointer with nothing to say why. *@
+                    <p class="answered-by" role="status">Answered by @answered.By: @(answered.Answer).</p>
+                }
                 else if (_said is { Length: > 0 } late)
                 {
-                    @* Two people pressed an answer at once: the service took the other one, and the card went with the
-                       question. Said under the card only, the refusal went with it too - the card vanished under the
-                       second person's pointer and nothing said why. *@
+                    @* This page's answer was refused and the card went with the question: said under the card only, the
+                       refusal went with it. *@
                     <p class="said" role="alert">@late</p>
                 }
             </Decision>
@@ -139,6 +146,9 @@
 
     /// <summary>The question <see cref="_said"/> answers: a refusal said under one question is not said under the next.</summary>
     private Guid? _saidFor;
+
+    /// <summary>The question this page last drew a card for, and the one whose answer was taken from this page.</summary>
+    private Guid? _lastShown, _answeredHere;
     private bool _answering;
     private int _repoReads;
     private (int Steps, bool Ended) _repoSeen;
@@ -152,7 +162,7 @@
         _shown = RunId;
         _user = (await Auth).User;
         _me = _user.Identity?.Name;
-        (_tab, _said) = (0, null);
+        (_tab, _said, _lastShown, _answeredHere) = (0, null, null, null);
         // A view, and a reader, of this run's own: the last follower's read can still be under way when the screen moves
         // to another run, and it wrote the old run's view over the new one's - through a reader shared by two sessions'
         // locks. What it reads now lands in a view nobody draws.
@@ -171,6 +181,7 @@
         // never holding the run up (RunFollower). Named, so the others with the run open see who else is watching.
         _follower = new RunFollower(run.Session, () => (shown.View = ReadOf(run, reader)).Seq,
             () => InvokeAsync(Redraw), _me);
+        _lastShown = run.Questions.Pending?.Request.Id;
         _follower.Start();
         _repoSeen = (shown.View.StepsDone, run.Ended.IsCompleted);
         if (Clock.Every is { } every)
@@ -210,8 +221,12 @@
         }
         // A refusal is about its own question: once another is up, it is forgotten - kept, it came back as that one's card
         // went, and said a question was answered that had nothing to do with it.
-        if (_run?.Questions.Pending is { } up && up.Request.Id != _saidFor)
-            _said = null;
+        if (_run?.Questions.Pending is { } up)
+        {
+            if (up.Request.Id != _saidFor)
+                _said = null;
+            _lastShown = up.Request.Id;
+        }
         StateHasChanged();
     }
 
@@ -260,6 +275,10 @@
         return question.Choices.Where(c => owner || c.Remember == RememberAs.Nothing).Select(c => c.Label).ToList();
     }
 
+    /// <summary>The answer another page gave the question this page showed last, or null.</summary>
+    private AnsweredQuestion? AnsweredElsewhere(ServerRun run)
+        => run.Questions.LastAnswered is { } answered && answered.Question == _lastShown && answered.Question != _answeredHere ? answered : null;
+
     private static string? Recommended(WebQuestion question)
         => question.Choices.FirstOrDefault(c => c.Remember == RememberAs.Nothing && c.OptionId == question.Request.RecommendedOptionId)?.Label;
 
@@ -281,7 +300,16 @@
         if (_answering || _run is not { } run)
             return;
         _answering = true;
-        try { (_said, _saidFor) = (Runs.Answer((await Auth).User, run.Id, question, choice), question); }
+        // Marked before the service is asked: taking the answer takes the question down, and the page drawn in between
+        // told its own person that they had answered from somewhere else.
+        var before = _answeredHere;
+        _answeredHere = question;
+        try
+        {
+            (_said, _saidFor) = (Runs.Answer((await Auth).User, run.Id, question, choice), question);
+            if (_said is not null)
+                _answeredHere = before;
+        }
         finally { _answering = false; }
     }
 

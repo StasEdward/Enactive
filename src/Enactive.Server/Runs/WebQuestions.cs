@@ -11,6 +11,9 @@ using Enactive.Core.Permissions;
 internal sealed record WebQuestion(DecisionRequest Request, IReadOnlyList<DecisionChoice> Choices, Func<DecisionChoice, bool> Answer,
     DateTimeOffset AskedAt);
 
+/// <summary>A question answered from a page: which (DecisionRequest.Id), by whom, with which answer (its label).</summary>
+internal sealed record AnsweredQuestion(Guid Question, string By, string Answer);
+
 /// <summary>
 /// The browser's side of asking (IDecisionPresenter): the run's waiting question is held here, where every page
 /// watching the run - the owner's, another Operator's, one opened after the question was asked - finds it. The rules of
@@ -19,12 +22,27 @@ internal sealed record WebQuestion(DecisionRequest Request, IReadOnlyList<Decisi
 internal sealed class WebQuestions : IDecisionPresenter
 {
     private volatile WebQuestion? _pending;
+    private volatile AnsweredQuestion? _answered;
 
     /// <summary>The question up now, or null.</summary>
     public WebQuestion? Pending => _pending;
 
-    /// <summary>A question went up or came down. Raised on the run's thread; a page marshals it to its own.</summary>
+    /// <summary>
+    /// The last question answered from a page, and by whom; null before any. Every other page that showed it says so: two
+    /// people who press at once each expect their answer to count, and the press that came second is often dropped
+    /// unseen - the card it was on was gone by then - so the page has only this to tell its person what happened.
+    /// </summary>
+    public AnsweredQuestion? LastAnswered => _answered;
+
+    /// <summary>A question went up or came down, or was answered. Raised on the run's thread; a page marshals it to its own.</summary>
     public event Action? Changed;
+
+    /// <summary>Records who answered a question, once the run has taken the answer (RunControl.Answer).</summary>
+    public void Answered(Guid question, string by, string answer)
+    {
+        _answered = new AnsweredQuestion(question, by, answer);
+        Changed?.Invoke();
+    }
 
     public Task ShowAsync(DecisionRequest request, IReadOnlyList<DecisionChoice> choices, Func<DecisionChoice, bool> answer)
     {

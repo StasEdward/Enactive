@@ -484,6 +484,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
 
         if (!pending.Answer(chosen))
             return "That question has already been answered, or withdrawn.";
+        run.Questions.Answered(pending.Request.Id, account.Name, chosen.Label);
         users.Audit(account.Name, "question answered", $"{pending.Request.Topic}: {chosen.Label}" + (account.Name == run.Owner ? "" : $" (run of {run.Owner})"));
         return null;
     }

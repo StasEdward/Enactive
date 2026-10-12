@@ -218,6 +218,35 @@ public sealed class LiveRunTests : ComponentHost
         Assert.Empty(page.FindAll("[role=alert]"));
     }
 
+    /// <summary>
+    /// Two people press an answer at once, and the service takes one. The other press often never reaches its handler:
+    /// by the time it is dispatched the card it was on has been taken away, and the framework drops a press on a component
+    /// that is gone - without a word. So the page that showed the question says who answered it, and with what, whether or
+    /// not its own press came to anything; the page whose answer was taken says nothing of the sort.
+    /// </summary>
+    [Fact]
+    public async Task A_question_answered_by_somebody_else_says_who_answered_it()
+    {
+        var run = await StartedAsync();
+        var asked = _script.AskAsync(WriteFile(run.Workspace));
+        await WaitUntil(() => run.Questions.Pending is not null);
+        var other = Open("ada", run);
+        other.WaitForAssertion(() => Assert.NotEmpty(Answers(other)));
+        var owner = Open("alice", run);
+        owner.WaitForAssertion(() => Assert.NotEmpty(Answers(owner)));
+
+        owner.FindAll(".decision button").Single(b => b.TextContent.Trim() == "Allow").Click();
+
+        Assert.Equal("allow", (await asked.WaitAsync(TimeSpan.FromSeconds(10))).OptionId);
+        other.WaitForAssertion(() =>
+        {
+            Assert.Empty(other.FindAll(".decision"));
+            Assert.Equal("Answered by alice: Allow.", other.Find(".answered-by").TextContent.Trim());
+        });
+        owner.WaitForAssertion(() => Assert.Empty(owner.FindAll(".decision")));
+        Assert.Empty(owner.FindAll(".answered-by"));
+    }
+
     [Fact]
     public async Task The_tiles_follow_the_panel()
     {
