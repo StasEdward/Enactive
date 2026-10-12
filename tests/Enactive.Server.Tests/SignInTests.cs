@@ -173,8 +173,25 @@ public sealed partial class SignInTests : IAsyncLifetime
         var response = await SignInAsync(browser, "alice", "not the password");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains("the name or the password is not right", await response.Content.ReadAsStringAsync());
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("the name or the password is not right", body);
         Assert.DoesNotContain("enactive", browser.Cookies);
+        // The page drawn again for another try holds no password: what was typed is not written back into the box.
+        Assert.DoesNotContain("not the password", body);
+    }
+
+    /// <summary>Locked out: the page says to wait, and is drawn again with neither the password typed nor any other.</summary>
+    [Fact]
+    public async Task A_locked_sign_in_writes_no_password_back_into_the_page()
+    {
+        var browser = NewBrowser();
+        HttpResponseMessage response = null!;
+        for (var i = 0; i <= UserStore.FailuresBeforeLockout; i++)
+            response = await SignInAsync(browser, "alice", $"wrong guess {i}");
+
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("Too many wrong passwords.", body);
+        Assert.DoesNotContain("wrong guess", body);
     }
 
     /// <summary>Disabled while signed in: the very next request is a signed-out one, not the next morning's.</summary>

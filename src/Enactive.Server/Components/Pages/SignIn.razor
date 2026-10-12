@@ -56,6 +56,9 @@
         var remote = HttpContext.Connection.RemoteIpAddress?.ToString();
         var typed = Input!.Name.Length > 64 ? Input.Name[..64] : Input.Name;
         var (verdict, account) = Users.SignIn(Input.Name, Input.Password);
+        // Emptied once checked: a refused sign-in draws the form again from what was posted, and the box was drawn with
+        // the typed password as its value - the password written back into the page, its cache and anything that saves it.
+        Input.Password = "";
 
         switch (verdict)
         {
