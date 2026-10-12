@@ -6,6 +6,7 @@ using Enactive.Server.Accounts;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -468,6 +469,66 @@ public sealed partial class SignInTests : IAsyncLifetime
         var audit = await browser.GetAsync("/admin/audit");
         Assert.Equal(HttpStatusCode.Redirect, audit.StatusCode);
         Assert.Equal("/audit", audit.Headers.Location!.OriginalString);
+    }
+
+    /// <summary>
+    /// Every old address lands on a page that is there: each is a link somebody kept - a bookmark, an earlier mail - and a
+    /// redirect to an address no page answers is that link dead with an extra step.
+    /// </summary>
+    [Fact]
+    public async Task Every_old_address_lands_on_a_page_that_answers()
+    {
+        var folder = Path.Combine(_root, "project");
+        Directory.CreateDirectory(folder);
+        _app.Services.GetRequiredService<Runs.ServerEngine>().Workspaces.Touch(folder);
+        var ws = Uri.EscapeDataString(folder);
+        // An Admin: every page is theirs to open, so a page that refuses a role is not mistaken for one that is not there.
+        _users.Add("ada", Password, Role.Admin);
+        var browser = NewBrowser();
+        await SignInAsync(browser, "ada", Password);
+
+        foreach (var old in new[]
+                 {
+                     $"/history?ws={ws}", "/workspaces", $"/history/run?ws={ws}&id={Guid.NewGuid()}", $"/file?ws={ws}&path=digest.md",
+                     $"/proposals/view?ws={ws}&set={Guid.NewGuid():N}", $"/library/template?ws={ws}&id=digest", $"/library/template?ws={ws}",
+                     $"/library?ws={ws}", $"/library/schedule?ws={ws}&id={Guid.NewGuid()}", "/logs", "/admin/settings", "/admin/users", "/admin/audit"
+                 })
+        {
+            var moved = await browser.GetAsync(old);
+            Assert.True(moved.StatusCode == HttpStatusCode.Redirect, $"{old} answered {moved.StatusCode}");
+            var landed = await browser.GetAsync(moved.Headers.Location!.OriginalString);
+            Assert.True(landed.StatusCode == HttpStatusCode.OK, $"{old} -> {moved.Headers.Location} answered {landed.StatusCode}");
+        }
+    }
+
+    /// <summary>
+    /// What the service answers besides its pages: signing out, its health, and the old addresses sent on. The pages the web
+    /// UI replaced posted their forms to endpoints of their own, each its own check of who may do what beside the services';
+    /// one left behind is a second way in that no page uses and no test watches.
+    /// </summary>
+    [Fact]
+    public void Only_sign_out_health_and_the_old_addresses_are_endpoints_of_their_own()
+    {
+        var endpoints = ((IEndpointRouteBuilder)_app).DataSources.SelectMany(d => d.Endpoints).OfType<RouteEndpoint>()
+            // The pages (a component's route) and the files (the static assets) are not endpoints of the service's own.
+            .Where(e => e.Metadata.GetMetadata<Microsoft.AspNetCore.Components.Endpoints.ComponentTypeMetadata>() is null
+                        && e.Metadata.GetMetadata<Microsoft.AspNetCore.Components.Endpoints.RootComponentMetadata>() is null
+                        && e.Metadata.GetMetadata<Microsoft.AspNetCore.StaticAssets.StaticAssetDescriptor>() is null
+                        // The framework's own: the hub's (/_blazor) and its redirect helper (/_framework).
+                        && !(e.RoutePattern.RawText ?? "").TrimStart('/').StartsWith("_blazor", StringComparison.Ordinal)
+                        && !(e.RoutePattern.RawText ?? "").TrimStart('/').StartsWith("_framework", StringComparison.Ordinal)
+                        // The static files' own catch-all, for a file the build manifest names (UseStaticWebAssets).
+                        && e.RoutePattern.RawText != "{**path:file}")
+            .Select(e => $"{string.Join(",", e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? [])} {e.RoutePattern.RawText}")
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(new[]
+        {
+            "GET /admin/audit", "GET /admin/settings", "GET /admin/users", "GET /file", "GET /health", "GET /history", "GET /history/run",
+            "GET /library", "GET /library/schedule", "GET /library/template", "GET /logs", "GET /proposals/view", "GET /workspaces",
+            "POST /signout"
+        }.Order(StringComparer.Ordinal), endpoints);
     }
 
     /// <summary>

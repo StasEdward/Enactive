@@ -109,94 +109,7 @@ internal static class ServerApp
                 return Results.LocalRedirect("/signin");
             });
 
-        // The old address of a set of proposed changes (the workspace by its path, the set in a query), which is the proposals
-        // page at /proposals/{workspace}/{set} now - the workspace by its id (WorkspaceIds), found only among the workspaces
-        // the service knows. A path it does not know, a folder whose path cannot be read, or a set that is not a run's id lands
-        // on the list: never a folder read off the disk, and no name walks out of the staging folder.
-        app.MapGet("/proposals/view", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids) =>
-            {
-                var workspace = history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known
-                    ? ids.TryIdOf(known.RootPath)
-                    : null;
-                var set = context.Request.Query["set"].ToString();
-                return Results.LocalRedirect(workspace is { } id && Guid.TryParseExact(set, "N", out _)
-                    ? "/" + Components.Links.Proposals(id, set)
-                    : "/proposals");
-            })
-            .RequireAuthorization(nameof(Role.Viewer));
-
-        // The old addresses of a workspace's history and of the workspace list, which the Runs screen is now: a link in an
-        // earlier mail or a bookmark still lands. The history named its workspace by its path; the Runs screen names it by
-        // its id (WorkspaceIds), found only among the workspaces the service knows - a path it does not know lands on the
-        // Runs screen as it opens, not on a folder read off the disk. What the old page was told to say comes along. A known
-        // folder whose path cannot be read (a drive not mounted) has no id to give, and lands there too (TryIdOf): read
-        // unguarded it was a 500 for an old link.
-        app.MapGet("/history", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids) =>
-            Results.LocalRedirect(Components.Links.Runs(
-                history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known ? ids.TryIdOf(known.RootPath) : null,
-                context.Request.Query["said"].ToString())))
-            .RequireAuthorization(nameof(Role.Viewer));
-        app.MapGet("/workspaces", () => Results.LocalRedirect("/")).RequireAuthorization(nameof(Role.Viewer));
-
-        // A past run's old page, and the page a file it wrote was read on, are the Runs screen now - the run at its own
-        // address there (/history/{workspace}/{run}), its files reviewed on its Artifacts tab - and an old link lands, by
-        // the same rule as the history's above: the workspace by its id, a path the service does not know on "/".
-        app.MapGet("/history/run", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids) =>
-            {
-                var workspace = history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known
-                    ? ids.TryIdOf(known.RootPath)
-                    : null;
-                return Results.LocalRedirect(workspace is { } id && Guid.TryParse(context.Request.Query["id"], out var run)
-                    ? "/" + Components.Links.PastRun(id, run)
-                    : Components.Links.Runs(workspace));
-            })
-            .RequireAuthorization(nameof(Role.Viewer));
-        app.MapGet("/file", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids) =>
-            Results.LocalRedirect(Components.Links.Runs(
-                history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known ? ids.TryIdOf(known.RootPath) : null)))
-            .RequireAuthorization(nameof(Role.Viewer));
-
-        // The old template page (the workspace by its path, the template in a query): the template in the Templates
-        // screen's editor, the workspace by its id - a new one with no template named, as the old page opened. A path the
-        // service does not know is not looked up on the disk: the Templates screen as it opens.
-        app.MapGet("/library/template", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids) =>
-            {
-                var workspace = history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known
-                    ? ids.TryIdOf(known.RootPath)
-                    : null;
-                var template = context.Request.Query["id"].ToString();
-                return Results.LocalRedirect("/" + (workspace is not { } id ? Components.Links.Templates(null)
-                    : template.Length == 0 ? Components.Links.NewTemplate(id)
-                    : Components.Links.Template(id, template)));
-            })
-            .RequireAuthorization(nameof(Role.Viewer));
-
-        // The old schedules page and a schedule's form (the workspace by its path, the schedule in a query): the Schedules
-        // screen, the workspace by its id, on the schedule when one is named. A path the service does not know is not looked
-        // up on the disk: the Schedules screen as it opens.
-        app.MapGet("/library", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids)
-                => Results.LocalRedirect("/" + Components.Links.Schedules(OldWorkspace(context, history, ids))))
-            .RequireAuthorization(nameof(Role.Viewer));
-        app.MapGet("/library/schedule", (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids) =>
-            {
-                var workspace = OldWorkspace(context, history, ids);
-                return Results.LocalRedirect("/" + Components.Links.Schedules(workspace,
-                    workspace is not null && Guid.TryParse(context.Request.Query["id"], out var schedule) ? schedule : null));
-            })
-            .RequireAuthorization(nameof(Role.Viewer));
-
-        // The old log page's address: the log is at /log now, as the rail names it.
-        app.MapGet("/logs", () => Results.LocalRedirect("/log")).RequireAuthorization(nameof(Role.Viewer));
-
-        // The old settings page's address: the settings are at /settings now, as the rail names them. Anybody signed in
-        // is sent on, and /settings itself says to anybody but an Admin that the role does not include it - as the old
-        // page did.
-        app.MapGet("/admin/settings", () => Results.LocalRedirect("/settings")).RequireAuthorization(nameof(Role.Viewer));
-
-        // The old accounts and audit pages' addresses, by the same rule: the pages are at /accounts and /audit now, as the
-        // rail names them, and they say to anybody but an Admin that the role does not include them.
-        app.MapGet("/admin/users", () => Results.LocalRedirect("/accounts")).RequireAuthorization(nameof(Role.Viewer));
-        app.MapGet("/admin/audit", () => Results.LocalRedirect("/audit")).RequireAuthorization(nameof(Role.Viewer));
+        MapOldAddresses(app);
 
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
         return app;
@@ -276,8 +189,76 @@ internal static class ServerApp
     }
 
     /// <summary>
-    /// The workspace an old address named by its path (<c>?ws=</c>), as its id - or null for a path the service does not
-    /// know, which is not looked up on the disk: an address is typed by people, and the new addresses name ids only.
+    /// The addresses of the pages the web UI replaced, each sent on to the page that took its place - and nothing else is
+    /// left of those pages. They stay because links to them outlive them: a bookmark, a link in an earlier mail
+    /// (MailNotices), an address somebody wrote down. Each answers only somebody signed in - what a workspace's id is, is not
+    /// told to anybody else - and each lands on a page that says for itself whether the person's role may read it.
+    /// </summary>
+    private static void MapOldAddresses(WebApplication app)
+    {
+        void Redirect(string from, Func<HttpContext, Runs.ServerHistory, Runs.WorkspaceIds, string> to)
+            => app.MapGet(from, (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids)
+                    => Results.LocalRedirect(to(context, history, ids)))
+                .RequireAuthorization(nameof(Role.Viewer));
+
+        // A workspace's history, and the list of workspaces: the Runs screen, which the workspace column is now. What the
+        // old page was told to say (an action's result) comes along.
+        Redirect("/history", (c, h, i) => Components.Links.Runs(OldWorkspace(c, h, i), c.Request.Query["said"].ToString()));
+        Redirect("/workspaces", (_, _, _) => "/");
+
+        // A past run, and a file it wrote: the run on the Runs screen at its own address, its files on its Artifacts tab.
+        // An address with no run in it names only the workspace.
+        Redirect("/history/run", (c, h, i) =>
+        {
+            var workspace = OldWorkspace(c, h, i);
+            return workspace is { } id && Guid.TryParse(c.Request.Query["id"], out var run)
+                ? "/" + Components.Links.PastRun(id, run)
+                : Components.Links.Runs(workspace);
+        });
+        Redirect("/file", (c, h, i) => Components.Links.Runs(OldWorkspace(c, h, i)));
+
+        // A set of proposed changes: its page. A set is named by a run's id only, so no name walks out of the staging
+        // folder; anything else lands on the list.
+        Redirect("/proposals/view", (c, h, i) =>
+        {
+            var set = c.Request.Query["set"].ToString();
+            return OldWorkspace(c, h, i) is { } id && Guid.TryParseExact(set, "N", out _)
+                ? "/" + Components.Links.Proposals(id, set)
+                : "/proposals";
+        });
+
+        // A template: the Templates screen's editor - a new template when none is named, as the old page opened.
+        Redirect("/library/template", (c, h, i) =>
+        {
+            var template = c.Request.Query["id"].ToString();
+            return "/" + (OldWorkspace(c, h, i) is not { } id ? Components.Links.Templates(null)
+                : template.Length == 0 ? Components.Links.NewTemplate(id)
+                : Components.Links.Template(id, template));
+        });
+
+        // The schedules, and a schedule's form: the Schedules screen, on the schedule when one is named.
+        Redirect("/library", (c, h, i) => "/" + Components.Links.Schedules(OldWorkspace(c, h, i)));
+        Redirect("/library/schedule", (c, h, i) =>
+        {
+            var workspace = OldWorkspace(c, h, i);
+            return "/" + Components.Links.Schedules(workspace,
+                workspace is not null && Guid.TryParse(c.Request.Query["id"], out var schedule) ? schedule : null);
+        });
+
+        // Pages that only moved: at the addresses the rail names them by now. Settings, accounts and audit say to anybody
+        // but an Admin that the role does not include them, as the old pages did.
+        Redirect("/logs", (_, _, _) => "/log");
+        Redirect("/admin/settings", (_, _, _) => "/settings");
+        Redirect("/admin/users", (_, _, _) => "/accounts");
+        Redirect("/admin/audit", (_, _, _) => "/audit");
+    }
+
+    /// <summary>
+    /// The workspace an old address named by its path (<c>?ws=</c>), as its id - the new addresses name a workspace by its
+    /// id (WorkspaceIds), as a path does not survive an address. Found only among the workspaces the service knows: a path
+    /// it does not know is never looked up on the disk (an address is typed by people), and gives null - the page as it
+    /// opens. So does a known folder whose path cannot be read now (a drive not mounted, TryIdOf): read unguarded, an old
+    /// link to it was a 500.
     /// </summary>
     private static Guid? OldWorkspace(HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids)
         => history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known ? ids.TryIdOf(known.RootPath) : null;
