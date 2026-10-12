@@ -301,6 +301,25 @@ public sealed class LiveRunTests : ComponentHost
     }
 
     /// <summary>
+    /// Source shows only where there is something to switch between, as the window's viewer: beside a caller's rendering,
+    /// which must never be the only way to read the text. With the text alone, a Source button would switch to itself.
+    /// </summary>
+    [Fact]
+    public void The_viewer_offers_the_source_only_beside_a_rendering()
+    {
+        var plain = Render<Enactive.Server.Components.Ui.TextViewer>(p => p.Add(v => v.Title, "notes.md").Add(v => v.Text, "# Notes"));
+        Assert.DoesNotContain(plain.FindAll("button"), b => b.TextContent.Trim() == "Source");
+        Assert.Equal("# Notes", plain.Find("pre").TextContent);
+
+        var rendered = Render<Enactive.Server.Components.Ui.TextViewer>(p => p.Add(v => v.Title, "notes.md").Add(v => v.Text, "# Notes")
+            .Add(v => v.Rendered, (Microsoft.AspNetCore.Components.RenderFragment)(b => b.AddMarkupContent(0, "<h1>Notes</h1>"))));
+        Assert.Equal("Notes", rendered.Find(".viewer-rendered h1").TextContent);
+        rendered.FindAll("button").Single(b => b.TextContent.Trim() == "Source").Click();
+        Assert.Equal("# Notes", rendered.Find("pre").TextContent);
+        Assert.Empty(rendered.FindAll(".viewer-rendered"));
+    }
+
+    /// <summary>
     /// Once the run has ended its kept proposals are in its Artifacts tab, each with its diff, to apply or reject (an
     /// Operator; ServerStaging rules) - the window's staged cards. While the run goes they are not offered: the store is
     /// still being written.
