@@ -81,8 +81,10 @@
             </Virtualize>
         </div>
 
-        <textarea class="log-detail" readonly aria-label="Payload"
-                  placeholder="Select a row to see its full payload (prompt / response / arguments)…">@vm.DetailText</textarea>
+        @* The payload as the box's value, the property a browser shows a textarea by: its content is only the default
+           value, which the browser stops showing once the box's value has been set. *@
+        <textarea class="log-detail" readonly aria-label="Payload" value="@vm.DetailText"
+                  placeholder="Select a row to see its full payload (prompt / response / arguments)…"></textarea>
 
         <p class="hint log-status" role="status">@vm.Status</p>
     }

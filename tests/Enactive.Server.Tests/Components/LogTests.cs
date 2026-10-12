@@ -165,7 +165,7 @@ public sealed class LogTests : ComponentHost
 
         Act(() => log.FindAll(".log-line").Single(l => l.TextContent.EndsWith("response")).Click());
 
-        log.WaitForAssertion(() => Assert.Contains("the whole reply", log.Find("textarea.log-detail").TextContent));
+        log.WaitForAssertion(() => Assert.Contains("the whole reply", log.Find("textarea.log-detail").GetAttribute("value")));
     }
 
     /// <summary>Export hands the visible log to the browser as a file: what LogText makes of the lines shown.</summary>

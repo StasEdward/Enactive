@@ -438,6 +438,9 @@ test('a viewer reads the service log, narrowed, and is offered no model to ask',
   const search = page.getByRole('searchbox', { name: 'Search' });
   await search.fill('Application started');
   await expect(lines).toContainText('Application started');
+  // A line chosen shows its whole entry under the list, as the window's detail box.
+  await lines.getByRole('button', { name: /Application started/ }).first().click();
+  await expect(page.getByRole('textbox', { name: 'Payload' })).toHaveValue(/Application started/);
   await expect(page.getByRole('button', { name: 'AI Analyze' })).toHaveCount(0);
   await expect(page.getByText('Capture raw wire (Trace)')).toHaveCount(0);
 
