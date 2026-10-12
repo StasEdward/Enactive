@@ -49,9 +49,12 @@ internal sealed class WorkspaceRoots(IReadOnlyList<string> roots)
         }
     }
 
+    // A drive keeps its separator when trimmed ("D:\"): one more made "D:\\", which no folder on the drive starts with,
+    // and a drive named as a root refused every folder on it.
     private static bool Inside(string full, string root)
         => string.Equals(full, root, StringComparison.OrdinalIgnoreCase)
-           || full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+           || full.StartsWith(Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar,
+               StringComparison.OrdinalIgnoreCase);
 
     private static string? LinkOnTheWay(string root, string full)
     {

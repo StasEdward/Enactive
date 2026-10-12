@@ -36,6 +36,19 @@ public sealed class WorkspaceRootsTests : IDisposable
         Assert.Contains("is not under", roots.Refusal(Path.Combine(_work, "..", "elsewhere")));
     }
 
+    /// <summary>
+    /// A drive named as a root holds every folder on it. Its full path keeps its separator ("D:\"), and the check for
+    /// "under it" added another, so no folder on the drive was under it - every run and every folder refused.
+    /// </summary>
+    [Fact]
+    public void A_drive_named_as_a_root_holds_the_folders_on_it()
+    {
+        var roots = new WorkspaceRoots([Path.GetPathRoot(_work)!]);
+
+        Assert.Null(roots.Refusal(_work));
+        Assert.Contains(Path.Combine(_work, "project"), roots.Below(_work));
+    }
+
     /// <summary>No roots, no runs from the browser: a box to type any path into is every folder one Run from a shell.</summary>
     [Fact]
     public void With_no_roots_no_folder_is_one()

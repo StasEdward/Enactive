@@ -123,6 +123,12 @@ internal interface IRunControl
     /// </summary>
     StartResult StartScheduled(DueRun due);
 
+    /// <summary>
+    /// Why this person's run in this folder would be refused now, or null - asked before something is spent on it, as
+    /// an inbox answer is (ServerInbox): the refusal comes from the same checks a start makes.
+    /// </summary>
+    string? Refusal(ClaimsPrincipal user, string workspace);
+
     /// <summary>Carries on a run that stopped at a question, now answered in the inbox: under the same task, as a new run.</summary>
     Task<StartResult> ContinueAsync(ClaimsPrincipal user, string workspace, Agents.ParkedDecision parked, string title);
     IReadOnlyList<ServerRun> List(ClaimsPrincipal user);
@@ -149,7 +155,9 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
     public StartResult StartScheduled(DueRun due)
     {
         var root = Workspace.WorkspaceRegistry.Normalise(due.Schedule.WorkspaceRoot);
-        if (RunLauncher.Refusal(root, executor.Problem) is { } refused)
+        // Held to the roots as a person's run is: the schedules file is also the account's desktop's and console tick's,
+        // and a schedule there for a folder outside the roots ran an agent there every time it came due.
+        if ((RunLauncher.Refusal(root, executor.Problem) ?? roots?.Refusal(root)) is { } refused)
         {
             due.Hold.Dispose();
             return new(null, refused);
@@ -201,17 +209,9 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
     private StartResult StartRun(ClaimsPrincipal user, string workspace, string prompt, Guid? taskId, RunCheckpoint? resume, string action,
         Core.Templates.ResolvedTaskSpec? spec = null)
     {
-        if (Allowed(user, Role.Operator) is not { } account)
-            return new(null, NotAllowed(user, "start a run"));
-        if (string.IsNullOrWhiteSpace(prompt))
+        if (string.IsNullOrWhiteSpace(prompt) && Allowed(user, Role.Operator) is not null)
             return new(null, "Say what the run is to do.");
-        if (string.IsNullOrWhiteSpace(workspace))
-            return new(null, "Name the folder the run is to work in.");
-
-        var root = Workspace.WorkspaceRegistry.Normalise(workspace);
-        // The same checks every host makes before a run (RunLauncher): a folder that is there, an engine to run on - and
-        // the service's own: a folder under its roots (WorkspaceRoots).
-        if ((RunLauncher.Refusal(root, executor.Problem) ?? roots?.Refusal(root)) is { } refused)
+        if (Check(user, workspace, out var account, out var root) is { } refused)
             return new(null, refused);
 
         ServerRun run;
@@ -219,7 +219,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         {
             if (_stopping)
                 return new(null, "The service is stopping; start the run again when it is back.");
-            run = new ServerRun(account.Name, root, prompt.Trim(), queue.Enqueue(root), taskId, resume, spec);
+            run = new ServerRun(account!.Name, root, prompt.Trim(), queue.Enqueue(root), taskId, resume, spec);
             _runs.Add(run);
             var finished = _runs.Where(r => r.Ended.IsCompleted).ToList();
             foreach (var old in finished.Take(Math.Max(0, finished.Count - KeepFinished)))
@@ -228,6 +228,26 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         users.Audit(account.Name, action, $"{root}: {run.Prompt}");
         _ = LifeAsync(run, account.Name);
         return new(run, null);
+    }
+
+    public string? Refusal(ClaimsPrincipal user, string workspace) => Check(user, workspace, out _, out _);
+
+    /// <summary>Every check a start makes but the task's words: who asks, the folder, the engine, the service's state.</summary>
+    private string? Check(ClaimsPrincipal user, string workspace, out Account? account, out string root)
+    {
+        root = "";
+        if ((account = Allowed(user, Role.Operator)) is null)
+            return NotAllowed(user, "start a run");
+        if (string.IsNullOrWhiteSpace(workspace))
+            return "Name the folder the run is to work in.";
+
+        root = Workspace.WorkspaceRegistry.Normalise(workspace);
+        // The same checks every host makes before a run (RunLauncher): a folder that is there, an engine to run on - and
+        // the service's own: a folder under its roots (WorkspaceRoots).
+        if ((RunLauncher.Refusal(root, executor.Problem) ?? roots?.Refusal(root)) is { } refused)
+            return refused;
+        lock (_gate)
+            return _stopping ? "The service is stopping; start the run again when it is back." : null;
     }
 
     /// <summary>The run from its place in the line to its end. Never throws: what went wrong is the run's to say.</summary>

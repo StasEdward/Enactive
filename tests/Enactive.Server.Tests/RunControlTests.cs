@@ -557,5 +557,53 @@ public sealed class RunControlTests : IDisposable
 
         Assert.Contains("is not under", control.Start(As("alice"), _workspace, "write the digest").Refusal);
     }
+
+    /// <summary>
+    /// A schedule's folder is held to the roots as a person's is. The schedules file is the service account's, which its
+    /// desktop and a console tick also write; a schedule there for a folder outside the roots ran an agent there every time
+    /// it came due, where a run asked for in the browser was refused.
+    /// </summary>
+    [Fact]
+    public async Task A_schedule_for_a_folder_outside_the_roots_does_not_run_and_says_so()
+    {
+        var elsewhere = Path.Combine(_root, "roots-only-here");
+        Directory.CreateDirectory(elsewhere);
+        var control = new RunControl(_users, new RunQueue(2), _engine, NullLogger<RunControl>.Instance, roots: new WorkspaceRoots([elsewhere]));
+        var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        var policy = new PermissionPolicy(PermissionLevel.Autonomous, ["*"], []);
+        var spec = new Enactive.Core.Templates.ResolvedTaskSpec("digest", 1, "Digest", Guid.NewGuid(), "project", _workspace,
+            "write the digest", new Dictionary<string, string>(), policy, [], Enactive.Core.Templates.ExecutionLimits.None, null, false);
+        var schedule = new Enactive.Core.Schedules.Schedule(Guid.NewGuid(), _workspace, "morning digest",
+            Enactive.Core.Schedules.ScheduledWork.FromPastRun(spec.Snapshot()),
+            Enactive.Core.Schedules.ScheduleTiming.Once(DateTimeOffset.Now.AddMinutes(-1)), policy, CreatedAt: DateTimeOffset.Now.AddHours(-1));
+        engine.Schedules.Save(schedule);
+
+        Assert.Empty(await new ServerScheduler(engine, control, NullLogger<ServerScheduler>.Instance).TickAsync(DateTimeOffset.Now, CancellationToken.None));
+
+        Assert.False(engine.Markers.IsRunning(schedule.Id));
+        var item = Assert.Single(await Enactive.Workspace.InboxStoreFactory.Create(Enactive.Core.Context.WorkspaceInfo.For(_workspace))
+            .LoadAllAsync(CancellationToken.None));
+        Assert.Contains("is not under", item.Summary);
+    }
+
+    /// <summary>
+    /// The answer is spent only on a run that can carry on. The question was answered first and the run refused after
+    /// (here: its folder outside the roots), and the question was gone from the inbox with nothing carried on.
+    /// </summary>
+    [Fact]
+    public async Task A_question_whose_run_cannot_carry_on_stays_waiting_in_the_inbox()
+    {
+        var (_, itemId) = ParkedInTheInbox();
+        var elsewhere = Path.Combine(_root, "roots-only-here");
+        Directory.CreateDirectory(elsewhere);
+        var control = new RunControl(_users, new RunQueue(2), _engine, NullLogger<RunControl>.Instance, roots: new WorkspaceRoots([elsewhere]));
+        var inbox = InboxOf(control);
+
+        var (said, carried) = await inbox.AnswerAsync(As("bob"), _workspace, itemId, "allow", CancellationToken.None);
+
+        Assert.Null(carried);
+        Assert.Contains("is not under", said);
+        Assert.NotNull(Assert.Single(await inbox.ListAsync(As("bob"), CancellationToken.None)).Waiting);
+    }
 }
 

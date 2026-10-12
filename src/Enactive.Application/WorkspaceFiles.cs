@@ -43,7 +43,7 @@ internal static class WorkspaceFiles
     /// The first folder or file between the workspace and the file that is a reparse point - a junction, a symbolic
     /// link, a mount - or null. The workspace folder itself may be one: that is where its owner put it.
     /// </summary>
-    private static string? LinkOnTheWay(string root, string full)
+    internal static string? LinkOnTheWay(string root, string full)
     {
         var top = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         var at = full;

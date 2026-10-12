@@ -68,6 +68,10 @@ internal sealed class ServerInbox(UserStore users, ServerEngine engine, IRunCont
             return ("The service does not know that folder as a workspace.", null);
         if ((await ListAsync(user, ct)).FirstOrDefault(e => e.Item.Id == itemId && e.Workspace == known.RootPath) is not { Waiting: { } waiting } entry)
             return ("This question is no longer waiting - it was answered already, or its run has ended.", null);
+        // Asked before the answer is recorded: once it is, the question is no longer waiting, and a run refused after
+        // that (no engine, a folder outside the roots) left nothing in the inbox to answer and nothing carried on.
+        if (runs.Refusal(user, known.RootPath) is { } refused)
+            return (refused, null);
 
         Guid? carried = null;
         var inbox = new InboxDecisions(known.RootPath, async (parked, item) =>
