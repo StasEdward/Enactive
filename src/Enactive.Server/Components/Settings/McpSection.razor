@@ -1,0 +1,35 @@
+@* The window's AI · MCP (SettingsWindow.axaml): the servers as cards, a program on this machine green and one reached
+   over the network blue (Looks.Local), what each is in a line; Edit and Remove on the card, Add below; and, in red,
+   the note that a server is enabled and named by no role (McpRoles), said where somebody can act on it. *@
+
+<p class="label">MCP servers</p>
+<p class="hint">Connect local programs through stdio or remote servers through HTTP. Enabled servers connect for each new run; running tasks keep their current settings.</p>
+<p class="hint">Allow mcp__* under AI · Team to let a worker use these tools. Calls ask for approval by default. External changes are not staged or undone by Enactive.</p>
+<p class="hint">A stdio server is a program the service starts, as the service's own Windows account.</p>
+@if (Vm.HasMcpReachNote)
+{
+    <p class="hint settings-problem" role="alert">@Vm.McpReachNote</p>
+}
+
+<ul class="cards settings-cards" aria-label="MCP servers">
+    @foreach (var row in Vm.McpServers)
+    {
+        <li class="@($"card settings-card {Looks.Local(row.IsLocal)}")">
+            <span class="settings-card-text">
+                <span class="card-title">@row.Name</span>
+                <span class="card-meta">@row.Meta</span>
+            </span>
+            <span class="card-meta settings-reach">@row.Reach</span>
+            <RowIcons Edit="() => row.EditCommand.Execute(null)" Remove="() => row.RemoveCommand.Execute(null)" Of="@row.Name" />
+        </li>
+    }
+</ul>
+<div class="settings-section-actions">
+    <button type="button" class="btn" @onclick="() => Vm.AddMcpCommand.Execute(null)">Add</button>
+</div>
+
+@code {
+    // Handed down as a cascading value rather than a parameter: the view model is internal to the application layer,
+    // and a component's parameters are public.
+    [CascadingParameter] private SettingsViewModel Vm { get; set; } = default!;
+}

@@ -13,7 +13,7 @@
    do, unless the caller's OnClose declines (busy doing what was asked). *@
 
 <div class="dialog-scrim" @onclick="CloseAsync">
-    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="@_titleId" tabindex="-1" @ref="_dialog"
+    <div class="@("dialog" + (Class is { Length: > 0 } ? " " + Class : ""))" role="dialog" aria-modal="true" aria-labelledby="@_titleId" tabindex="-1" @ref="_dialog"
          @onclick:stopPropagation="true" @onkeydown="KeyAsync">
         <h2 id="@_titleId" class="dialog-title">@Title</h2>
         @ChildContent
@@ -35,6 +35,9 @@
     [Parameter, EditorRequired] public string Title { get; set; } = "";
     [Parameter] public RenderFragment? ChildContent { get; set; }
     [Parameter] public RenderFragment? Actions { get; set; }
+
+    /// <summary>A class of the dialog's own beside "dialog" - a wider one for a form of two columns.</summary>
+    [Parameter] public string? Class { get; set; }
 
     /// <summary>Escape, the scrim, or a Cancel the caller draws; nothing when the dialog may not be left now.</summary>
     [Parameter] public EventCallback OnClose { get; set; }

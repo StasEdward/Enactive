@@ -41,6 +41,7 @@ public sealed class LooksTests
         classes.AddRange(Enum.GetValues<FeedEntryKind>().Select(Looks.Entry));
         classes.AddRange(Enum.GetValues<TemplateEdge>().Select(Looks.Template));
         classes.AddRange(Enum.GetValues<ScheduleState>().Select(Looks.Schedule));
+        classes.AddRange(new[] { true, false }.Select(Looks.Local));
         classes.AddRange(new[] { "result", "decision", "error", "anything else" }.Select(Looks.Inbox));
         classes.Add(Looks.Change(applied: false, rejected: false));
         classes.Add(Looks.Change(applied: true, rejected: false));
@@ -195,6 +196,13 @@ public sealed class LooksTests
         rows.Add(("Change.Staged", Looks.Change(false, false), WindowHex("ChangeState.Staged")));
         rows.Add(("Change.Applied", Looks.Change(true, false), WindowHex("ChangeState.Applied")));
         rows.Add(("Change.Rejected", Looks.Change(false, true), WindowHex("ChangeState.Rejected")));
+
+        // On this machine or not is a two-way Map in Palette.cs (Local), not an enum's arms: read as its own shape.
+        var local = Regex.Match(File.ReadAllText(RepoRoot.Source("src", "Enactive.App.Ui", "Palette.cs")),
+            @"Local\s*=\s*Map<bool>\(local\s*=>\s*local\s*\?\s*Brand\.(?<here>\w+)\s*:\s*Brand\.(?<away>\w+)\)");
+        Assert.True(local.Success, "Palette.Local is not `Map<bool>(local => local ? Brand.X : Brand.Y)`, the shape this test reads.");
+        rows.Add(("Local.true", Looks.Local(true), BrandHex(local.Groups["here"].Value)));
+        rows.Add(("Local.false", Looks.Local(false), BrandHex(local.Groups["away"].Value)));
 
         // The autonomy scale is Brand.Autonomy(level), not an arm of Palette.
         string[] tiers = ["AutonomyObserve", "AutonomySuggest", "AutonomyExecute", "AutonomyAutonomous"];

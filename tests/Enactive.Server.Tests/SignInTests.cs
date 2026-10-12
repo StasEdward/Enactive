@@ -262,7 +262,7 @@ public sealed partial class SignInTests : IAsyncLifetime
     {
         // The old addresses too: what a workspace's id is, is not told to somebody who has not signed in.
         foreach (var address in new[] { "/", "/history?ws=x", "/workspaces", "/history/run?ws=x&id=x", "/file?ws=x&path=y", "/library/template?ws=x",
-                     "/library?ws=x", "/library/schedule?ws=x&id=x", "/logs" })
+                     "/library?ws=x", "/library/schedule?ws=x&id=x", "/logs", "/admin/settings" })
         {
             var response = await NewBrowser().GetAsync(address);
             Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
@@ -416,6 +416,22 @@ public sealed partial class SignInTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.Redirect, old.StatusCode);
         Assert.Equal("/log", old.Headers.Location!.OriginalString);
+    }
+
+    /// <summary>
+    /// The old settings page's address lands on the settings, at the address the rail names them by - where anybody but
+    /// an Admin is told the role does not include them, as the old page told them.
+    /// </summary>
+    [Fact]
+    public async Task The_old_settings_address_lands_on_the_settings()
+    {
+        var browser = NewBrowser();
+        await SignInAsync(browser, "alice", Password);
+
+        var old = await browser.GetAsync("/admin/settings");
+
+        Assert.Equal(HttpStatusCode.Redirect, old.StatusCode);
+        Assert.Equal("/settings", old.Headers.Location!.OriginalString);
     }
 
     [Fact]

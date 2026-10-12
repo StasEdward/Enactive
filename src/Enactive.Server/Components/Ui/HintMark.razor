@@ -1,0 +1,16 @@
+@* The window's HintView: a "?" beside a label, and the advice behind it, which stays open until it is closed again - a
+   tooltip vanished the moment the pointer moved toward several sentences somebody reads while deciding. A disclosure
+   rather than a script: the browser opens and closes it, and the text is in the page for whoever reads it aloud. *@
+
+<details class="hint-mark">
+    <summary aria-label="@($"About {Of}")" title="@($"About {Of}")">?</summary>
+    <p class="hint-mark-text">@Text</p>
+</details>
+
+@code {
+    /// <summary>The advice, as Core keeps it (SettingsAdvice, PhaseAdvice, RoleAdvice) or a view model says it.</summary>
+    [Parameter, EditorRequired] public string Text { get; set; } = "";
+
+    /// <summary>What the advice is about - the label beside it - for the "?" to be named by.</summary>
+    [Parameter, EditorRequired] public string Of { get; set; } = "";
+}

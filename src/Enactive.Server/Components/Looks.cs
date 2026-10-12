@@ -140,6 +140,12 @@ internal static class Looks
     };
 
     /// <summary>
+    /// A provider's or an MCP server's edge, as Palette.Local: green when it is on this machine, blue when it is reached
+    /// over the network - whether the work leaves the box to reach it.
+    /// </summary>
+    public static string Local(bool local) => local ? "tone-local" : "tone-cloud";
+
+    /// <summary>
     /// A template's edge in the library, as Palette.Template: grey for a built-in, blue for the global library, green for one
     /// that lives with the project - and amber for the one chosen, whose form is filled in (TemplateListItem.Edge).
     /// </summary>

@@ -186,10 +186,8 @@ button.secondary { background: var(--bg-card); color: var(--text); border-color:
 form.inline { display: inline-flex; gap: 4px; margin: 2px 6px 2px 0; }
 th { text-align: left; color: var(--text-muted); font-weight: normal; }
 select { font: inherit; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px; }
-fieldset.card { display: grid; gap: 6px; max-width: 720px; }
-main > label, fieldset label { display: block; margin: 4px 0; }
-main > label input:not([type="checkbox"]), main > label select, main > label textarea,
-fieldset label input:not([type="checkbox"]), fieldset label select, fieldset label textarea { display: block; width: 100%; max-width: 720px; }
+main > label { display: block; margin: 4px 0; }
+main > label input:not([type="checkbox"]), main > label select, main > label textarea { display: block; width: 100%; max-width: 720px; }
 .start.wide { max-width: 960px; }
 .start.wide textarea { font-family: var(--font-mono); font-size: 0.85rem; }
 
@@ -716,3 +714,74 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
 .markdown .md-table { border-collapse: collapse; margin: 6px 0; }
 .markdown .md-table th, .markdown .md-table td { padding: 2px 8px; border: 1px solid var(--border); }
+
+/* ── Settings (Pages/SettingsScreen.razor; SettingsWindow.axaml): the sections, 188 px, on the context surface | the one
+   chosen; what a Save could not do, Save and Cancel at the foot of every section. ─────────────────────────────────── */
+.shell > main:has(> .settings-screen) { padding: 0; max-width: none; }
+.settings-screen { display: grid; grid-template-columns: 188px minmax(0, 860px); grid-template-rows: 1fr auto; column-gap: 16px;
+  min-height: calc(100vh - 41px); }
+.settings-screen > .said { grid-column: 1 / -1; padding: 16px; }
+/* The window's Border.context and its Button.nav: muted until pointed at; the section you are in lit, with its edge. */
+.settings-nav { grid-row: 1 / span 2; display: flex; flex-direction: column; padding: 12px 8px; background: var(--bg-elevated);
+  border-right: 1px solid var(--border); }
+.settings-nav-item { display: block; padding: 6px 10px; margin: 0 0 2px; font-size: 12.5px; color: var(--text-muted); text-decoration: none;
+  border-left: 2px solid transparent; border-radius: 0 4px 4px 0; }
+.settings-nav-item:hover { color: var(--text); background: var(--card-fill); }
+.settings-nav-item.on, .settings-nav-item.on:hover { color: var(--text); background: var(--card-fill-active); border-left-color: var(--accent); }
+.settings-nav-rule { height: 1px; margin: 10px 0 8px 10px; background: var(--border); }
+.settings-nav-group { margin: 0 0 4px 10px; }
+.settings-pane { display: flex; flex-direction: column; gap: 6px; padding: 12px 0; min-width: 0; }
+.settings-pane p { margin: 0; }
+.settings-pane input:not([type="checkbox"]), .settings-pane textarea, .settings-pane select { width: 100%; box-sizing: border-box; }
+.settings-pane .label { margin: 8px 0 0; }
+.settings-foot { grid-column: 2; display: grid; gap: 6px; padding: 8px 0 12px; }
+.settings-foot p { margin: 0; }
+.settings-note { color: var(--warning); }
+.settings-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.settings-field { display: grid; gap: 3px; }
+.settings-label-row { display: inline-flex; align-items: center; gap: 6px; }
+.settings-small { font-size: 12px; }
+.settings-server { display: grid; grid-template-columns: minmax(0, 1fr) 90px; gap: 8px; }
+.settings-problem { color: var(--danger); }
+.settings-stored { color: var(--text-body); }
+.settings-state { margin-top: 8px; }
+.settings-cards { margin: 0; padding: 0; list-style: none; }
+.settings-card { display: flex; align-items: center; gap: 9px; }
+.settings-card-text { display: grid; gap: 1px; flex: 1; min-width: 0; }
+.settings-card-text a.card-title { text-decoration: none; }
+.settings-card-text a.card-title:hover { text-decoration: underline; }
+.settings-wrap { white-space: normal; }
+.settings-reach { flex: none; }
+.settings-section-actions { display: flex; gap: 8px; }
+.row-icons { flex: none; display: inline-flex; gap: 2px; }
+/* What the last check learned: grey until asked (Looks.Health), the sentence and the time in its title. */
+.health-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--tone, var(--text-faint)); }
+.settings-about-name { font-size: 20px; font-weight: 600; }
+.settings-about { display: grid; grid-template-columns: 120px 1fr; gap: 2px 0; margin: 10px 0 0; font-size: 12px; }
+.settings-about dd { margin: 0; overflow-wrap: anywhere; }
+.mono { font-family: var(--font-mono); font-size: 12px; }
+.settings-components { margin: 6px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.settings-components li { display: grid; grid-template-columns: minmax(0, 1fr) 140px 120px; gap: 6px; margin: 0 0 3px; }
+.settings-component-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-roots .card-title { white-space: normal; overflow-wrap: anywhere; }
+/* The editors over the settings: the provider's two columns (ProviderEditWindow.axaml), one for the others. */
+.dialog.dialog-wide { width: min(1040px, calc(100vw - 32px)); }
+.settings-editor-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.settings-editor-column { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.settings-editor-column p { margin: 0; }
+.settings-editor-column input:not([type="checkbox"]), .settings-editor-column textarea, .settings-editor-column select { width: 100%; box-sizing: border-box; }
+.settings-editor-column .label { margin: 6px 0 0; }
+.settings-editor-status { white-space: pre-line; color: var(--text-body); margin: 8px 0 0; }
+.settings-fetch { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.settings-test, .settings-checks { display: flex; align-items: center; gap: 8px 24px; flex-wrap: wrap; }
+.settings-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.settings-tools { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+
+/* The window's HintView: a 16 px "?" beside a label; the advice behind it stays until it is closed. */
+.hint-mark { position: relative; display: inline-block; }
+.hint-mark > summary { list-style: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
+  border: 1px solid var(--border-strong); border-radius: 8px; font-size: 10px; font-weight: 700; color: var(--text-muted); cursor: pointer; }
+.hint-mark > summary::-webkit-details-marker { display: none; }
+.hint-mark > summary:hover, .hint-mark[open] > summary { color: var(--accent); border-color: var(--accent); }
+.hint-mark-text { position: absolute; z-index: 30; top: 20px; left: 0; width: 360px; margin: 0; padding: 10px 12px; font-size: 12px; font-weight: 400;
+  color: var(--text-body); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 6px; white-space: pre-line; }

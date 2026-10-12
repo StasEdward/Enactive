@@ -73,7 +73,7 @@ internal static class RailAddresses
         ["/proposals"] = new("proposals", ["proposals"]),
         ["/log"] = new("log", ["log"]),
         ["/environment"] = new("environment", ["environment"]),
-        ["/settings"] = new("admin/settings", ["settings", "admin/settings"]),           // TEMPORARY: /admin/settings today
+        ["/settings"] = new("settings", ["settings"]),
         ["/accounts"] = new("admin/users", ["accounts", "admin/users"]),                 // TEMPORARY: /admin/users today
         ["/audit"] = new("admin/audit", ["audit", "admin/audit"]),                       // TEMPORARY: /admin/audit today
     };

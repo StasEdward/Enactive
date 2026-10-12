@@ -1,0 +1,35 @@
+@using Enactive.Application
+
+@* The window's About (SettingsWindow.axaml): what this build is, read off the files beside it (BuildInfo) - here, the
+   service's own. *@
+
+<p class="settings-about-name">Enactive</p>
+<p class="hint">An AI workspace.</p>
+
+<dl class="settings-about">
+    <dt class="hint">Version</dt>
+    <dd class="mono">@Vm.AppVersion</dd>
+    <dt class="hint">Built</dt>
+    <dd class="mono">@Vm.BuiltAt</dd>
+    <dt class="hint">Runtime</dt>
+    <dd>@Vm.RuntimeInfo</dd>
+</dl>
+
+<p class="panel-header">COMPONENTS</p>
+<p class="hint">All of these ship from one build, so they carry the same version. Two different numbers below mean a stale file is sitting in the program folder.</p>
+<ul class="settings-components" aria-label="Components">
+    @foreach (var component in Vm.Components)
+    {
+        <li>
+            <span class="settings-component-name">@component.Name</span>
+            <span class="mono">@component.Version</span>
+            <span class="hint">@component.Detail</span>
+        </li>
+    }
+</ul>
+
+@code {
+    // Handed down as a cascading value rather than a parameter: the view model is internal to the application layer,
+    // and a component's parameters are public.
+    [CascadingParameter] private SettingsViewModel Vm { get; set; } = default!;
+}

@@ -200,6 +200,11 @@ internal static class ServerApp
         // The old log page's address: the log is at /log now, as the rail names it.
         app.MapGet("/logs", () => Results.LocalRedirect("/log")).RequireAuthorization(nameof(Role.Viewer));
 
+        // The old settings page's address: the settings are at /settings now, as the rail names them. Anybody signed in
+        // is sent on, and /settings itself says to anybody but an Admin that the role does not include it - as the old
+        // page did.
+        app.MapGet("/admin/settings", () => Results.LocalRedirect("/settings")).RequireAuthorization(nameof(Role.Viewer));
+
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
         return app;
     }

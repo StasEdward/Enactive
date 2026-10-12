@@ -1,0 +1,45 @@
+@* The window's AI · Templates (SettingsWindow.axaml): the templates as cards, each edged by where it comes from
+   (Looks.Template), and the window's hints - templates are FILES, saved by their editor at once, which this page's
+   Cancel does not undo. They are edited where the service edits them, the Templates screen's editor: each card leads
+   there, as New template does, rather than a second editor here. *@
+
+<p class="label">Task templates</p>
+<p class="hint">A saved task: what to ask for, the bounds it runs under, and the checks that decide whether it finished. Pick one from Templates on the rail to run it.</p>
+<p class="hint">Templates are FILES, and the editor writes them as soon as you press Save there. Cancel on this page does not undo them, unlike everything else here.</p>
+<p class="hint">A file saved under a built-in's id replaces that built-in; delete the file and the original comes back. A workspace template replaces a global one of the same id, which is how a project keeps its own version next to its code.</p>
+<p class="hint">@Vm.TemplateFolders</p>
+
+<ul class="cards settings-cards" aria-label="Templates">
+    @foreach (var row in Vm.Templates)
+    {
+        <li class="@($"card settings-card {Looks.Template(row.Edge)}")">
+            <span class="settings-card-text">
+                @if (Workspace is { } ws)
+                {
+                    <a class="card-title" href="@Links.Template(ws, row.Template.Id)">@row.Name</a>
+                }
+                else
+                {
+                    <span class="card-title">@row.Name</span>
+                }
+                <span class="card-meta">@row.Meta</span>
+                @if (row.HasDescription)
+                {
+                    <span class="card-meta settings-wrap">@row.Description</span>
+                }
+            </span>
+        </li>
+    }
+</ul>
+<div class="settings-section-actions">
+    <a class="btn" href="@(Workspace is { } id ? Links.NewTemplate(id) : Links.Templates(null))">New template</a>
+</div>
+
+@code {
+    // Handed down as a cascading value rather than a parameter: the view model is internal to the application layer,
+    // and a component's parameters are public.
+    [CascadingParameter] private SettingsViewModel Vm { get; set; } = default!;
+
+    /// <summary>The workspace the Templates screen opens on, by its id - the one whose templates are listed - or none.</summary>
+    [Parameter] public Guid? Workspace { get; set; }
+}

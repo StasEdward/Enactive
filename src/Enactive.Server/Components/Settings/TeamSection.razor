@@ -1,0 +1,26 @@
+@* The window's AI · Team (SettingsWindow.axaml): one card per worker, its edge the worker's permission level on the
+   autonomy slider's green-to-red scale (Looks.Autonomy); Edit and Remove on the card, Add below. *@
+
+<p class="hint">The Runs screen's role picker chooses which worker handles a run. Honesty rules and global instructions are added to every worker automatically. The edge is the worker's permission level, on the same green-to-red scale as the autonomy slider.</p>
+
+<ul class="cards settings-cards" aria-label="Team">
+    @foreach (var row in Vm.Workers)
+    {
+        <li class="@($"card settings-card {Looks.Autonomy(row.Autonomy)}")">
+            <span class="settings-card-text">
+                <span class="card-title">@row.Name</span>
+                <span class="card-meta">@row.Meta</span>
+            </span>
+            <RowIcons Edit="() => row.EditCommand.Execute(null)" Remove="() => row.RemoveCommand.Execute(null)" Of="@row.Name" />
+        </li>
+    }
+</ul>
+<div class="settings-section-actions">
+    <button type="button" class="btn" @onclick="() => Vm.AddWorkerCommand.Execute(null)">Add</button>
+</div>
+
+@code {
+    // Handed down as a cascading value rather than a parameter: the view model is internal to the application layer,
+    // and a component's parameters are public.
+    [CascadingParameter] private SettingsViewModel Vm { get; set; } = default!;
+}

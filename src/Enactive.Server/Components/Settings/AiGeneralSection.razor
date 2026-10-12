@@ -1,0 +1,96 @@
+@using Enactive.Application
+@using Enactive.Core.Guidance
+@using Enactive.Server.Components.Ui
+
+@* The window's AI · General (SettingsWindow.axaml), in its order: each explanation behind its own "?" (Core's
+   SettingsAdvice), and the page is the controls themselves. *@
+
+<div class="settings-field">
+    <span class="settings-label-row"><label class="label" for="ai-numctx">Context length (num_ctx)</label><HintMark Text="@SettingsAdvice.NumCtx" Of="Context length" /></span>
+    <input id="ai-numctx" placeholder="e.g. 8192 — blank uses whatever the model already has loaded" @bind="Vm.NumCtxText" />
+</div>
+
+<p class="label">Generation budgets (output tokens)</p>
+<p class="hint">Provider limits and remaining context may lower these ceilings.</p>
+<label class="settings-small" for="ai-planner">Planner</label>
+<input id="ai-planner" @bind="Vm.GenerationPlannerText" />
+<label class="settings-small" for="ai-action">Short action</label>
+<input id="ai-action" @bind="Vm.GenerationActionText" />
+<label class="settings-small" for="ai-filewrite">File-write continuation</label>
+<input id="ai-filewrite" @bind="Vm.GenerationFileWriteText" />
+<label class="settings-small" for="ai-final">Final-answer continuation</label>
+<input id="ai-final" @bind="Vm.GenerationFinalAnswerText" />
+<label class="settings-small" for="ai-handover">Handover note</label>
+<input id="ai-handover" @bind="Vm.GenerationHandoverText" />
+
+<p class="label">Repair consultant (optional)</p>
+<p class="hint">Sends the goal, current diff and error to the chosen model for advice, once per step attempt. The worker stays unchanged.</p>
+<input aria-label="Repair consultant model" placeholder="provider-id/model — blank disables consultation" @bind="Vm.RepairModelText" />
+<label class="hint" for="ai-repair-threshold">Distinct failed repairs before advice: 0 = off, minimum 2. Choose from observed runs; no calibrated default.</label>
+<input id="ai-repair-threshold" @bind="Vm.RepairThresholdText" />
+
+<div class="settings-field">
+    <span class="settings-label-row"><label class="label" for="ai-instructions">Global instructions</label><HintMark Text="@SettingsAdvice.GlobalInstructions" Of="Global instructions" /></span>
+    <textarea id="ai-instructions" rows="10" placeholder="Global instructions — applied to every run" @bind="Vm.GlobalInstructions"></textarea>
+</div>
+
+<p class="label">Local model behaviour</p>
+
+<span class="settings-label-row">
+    <label class="check"><input type="checkbox" @bind="Vm.DisableThinking" /> Disable local model reasoning (&lt;think&gt;) — recommended for qwen3</label>
+    <HintMark Text="@SettingsAdvice.DisableThinking" Of="Disable local model reasoning" />
+</span>
+<span class="settings-label-row">
+    <label class="check"><input type="checkbox" @bind="Vm.VerifyWrites" /> Verify writes by reading files back — helps weak local models, adds a round-trip</label>
+    <HintMark Text="@SettingsAdvice.VerifyWrites" Of="Verify writes" />
+</span>
+<span class="settings-label-row">
+    <label class="check"><input type="checkbox" @bind="Vm.RevertRejectedSteps" /> Put a rejected step's files back to how they were</label>
+    <HintMark Text="@SettingsAdvice.RevertRejectedSteps" Of="Put a rejected step's files back" />
+</span>
+
+<div class="settings-field">
+    <span class="settings-label-row"><label class="label" for="ai-retries">Review retries</label><HintMark Text="@SettingsAdvice.ReviewRetries" Of="Review retries" /></span>
+    <input id="ai-retries" placeholder="1 = two tries in total" @bind="Vm.ReviewRetriesText" />
+</div>
+
+<span class="settings-label-row">
+    <label class="check"><input type="checkbox" @bind="Vm.AllowImplicitToolCalls" /> Run tool calls the model only described in text — unsafe, off by default</label>
+    <HintMark Text="@SettingsAdvice.AllowImplicitToolCalls" Of="Run tool calls the model only described" />
+</span>
+
+<div class="settings-field">
+    <span class="settings-label-row"><label class="label" for="ai-parallel">Parallel steps</label><HintMark Text="@SettingsAdvice.MaxParallelSteps" Of="Parallel steps" /></span>
+    <input id="ai-parallel" placeholder="1 = one step at a time" @bind="Vm.MaxParallelStepsText" />
+</div>
+
+<div class="settings-field">
+    <span class="settings-label-row"><label class="label" for="ai-evidence">Evidence shown to the reviewer</label><HintMark Text="@SettingsAdvice.EvidenceBudget" Of="Evidence shown to the reviewer" /></span>
+    <input id="ai-evidence" placeholder="6000 = the default" @bind="Vm.EvidenceBudgetText" />
+</div>
+
+<div class="settings-field">
+    <span class="settings-label-row"><label class="label" for="ai-shell">Shell commands</label><HintMark Text="@SettingsAdvice.ShellCommands" Of="Shell commands" /></span>
+    @* By its place in the list, as the window's ComboBox: ShellCommandPolicy's order. *@
+    <select id="ai-shell" @bind="Vm.ShellCommandsIndex">
+        <option value="0">Follow the autonomy level (default)</option>
+        <option value="1">Always ask, even when autonomous</option>
+        <option value="2">Off — refuse shell commands</option>
+    </select>
+</div>
+
+<div class="settings-field">
+    <span class="settings-label-row"><label class="label" for="ai-logdays">Keep logs for (days)</label><HintMark Text="@SettingsAdvice.LogRetentionDays" Of="Keep logs for" /></span>
+    <input id="ai-logdays" placeholder="14 = the default, 0 = keep everything" @bind="Vm.LogRetentionDaysText" />
+</div>
+
+<span class="settings-label-row">
+    <label class="check"><input type="checkbox" @bind="Vm.LogPromptBodies" /> Write the full text of every prompt to the log</label>
+    <HintMark Text="@SettingsAdvice.LogPromptBodies" Of="Write the full text of every prompt" />
+</span>
+
+@code {
+    // Handed down as a cascading value rather than a parameter: the view model is internal to the application layer,
+    // and a component's parameters are public.
+    [CascadingParameter] private SettingsViewModel Vm { get; set; } = default!;
+}

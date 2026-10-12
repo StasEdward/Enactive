@@ -1,0 +1,25 @@
+@* The folders the service runs tasks in, from server.json (WorkspaceRoots), read only: they are set when the service is
+   installed, and a page that could add one could open any folder of the server to a run with a shell. The window's
+   add and remove are not offered. *@
+
+<h2 class="label">Writable folders</h2>
+<p class="hint">A run may only write inside its workspace, and a workspace of the service is a folder under one of these. They are set when the service is installed - WorkspaceRoots in server.json - and changed there by an administrator of the server, who then restarts the service.</p>
+
+@if (Roots.Count == 0)
+{
+    <p class="hint">server.json names no folder, so no workspace can be added until it does.</p>
+}
+else
+{
+    <ul class="cards settings-roots" aria-label="Workspace roots">
+        @foreach (var root in Roots)
+        {
+            <li class="card"><span class="card-title path">@root</span></li>
+        }
+    </ul>
+}
+
+@code {
+    /// <summary>The roots as the service has them (ServerSettings.WorkspaceRoots).</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<string> Roots { get; set; } = [];
+}

@@ -222,6 +222,17 @@ public sealed class ShellTests : ComponentHost
         Assert.Equal("schedules", rail.Find("[data-rail='/schedules']").GetAttribute("href"));
     }
 
+    /// <summary>Settings lead to their own page. They led to the old page at /admin/settings, which is a redirect now.</summary>
+    [Fact]
+    public void Settings_lead_to_their_own_page()
+    {
+        SignIn("ada");
+
+        var rail = RenderedRail();
+
+        Assert.Equal("settings", rail.Find("[data-rail='/settings']").GetAttribute("href"));
+    }
+
     [Theory]
     [InlineData("http://localhost/", "/")]
     [InlineData("http://localhost/runs/0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/")]
@@ -234,7 +245,8 @@ public sealed class ShellTests : ComponentHost
     [InlineData("http://localhost/log", "/log")]
     [InlineData("http://localhost/timeline?ws=0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f", "/timeline")]
     [InlineData("http://localhost/environment", "/environment")]
-    [InlineData("http://localhost/admin/settings", "/settings")]
+    [InlineData("http://localhost/settings", "/settings")]
+    [InlineData("http://localhost/settings/ai-providers", "/settings")]
     [InlineData("http://localhost/admin/users", "/accounts")]
     public void The_section_you_are_in_is_marked(string address, string marked)
     {

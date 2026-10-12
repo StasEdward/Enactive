@@ -1,0 +1,28 @@
+@using Enactive.Application
+
+@* The window's Web pane (SettingsWindow.axaml): whether tasks may read the web, where search goes, whether either asks. *@
+
+<h2 class="label">Web</h2>
+<p class="hint">Whether tasks may read the web. fetch_url reads a page by its address and returns its text; web_search searches through a search server you run. What they bring back is treated as data from the web, not as instructions.</p>
+
+<label class="check"><input type="checkbox" @bind="Vm.WebEnabled" /> Let tasks read the web</label>
+<p class="hint">Public addresses only: not this computer and not its network. Asking for a page sends its address out of this computer - the address can carry anything the model puts in it.</p>
+
+<label class="label" for="web-search">Search server</label>
+<input id="web-search" placeholder="http://localhost:8888" disabled="@(!Vm.WebEnabled)" @bind="Vm.WebSearchUrl" @bind:event="oninput" />
+<p class="hint">A SearXNG server, for example one started in Docker. In its settings.yml, add json under search.formats - that is what web_search reads. Leave empty for no web_search. A search query is written from the task and leaves this computer.</p>
+@if (Vm.HasWebProblem)
+{
+    <p class="hint settings-problem" role="alert">@Vm.WebProblem</p>
+}
+
+<label class="check"><input type="checkbox" disabled="@(!Vm.WebEnabled)" @bind="Vm.WebUseWithoutAsking" /> Use without asking each time</label>
+<p class="hint">@Vm.WebAsking</p>
+
+<p class="hint settings-state">@Vm.WebState</p>
+
+@code {
+    // Handed down as a cascading value rather than a parameter: the view model is internal to the application layer,
+    // and a component's parameters are public.
+    [CascadingParameter] private SettingsViewModel Vm { get; set; } = default!;
+}
