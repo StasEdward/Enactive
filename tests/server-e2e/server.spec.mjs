@@ -327,44 +327,78 @@ test('a folder under the roots is added as a workspace by browsing, and nothing 
 
 test('an admin adds a provider with its key on the settings page, and the key never comes back to a page', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'ada');
-  await page.getByRole('link', { name: 'Settings' }).click();
-  await expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible();
+  // The rail's Settings opens the window's sections; Providers is under AI.
+  await page.getByRole('link', { name: 'Settings', exact: true }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Providers' }).click();
+  await expect(page).toHaveURL(/\/settings\/ai-providers$/);
 
-  await page.getByRole('button', { name: 'Add a provider' }).click();
-  const added = page.locator('fieldset.card').filter({ has: page.getByRole('button', { name: 'Remove provider' }) }).last();
-  await added.getByLabel('Id').fill('box');
-  await added.getByLabel('Address').fill('http://127.0.0.1:8080/v1');
-  await added.getByLabel('Models, one per line').fill('qwen');
-  await added.getByLabel(/API key/).fill('sk-e2e-secret');
+  // Added in the window's provider editor, over the settings; Apply puts it into the copy, Save writes it.
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  let editor = page.getByRole('dialog', { name: 'Provider' });
+  await editor.getByLabel('Id', { exact: true }).fill('box');
+  await editor.getByLabel('Base URL').fill('http://127.0.0.1:8080/v1');
+  await editor.getByLabel('API key').fill('sk-e2e-secret');
+  await editor.getByLabel('Models', { exact: true }).fill('qwen');
+  await editor.getByRole('button', { name: 'Apply' }).click();
+  await expect(page.getByRole('list', { name: 'Providers' }).getByText('box', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByText(/^Saved\./)).toBeVisible();
 
+  // Opened again, the key is said to be kept - and is nowhere on the page, not even as the value of its box.
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Providers' }).getByText('box', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Edit box' }).click();
+  editor = page.getByRole('dialog', { name: 'Provider' });
+  await expect(editor.getByText('A key is stored. Leave the box empty to keep it.')).toBeVisible();
+  await expect(editor.getByLabel('API key')).toHaveValue('');
   expect(await page.content()).not.toContain('sk-e2e-secret');
-  // The page says a key is set - and nothing more of it. (Blazor sets an input's value as a property, so the
-  // provider's row is not found by a value attribute; the status is enough.)
-  await expect(page.getByText('set', { exact: true }).first()).toBeVisible();
   await context.close();
 });
 
 test('an admin adds an MCP server with a token header, and the page names the header but never shows the token', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'ada');
+  // The old address lands on the settings.
   await page.goto('/admin/settings');
-  await expect(page.getByRole('heading', { name: 'MCP servers' })).toBeVisible();
+  await expect(page).toHaveURL(/\/settings$/);
+  await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'MCP' }).click();
+  await expect(page.getByText('MCP servers', { exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Add an MCP server' }).click();
-  const added = page.locator('fieldset.card').filter({ has: page.getByRole('button', { name: 'Remove server' }) }).last();
-  await added.getByLabel('Id').fill('tracker');
-  await added.getByLabel('Transport').selectOption('Http');
-  await added.getByLabel('Address').fill('https://mcp.example.com/');
-  await added.getByLabel(/New headers/).fill('Authorization: Bearer tk-e2e-secret');
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  let editor = page.getByRole('dialog', { name: 'MCP server' });
+  await editor.getByLabel('Server ID').fill('tracker');
+  await editor.getByLabel('Transport').selectOption('Http');
+  await editor.getByLabel('Endpoint').fill('https://mcp.example.com/');
+  await editor.getByLabel(/New headers/).fill('Authorization: Bearer tk-e2e-secret');
+  await editor.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('list', { name: 'MCP servers' }).getByText('tracker', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByText(/^Saved\./)).toBeVisible();
 
   await page.reload();
-  await expect(page.getByText('Credentials: Authorization: …')).toBeVisible();
+  await page.getByRole('button', { name: 'Edit tracker' }).click();
+  editor = page.getByRole('dialog', { name: 'MCP server' });
+  await expect(editor.getByText('Set: Authorization: …')).toBeVisible();
   expect(await page.content()).not.toContain('tk-e2e-secret');
+  await context.close();
+});
+
+test('a change in one settings section is kept while another is open, and Cancel drops it', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'ada');
+  await page.goto('/settings/web');
+  const sections = page.getByRole('navigation', { name: 'Settings sections' });
+  await page.getByLabel('Let tasks read the web').check();
+  await page.getByLabel('Search server').fill('http://localhost:8888');
+
+  // Another section is another address of the same page, over the same copy (the window's one working copy).
+  await sections.getByRole('link', { name: 'SMTP' }).click();
+  await expect(page).toHaveURL(/\/settings\/smtp$/);
+  await sections.getByRole('link', { name: 'Web' }).click();
+  await expect(page.getByLabel('Search server')).toHaveValue('http://localhost:8888');
+
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.getByLabel('Search server')).toHaveValue('');
+  await expect(page.getByLabel('Let tasks read the web')).not.toBeChecked();
   await context.close();
 });
 
