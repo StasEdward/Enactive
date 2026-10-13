@@ -337,6 +337,53 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         return null;
     }
 
+    // ── renaming and forgetting a workspace (Operators) ─────────────────────
+
+    /// <summary>
+    /// The longest name kept. The window has no limit, its person typing for themselves; here any Operator names a
+    /// workspace for everybody, and a page can send a name of any length - which every switcher, card and mail would then
+    /// carry.
+    /// </summary>
+    public const int NameLimit = 200;
+
+    /// <summary>
+    /// Gives a workspace a name of its own, as the window's Rename: what the service calls it - the folder is not touched.
+    /// A blank name is the folder's own again (WorkspaceRegistry.Rename). Audited.
+    /// </summary>
+    public string RenameWorkspace(ClaimsPrincipal user, string root, string name)
+    {
+        if (ServerAuth.StillValid(users, user) is not { Role: >= Role.Operator } account)
+            return "Your role does not include renaming workspaces.";
+        // Before the registry is asked, as SaveSettings: a folder outside the roots, or one the service does not list, is
+        // not a workspace of the service to rename.
+        if (workspaces.Find(root) is not { } known)
+            return "The service does not know that folder as a workspace.";
+        if (name.Trim().Length > NameLimit)
+            return $"A name is at most {NameLimit} characters.";
+
+        engine.Workspaces.Rename(known.RootPath, name);
+        var now = engine.Workspaces.Find(known.RootPath)?.Name ?? known.Name;
+        users.Audit(account.Name, "workspace renamed", $"{known.RootPath}: \u201c{known.Name}\u201d to \u201c{now}\u201d");
+        return $"\u201c{known.Name}\u201d is called \u201c{now}\u201d now.";
+    }
+
+    /// <summary>
+    /// Forgets a workspace, as the window's Forget: the service's list loses it - its name and how runs are set up in it -
+    /// and nothing on disk is touched, the folder and its run history included. Added again under the roots, it is back
+    /// with its history. Audited.
+    /// </summary>
+    public string ForgetWorkspace(ClaimsPrincipal user, string root)
+    {
+        if (ServerAuth.StillValid(users, user) is not { Role: >= Role.Operator } account)
+            return "Your role does not include forgetting workspaces.";
+        if (workspaces.Find(root) is not { } known)
+            return "The service does not know that folder as a workspace.";
+
+        engine.Workspaces.Remove(known.RootPath);
+        users.Audit(account.Name, "workspace forgotten", known.RootPath);
+        return $"\u201c{known.Name}\u201d is forgotten. The folder and its run history are where they were; Add folder\u2026 brings it back.";
+    }
+
     // ── adding a workspace (Operators) ──────────────────────────────────────
 
     /// <summary>The roots, or the folders below one of them, for an Operator choosing a workspace; nothing for anybody else.</summary>

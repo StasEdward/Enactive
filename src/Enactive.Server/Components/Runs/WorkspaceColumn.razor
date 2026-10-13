@@ -24,7 +24,9 @@
     <div class="column-top">
         <PanelHeader Text="WORKSPACE" />
         <WorkspaceSwitcher Rows="State.Workspaces" Current="State.Current" Href="State.Href"
-                           OnAdd="@(State.CanOperate ? EventCallback.Factory.Create(this, OpenBrowser) : default)" />
+                           OnAdd="@(State.CanOperate ? EventCallback.Factory.Create(this, OpenBrowser) : default)"
+                           OnRename="@(State.CanOperate ? EventCallback.Factory.Create<SwitcherRow>(this, AskRename) : default)"
+                           OnForget="@(State.CanOperate ? EventCallback.Factory.Create<SwitcherRow>(this, AskForget) : default)" />
         @if (State.SelectedMissing)
         {
             <p class="missing-note">This folder is not on disk. Nothing will run here until you pick another one.</p>
@@ -162,6 +164,21 @@
     </Dialog>
 }
 
+@if (_renaming is { } renaming)
+{
+    @* The window's prompt (PromptWindow): its title and line, the name as it is to start from, OK and Cancel. *@
+    <Dialog Title="@WorkspaceRows.RenameTitle" OnClose="CloseRename">
+        <ChildContent>
+            <p class="body">@WorkspaceRows.RenamePrompt</p>
+            <input class="ws-rename-name" aria-label="Name" maxlength="@ServerHistory.NameLimit" @bind="_newName" @bind:event="oninput" />
+        </ChildContent>
+        <Actions>
+            <button type="button" class="btn primary" disabled="@_busy" @onclick="RenameAsync">OK</button>
+            <button type="button" class="btn" disabled="@_busy" @onclick="CloseRename">Cancel</button>
+        </Actions>
+    </Dialog>
+}
+
 @if (_browsing)
 {
     <Dialog Title="Add folder" OnClose="CloseBrowser">
@@ -272,6 +289,45 @@
             return;
         (_question, _answer) = (null, null);
     }
+
+    private SwitcherRow? _renaming;
+    private string _newName = "";
+
+    private void AskRename(SwitcherRow row) => (_renaming, _newName) = (row, row.Entry.Name);
+
+    private void CloseRename()
+    {
+        if (!_busy)
+            _renaming = null;
+    }
+
+    private async Task RenameAsync()
+    {
+        if (_renaming is not { } row || _busy)
+            return;
+        _busy = true;
+        try
+        {
+            State.Said = await State.RenameAsync(row, _newName, CancellationToken.None);
+        }
+        finally
+        {
+            _busy = false;
+            CloseRename();
+        }
+    }
+
+    /// <summary>Asked first, in the window's words (WorkspaceRows.Forget); nothing on disk is touched.</summary>
+    private void AskForget(SwitcherRow row)
+        => Ask(WorkspaceRows.Forget(row.Entry.Name), "destructive", async _ =>
+        {
+            var (said, wasShown) = await State.ForgetAsync(row, CancellationToken.None);
+            // The address named the workspace just forgotten: the column moves to the one used last, saying what was done.
+            if (wasShown)
+                Navigation.NavigateTo(Links.Runs(null), Links.Saying(said));
+            else
+                State.Said = said;
+        });
 
     private void OpenBrowser() => (_browsing, _browseSaid) = (true, null);
 

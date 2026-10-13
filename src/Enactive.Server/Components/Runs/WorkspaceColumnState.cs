@@ -218,6 +218,26 @@ internal sealed class WorkspaceColumnState(ServerHistory history, IRunControl ru
         return (history.Workspace(user, folder) is { } added ? IdOf(added.RootPath) : null, said);
     }
 
+    /// <summary>Renames a workspace (ServerHistory.RenameWorkspace) and reads the switcher again; what the service said.</summary>
+    public async Task<string> RenameAsync(SwitcherRow row, string name, CancellationToken ct)
+    {
+        var said = history.RenameWorkspace(user, row.Entry.RootPath, name);
+        await LoadAsync(Selected is { } shown ? IdOf(shown.RootPath) : null, ct);
+        return said;
+    }
+
+    /// <summary>
+    /// Forgets a workspace (ServerHistory.ForgetWorkspace) and reads the switcher again; what the service said, and whether
+    /// it was the one shown - then the column has nothing to show of it, and moves to the one used last.
+    /// </summary>
+    public async Task<(string Said, bool WasShown)> ForgetAsync(SwitcherRow row, CancellationToken ct)
+    {
+        var wasShown = row.IsCurrent;
+        var said = history.ForgetWorkspace(user, row.Entry.RootPath);
+        await LoadAsync(!wasShown && Selected is { } shown ? IdOf(shown.RootPath) : null, ct);
+        return (said, wasShown);
+    }
+
     // ── ─────────────────────────────────────────────────────────────────────
 
     private void Show()

@@ -311,6 +311,10 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .ws-row a { display: grid; gap: 1px; padding: 6px 8px; color: var(--text); text-decoration: none; border-radius: 0 4px 4px 0; }
 .ws-row a:hover { background: var(--card-fill-hover); }
 .ws-row .ws-name { font-size: 12.5px; }
+/* A row's Rename and Forget beside its link, as the window's row icons: the link takes the rest of the row. */
+.ws-row:has(.row-icon) { display: flex; align-items: center; gap: 2px; padding-right: 4px; }
+.ws-row:has(.row-icon) a { flex: 1; min-width: 0; }
+.ws-rename-name { width: 100%; }
 .add-folder { width: 100%; font-size: 12px; }
 
 /* Cards of the column: RUNNING's edge is ember (a run is on), UNFINISHED's amber (it waits for a person), the history's

@@ -255,4 +255,74 @@ public sealed class WorkspaceColumnTests : ComponentHost
             System.Globalization.CultureInfo.CurrentCulture = was;
         }
     }
+
+    /// <summary>
+    /// The switcher's rows carry the window's Rename and Forget for an Operator, in the window's words: a name of the
+    /// service's own, and the list forgetting a workspace - its name and how runs are set up in it - while the folder and
+    /// its run history stay where they are. Each is done by the service, audited. They were not offered at all.
+    /// </summary>
+    [Fact]
+    public async Task An_operator_renames_and_forgets_a_workspace_and_nothing_on_disk_goes()
+    {
+        var alpha = Known("alpha");
+        var beta = Known("beta");
+        await RecordedAsync(beta, "digest the inbox", DateTimeOffset.Now.AddHours(-1));
+        var registry = Services.GetRequiredService<ServerEngine>().Workspaces;
+
+        var screen = Screen("alice", $"/?ws={IdOf(alpha)}", "alpha");
+        screen.Find("button.ws-card").Click();
+        var rename = screen.FindAll(".switcher button.ws-rename").Single(b => b.GetAttribute("aria-label") == "Rename beta");
+        Assert.Equal("Rename. What Enactive calls it — the folder is not touched.", rename.GetAttribute("title"));
+        rename.Click();
+        var dialog = screen.Find("[role=dialog]");
+        Assert.Equal("Name this workspace", dialog.QuerySelector(".dialog-title")!.TextContent.Trim());
+        Assert.Equal("beta", screen.Find("input.ws-rename-name").GetAttribute("value"));
+        screen.Find("input.ws-rename-name").Input("Beta docs");
+        screen.FindAll("[role=dialog] button").Single(b => b.TextContent.Trim() == "OK").Click();
+
+        screen.WaitForAssertion(() => Assert.Equal("Beta docs", registry.Find(beta)!.Name));
+        Assert.Contains("is called “Beta docs” now", screen.Find(".said").TextContent);
+        Assert.Contains(Users.AuditTrail(), e => e is { Account: "alice", Action: "workspace renamed" });
+
+        screen.Find("button.ws-card").Click();
+        var forget = screen.FindAll(".switcher button.ws-forget").Single(b => b.GetAttribute("aria-label") == "Forget Beta docs");
+        Assert.Equal("Forget this workspace. The folder and its history are left where they are.", forget.GetAttribute("title"));
+        forget.Click();
+        Assert.Equal("Forget “Beta docs”?", screen.Find("[role=dialog] .dialog-title").TextContent.Trim());
+        Assert.StartsWith("The folder and everything in it, including its run history, are left exactly where they are.",
+            screen.Find("[role=dialog] .body").TextContent.Trim());
+        screen.FindAll("[role=dialog] button").Single(b => b.TextContent.Trim() == "Forget").Click();
+
+        screen.WaitForAssertion(() => Assert.Null(registry.Find(beta)));
+        Assert.Contains(Users.AuditTrail(), e => e is { Account: "alice", Action: "workspace forgotten" });
+        // Nothing on disk: the folder, and the history in it, are where they were.
+        Assert.True(Directory.Exists(beta));
+        Assert.Single(await RunStoreFactory.Create(WorkspaceInfo.For(beta)).LoadSummariesAsync(CancellationToken.None));
+        screen.Find("button.ws-card").Click();
+        Assert.DoesNotContain(screen.FindAll(".switcher .ws-row"), r => r.TextContent.Contains("Beta docs"));
+    }
+
+    /// <summary>A Viewer is offered neither, and the service refuses both to anybody below an Operator, whatever page asks.</summary>
+    [Fact]
+    public void A_viewer_can_neither_rename_nor_forget_a_workspace()
+    {
+        var alpha = Known("alpha");
+        var screen = Screen("vera", $"/?ws={IdOf(alpha)}", "alpha");
+        screen.Find("button.ws-card").Click();
+        Assert.Empty(screen.FindAll(".switcher .ws-rename, .switcher .ws-forget"));
+
+        var history = Services.GetRequiredService<ServerHistory>();
+        var vera = Enactive.Server.Accounts.ServerAuth.PrincipalOf(Users.Find("vera")!);
+        Assert.Contains("role does not include", history.RenameWorkspace(vera, alpha, "mine"));
+        Assert.Contains("role does not include", history.ForgetWorkspace(vera, alpha));
+        var registry = Services.GetRequiredService<ServerEngine>().Workspaces;
+        Assert.Equal("alpha", registry.Find(alpha)!.Name);
+
+        // Nor is a folder the service does not know renamed into its list.
+        var alice = Enactive.Server.Accounts.ServerAuth.PrincipalOf(Users.Find("alice")!);
+        var stranger = Path.Combine(_folders, "stranger");
+        Directory.CreateDirectory(stranger);
+        Assert.Contains("does not know that folder", history.RenameWorkspace(alice, stranger, "mine"));
+        Assert.Null(registry.Find(stranger));
+    }
 }

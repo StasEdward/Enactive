@@ -58,4 +58,19 @@ public sealed class RunRowsTests
         Assert.Equal(@"D:\work\notes", WorkspaceRows.Detail(entry, exists: true));
         Assert.Equal(@"Folder not found · D:\work\notes", WorkspaceRows.Detail(entry, exists: false));
     }
+
+    /// <summary>
+    /// Forgetting a workspace asks first, in words that say what is lost and what is not - the window's, which the service's
+    /// switcher asks too.
+    /// </summary>
+    [Fact]
+    public void Forgetting_a_workspace_says_what_goes_and_what_stays()
+    {
+        var question = WorkspaceRows.Forget("notes");
+
+        Assert.Equal("Forget “notes”?", question.Headline);
+        Assert.Equal("The folder and everything in it, including its run history, are left exactly where they are. "
+                     + "What goes is the name you gave it here and how runs are set up in it.", question.Body);
+        Assert.Equal(("Forget", "Keep"), (question.Confirm, question.Cancel));
+    }
 }

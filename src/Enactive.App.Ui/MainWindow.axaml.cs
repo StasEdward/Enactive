@@ -1516,11 +1516,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             if (entry is null)
                 return;
 
-            var name = await PromptWindow.AskAsync(
-                this,
-                "Name this workspace",
-                "What Enactive calls it. The folder is not touched.",
-                entry.Name);
+            var name = await PromptWindow.AskAsync(this, WorkspaceRows.RenameTitle, WorkspaceRows.RenamePrompt, entry.Name);
 
             if (name is null)
                 return;
@@ -1599,13 +1595,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             if (entry is null)
                 return;
 
-            var forget = await ConfirmWindow.AskAsync(
-                this,
-                $"Forget \u201c{entry.Name}\u201d?",
-                "The folder and everything in it, including its run history, are left exactly where they are. "
-                + "What goes is the name you gave it here and how runs are set up in it.",
-                "Forget",
-                "Keep");
+            var question = WorkspaceRows.Forget(entry.Name);
+            var forget = await ConfirmWindow.AskAsync(this, question.Headline, question.Body, question.Confirm, question.Cancel);
 
             if (!forget)
                 return;
