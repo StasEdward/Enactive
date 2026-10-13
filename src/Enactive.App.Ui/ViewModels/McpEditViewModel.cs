@@ -1,6 +1,7 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Text.Json;
+using Enactive.Application;
 using Enactive.Application.Mvvm;
 using Enactive.Tools.Mcp;
 
@@ -46,7 +47,7 @@ internal sealed class McpEditViewModel : ObservableObject, IDisposable
     {
         _saved = saved;
         if (config.CredentialsUnavailable)
-            Status = "Stored credentials could not be decrypted. Re-enter environment variables and headers before using these settings.";
+            Status = McpEditorWords.CredentialsUnavailable;
         Id = config.Id; Enabled = config.Enabled; RequireApproval = config.RequireApproval;
         Transport = config.Transport; Command = config.Command; WorkingDirectory = config.WorkingDirectory;
         Url = config.Url; TimeoutText = config.TimeoutSeconds.ToString();
@@ -89,7 +90,7 @@ internal sealed class McpEditViewModel : ObservableObject, IDisposable
         try { config = Read(); }
         catch (JsonException) { Status = "Invalid JSON in arguments, environment or headers."; return; }
         catch (FormatException ex) { Status = ex.Message; return; }
-        Status = "Connecting and listing tools…";
+        Status = McpEditorWords.Connecting;
         try
         {
             await using var connection = await McpConnection.ConnectAsync(config, Directory.GetCurrentDirectory(), _lifetime.Token);

@@ -22,7 +22,7 @@ public sealed class AccountTests : IDisposable
 
     public void Dispose()
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 
@@ -50,7 +50,7 @@ public sealed class AccountTests : IDisposable
     public void The_password_is_not_in_the_database()
     {
         _users.Add("alice", Password, Role.Viewer);
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
 
         Assert.DoesNotContain(Password, File.ReadAllText(Path.Combine(_root, "server.db")));
     }
@@ -89,6 +89,23 @@ public sealed class AccountTests : IDisposable
 
         _clock.Now += UserStore.LockoutFor + TimeSpan.FromSeconds(1);
         Assert.Equal(SignInVerdict.Ok, _users.SignIn("alice", Password).Verdict);
+    }
+
+    /// <summary>
+    /// A name that is no account locks as an account does. Only accounts could be locked, so five wrong passwords told a
+    /// guesser whether a name was one: the page says "too many wrong passwords" for a lockout and nothing else.
+    /// </summary>
+    [Fact]
+    public void A_name_that_is_no_account_locks_as_an_account_does()
+    {
+        for (var i = 0; i < UserStore.FailuresBeforeLockout - 1; i++)
+            Assert.Equal(SignInVerdict.Wrong, _users.SignIn("nobody", "guess " + i + "xxxxxxxx").Verdict);
+
+        Assert.Equal(SignInVerdict.Locked, _users.SignIn("NOBODY", "the fifth guess!!").Verdict);
+        Assert.Equal(SignInVerdict.Locked, _users.SignIn("nobody", "and a sixth one!!").Verdict);
+
+        _clock.Now += UserStore.LockoutFor + TimeSpan.FromSeconds(1);
+        Assert.Equal(SignInVerdict.Wrong, _users.SignIn("nobody", "after the wait!!!").Verdict);
     }
 
     [Fact]
@@ -213,5 +230,28 @@ public sealed class AccountTests : IDisposable
 
         Assert.Contains("alice", said);
         Assert.Matches(@"bob\s+Viewer\s+disabled", said);
+    }
+
+    /// <summary>A locked account says until when as the window writes a time, "HH:mm", in every culture: fi-FI wrote "09.20".</summary>
+    [Fact]
+    public void A_locked_account_says_until_when_in_every_culture()
+    {
+        _users.Add("alice", Password, Role.Admin);
+        _users.Add("bob", Password, Role.Viewer);
+        // Locked from now: the list says a lockout only while it lasts, by the machine's clock.
+        _clock.Now = DateTimeOffset.UtcNow;
+        for (var i = 0; i < UserStore.FailuresBeforeLockout; i++)
+            _users.SignIn("bob", "guess " + i + "xxxxxxxx");
+        var was = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("fi-FI");
+            var (_, said, _) = Run(["--list-users"]);
+            Assert.Matches(@"bob\s+Viewer\s+locked until \d{2}:\d{2}", said);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = was;
+        }
     }
 }

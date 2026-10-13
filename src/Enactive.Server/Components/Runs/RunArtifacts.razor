@@ -1,0 +1,86 @@
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerStaging Staging
+
+@* The run's Artifacts tab (MainWindow.axaml 616-688): the files it wrote, each with Review and Delete (WrittenFiles), a
+   file a rejected step put back saying so and offering nothing - and, once the run has ended, the changes it proposed and
+   the service kept (ServerStaging), amber down the edge while they wait for a person, each with its diff, Apply and
+   Reject. A staging run's proposals are never listed as files it wrote: the file on disk is the person's, unchanged, and
+   Delete would have deleted it. While the run goes they are only counted here: the store is still being written, and the
+   service refuses to apply them then anyway. Every action is the service's to decide; what it said is under the list. *@
+
+<div class="artifacts">
+    @if (Said is { Length: > 0 } said)
+    {
+        <p class="said" role="alert">@said</p>
+    }
+
+    @if (Files.Written.Count == 0 && _state is not { Files.Count: > 0 } && (Ended || Files.Staged.Count == 0))
+    {
+        <p class="hint">Nothing written yet.</p>
+    }
+
+    <WrittenFiles Root="@Root" Paths="Files.Written" PutBack="Files.PutBack" />
+
+    @if (!Ended && Files.Staged.Count > 0)
+    {
+        <p class="hint proposed-while-running">@ProposedWhileRunning(Files.Staged.Count)</p>
+    }
+
+    @if (_state is { Files.Count: > 0 } state)
+    {
+        <StagedChanges Files="state.Files" CanDecide="state.CanDecide" Busy="state.Busy" OnAct="ActAsync" />
+    }
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The run's workspace, where its files are.</summary>
+    [Parameter, EditorRequired] public string Root { get; set; } = "";
+
+    /// <summary>The run's files - written, put back, proposed (RunPanel.Files).</summary>
+    [Parameter] public RunFilesView Files { get; set; } = RunFilesView.Empty;
+
+    /// <summary>The run, whose kept proposals are named by its id (ServerStaging.Begin).</summary>
+    [Parameter] public Guid RunId { get; set; }
+
+    /// <summary>Over: its proposals can be shown and decided.</summary>
+    [Parameter] public bool Ended { get; set; }
+
+    private StagedSetState? _state;
+    private (Guid Run, bool Ended)? _read;
+    private string? _problem;
+
+    private string? Said => _state?.Said ?? _problem;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var user = (await Auth).User;
+        // Read once the run is over, and once only: they are on disk, and the page is drawn again at every event.
+        if (_read != (RunId, Ended))
+        {
+            _read = (RunId, Ended);
+            _state = null;
+            _problem = null;
+            if (!Ended)
+                return;
+            var state = new StagedSetState(Staging, user, Root, RunId.ToString("N"));
+            state.Load();
+            _state = state;
+            // No set is the common case - a run in a folder that does not stage, or one whose proposals are all decided - and
+            // says nothing; a set that cannot be read says why.
+            _problem = state.Set is null && state.Problem is { } problem
+                       && problem.StartsWith("These proposals cannot be read", StringComparison.Ordinal) ? problem : null;
+        }
+    }
+
+    /// <summary>What a staging run's proposals are while it goes: counted, to apply or reject here once it is over.</summary>
+    internal static string ProposedWhileRunning(int count)
+        => count == 1
+            ? "1 change proposed - to apply or reject here once the run is over."
+            : $"{count.ToString(System.Globalization.CultureInfo.InvariantCulture)} changes proposed - to apply or reject here once the run is over.";
+
+    private Task ActAsync((StagedFile File, bool Apply) act) => _state!.ActAsync(act.File, act.Apply, CancellationToken.None);
+}

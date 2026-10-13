@@ -1,5 +1,6 @@
 namespace Enactive.Remote.Gateway.Services;
 
+using System.Globalization;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway.Storage;
@@ -737,7 +738,7 @@ public sealed class HostService(Database database, TimeProvider? clock = null, L
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > max)
         {
-            throw GatewayFault.MalformedEvent($"'{field}' must be 1 to {max:N0} characters.");
+            throw GatewayFault.MalformedEvent($"'{field}' must be 1 to {max.ToString("N0", CultureInfo.InvariantCulture)} characters.");
         }
     }
 

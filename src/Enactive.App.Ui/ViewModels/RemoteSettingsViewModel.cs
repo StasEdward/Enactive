@@ -1,8 +1,10 @@
 namespace Enactive.App.Ui.ViewModels;
 
+using Enactive.Application;
 using Enactive.Application.Mvvm;
 using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Host;
+using Enactive.Settings;
 
 /// <summary>
 /// The Remote access pane: whether this computer answers a phone, and the connection code that says
@@ -18,18 +20,30 @@ using Enactive.Remote.Host;
 /// a key store changed by a code whose settings were then cancelled would hold a trusted device and a
 /// grant for a computer the settings do not name. What was stored is shown read only afterwards; the
 /// token itself never is, and neither is the code, which holds the token and the pairing secret.</para>
+///
+/// <para>A view model of its own, beside the settings' (<see cref="IHostSettingsPane"/>): the rest of the settings
+/// are shared with the service, which pairs with no gateway, and a part of a class cannot follow it into another
+/// assembly. It edits the same working copy of the settings - <c>working</c> is the copy the settings' view model
+/// edits and saves.</para>
 /// </summary>
-internal sealed partial class SettingsViewModel
+internal sealed class RemoteSettingsViewModel : ObservableObject, IHostSettingsPane
 {
-    private const int SectionRemote = 9;
+    private readonly AppSettings _working;
 
-    public bool IsRemote => Section == SectionRemote;
+    public RemoteSettingsViewModel(AppSettings working)
+    {
+        _working = working;
+        TestRemoteCommand = new(() => _ = TestRemoteAsync());
+        ConnectRemoteCommand = new(() => _ = ConnectRemoteAsync());
 
-    public RelayCommand ShowRemoteCommand { get; private set; } = null!;
+        _remoteEnabled = _working.RemoteAccess.Enabled;
 
-    public RelayCommand TestRemoteCommand { get; private set; } = null!;
+        Revalidate();
+    }
 
-    public RelayCommand ConnectRemoteCommand { get; private set; } = null!;
+    public RelayCommand TestRemoteCommand { get; }
+
+    public RelayCommand ConnectRemoteCommand { get; }
 
     /// <summary>The trusted devices and Add a device.</summary>
     public RemoteDevicesViewModel RemoteDeviceList { get; } = new();
@@ -126,7 +140,11 @@ internal sealed partial class SettingsViewModel
     public string RemoteProblem
     {
         get => _remoteProblem;
-        private set => Set(ref _remoteProblem, value);
+        private set
+        {
+            if (Set(ref _remoteProblem, value))
+                OnPropertyChanged(nameof(HasRemoteProblem));
+        }
     }
 
     public bool HasRemoteProblem => !string.IsNullOrEmpty(RemoteProblem);
@@ -157,7 +175,7 @@ internal sealed partial class SettingsViewModel
             if (Set(ref _remoteBusy, value))
             {
                 OnPropertyChanged(nameof(CanUseRemote));
-                SaveCommand?.RaiseCanExecuteChanged();
+                BusyChanged?.Invoke();
                 RemoteDeviceList.PaneBusy = value;
             }
         }
@@ -165,20 +183,15 @@ internal sealed partial class SettingsViewModel
 
     public bool CanUseRemote => !RemoteBusy;
 
-    private void InitializeRemote()
+    bool IHostSettingsPane.Busy => RemoteBusy;
+
+    public event Action? BusyChanged;
+
+    /// <summary>Opening the pane reads the devices again: the connection comes and goes while the window is open.</summary>
+    public void Shown()
     {
-        ShowRemoteCommand = new(() =>
-        {
-            Section = SectionRemote;
-            RemoteDeviceList.RefreshConnection();
-            _ = RemoteDeviceList.RefreshAsync();
-        });
-        TestRemoteCommand = new(() => _ = TestRemoteAsync());
-        ConnectRemoteCommand = new(() => _ = ConnectRemoteAsync());
-
-        _remoteEnabled = _working.RemoteAccess.Enabled;
-
-        Revalidate();
+        RemoteDeviceList.RefreshConnection();
+        _ = RemoteDeviceList.RefreshAsync();
     }
 
     /// <summary>
@@ -262,18 +275,7 @@ internal sealed partial class SettingsViewModel
         }
     }
 
-    /// <summary>
-    /// Every pane's complaint, recomputed. Shared because Save consults them together and a
-    /// second method would be a second thing to forget when a pane is added.
-    /// </summary>
-    private void Revalidate()
-    {
-        RemoteProblem = RemoteFault() ?? string.Empty;
-        OnPropertyChanged(nameof(HasRemoteProblem));
-
-        SmtpProblem = SmtpValidation();
-        OnPropertyChanged(nameof(SmtpState));
-    }
+    private void Revalidate() => RemoteProblem = RemoteFault() ?? string.Empty;
 
     /// <summary>
     /// What would stop this from connecting. Only said when it is turned on - settings that are
@@ -296,10 +298,10 @@ internal sealed partial class SettingsViewModel
     }
 
     /// <summary>
-    /// Writes the pane back. Called from <see cref="Save"/>, before the settings are handed over. Only
-    /// the switch: the address, the computer id and the token are written by Connect, from a code.
+    /// Writes the pane back, before the settings are handed over. Only the switch: the address, the
+    /// computer id and the token are written by Connect, from a code.
     /// </summary>
-    private void SaveRemote() => _working.RemoteAccess.Enabled = RemoteEnabled;
+    public void Save(AppSettings working) => working.RemoteAccess.Enabled = RemoteEnabled;
 
     private static string Shown(string value) => string.IsNullOrEmpty(value) ? "not connected" : value;
 }

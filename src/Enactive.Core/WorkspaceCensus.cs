@@ -95,7 +95,7 @@ public static class WorkspaceCensus
         // Said, not silently applied. A census that stopped counting and did not mention it is a
         // number presented as the whole truth, which is the one thing a planner must not be given.
         if (cutAfter is { } counted && lines.Count > 0)
-            lines.Add($"(counted the first {counted:N0} files; there are more)");
+            lines.Add($"(counted the first {Invariant.N0(counted)} files; there are more)");
 
         return lines;
     }

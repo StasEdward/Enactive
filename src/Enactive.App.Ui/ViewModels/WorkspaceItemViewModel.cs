@@ -1,6 +1,7 @@
 ﻿namespace Enactive.App.Ui.ViewModels;
 
 using Enactive.Application.Mvvm;
+using Enactive.Application.Projections;
 using Enactive.Workspace;
 
 /// <summary>
@@ -23,7 +24,7 @@ internal sealed class WorkspaceItemViewModel
 
         Name = entry.Name;
         Path = entry.RootPath;
-        Detail = exists ? entry.RootPath : "Folder not found · " + entry.RootPath;
+        Detail = WorkspaceRows.Detail(entry, exists);
 
         SwitchCommand = new RelayCommand(() => switchTo(entry.RootPath));
         RenameCommand = new RelayCommand(() => rename(entry.RootPath));
@@ -38,8 +39,8 @@ internal sealed class WorkspaceItemViewModel
     public string Path { get; }
     public string Detail { get; }
 
-    /// <summary>A missing folder outranks being current: the name is already red, and the edge agrees (Palette.WorkspaceEdge).</summary>
-    public WorkspacePlace Place => !Exists ? WorkspacePlace.Missing : IsCurrent ? WorkspacePlace.Current : WorkspacePlace.Other;
+    /// <summary>The row's edge (Palette.WorkspaceEdge), by WorkspaceRows.Place - which the service's switcher uses too.</summary>
+    public WorkspacePlace Place => WorkspaceRows.Place(Exists, IsCurrent);
 
     public RelayCommand SwitchCommand { get; }
     public RelayCommand RenameCommand { get; }

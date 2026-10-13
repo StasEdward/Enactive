@@ -1,0 +1,65 @@
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@implements IDisposable
+@inject AuthenticationStateProvider Auth
+@inject NavigationManager Navigation
+
+@* The desktop's title strip on the web: the loop, the name, which service this is, and who is signed in. *@
+<header class="top">
+    @* The workspace column's button on a narrow screen, where the column is a drawer (theme.css shows it only there): a
+       CSS width, not a script's, so turning a tablet round needs no trip to the service. Drawn only while a screen with
+       a drawer is shown - on the others it would open nothing. *@
+    @if (Drawer is { Offered: true } drawer)
+    {
+        <button type="button" class="drawer-button" aria-label="Workspace and runs" title="Workspace and runs"
+                aria-controls="@DrawerState.Id" aria-expanded="@(drawer.IsOpen ? "true" : "false")" @onclick="drawer.Toggle">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M 4,6 H 20 M 4,12 H 20 M 4,18 H 20" /></svg>
+        </button>
+    }
+    <a class="mark" href="/"><img src="brand/mark-loop.svg" alt="" />Enactive</a>
+    <span class="host">@Host</span>
+    @* Only on a live page: a page drawn statically (sign-in) has no connection, and "Connected" there was untrue. *@
+    @if (RendererInfo.IsInteractive)
+    {
+        <ReconnectState />
+    }
+    @if (_user?.Identity?.IsAuthenticated == true)
+    {
+        <span class="who">@_user.Identity.Name</span>
+        <span class="pill tone-plain">@_user.FindFirstValue(ClaimTypes.Role)</span>
+        <form method="post" action="/signout" class="signout">
+            <AntiforgeryToken />
+            <button type="submit">Sign out</button>
+        </form>
+    }
+</header>
+
+@code {
+    private ClaimsPrincipal? _user;
+
+    /// <summary>The layout's workspace drawer; none where a page is drawn without the layout (sign-in has no top bar).</summary>
+    [CascadingParameter] public DrawerState? Drawer { get; set; }
+
+    // The address the person typed to reach the service, which is the name they know it by.
+    private string Host => new Uri(Navigation.BaseUri).Host;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Auth.AuthenticationStateChanged += OnChanged;
+        if (Drawer is not null)
+            Drawer.Changed += OnDrawerChanged;
+        _user = (await Auth.GetAuthenticationStateAsync()).User;
+    }
+
+    private void OnChanged(Task<AuthenticationState> state)
+        => _ = InvokeAsync(async () => { _user = (await state).User; StateHasChanged(); });
+
+    private void OnDrawerChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Auth.AuthenticationStateChanged -= OnChanged;
+        if (Drawer is not null)
+            Drawer.Changed -= OnDrawerChanged;
+    }
+}

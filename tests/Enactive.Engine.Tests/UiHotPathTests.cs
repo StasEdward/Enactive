@@ -2,6 +2,7 @@ namespace Enactive.Engine.Tests;
 
 using System.Collections.Specialized;
 using Enactive.Application;
+using Enactive.Application.Mvvm;
 using Enactive.App.Ui;
 using Enactive.Core.Diagnostics;
 using Enactive.Workspace;

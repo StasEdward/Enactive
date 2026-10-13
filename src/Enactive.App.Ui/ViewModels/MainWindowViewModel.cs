@@ -3,6 +3,7 @@ namespace Enactive.App.Ui.ViewModels;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using Enactive.Agents;
+using Enactive.Application;
 using Enactive.Application.Projections;
 using Enactive.Core.History;
 using Enactive.Workspace;
@@ -92,9 +93,7 @@ internal sealed class DiffLineViewModel
     public DiffLineViewModel(string text)
     {
         Text = text;
-        Kind = text.StartsWith('+') ? DiffLineKind.Added
-             : text.StartsWith('-') ? DiffLineKind.Removed
-             : DiffLineKind.Context;
+        Kind = DiffLines.Kind(text);
     }
 
     public string Text { get; }
@@ -198,7 +197,8 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     public MainWindowViewModel()
     {
-        foreach (var verb in new[] { "Fix", "Build", "Investigate", "Explain", "Refactor" })
+        // The verbs and what a chip does are the service's bar's too (CommandVerbs).
+        foreach (var verb in CommandVerbs.All)
             Verbs.Add(new VerbChipViewModel(verb, PrefixInput));
 
         RunCommand = new RelayCommand(() => RunRequested?.Invoke(), () => !IsBusy);
@@ -441,7 +441,7 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     public bool HasUnread => InboxUnread > 0;
 
-    public string InboxTooltip => InboxUnread > 0 ? $"Inbox — {InboxUnread} unread" : "Inbox";
+    public string InboxTooltip => InboxRows.Tooltip(InboxUnread);
 
     public RelayCommand TimelineCommand { get; }
     public RelayCommand LogCommand { get; }
@@ -513,8 +513,8 @@ internal sealed class MainWindowViewModel : ObservableObject
     /// </summary>
     public PastRunViewModel? PastRun { get => _pastRun; private set => Set(ref _pastRun, value); }
 
-    /// <summary>The workspace's repository, at the foot of the window (RepoBarViewModel).</summary>
-    public RepoBarViewModel Repo { get; } = new();
+    /// <summary>The workspace's repository, at the foot of the window (RepoBar).</summary>
+    public RepoBar Repo { get; } = new();
 
     public bool IsViewingPast
     {
@@ -552,7 +552,7 @@ internal sealed class MainWindowViewModel : ObservableObject
     public int ArtifactCount => Artifacts.Count;
 
     /// <summary>The tab carries its own count, so an empty run does not advertise "Artifacts (0)".</summary>
-    public string ArtifactsTabLabel => Artifacts.Count == 0 ? "Artifacts" : $"Artifacts ({Artifacts.Count})";
+    public string ArtifactsTabLabel => RunFigures.ArtifactsTab(Artifacts.Count);
 
     /// <summary>Tile text. A tile shows a value under a label, so the number arrives ready to draw.</summary>
     public string ArtifactCountText => Artifacts.Count.ToString();
@@ -577,13 +577,9 @@ internal sealed class MainWindowViewModel : ObservableObject
     public int PromptTokens { get; private set; }
     public int CompletionTokens { get; private set; }
 
-    public string TokensText => PromptTokens + CompletionTokens == 0
-        ? "—"
-        : TokenCounts.Compact(PromptTokens + CompletionTokens);
+    public string TokensText => RunFigures.Tokens(RunFigures.Reported(PromptTokens, CompletionTokens));
 
-    public string TokensDetail => PromptTokens + CompletionTokens == 0
-        ? "nothing reported"
-        : $"{TokenCounts.Compact(PromptTokens)} in · {TokenCounts.Compact(CompletionTokens)} out";
+    public string TokensDetail => RunFigures.TokensDetail(RunFigures.Reported(PromptTokens, CompletionTokens));
 
     public void AddUsage(int promptTokens, int completionTokens,
         string? providerId = null, ModelReach where = ModelReach.Unknown)
@@ -682,11 +678,7 @@ internal sealed class MainWindowViewModel : ObservableObject
     /// can walk away from it the reason stops being obvious: the thing occupying Run may be
     /// happening in a workspace that is not on screen.
     /// </summary>
-    public string RunTip
-        => IsBusy
-            ? "A run is already in progress. Enactive runs one foreground run at a time, and that "
-              + "run may be in another workspace. Run in background is not held by it."
-            : "Run this here, and watch it.";
+    public string RunTip => RunButton.Tip(IsBusy);
 
     /// <summary>Shows the agent pill, unless it already says exactly this.</summary>
     public void SetAgent(string label, AgentKind kind)
@@ -700,7 +692,7 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     private void PrefixInput(string verb)
     {
-        InputText = string.IsNullOrWhiteSpace(InputText) ? verb + " " : verb + " " + InputText;
+        InputText = CommandVerbs.Prefix(InputText, verb);
         InputFocusRequested?.Invoke();
     }
 

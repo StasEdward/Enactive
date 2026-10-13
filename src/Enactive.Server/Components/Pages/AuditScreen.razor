@@ -1,0 +1,89 @@
+@page "/audit"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = "Admin")]
+@using System.Globalization
+@using Enactive.Server.Accounts
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AccountAdmin Service
+
+<PageTitle>Audit - Enactive</PageTitle>
+
+@* Who did what on this service (web only - the desktop has none), an Admin's, as AccountAdmin hands it out: newest first,
+   in the columns the old page had - when, who, what, about what, from where. *@
+
+<div class="admin-screen admin-wide">
+    <h1 class="admin-title">Audit</h1>
+    @if (!_loaded)
+    {
+        // Nothing until the role is checked: an unchecked page is a closed one.
+    }
+    else if (_refusal is { } refusal)
+    {
+        <p class="said" role="alert">@refusal</p>
+    }
+    else
+    {
+        <p class="hint">Who did what on this service, newest first: sign-ins, runs started and cancelled, questions answered, history and account changes.</p>
+        @if (_trail.Count == 0)
+        {
+            <p class="hint">Nothing is recorded yet.</p>
+        }
+        else
+        {
+            @* A box of its own that scrolls sideways: five columns do not fit a phone, and wider than the screen the table
+               made the whole page scroll sideways, the bars with it. *@
+            <div class="audit-scroll">
+                <table class="audit-table" aria-label="Audit trail">
+                    <thead>
+                        <tr><th scope="col">When</th><th scope="col">Account</th><th scope="col">Action</th><th scope="col">Detail</th><th scope="col">From</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entry in _trail)
+                        {
+                            <tr>
+                                @* Invariant: the current culture's time separator made it "12.34.56" on one machine and "12:34:56" on another. *@
+                                <td class="audit-when">@entry.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)</td>
+                                <td>@entry.Account</td>
+                                <td>@entry.Action</td>
+                                <td class="audit-detail">@entry.Detail</td>
+                                <td class="audit-when">@entry.Remote</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (_more)
+            {
+                <p class="hint">The newest @Newest entries are shown. The older ones are kept in server.db, in the service's data folder.</p>
+            }
+        }
+    }
+</div>
+
+@code {
+    /// <summary>
+    /// The entries drawn at once. The trail is never trimmed (nothing deletes from it), so after a year of sign-ins the
+    /// whole of it would be tens of thousands of rows sent over the page's connection; the old page drew the same 200.
+    /// </summary>
+    public const int Newest = 200;
+
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    // Closed until the gate has run: while the person is still being read, a null refusal would have meant "allowed",
+    // and the page drew what only an Admin is shown before it knew who was asking.
+    private bool _loaded;
+    private string? _refusal;
+    private IReadOnlyList<(DateTimeOffset At, string Account, string Action, string? Detail, string? Remote)> _trail = [];
+    private bool _more;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await Auth).User;
+        _refusal = Service.Refusal(user);
+        // One more than is drawn, to know whether there are more: at exactly the limit the page said older entries were
+        // kept when there were none.
+        var read = _refusal is null ? Service.Trail(user, Newest + 1) : [];
+        _more = read.Count > Newest;
+        _trail = read.Take(Newest).ToList();
+        _loaded = true;
+    }
+}

@@ -1,5 +1,6 @@
 namespace Enactive.Application.Projections;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using Enactive.Core.Chat;
 
 /// <summary>
@@ -85,15 +86,15 @@ internal sealed class ModelPerformance : Mvvm.ObservableObject
         if (m.Timings?.GenerationSeconds is > 0 and var gs && (m.Timings.GenerationTokens ?? m.CompletionTokens) is { } n)
         { t.Generation += gs; t.Generated += n; t.TimedCalls++; }
         var row = new ModelPerformanceRow(m.ProviderId, m.Model,
-            t.Generation > 0 ? $"{t.Generated / t.Generation:N1} T/s"
-                : t.MeasuredRequest > 0 ? $"≈ {t.RequestOutput / t.MeasuredRequest:N1} T/s" : "—",
+            t.Generation > 0 ? Invariant($"{t.Generated / t.Generation:N1} T/s")
+                : t.MeasuredRequest > 0 ? Invariant($"≈ {t.RequestOutput / t.MeasuredRequest:N1} T/s") : "—",
             t.Generation > 0 || t.MeasuredRequest == 0 ? "Generation avg" : "Whole request avg",
             $"Prompt Σ  {Seconds(t.PromptCalls > 0 ? t.Prompt : null)}   ·   Decode Σ  {Seconds(t.TimedCalls > 0 ? t.Generation : null)}",
-            $"Tokens  {(t.HasInput ? t.Input.ToString("N0") : "—")} in / {(t.HasOutput ? t.Output.ToString("N0") : "—")} out",
-            $"Cache  {(t.CacheInput > 0 ? (100.0 * t.Cached / t.CacheInput).ToString("N1") + "%" : "—")}   ·   Load Σ  {Seconds(t.LoadCalls > 0 ? t.Load : null)}",
+            $"Tokens  {(t.HasInput ? t.Input.ToString("N0", CultureInfo.InvariantCulture) : "—")} in / {(t.HasOutput ? t.Output.ToString("N0", CultureInfo.InvariantCulture) : "—")} out",
+            $"Cache  {(t.CacheInput > 0 ? (100.0 * t.Cached / t.CacheInput).ToString("N1", CultureInfo.InvariantCulture) + "%" : "—")}   ·   Load Σ  {Seconds(t.LoadCalls > 0 ? t.Load : null)}",
             $"First delta avg  {Seconds(t.FirstCalls > 0 ? t.First / t.FirstCalls : null)}",
-            $"Request avg  {Seconds(t.Request / t.Calls)}   ·   {t.Calls} calls",
-            $"Server timings: prompt {t.PromptCalls}/{t.Calls}, decode {t.TimedCalls}/{t.Calls}. " +
+            Invariant($"Request avg  {Seconds(t.Request / t.Calls)}   ·   {t.Calls} calls"),
+            Invariant($"Server timings: prompt {t.PromptCalls}/{t.Calls}, decode {t.TimedCalls}/{t.Calls}. ") +
             "Generation speed = total timed output tokens / total server decode seconds. " +
             "Without server decode timing, ≈ T/s = total reported output tokens / total duration of those requests, " +
             "including queue, prompt processing and network time; this is not server generation speed. " +
@@ -102,7 +103,11 @@ internal sealed class ModelPerformance : Mvvm.ObservableObject
         var old = Rows.FirstOrDefault(x => x.Provider == m.ProviderId && x.Model == m.Model);
         if (old is null) Rows.Add(row); else Rows[Rows.IndexOf(old)] = row;
     }
-    private static string Seconds(double? n) => n is { } v ? $"{v:N2} s" : "—";
+    private static string Seconds(double? n) => n is { } v ? Invariant($"{v:N2} s") : "—";
+
+    // The same in every culture: the service draws these in the server's culture, not the reader's, and "1 000,0 T/s" on
+    // one machine and "1,000.0 T/s" on another was one speed said two ways (as TokenCounts).
+    private static string Invariant(FormattableString text) => text.ToString(CultureInfo.InvariantCulture);
     private sealed class Totals
     {
         public int Calls, FirstCalls, PromptCalls, TimedCalls, LoadCalls;

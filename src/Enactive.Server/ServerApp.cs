@@ -38,17 +38,14 @@ internal static class ServerApp
         // Into the Application log as "Enactive", the source the installer registers; left to the default it is the
         // assembly's name, which nothing registered, and the service's own entries were lost.
         builder.Services.Configure<Microsoft.Extensions.Logging.EventLog.EventLogSettings>(s => s.SourceName = ServiceName);
-        builder.Services.AddSingleton(options);
-        builder.Services.AddSingleton(new ServerFolders(dataFolder));
+        // Before the services, as it always was: the authentication state provider of ServerAuth must be the one
+        // registered last, and the components' own registrations are not to land after it.
+        builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+        AddServices(builder.Services, options, dataFolder);
 
-        // One log for the process: the service's own lines and the engine's, kept recent in memory for the log page and
-        // written to the daily file. They were two - the page would have shown the engine and not the request that
-        // started its run.
-        var logFile = new FileLogSink(Path.Combine(dataFolder, "logs", "server"));
-        var log = new LogHub(minLevel: Enactive.Core.Diagnostics.LogLevel.Debug, downstream: [logFile]);
-        builder.Services.AddSingleton(logFile);
-        builder.Services.AddSingleton(log);
-        builder.Logging.AddProvider(new FileLoggerProvider(log));
+        // The log file's provider, from the one log AddServices registered: the service's own lines go where the
+        // engine's do.
+        builder.Services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider>(sp => new FileLoggerProvider(sp.GetRequiredService<LogHub>()));
         // The framework says every request at Information - a line per page, script and hub message - which would push
         // the runs out of the log the page keeps. Its warnings and errors still come through; the host's start and stop do.
         builder.Logging.AddFilter("Microsoft.AspNetCore", Microsoft.Extensions.Logging.LogLevel.Warning);
@@ -68,64 +65,15 @@ internal static class ServerApp
                     ?? throw new InvalidOperationException("The service does not listen without a certificate.")));
         });
 
-        // The keys that protect sign-in cookies and the antiforgery tokens: in the service's data folder, encrypted
-        // for its account. Left to the default they went into the profile's ASP.NET folder, apart from everything else
-        // the service keeps and from its backups.
-        builder.Services.AddDataProtection()
-            .SetApplicationName(ServiceName)
-            .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataFolder, "keys")))
-            .ProtectKeysWithDpapi();
-
-        builder.Services.AddRazorComponents().AddInteractiveServerComponents();
-
-        // The accounts and the audit log (server.db), signing in, the roles (ServerAuth).
-        ServerAuth.Add(builder.Services, new UserStore(dataFolder));
-
-        // Runs: the engine (built when first asked for, from the service account's settings), the line of runs, and
-        // the one interface every action on a run goes through (IRunControl) - which checks who is asking.
-        builder.Services.AddSingleton(sp => new Runs.ServerEngine(dataFolder, sp.GetRequiredService<LogHub>()));
-        builder.Services.AddSingleton(new Enactive.Application.RunQueue(options.MaxActiveRuns));
-        builder.Services.AddSingleton<Runs.ServerStaging>();
-        builder.Services.AddSingleton<Runs.IRunExecutor>(sp => new Runs.EngineExecutor(sp.GetRequiredService<Runs.ServerEngine>(),
-            sp.GetRequiredService<Runs.ServerStaging>()));
-        builder.Services.AddSingleton<Runs.IRunControl>(sp => new Runs.RunControl(sp.GetRequiredService<UserStore>(),
-            sp.GetRequiredService<Enactive.Application.RunQueue>(), sp.GetRequiredService<Runs.IRunExecutor>(),
-            sp.GetRequiredService<ILogger<Runs.RunControl>>(), TimeSpan.FromMinutes(options.QuestionWaitMinutes),
-            sp.GetRequiredService<Runs.WorkspaceRoots>()));
-        builder.Services.AddSingleton(new Runs.WorkspaceRoots(options.WorkspaceRoots));
-        builder.Services.AddSingleton<Runs.ServerHistory>();
-        builder.Services.AddSingleton<Runs.ServerInbox>();
-        builder.Services.AddSingleton<AccountAdmin>();
-        builder.Services.AddSingleton<Runs.ServerSettings>();
-        builder.Services.AddSingleton<Runs.ServerLibrary>();
-        builder.Services.AddSingleton<Runs.ServerLogs>();
-        builder.Services.AddHostedService<Runs.RunsStopWithTheService>();
-        // The schedules, every minute (ServerScheduler).
-        builder.Services.AddSingleton<Runs.ServerScheduler>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<Runs.ServerScheduler>());
-        // What arrives in the inbox, by mail, when server.json names who to tell (MailNotices).
-        builder.Services.AddHostedService(sp => new Runs.MailNotices(sp.GetRequiredService<Runs.ServerEngine>(), options,
-            sp.GetRequiredService<ServerFolders>(), sp.GetRequiredService<ILogger<Runs.MailNotices>>()));
-        builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(30));
-
-        builder.Services.AddSingleton(sp => new NetworkGate(options.Subnets(), options.HostNames, sp.GetRequiredService<ILogger<NetworkGate>>()));
-
-        // Only the names the service is reached by, in the Host header. A name anyone can point at the service's
-        // address (DNS rebinding) would otherwise make a page of theirs same-origin with it.
-        builder.Services.AddHostFiltering(o =>
-        {
-            o.AllowedHosts = options.HostNames.ToList();
-            o.AllowEmptyHosts = false;
-        });
-
         adjust?.Invoke(builder);
 
         var app = builder.Build();
+        // A page's listener that throws is written where the service's own lines go (Runs.Listeners).
+        Runs.Listeners.Log = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(Runs.Listeners).FullName!);
 
-        // First, before anything answers: the subnets and the origin (NetworkGate), then the Host header.
+        // First, before anything answers: the subnets, the origin, the Host header (NetworkGate).
         var gate = app.Services.GetRequiredService<NetworkGate>();
         app.Use((context, next) => gate.InvokeAsync(context, _ => next()));
-        app.UseHostFiltering();
 
         // Browsers are told to come back over HTTPS only, for a year; the service never answers plain HTTP anyway.
         app.UseHsts();
@@ -163,114 +111,169 @@ internal static class ServerApp
                 return Results.LocalRedirect("/signin");
             });
 
-        // The inbox's answer and crash recovery's resume: form posts from static pages, with their antiforgery token
-        // checked here (as for sign-out), the person's role checked by the services. Each goes on to the run's page.
-        app.MapPost("/inbox/answer", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerInbox inbox) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var (said, run) = await inbox.AnswerAsync(context.User, form["ws"].ToString(),
-                Guid.TryParse(form["item"], out var item) ? item : Guid.Empty, form["option"].ToString(), context.RequestAborted);
-            return run is { } id ? Results.LocalRedirect($"/runs/{id}") : Results.LocalRedirect("/inbox?said=" + Uri.EscapeDataString(said));
-        });
-        app.MapPost("/runs/resume", async (HttpContext context, IAntiforgery antiforgery, Runs.IRunControl runs) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var workspace = form["ws"].ToString();
-            var (run, refusal) = await runs.ResumeAsync(context.User, workspace,
-                Guid.TryParse(form["run"], out var id) ? id : Guid.Empty);
-            return run is not null
-                ? Results.LocalRedirect($"/runs/{run.Id}")
-                : Results.LocalRedirect("/" + Components.Links.History(workspace) + "&said=" + Uri.EscapeDataString(refusal ?? ""));
-        });
-
-        // A kept proposal applied or rejected (ServerStaging checks the role and the run's end), back to its page.
-        app.MapPost("/proposals/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerStaging staging) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var (workspace, set) = (form["ws"].ToString(), form["set"].ToString());
-            var said = await staging.ActAsync(context.User, workspace, set,
-                Guid.TryParse(form["change"], out var change) ? change : Guid.Empty, form["act"] == "apply", context.RequestAborted);
-            return Results.LocalRedirect("/" + Components.Links.Proposals(workspace, set) + "&said=" + Uri.EscapeDataString(said));
-        });
-
-        // The history's actions - try again, run again, delete a run or a file, forget an unfinished run - after the
-        // confirmation page asked its question where one is due.
-        app.MapPost("/history/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerHistory history) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var workspace = form["ws"].ToString();
-            var (said, run) = await history.DoAsync(context.User, workspace, form["act"].ToString(),
-                Guid.TryParse(form["id"], out var id) ? id : Guid.Empty, form["path"].ToString(), form["choice"].ToString(),
-                context.RequestAborted);
-            return run is { } started
-                ? Results.LocalRedirect($"/runs/{started}")
-                : Results.LocalRedirect("/" + Components.Links.History(workspace) + "&said=" + Uri.EscapeDataString(said));
-        });
-
-        // The accounts page's changes: an Admin's, checked by AccountAdmin; the token here. Not at the page's own
-        // address: a page also takes form posts, and two endpoints on one address was a 500 (found by tests/server-e2e).
-        app.MapPost("/admin/users/act", async (HttpContext context, IAntiforgery antiforgery, AccountAdmin accounts) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var said = accounts.Do(context.User, form["act"].ToString(), form["name"].ToString().Trim(),
-                form["role"].ToString(), form["password"].ToString(), form["again"].ToString());
-            return Results.LocalRedirect("/admin/users?said=" + Uri.EscapeDataString(said));
-        });
-
-        app.MapPost("/workspaces/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerHistory history) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var said = history.AddWorkspace(context.User, form["folder"].ToString());
-            return Results.LocalRedirect("/workspaces?said=" + Uri.EscapeDataString(said));
-        });
-
-        // A workspace's templates and schedules (ServerLibrary checks the role and the rules), each back to its page.
-        app.MapPost("/library/template/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerLibrary library) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var workspace = form["ws"].ToString();
-            var scope = Enum.TryParse<Enactive.Workspace.TemplateScope>(form["scope"], out var s) ? s : Enactive.Workspace.TemplateScope.Workspace;
-            var said = form["act"] == "delete"
-                ? library.DeleteTemplate(context.User, workspace, form["id"].ToString(), scope)
-                : library.SaveTemplate(context.User, workspace, form["json"].ToString(), scope).Said;
-            return Results.LocalRedirect("/" + Components.Links.Library(workspace) + "&said=" + Uri.EscapeDataString(said));
-        });
-        app.MapPost("/library/schedule/act", async (HttpContext context, IAntiforgery antiforgery, Runs.ServerLibrary library) =>
-        {
-            if (!await antiforgery.IsRequestValidAsync(context))
-                return Results.BadRequest();
-            var form = await context.Request.ReadFormAsync();
-            var workspace = form["ws"].ToString();
-            Guid? id = Guid.TryParse(form["id"], out var parsed) ? parsed : null;
-            var said = form["act"].ToString() switch
-            {
-                "on" => library.SwitchSchedule(context.User, workspace, id ?? Guid.Empty, on: true),
-                "off" => library.SwitchSchedule(context.User, workspace, id ?? Guid.Empty, on: false),
-                "delete" => library.DeleteSchedule(context.User, workspace, id ?? Guid.Empty),
-                _ => library.SaveSchedule(context.User, workspace, new Runs.ScheduleForm(id, form["name"].ToString(),
-                    form["work"].ToString(), form["repeat"].ToString(), form["time"].ToString(), form["day"].ToString(),
-                    form["date"].ToString(), form["tier"].ToString(), form["runLate"] == "true", form["parameters"].ToString())).Said
-            };
-            return Results.LocalRedirect("/" + Components.Links.Library(workspace) + "&said=" + Uri.EscapeDataString(said));
-        });
+        MapOldAddresses(app);
 
         app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
         return app;
     }
+
+    /// <summary>
+    /// Every service the application keeps, registered on any container: the pipeline's Build adds them to the web
+    /// host, and the component tests to bUnit's, so a page under test gets the services it has on the server - a copy of
+    /// the list in a test would pass while the real one lacked a service. What needs the web host itself (Kestrel, the
+    /// log providers, the static assets, the Razor components' endpoints) stays in Build.
+    /// </summary>
+    internal static void AddServices(IServiceCollection services, ServerOptions options, string dataFolder)
+    {
+        services.AddSingleton(options);
+        services.AddSingleton(new ServerFolders(dataFolder));
+
+        // One log for the process: the service's own lines and the engine's, kept recent in memory for the log page and
+        // written to the daily file. They were two - the page would have shown the engine and not the request that
+        // started its run.
+        // Made by the container, not handed to it ready-made: the container disposes only what it made, and at the
+        // service's stop the hub then drains its pump into the file and the file is closed. Registered as instances, the
+        // last lines before a stop were lost and the file stayed open to the end of the process.
+        services.AddSingleton(_ => new FileLogSink(Path.Combine(dataFolder, "logs", "server")));
+        services.AddSingleton(sp => new LogHub(minLevel: Enactive.Core.Diagnostics.LogLevel.Debug,
+            downstream: [sp.GetRequiredService<FileLogSink>()]));
+        // The keys that protect sign-in cookies and the antiforgery tokens: in the service's data folder, encrypted
+        // for its account. Left to the default they went into the profile's ASP.NET folder, apart from everything else
+        // the service keeps and from its backups.
+        services.AddDataProtection()
+            .SetApplicationName(ServiceName)
+            .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataFolder, "keys")))
+            .ProtectKeysWithDpapi();
+
+        // The accounts and the audit log (server.db), signing in, the roles (ServerAuth).
+        ServerAuth.Add(services, new UserStore(dataFolder));
+
+        // Runs: the engine (built when first asked for, from the service account's settings), the line of runs, and
+        // the one interface every action on a run goes through (IRunControl) - which checks who is asking.
+        services.AddSingleton(sp => new Runs.ServerEngine(dataFolder, sp.GetRequiredService<LogHub>()));
+        services.AddSingleton(new Enactive.Application.RunQueue(options.MaxActiveRuns));
+        services.AddSingleton<Runs.ServerStaging>();
+        services.AddSingleton<Runs.IRunExecutor>(sp => new Runs.EngineExecutor(sp.GetRequiredService<Runs.ServerEngine>(),
+            sp.GetRequiredService<Runs.ServerStaging>()));
+        services.AddSingleton<Runs.IRunControl>(sp => new Runs.RunControl(sp.GetRequiredService<UserStore>(),
+            sp.GetRequiredService<Enactive.Application.RunQueue>(), sp.GetRequiredService<Runs.IRunExecutor>(),
+            sp.GetRequiredService<ILogger<Runs.RunControl>>(), TimeSpan.FromMinutes(options.QuestionWaitMinutes),
+            sp.GetRequiredService<Runs.WorkspaceRoots>(),
+            (root, shown) => Runs.BarSettings.ChangedFor(sp.GetRequiredService<Runs.ServerEngine>(), root, shown),
+            known: sp.GetRequiredService<Runs.KnownWorkspaces>()));
+        services.AddSingleton(new Runs.WorkspaceRoots(options.WorkspaceRoots));
+        // Every page's lookup of a workspace: known to the service and under the roots.
+        services.AddSingleton<Runs.KnownWorkspaces>();
+        services.AddSingleton<Runs.ServerHistory>();
+        services.AddSingleton<Runs.WorkspaceIds>();
+        services.AddSingleton<Runs.ServerInbox>();
+        services.AddSingleton<AccountAdmin>();
+        services.AddSingleton<Runs.ServerSettings>();
+        services.AddSingleton<Runs.ServerLibrary>();
+        services.AddSingleton<Runs.ServerLogs>();
+        // The Timeline and Environment pages (ServerReports): the environment is the service's own machine, probed as the
+        // window probes its own.
+        services.AddSingleton<Enactive.Application.ProbeEnvironment>(new Enactive.Workspace.EnvironmentProbe().ProbeFullAsync);
+        services.AddSingleton<Runs.ServerReports>();
+        // The repository strips' reading, one for the service: GitHub is asked about a folder's branch at most every 15 s
+        // by every page together, not by each page on its own (Ui/RepoReads).
+        services.AddSingleton(_ => new Components.Ui.RepoReads());
+        // The live run's page moves its clock every second while the run goes (Runs/LiveRun).
+        services.AddSingleton(Components.Runs.LiveRunClock.EverySecond);
+        services.AddHostedService<Runs.RunsStopWithTheService>();
+        // The schedules, every minute (ServerScheduler).
+        services.AddSingleton<Runs.ServerScheduler>();
+        services.AddHostedService(sp => sp.GetRequiredService<Runs.ServerScheduler>());
+        // Proposed changes nobody decided in server.json's ProposalsKeptDays are dropped, and said (StagingRetention).
+        services.AddHostedService<Runs.StagingRetention>();
+        // What arrives in the inbox, by mail, when server.json names who to tell (MailNotices).
+        services.AddHostedService(sp => new Runs.MailNotices(sp.GetRequiredService<Runs.ServerEngine>(), options,
+            sp.GetRequiredService<ServerFolders>(), sp.GetRequiredService<ILogger<Runs.MailNotices>>()));
+        services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(30));
+
+        services.AddSingleton(sp => new NetworkGate(options.Subnets(), options.HostNames, sp.GetRequiredService<ILogger<NetworkGate>>()));
+
+        // The Host header is NetworkGate's, after the subnets. The framework's own host filter runs ahead of the whole
+        // pipeline when it has names to filter by, and answered a network the service does not answer with its
+        // "Invalid Hostname" page; told every name is allowed, it passes everything on to the gate.
+        services.Configure<Microsoft.AspNetCore.HostFiltering.HostFilteringOptions>(o => o.AllowedHosts = ["*"]);
+    }
+
+    /// <summary>
+    /// The addresses of the pages the web UI replaced, each sent on to the page that took its place - and nothing else is
+    /// left of those pages. They stay because links to them outlive them: a bookmark, a link in an earlier mail
+    /// (MailNotices), an address somebody wrote down. Each answers only somebody signed in - what a workspace's id is, is not
+    /// told to anybody else - and each lands on a page that says for itself whether the person's role may read it.
+    /// </summary>
+    private static void MapOldAddresses(WebApplication app)
+    {
+        void Redirect(string from, Func<HttpContext, Runs.ServerHistory, Runs.WorkspaceIds, string> to)
+            => app.MapGet(from, (HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids)
+                    => Results.LocalRedirect(to(context, history, ids)))
+                .RequireAuthorization(nameof(Role.Viewer));
+
+        // A workspace's history, and the list of workspaces: the Runs screen, which the workspace column is now. What the
+        // old page was told to say ("said") does not come along: any link could put words there, and the service would
+        // say them in its own voice - after a sign-in too, carried in the return address.
+        Redirect("/history", (c, h, i) => Components.Links.Runs(OldWorkspace(c, h, i)));
+        Redirect("/workspaces", (_, _, _) => "/");
+
+        // A past run, and a file it wrote: the run on the Runs screen at its own address, its files on its Artifacts tab.
+        // An address with no run in it names only the workspace.
+        Redirect("/history/run", (c, h, i) =>
+        {
+            var workspace = OldWorkspace(c, h, i);
+            return workspace is { } id && Guid.TryParse(c.Request.Query["id"], out var run)
+                ? "/" + Components.Links.PastRun(id, run)
+                : Components.Links.Runs(workspace);
+        });
+        Redirect("/file", (c, h, i) => Components.Links.Runs(OldWorkspace(c, h, i)));
+
+        // A set of proposed changes: its page. A set is named by a run's id only, so no name walks out of the staging
+        // folder; anything else lands on the list.
+        Redirect("/proposals/view", (c, h, i) =>
+        {
+            var set = c.Request.Query["set"].ToString();
+            return OldWorkspace(c, h, i) is { } id && Guid.TryParseExact(set, "N", out _)
+                ? "/" + Components.Links.Proposals(id, set)
+                : "/proposals";
+        });
+
+        // A template: the Templates screen's editor - a new template when none is named, as the old page opened.
+        Redirect("/library/template", (c, h, i) =>
+        {
+            var template = c.Request.Query["id"].ToString();
+            return "/" + (OldWorkspace(c, h, i) is not { } id ? Components.Links.Templates(null)
+                : template.Length == 0 ? Components.Links.NewTemplate(id)
+                : Components.Links.Template(id, template));
+        });
+
+        // The schedules, and a schedule's form: the Schedules screen, on the schedule when one is named.
+        Redirect("/library", (c, h, i) => "/" + Components.Links.Schedules(OldWorkspace(c, h, i)));
+        Redirect("/library/schedule", (c, h, i) =>
+        {
+            var workspace = OldWorkspace(c, h, i);
+            return "/" + Components.Links.Schedules(workspace,
+                workspace is not null && Guid.TryParse(c.Request.Query["id"], out var schedule) ? schedule : null);
+        });
+
+        // Pages that only moved: at the addresses the rail names them by now. Settings, accounts and audit say to anybody
+        // but an Admin that the role does not include them, as the old pages did.
+        Redirect("/logs", (_, _, _) => "/log");
+        Redirect("/admin/settings", (_, _, _) => "/settings");
+        Redirect("/admin/users", (_, _, _) => "/accounts");
+        Redirect("/admin/audit", (_, _, _) => "/audit");
+    }
+
+    /// <summary>
+    /// The workspace an old address named by its path (<c>?ws=</c>), as its id - the new addresses name a workspace by its
+    /// id (WorkspaceIds), as a path does not survive an address. Found only among the workspaces the service knows: a path
+    /// it does not know is never looked up on the disk (an address is typed by people), and gives null - the page as it
+    /// opens. So does a known folder whose path cannot be read now (a drive not mounted, TryIdOf): read unguarded, an old
+    /// link to it was a 500.
+    /// </summary>
+    private static Guid? OldWorkspace(HttpContext context, Runs.ServerHistory history, Runs.WorkspaceIds ids)
+        => history.Workspace(context.User, context.Request.Query["ws"].ToString()) is { } known ? ids.TryIdOf(known.RootPath) : null;
 
     private static string BuildVersion()
         => typeof(ServerApp).Assembly

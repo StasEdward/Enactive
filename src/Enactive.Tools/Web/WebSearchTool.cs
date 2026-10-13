@@ -2,6 +2,7 @@ namespace Enactive.Tools.Web;
 
 using System.Text;
 using System.Text.Json;
+using Enactive.Core;
 using Enactive.Core.Permissions;
 using Enactive.Core.Tools;
 using Enactive.Core.Web;
@@ -68,7 +69,7 @@ public sealed class WebSearchTool(WebAccess access, HttpClient http) : ITool
         if (string.IsNullOrEmpty(query))
             return ToolResults.Unreadable("'query' is required: what to search for.");
         if (query.Length > MaxQueryChars)
-            return ToolResults.Unreadable($"The query is {query.Length:N0} characters; a search takes at most {MaxQueryChars}. "
+            return ToolResults.Unreadable($"The query is {Invariant.N0(query.Length)} characters; a search takes at most {MaxQueryChars}. "
                 + "Search for what you need in a few words, not with the text you are working on.");
 
         string body;

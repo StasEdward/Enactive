@@ -1,0 +1,19 @@
+@page "/timeline"
+@using Enactive.Application
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@inject ServerReports Reports
+
+<PageTitle>Timeline - Enactive</PageTitle>
+
+@* The window's Timeline (MainWindow.ShowTimelineAsync): the workspace's project memory - its decisions and notes, what
+   its runs made, and the runs by day - in the viewer, for the workspace chosen here. *@
+<WorkspaceReport Title="@WorkspaceReports.TimelineTitle" Ws="@Ws" Href="@(row => Links.Timeline(row.Id))" Read="Reports.TimelineAsync" />
+
+@code {
+    /// <summary>
+    /// The workspace, by its id (WorkspaceIds); none, the one used last. Read as text: an address is typed by people, and
+    /// one that is not an id says "not known" rather than failing the page.
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "ws")] private string? Ws { get; set; }
+}

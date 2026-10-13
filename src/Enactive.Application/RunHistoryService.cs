@@ -215,9 +215,9 @@ internal sealed class RunHistoryService(Func<int> keepRuns)
     /// NOW, not what the run wrote. Null when the file is already gone (or not the workspace's).
     /// </summary>
     public static Question? DeleteFile(string root, string relative)
-        => FileOf(root, relative) is { } full && File.Exists(full)
+        => FileOf(root, relative) is { } full && File.Exists(full) && WorkspaceFiles.LinkOnTheWay(root, full) is null
             ? new($"Delete “{relative}”?",
-                $"This deletes the file as it is on disk now, last changed {File.GetLastWriteTime(full):yyyy-MM-dd HH:mm} "
+                $"This deletes the file as it is on disk now, last changed {Times.Minute(File.GetLastWriteTime(full))} "
                 + "- not the version this run wrote. There is no undo.",
                 "Delete", "Keep")
             : null;
@@ -229,6 +229,10 @@ internal sealed class RunHistoryService(Func<int> keepRuns)
             return ("not in this workspace", true);
         if (!File.Exists(full))
             return ("already gone", true);
+        // Inside by name, outside in fact: File.Delete follows a junction or link on the way and deleted the file it led
+        // to, outside the workspace (a run can make one with its shell). Reading such a path was refused already.
+        if (WorkspaceFiles.LinkOnTheWay(root, full) is { } link)
+            return ($"not deleted: '{link}' is a link to somewhere else", true);
         try
         {
             File.Delete(full);

@@ -31,13 +31,13 @@ public sealed class ServerStagingTests : IDisposable
         _users.Add("vera", "correct horse battery", Role.Viewer);
         _engine = new ServerEngine(_root, new FileLogSink(Path.Combine(_root, "logs")));
         _engine.Workspaces.Touch(_workspace);
-        _staging = new ServerStaging(_users, _engine);
+        _staging = new ServerStaging(_users, new KnownWorkspaces(_engine, new WorkspaceRoots([_root])));
     }
 
     public void Dispose()
     {
         _engine.Dispose();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 
@@ -59,6 +59,31 @@ public sealed class ServerStagingTests : IDisposable
             await EndAsync(staging, folder, store);
         store.Dispose();
         return folder;
+    }
+
+    /// <summary>
+    /// A workspace whose proposals cannot be listed now - here its staging folder is a junction whose target is gone, as a
+    /// drive that went away - is passed over, and the others are listed. Thrown, it took down every page: the rail reads
+    /// this list on each of them.
+    /// </summary>
+    [Fact]
+    public async Task A_workspace_whose_proposals_cannot_be_listed_is_passed_over()
+    {
+        var folder = await StagedAsync();
+        var broken = Path.Combine(_root, "broken");
+        var gone = Path.Combine(_root, "gone");
+        Directory.CreateDirectory(Path.Combine(broken, ".enactive"));
+        Directory.CreateDirectory(gone);
+        using (var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe",
+                   $"/c mklink /J \"{ServerStaging.Root(broken)}\" \"{gone}\"")
+               { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true })!)
+            mklink.WaitForExit();
+        Directory.Delete(gone);
+        _engine.Workspaces.Touch(broken);
+        Assert.True(Directory.Exists(ServerStaging.Root(broken)), "The junction stands with nothing behind it.");
+
+        var set = Assert.Single(_staging.List(As("vera")));
+        Assert.Equal(Path.GetFileName(folder), set.Id);
     }
 
     [Fact]
@@ -97,8 +122,8 @@ public sealed class ServerStagingTests : IDisposable
     [Fact]
     public async Task Proposals_outlive_the_process_that_kept_them()
     {
-        var folder = await StagedAsync(new ServerStaging(_users, _engine));
-        var afterRestart = new ServerStaging(_users, _engine);
+        var folder = await StagedAsync(new ServerStaging(_users, new KnownWorkspaces(_engine, new WorkspaceRoots([_root]))));
+        var afterRestart = new ServerStaging(_users, new KnownWorkspaces(_engine, new WorkspaceRoots([_root])));
         var id = Path.GetFileName(folder);
 
         var change = afterRestart.Open(As("alice"), _workspace, id).Files.Single().Id;
@@ -153,4 +178,104 @@ public sealed class ServerStagingTests : IDisposable
     [InlineData("not-a-run")]
     public void A_set_is_named_only_by_a_run_id(string id)
         => Assert.Contains("no longer kept", _staging.Open(As("alice"), _workspace, id).Problem);
+
+    // ── how long proposals are kept ─────────────────────────────────────────
+
+    /// <summary>
+    /// Proposals nobody decided in their time are dropped - the files stay as they are - and that is said where people
+    /// look: the inbox and the audit trail. They waited without end, a folder of bytes per forgotten run in the workspace.
+    /// </summary>
+    [Fact]
+    public async Task Proposals_nobody_decided_in_their_time_are_dropped_and_said()
+    {
+        var folder = await StagedAsync();
+
+        var dropped = await _staging.ExpireAsync(DateTimeOffset.Now.AddDays(31), TimeSpan.FromDays(30), CancellationToken.None);
+
+        Assert.Equal(1, dropped);
+        Assert.False(Directory.Exists(folder));
+        Assert.Equal("old\n", File.ReadAllText(Path.Combine(_workspace, "notes.md")));
+        Assert.Empty(_staging.List(As("vera")));
+        var items = await InboxStoreFactory.Create(WorkspaceInfo.For(_workspace)).LoadAllAsync(CancellationToken.None);
+        Assert.Contains(items, i => i.Summary.Contains("not decided in 30 days", StringComparison.Ordinal));
+        Assert.Contains(_users.AuditTrail(), e => e is { Account: "(service)", Action: "staged changes dropped" });
+    }
+
+    /// <summary>Within their time they stay; and a run still writing its proposals is never dropped from under it.</summary>
+    [Fact]
+    public async Task Proposals_within_their_time_and_a_run_still_writing_are_kept()
+    {
+        var waiting = await StagedAsync();
+        var writing = await StagedAsync(end: false);
+
+        Assert.Equal(0, await _staging.ExpireAsync(DateTimeOffset.Now.AddDays(29), TimeSpan.FromDays(30), CancellationToken.None));
+        Assert.Equal(1, await _staging.ExpireAsync(DateTimeOffset.Now.AddDays(31), TimeSpan.FromDays(30), CancellationToken.None));
+
+        Assert.False(Directory.Exists(waiting));
+        Assert.True(Directory.Exists(writing));
+    }
+
+    // ── what the rail and the pages listen to ───────────────────────────────
+
+    /// <summary>
+    /// Anything that changes what waits says so: a run that begins to keep proposals, one that ends, a decision, a drop. The
+    /// rail's dot listens; read only at a navigation it kept saying "waiting" after the last change was applied on a page
+    /// that does not navigate.
+    /// </summary>
+    [Fact]
+    public async Task What_waits_changing_is_said_to_whoever_listens()
+    {
+        var said = 0;
+        _staging.Changed += () => said++;
+
+        var folder = Begin(_staging);
+        Assert.Equal(1, said);
+        using (var store = new StagingArtifactStore(_workspace, folder))
+        {
+            await store.CreateAsync("notes.md", ArtifactKind.FileSet, "notes", s => s.WriteAsync(Encoding.UTF8.GetBytes("new\n")).AsTask(), CancellationToken.None);
+            await EndAsync(_staging, folder, store);
+        }
+        Assert.Equal(2, said);
+
+        var change = _staging.Open(As("alice"), _workspace, Path.GetFileName(folder)).Files.Single().Id;
+        // Not said for what changed nothing: a role that may not decide, a change that is not there.
+        await _staging.ActAsync(As("vera"), _workspace, Path.GetFileName(folder), change, apply: true, CancellationToken.None);
+        await _staging.ActAsync(As("alice"), _workspace, Path.GetFileName(folder), Guid.NewGuid(), apply: true, CancellationToken.None);
+        Assert.Equal(2, said);
+
+        await _staging.ActAsync(As("alice"), _workspace, Path.GetFileName(folder), change, apply: false, CancellationToken.None);
+        Assert.Equal(3, said);
+
+        var later = await StagedAsync();
+        said = 0;
+        await _staging.ExpireAsync(DateTimeOffset.Now.AddDays(31), TimeSpan.FromDays(30), CancellationToken.None);
+        Assert.Equal(1, said);
+        Assert.False(Directory.Exists(later));
+    }
+
+    /// <summary>
+    /// Said after the action's lock is let go: a listener that reads or decides again in answer - as a page redrawing from
+    /// the service does - waited on the one the action still held, for ever.
+    /// </summary>
+    [Fact]
+    public async Task A_listener_may_decide_in_answer_without_waiting_on_the_action_that_woke_it()
+    {
+        // Two proposals, so the set is still kept (and its gate taken) when the listener decides the second.
+        var folder = Begin(_staging);
+        using (var store = new StagingArtifactStore(_workspace, folder))
+        {
+            await store.CreateAsync("notes.md", ArtifactKind.FileSet, "notes", s => s.WriteAsync(Encoding.UTF8.GetBytes("new\n")).AsTask(), CancellationToken.None);
+            await store.CreateAsync("todo.md", ArtifactKind.FileSet, "todo", s => s.WriteAsync(Encoding.UTF8.GetBytes("one\n")).AsTask(), CancellationToken.None);
+            await EndAsync(_staging, folder, store);
+        }
+        var id = Path.GetFileName(folder);
+        var files = _staging.Open(As("alice"), _workspace, id).Files;
+        string? answer = null;
+        _staging.Changed += () =>
+            answer ??= Task.Run(() => _staging.ActAsync(As("alice"), _workspace, id, files[1].Id, apply: false, CancellationToken.None)).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+
+        await _staging.ActAsync(As("alice"), _workspace, id, files[0].Id, apply: false, CancellationToken.None);
+
+        Assert.StartsWith("Rejected: todo.md.", answer);
+    }
 }

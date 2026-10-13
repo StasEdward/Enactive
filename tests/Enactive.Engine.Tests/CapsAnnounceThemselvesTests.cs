@@ -319,7 +319,7 @@ public sealed class CapsAnnounceThemselvesTests
 
         Assert.False(result.Success);
         Assert.True(result.DidNotRun, result.Error);
-        Assert.Contains($"{RunPowerShellTool.MaxEncodedChars:N0}", result.Error, StringComparison.Ordinal);
+        Assert.Contains(Enactive.Core.Invariant.N0(RunPowerShellTool.MaxEncodedChars), result.Error, StringComparison.Ordinal);
     }
 
     /// <summary>

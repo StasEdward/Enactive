@@ -16,3 +16,18 @@ internal interface IStartupEntry
     /// <summary>True when start-up is now as asked. False when the system refused.</summary>
     bool Set(bool enabled);
 }
+
+/// <summary>
+/// A host with no start-up of its own to change: the service, which Windows starts as a service. Its settings page
+/// offers no "start with the computer", and saving them must not reach any machine's login.
+/// </summary>
+internal sealed class NoStartupEntry : IStartupEntry
+{
+    public static NoStartupEntry Instance { get; } = new();
+
+    public bool Supported => false;
+
+    public bool IsEnabled() => false;
+
+    public bool Set(bool enabled) => false;
+}

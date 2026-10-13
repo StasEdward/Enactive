@@ -181,6 +181,12 @@ public sealed class FileLogSink : ILogSink, IDisposable
     private StreamWriter? _writer;
     private DateOnly _currentDay;
 
+    /// <summary>
+    /// Disposed: nothing more is written. A line logged after - by a host's own shutdown, after its container let go of
+    /// the sink - opened the file again (the writer is opened on a roll), and it stayed open for the rest of the process.
+    /// </summary>
+    private bool _disposed;
+
     private int _retentionDays = DefaultRetentionDays;
 
     /// <summary>
@@ -235,6 +241,8 @@ public sealed class FileLogSink : ILogSink, IDisposable
         {
             lock (_gate)
             {
+                if (_disposed)
+                    return;
                 RollIfNeeded(entry.At);
                 if (_writer is null) return;
 
@@ -345,6 +353,7 @@ public sealed class FileLogSink : ILogSink, IDisposable
     {
         lock (_gate)
         {
+            _disposed = true;
             _writer?.Flush();
             _writer?.Dispose();
             _writer = null;

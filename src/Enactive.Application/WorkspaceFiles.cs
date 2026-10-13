@@ -1,6 +1,7 @@
 namespace Enactive.Application;
 
 using System.Text;
+using Enactive.Core;
 
 /// <summary>
 /// Reading a file of a workspace to show it to a person - who, on the service, reads it through the service and may
@@ -29,7 +30,7 @@ internal static class WorkspaceFiles
         if (!file.Exists)
             return (null, "The file is not there any more.");
         if (file.Length > MaxBytes)
-            return (null, $"The file is {file.Length / 1024 / 1024.0:0.#} MB; a page shows files up to {MaxBytes / 1024 / 1024} MB.");
+            return (null, $"The file is {Invariant.Format(file.Length / 1024 / 1024.0, "0.#")} MB; a page shows files up to {MaxBytes / 1024 / 1024} MB.");
 
         var bytes = File.ReadAllBytes(full);
         // A zero byte in the first few kilobytes is the cheap, reliable sign of a binary file; text formats do not use it.
@@ -43,7 +44,7 @@ internal static class WorkspaceFiles
     /// The first folder or file between the workspace and the file that is a reparse point - a junction, a symbolic
     /// link, a mount - or null. The workspace folder itself may be one: that is where its owner put it.
     /// </summary>
-    private static string? LinkOnTheWay(string root, string full)
+    internal static string? LinkOnTheWay(string root, string full)
     {
         var top = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         var at = full;

@@ -199,9 +199,14 @@ A failure to write `--report` is printed to stderr but does not change the task 
 
 ## Scheduling a suitable task
 
-Use Windows Task Scheduler, cron, or a CI runner to invoke the console. There is no built-in durable scheduling service in the desktop app.
+The schedules made in the app's Schedules window are run by the desktop app itself while it is open - in the
+tray too: it checks them every minute and runs what is due in the background, with nobody to answer, and the
+outcome lands in the Inbox under the schedule. For a machine where the app is not running, wake the console with
+`--due-all` every few minutes from Windows Task Scheduler, cron, or a CI runner. Both take the same claim on a
+schedule, so the two on one machine do not start the same occurrence twice.
 
-For a file-only documentation workflow, a PowerShell wrapper can preserve the process outcome:
+To run one template on a timetable of the scheduler's own instead, invoke the console with `--template`. For a
+file-only documentation workflow, a PowerShell wrapper can preserve the process outcome:
 
 ```powershell
 $env:ENACTIVE_MODEL = 'qwen2.5-coder'

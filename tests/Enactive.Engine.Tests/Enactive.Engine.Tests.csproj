@@ -29,14 +29,14 @@
     <Compile Include="../../src/Enactive.App.Ui/RunEventPump.cs" Link="Ui/RunEventPump.cs" />
     <Compile Include="../../src/Enactive.App.Ui/RemoteAccessService.cs" Link="Ui/RemoteAccessService.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ForegroundRunSlot.cs" Link="Ui/ForegroundRunSlot.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/BatchObservableCollection.cs" Link="Ui/BatchObservableCollection.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/AddDeviceViewModel.cs" Link="Ui/AddDeviceViewModel.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/RemoteDevicesViewModel.cs" Link="Ui/RemoteDevicesViewModel.cs" />
     <Compile Include="../../src/Enactive.App.Ui/OneAtATime.cs" Link="Ui/OneAtATime.cs" />
     <Compile Include="../../src/Enactive.App.Ui/TrayHint.cs" Link="Ui/TrayHint.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/ViewModels/WorkerEditViewModel.cs" Link="Ui/WorkerEditViewModel.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/StepCardViewModel.cs" Link="Ui/StepCardViewModel.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/Looks.cs" Link="Ui/Looks.cs" />
+    <!-- Shared with the other test project: what lets go of a test's own SQLite files (tests/Shared). -->
+    <Compile Include="../Shared/SqlitePools.cs" Link="Shared/SqlitePools.cs" />
     <Using Include="Xunit" />
   </ItemGroup>
 

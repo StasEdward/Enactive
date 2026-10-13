@@ -1,6 +1,7 @@
 namespace Enactive.Agents;
 
 using System.Runtime.CompilerServices;
+using Enactive.Core;
 using static Enactive.Agents.ToolCallParsing;
 using Enactive.Core.Chat;
 using Enactive.Core.Events;
@@ -322,7 +323,7 @@ internal sealed class StepEnding(
             : "";
 
         return thought > 0
-            ? $"The model spent the whole turn reasoning ({thought:N0} characters of it) and "
+            ? $"The model spent the whole turn reasoning ({Invariant.N0(thought)} characters of it) and "
               + "produced no answer and no tool call. Turn Thinking off in Settings, or use a "
               + "model that answers as well as reasons." + tight
             // What was OBSERVED first, then the causes - and reasoning is named as ruled

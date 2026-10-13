@@ -129,9 +129,9 @@ public static class Shortening
         var tail = budget - head;
 
         if (tail < SmallestTail)
-            return text[..budget] + $"… ({budget:N0} of {text.Length:N0})";
+            return text[..budget] + $"… ({Invariant.N0(budget)} of {Invariant.N0(text.Length)})";
 
-        var notice = $"\n… ({text.Length - budget:N0} characters not shown here; the end follows) …\n";
+        var notice = $"\n… ({Invariant.N0(text.Length - budget)} characters not shown here; the end follows) …\n";
 
         // A cut that hides no more than its own notice takes up is not made: it would be longer than
         // the text it stands for, and it would say there was more to see. On 2026-10-04 a command

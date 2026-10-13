@@ -63,7 +63,7 @@ public sealed class LogAnalystTests
         var excerpt = LogAnalyst.Excerpt(Log(4_000), 4_000, out var sent);
 
         Assert.Contains(LogAnalyst.Gap, excerpt);
-        Assert.Contains($"({4_000 - sent:N0} lines)", excerpt);
+        Assert.Contains($"({Enactive.Core.Invariant.N0(4_000 - sent)} lines)", excerpt);
     }
 
     [Fact]
@@ -262,5 +262,25 @@ public sealed class LogAnalystTests
         Assert.True(start >= 0 && end > start, "LogAnalysis() was not found where it was");
 
         Assert.DoesNotContain("_settings", window[start..end]);
+    }
+
+    /// <summary>
+    /// What reading cost, said beside the answer by both hosts from one place: the tokens spent in the same digits on
+    /// every machine, and nothing when the provider did not count them - "0 tokens" reads as a free answer.
+    /// </summary>
+    [Fact]
+    public void The_cost_is_the_tokens_spent_or_nothing()
+    {
+        var was = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("ru-RU");
+            Assert.Equal("4,200 tokens", new LogAnalysisResult("fine", "a-model", 10, 10, 4000, 200).Cost);
+            Assert.Equal("", new LogAnalysisResult("fine", "a-model", 10, 10).Cost);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = was;
+        }
     }
 }

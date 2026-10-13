@@ -1,0 +1,13 @@
+@* One of the AI STATUS tiles (Border.tile): a figure over its label. A figure arrives ready to draw - "1.5k", "2m 3s",
+   an em dash for nothing reported - and what does not fit on the tile is its tooltip. *@
+
+<div class="tile" title="@Title">
+    <div class="tile-value">@Value</div>
+    <div class="tile-label">@Label</div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Value { get; set; } = "";
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter] public string? Title { get; set; }
+}

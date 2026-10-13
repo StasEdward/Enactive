@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Enactive.App.Ui.ViewModels"
         xmlns:local="using:Enactive.App.Ui"
+        xmlns:app="using:Enactive.Application"
         xmlns:proj="using:Enactive.Application.Projections"
         xmlns:sys="using:System"
         x:Class="Enactive.App.Ui.MainWindow"
@@ -710,7 +711,7 @@
                                  BorderThickness="0"
                                  ScrollViewer.HorizontalScrollBarVisibility="Auto">
                             <ListBox.ItemTemplate>
-                                <DataTemplate x:DataType="vm:LogRow">
+                                <DataTemplate x:DataType="app:LogRow">
                                     <TextBlock Text="{Binding Line}"
                                                Foreground="{Binding Entry.Level, Converter={x:Static local:Palette.LogLevel}}"
                                                FontFamily="Consolas, Menlo, monospace"

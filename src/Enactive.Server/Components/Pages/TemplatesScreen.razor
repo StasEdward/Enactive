@@ -1,0 +1,292 @@
+@page "/templates"
+@using System.ComponentModel
+@using System.Security.Claims
+@using Enactive.Application
+@using Enactive.Server.Accounts
+@using Enactive.Server.Components.Runs
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Enactive.Workspace
+@using Microsoft.AspNetCore.Components.Authorization
+@implements IDisposable
+@inject ServerLibrary Library
+@inject ServerHistory History
+@inject WorkspaceIds Ids
+@inject NavigationManager Navigation
+
+<PageTitle>Templates - Enactive</PageTitle>
+
+@* The window's library (TemplatesWindow.axaml) for one workspace: the templates, 300 px, each with its edge - where it
+   lives, amber for the one chosen; on the right what running it would mean, the form it asks for, "What it will be asked
+   to do", why it cannot run yet, and Run. What it shows and decides is the window's own view model (TemplatesViewModel),
+   built by ServerLibrary for this workspace at its level; this draws it. The workspace is chosen in the switcher, as on
+   the Runs screen. An Operator also has what the window's Settings, Templates section offers on a template - New, Edit
+   (Copy and edit for a built-in), Duplicate, Delete - the editor being a page of its own (TemplateEditor). Every action is
+   ServerLibrary's to decide, which checks the person again. *@
+
+<div class="templates-screen">
+    <div class="templates-top">
+        <PanelHeader Text="WORKSPACE" />
+        <WorkspaceSwitcher Rows="_switcher" Current="_switcher.FirstOrDefault(r => r.IsCurrent)" Href="@(row => Links.Templates(row.Id))" />
+    </div>
+
+    @if (_said is { Length: > 0 } said)
+    {
+        <p class="said" role="alert">@said</p>
+    }
+    @if (_problem is { } problem)
+    {
+        <p class="said">@problem</p>
+    }
+
+    @if (_library is { } library)
+    {
+        <div class="templates-body">
+            <section class="templates-library" aria-label="Templates">
+                @if (_canOperate)
+                {
+                    <a class="btn templates-new" href="@Links.NewTemplate(_workspaceId)">New template</a>
+                }
+                <ul class="cards templates-list">
+                    @foreach (var item in library.Templates)
+                    {
+                        <li>
+                            <button type="button" aria-current="@(item.IsSelected ? "true" : null)" @onclick="() => library.Selected = item"
+                                    class="@($"card selectable template-card {Looks.Template(item.Edge)}{(item.IsSelected ? " selected" : "")}")">
+                                <span class="card-title">@item.Name</span>
+                                <span class="card-meta">@item.Meta</span>
+                                @if (item.HasDescription)
+                                {
+                                    <span class="card-meta template-description">@item.Description</span>
+                                }
+                            </button>
+                        </li>
+                    }
+                </ul>
+            </section>
+
+            @if (library.Selected is { } chosen)
+            {
+                <section class="templates-detail" aria-label="Template">
+                    @* What running this would mean, before it is run: how much it may do, what it may not use, whether
+                       anything checks it, and how far it may go. *@
+                    <p class="hint template-summary">@library.SelectedSummary</p>
+
+                    @if (library.HasParameters)
+                    {
+                        @* The form, generated from what the template declares - one row per input, the control its type
+                           calls for (TemplateParameterInput). *@
+                        <div class="template-inputs">
+                            @foreach (var input in library.Parameters)
+                            {
+                                var field = "tp-" + input.Id;
+                                <div class="template-input">
+                                    @if (input.IsBoolean)
+                                    {
+                                        <label class="check"><input type="checkbox" id="@field" @bind="input.Flag" /> @input.Label</label>
+                                    }
+                                    else
+                                    {
+                                        <label class="label" for="@field">@input.Label</label>
+                                        @if (input.HasHint)
+                                        {
+                                            <p class="hint">@input.Hint</p>
+                                        }
+                                        @if (input.IsMultiline)
+                                        {
+                                            <textarea id="@field" rows="5" @bind="input.Value" @bind:event="oninput"></textarea>
+                                        }
+                                        else if (input.IsChoice)
+                                        {
+                                            <select id="@field" @bind="input.Value">
+                                                @foreach (var choice in input.Choices)
+                                                {
+                                                    <option value="@choice">@choice</option>
+                                                }
+                                            </select>
+                                        }
+                                        else
+                                        {
+                                            <input id="@field" @bind="input.Value" @bind:event="oninput" />
+                                        }
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    <h2 class="label">What it will be asked to do</h2>
+                    <p class="template-goal">@library.SelectedGoal</p>
+
+                    @if (library.HasProblems)
+                    {
+                        <p class="template-problems" role="status">@library.Problems</p>
+                    }
+
+                    @if (_canOperate)
+                    {
+                        <div class="template-actions">
+                            <a class="btn" href="@Links.Template(_workspaceId, chosen.Template.Id)">@(chosen.Entry.IsBuiltin ? "Copy and edit" : "Edit")</a>
+                            <a class="btn" href="@Links.Template(_workspaceId, chosen.Template.Id, copy: true)">Duplicate</a>
+                            @if (chosen.Entry.Scope is not null)
+                            {
+                                @* A file that replaced a built-in is reset - the built-in comes back - any other is deleted. *@
+                                var reset = chosen.Entry.Shadows == TemplateOrigin.Builtin;
+                                <button type="button" class="btn destructive" title="@(reset ? "Reset to the built-in" : "Delete this template")"
+                                        @onclick="() => AskRemove(chosen.Entry)">@(reset ? "Reset" : "Delete")</button>
+                            }
+                            @* Greyed until it can run as filled in, the reason above it: Run is never a button that turns
+                               out to be a refusal. *@
+                            <button type="button" class="btn go template-run" disabled="@(!library.CanRun || _running)" @onclick="Run">Run</button>
+                        </div>
+                    }
+                </section>
+            }
+        </div>
+
+        <p class="hint templates-where">@library.WorkspaceRoot</p>
+    }
+</div>
+
+@if (_question is { } question)
+{
+    <Dialog Title="@question.Headline" OnClose="Dismiss">
+        <ChildContent>
+            <p class="body">@question.Body</p>
+        </ChildContent>
+        <Actions>
+            <button type="button" class="btn destructive" disabled="@_busy" @onclick="Remove">@question.Confirm</button>
+            <button type="button" class="btn" disabled="@_busy" @onclick="Dismiss">@question.Cancel</button>
+        </Actions>
+    </Dialog>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>
+    /// The workspace, by its id (WorkspaceIds); none, the one used last. Read as text and parsed here, as the Runs screen
+    /// does: an address is typed by people, and one that is not an id must say "not known" rather than fail the page.
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "ws")] private string? Ws { get; set; }
+
+    /// <summary>The template to open the library on - the one just saved, or the one the editor was left from.</summary>
+    [SupplyParameterFromQuery(Name = "t")] private string? Template { get; set; }
+
+
+    private ClaimsPrincipal _user = new();
+    private bool _canOperate;
+    private IReadOnlyList<SwitcherRow> _switcher = [];
+    private string _root = "";
+    private Guid _workspaceId;
+    private TemplatesViewModel? _library;
+    private string? _problem;
+    private string? _said;
+    private bool _running;
+
+    private Question? _question;
+    private StoredTemplate? _removing;
+    private bool _busy;
+
+    // Read per address, not once (Pages/_Imports.razor): choosing another workspace is a link to this same page.
+    protected override async Task OnParametersSetAsync()
+    {
+        _user = (await Auth).User;
+        // Offered only: ServerLibrary refuses every change and run to anybody else, whatever a page sent.
+        _canOperate = ServerAuth.RoleOf(_user) >= Role.Operator;
+        // What the editor said of a save, carried by its navigation here (Links.Saying) - never read from the address.
+        _said = Links.SaidOn(Navigation);
+
+        var known = History.Workspaces(_user);
+        Guid? wanted = Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null;
+        var selected = WorkspaceColumnState.Choose(known, wanted, Ids);
+        _switcher = WorkspaceColumnState.Switcher(known, selected, Ids);
+        if (selected is null)
+        {
+            Show(null);
+            _problem = wanted is null ? "The service knows no workspace yet. An Operator adds one on the Runs screen." : "The service does not know that workspace.";
+            return;
+        }
+
+        _root = selected.RootPath;
+        // A known folder whose id cannot be read is Guid.Empty: its links name no workspace, and lead to "not known".
+        _workspaceId = Ids.TryIdOf(_root) ?? Guid.Empty;
+        Load(Template);
+    }
+
+    /// <summary>Reads the library again, on the template named when it is listed - as the window's Reload keeps it by id.</summary>
+    private void Load(string? template)
+    {
+        var (library, problem) = Library.Library(_user, _root);
+        _problem = problem;
+        if (library is not null && template is not null
+            && library.Templates.FirstOrDefault(t => string.Equals(t.Template.Id, template, StringComparison.OrdinalIgnoreCase)) is { } named)
+            library.Selected = named;
+        Show(library);
+    }
+
+    /// <summary>
+    /// The view model drawn: what changes in it is drawn again (INotifyPropertyChanged) - a Problems line or Run's state set
+    /// as an answer is typed, not only on the next event from this page.
+    /// </summary>
+    private void Show(TemplatesViewModel? library)
+    {
+        if (_library is not null)
+            _library.PropertyChanged -= Changed;
+        _library = library;
+        if (_library is not null)
+            _library.PropertyChanged += Changed;
+    }
+
+    private void Changed(object? sender, PropertyChangedEventArgs e) => _ = InvokeAsync(StateHasChanged);
+
+    private void Run()
+    {
+        if (_running || _library?.Selected is not { } chosen)
+            return;
+        // One press, one run: greyed while it is started.
+        _running = true;
+        _said = null;
+        var answers = _library.Parameters.ToDictionary(p => p.Id, p => p.Supplied, StringComparer.OrdinalIgnoreCase);
+        // Resolved once more by the service, from the template as it stands now: the button's state is a view of what was
+        // true a keystroke ago (TemplatesWindow.OnRun).
+        var (run, said) = Library.RunTemplate(_user, _root, chosen.Template.Id, answers);
+        if (run is { } id)
+        {
+            Navigation.NavigateTo($"runs/{id}");
+            return;
+        }
+        _said = said;
+        _running = false;
+    }
+
+    private void AskRemove(StoredTemplate entry)
+        => (_question, _removing) = (TemplateDrafts.Remove(entry), entry);
+
+    private void Remove()
+    {
+        if (_removing is not { Scope: { } scope } entry || _busy)
+            return;
+        // Busy while it is done: a second press is not a second delete.
+        _busy = true;
+        try
+        {
+            _said = Library.DeleteTemplate(_user, _root, entry.Template.Id, scope);
+            Load(null);
+        }
+        finally
+        {
+            _busy = false;
+            Dismiss();
+        }
+    }
+
+    private void Dismiss()
+    {
+        if (_busy)
+            return;
+        (_question, _removing) = (null, null);
+    }
+
+    public void Dispose() => Show(null);
+}

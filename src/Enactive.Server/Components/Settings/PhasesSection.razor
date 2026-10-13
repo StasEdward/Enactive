@@ -1,0 +1,36 @@
+@using Enactive.Core.Guidance
+
+@* The window's AI · Phases (SettingsWindow.axaml): the four models, each from the catalog every provider's models make
+   (SettingsViewModel.ModelCatalog, "(none)" first), each with its "?" (Core's PhaseAdvice). *@
+
+<p class="hint">Execute always runs on the selected worker's own model. Plan and Review use the models bound here. Choose (none) for Plan to plan on the executing model, or for Review to skip review entirely (single-agent).</p>
+
+<div class="settings-field">
+    <span class="settings-label-row"><label class="label" for="phase-plan">Plan model</label><HintMark Text="@PhaseAdvice.Plan" Of="Plan model" /></span>
+    <select id="phase-plan" @bind="Vm.Plan">@Options</select>
+</div>
+<div class="settings-field">
+    <span class="settings-label-row"><label class="label" for="phase-review">Review model</label><HintMark Text="@PhaseAdvice.Review" Of="Review model" /></span>
+    <select id="phase-review" @bind="Vm.Review">@Options</select>
+</div>
+<div class="settings-field">
+    <span class="settings-label-row"><label class="label" for="phase-light">Execute · light (trivial steps)</label><HintMark Text="@PhaseAdvice.Light" Of="Execute · light" /></span>
+    <select id="phase-light" @bind="Vm.ExecuteLight">@Options</select>
+</div>
+<div class="settings-field">
+    <span class="settings-label-row"><label class="label" for="phase-heavy">Execute · heavy (complex steps)</label><HintMark Text="@PhaseAdvice.Heavy" Of="Execute · heavy" /></span>
+    <select id="phase-heavy" @bind="Vm.ExecuteHeavy">@Options</select>
+</div>
+
+@code {
+    // Handed down as a cascading value rather than a parameter: the view model is internal to the application layer,
+    // and a component's parameters are public.
+    [CascadingParameter] private SettingsViewModel Vm { get; set; } = default!;
+
+    private RenderFragment Options => @<text>
+        @foreach (var model in Vm.ModelCatalog)
+        {
+            <option value="@model">@model</option>
+        }
+    </text>;
+}

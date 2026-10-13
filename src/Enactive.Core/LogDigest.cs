@@ -199,7 +199,7 @@ public static class LogDigest
             if (s.Records == 0) continue;
 
             sb.Append($"{key,-11} records={s.Records,6}");
-            if (s.Calls > 0) sb.Append($"  calls={s.Calls,3}  in={s.TokensIn,9:N0}  out={s.TokensOut,7:N0}");
+            if (s.Calls > 0) sb.Append($"  calls={s.Calls,3}  in={Invariant.N0(s.TokensIn),9}  out={Invariant.N0(s.TokensOut),7}");
             if (s.Warnings > 0) sb.Append($"  warn={s.Warnings}");
             if (s.Errors > 0) sb.Append($"  ERRORS={s.Errors}");
             sb.Append($"  {s.First:hh\\:mm\\:ss}..{s.Last:hh\\:mm\\:ss}");
@@ -218,7 +218,7 @@ public static class LogDigest
         {
             sb.AppendLine();
             sb.AppendLine(
-                $"… {dropped:N0} further timeline entries are NOT SHOWN — the digest was capped. "
+                $"… {Invariant.N0(dropped)} further timeline entries are NOT SHOWN — the digest was capped. "
                 + "The per-step totals above still count them.");
         }
 

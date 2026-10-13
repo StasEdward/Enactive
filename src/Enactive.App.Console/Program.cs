@@ -161,14 +161,10 @@ if (dueAll)
     Heartbeat.Stamp(DateTimeOffset.Now);
 
     var roots = ScheduleStore.Default.Workspaces();
-    var across = roots
-        .SelectMany(root => ScheduleTick.Decide(
-            ScheduleStore.Default.For(root), DateTimeOffset.Now, RunMarkers.Default.IsRunning,
-            // Per workspace, because a template store is per workspace. A schedule whose template
-            // cannot do its job under the tier it was given is reported here instead of becoming a
-            // run that spends a model's time discovering the same thing.
-            new TemplateStore(root).Find))
-        .ToArray();
+    // Decided as the window and the service decide it (DueSchedules), each workspace with its own template store: a
+    // schedule whose template cannot do its job under the tier it was given is reported here instead of becoming a run
+    // that spends a model's time discovering the same thing.
+    var across = DueSchedules.DecideAcross(ScheduleStore.Default, RunMarkers.Default, DateTimeOffset.Now);
 
     Console.WriteLine($"SCHEDULES — {roots.Count} workspace(s)");
     foreach (var decision in across.Where(d => d.WorthReporting || d.ShouldRun))
@@ -176,7 +172,7 @@ if (dueAll)
 
     if (ScheduleTick.FirstDue(across) is not { } winner)
     {
-        Console.WriteLine(across.Length == 0 ? "  (no schedules anywhere)" : "  nothing due");
+        Console.WriteLine(across.Count == 0 ? "  (no schedules anywhere)" : "  nothing due");
         return 0;
     }
 

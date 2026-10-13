@@ -1,0 +1,18 @@
+@using Enactive.Application.Projections
+
+@* A unified diff, each line in what it does to the file (DiffLines, Looks.Diff): added green, removed red, the rest
+   muted - the window's staged change opened. Text, never markup: a diff is a workspace's content, whatever it holds. *@
+
+<div class="diff">
+    @foreach (var line in Lines)
+    {
+        <div class="@("diff-line " + Looks.Diff(DiffLines.Kind(line)))">@line</div>
+    }
+</div>
+
+@code {
+    /// <summary>The diff as TextDiff.Unified writes it.</summary>
+    [Parameter, EditorRequired] public string Diff { get; set; } = "";
+
+    private IEnumerable<string> Lines => Diff.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+}

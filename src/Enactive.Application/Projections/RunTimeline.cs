@@ -60,7 +60,7 @@ internal sealed class RunEventViewModel
 {
     public RunEventViewModel(DateTimeOffset at, string kind, string summary)
     {
-        When = at.ToLocalTime().ToString("HH:mm:ss");
+        When = Times.Seconds(at);
         Kind = kind;
         Summary = summary;
         Tone = TimelineTones.Of(kind);

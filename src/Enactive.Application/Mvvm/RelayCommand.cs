@@ -45,7 +45,13 @@ internal sealed class AsyncRelayCommand : ICommand
 
     public bool CanExecute(object? parameter) => !_running && (_canExecute?.Invoke() ?? true);
 
-    public async void Execute(object? parameter)
+    public async void Execute(object? parameter) => await ExecuteAsync();
+
+    /// <summary>
+    /// What <see cref="Execute"/> does, for a caller that has to know when it has finished: a page that draws what the
+    /// command left only once it has, and a test. Execute cannot be awaited.
+    /// </summary>
+    public async Task ExecuteAsync()
     {
         if (_running)
             return;

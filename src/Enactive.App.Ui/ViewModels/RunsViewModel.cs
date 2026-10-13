@@ -44,10 +44,9 @@ internal sealed class RunListItemViewModel
         // one line still has to read properly, and rewriting somebody's stored runs in place to fix
         // a display problem is the wrong trade.
         Title = RunTitle.For(record);
-        Meta = $"{Ago(record.StartedAt)} · {Outcome(record)}";
-
-        var elapsed = record.FinishedAt - record.StartedAt;
-        Tooltip = $"{Title}\n{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {record.Status} · {RunDigest.Duration(elapsed)}";
+        // The lines are the service's too (its Runs screen draws the same column): one place says them (RunRows).
+        Meta = RunRows.Meta(record);
+        Tooltip = RunRows.Tooltip(record);
     }
 
     public RunSummary Record { get; }
@@ -67,47 +66,6 @@ internal sealed class RunListItemViewModel
     public RelayCommand RemoveCommand { get; }
     public string Meta { get; }
     public string Tooltip { get; }
-
-    /// <summary>
-    /// How long ago, the way a person would say it. Days are counted on the CALENDAR, not in
-    /// 24-hour blocks: a run at 23:50 was "yesterday" by breakfast, not "9 h ago".
-    /// </summary>
-    private static string Ago(DateTimeOffset at)
-    {
-        var local = at.ToLocalTime();
-        var days = (DateTime.Today - local.Date).Days;
-
-        if (days == 1)
-            return "yesterday";
-        if (days > 1 && days < 7)
-            return $"{days} days ago";
-        if (days >= 7)
-            return local.ToString("MMM d");
-
-        var span = DateTimeOffset.Now - at;
-        if (span.TotalMinutes < 1)
-            return "just now";
-        if (span.TotalMinutes < 60)
-            return $"{(int)span.TotalMinutes} min ago";
-        return $"{(int)span.TotalHours} h ago";
-    }
-
-    /// <summary>
-    /// What came of it, in two or three words. A run that did not complete says how - failed,
-    /// blocked, waiting, not finished (RunStanding, in Core, where the words are tested); otherwise
-    /// what it produced is more use than how long it took, and the duration is in the run's own
-    /// header anyway.
-    /// </summary>
-    private static string Outcome(RunSummary record)
-    {
-        if (RunStanding.Word(record.Status) is { } word)
-            return word;
-
-        if (record.Artifacts.Count > 0)
-            return $"{record.Artifacts.Count} artifact{(record.Artifacts.Count == 1 ? "" : "s")}";
-
-        return RunDigest.Duration(record.FinishedAt - record.StartedAt);
-    }
 }
 
 /// <summary>
@@ -160,13 +118,10 @@ internal sealed class ResumableRunViewModel
     {
         Checkpoint = checkpoint;
         Title = RunTitle.OneLine(checkpoint.Title);
-        Meta = $"stopped {checkpoint.At.ToLocalTime():MMM d, HH:mm} · "
-               + $"{checkpoint.Finished} of {checkpoint.Steps.Count} steps done";
-        Tooltip = $"{checkpoint.Request}\n\nResume runs the {checkpoint.Remaining} step(s) that are left, "
-                  + "under the permissions this run started with. A step that was in progress when it "
-                  + "stopped is done again from its beginning.";
-        // The button is an icon beside the delete one, as on every other row here - so what it does is said on it.
-        ResumeTip = $"Resume: run the {checkpoint.Remaining} step(s) that are left";
+        // Said in one place for the window and the service's Runs screen (RunRows).
+        Meta = RunRows.Meta(checkpoint);
+        Tooltip = RunRows.Tooltip(checkpoint);
+        ResumeTip = RunRows.ResumeTip(checkpoint);
         ResumeCommand = new RelayCommand(() => resume(checkpoint));
         RemoveCommand = new RelayCommand(() => remove?.Invoke(checkpoint), () => remove is not null);
     }
@@ -259,16 +214,11 @@ internal sealed class PastRunViewModel : ObservableObject
         Subtitle = digest.Subtitle;
         CanRetry = digest.CanRetry;
 
-        // Run again re-resolves the template as it stands NOW. Only offered when the template is
-        // still there: a template that has been deleted or renamed has no current version, and a
-        // button that fails when pressed is worse than one that is not there.
-        var live = Spec is null ? null : currentTemplate?.Invoke();
-        CanRunAgain = live is not null;
-        RunAgainTooltip = Spec is null
-            ? "This run did not come from a template."
-            : live is null
-                ? $"Template '{Spec.TemplateId}' is no longer in this library."
-                : $"Re-resolve '{live.Name}' v{live.Version} — this run used v{Spec.TemplateVersion}.";
+        // Run again re-resolves the template as it stands NOW, so it is offered only while the template is still there -
+        // the service's past run offers the same button by the same rule (RunAgainOffer).
+        var again = RunAgainOffer.Of(Spec, Spec is null ? null : currentTemplate?.Invoke());
+        CanRunAgain = again.Can;
+        RunAgainTooltip = again.Tooltip;
 
         RetryCommand = new RelayCommand(() => RetryRequested?.Invoke(this), () => CanRetry);
         RunAgainCommand = new RelayCommand(() => RunAgainRequested?.Invoke(this), () => CanRunAgain);
@@ -302,17 +252,16 @@ internal sealed class PastRunViewModel : ObservableObject
         WorkerText = digest.WorkerText;
         StagingText = digest.StagingText;
 
-        ShowExecutionCommand = new RelayCommand(() => SelectedTab = 0);
-        ShowArtifactsCommand = new RelayCommand(() => SelectedTab = 1);
-        ShowTimelineCommand = new RelayCommand(() => SelectedTab = 2);
+        ShowExecutionCommand = new RelayCommand(() => SelectedTab = PastRunTabs.Execution);
+        ShowArtifactsCommand = new RelayCommand(() => SelectedTab = PastRunTabs.Artifacts);
+        ShowTimelineCommand = new RelayCommand(() => SelectedTab = PastRunTabs.Timeline);
 
         // A record that rebuilds no cards would show Execution as an empty tab claiming the run did
         // nothing, so it opens on the timeline instead - which is what such a record actually holds.
         // WHY there are none is Core's answer, not this window's: there are two reasons and they
         // send a person to two different places.
         NoStepsReason = digest.NoStepsReason;
-        if (Steps.Count == 0)
-            SelectedTab = 2;
+        SelectedTab = PastRunTabs.Opening(Steps.Count);
     }
 
     public RunRecord Record { get; }
@@ -353,7 +302,7 @@ internal sealed class PastRunViewModel : ObservableObject
     public string ElapsedText { get; }
 
     /// <summary>A tab carries its own count, so a run that produced nothing does not advertise "(0)".</summary>
-    public string ArtifactsTabLabel => Artifacts.Count == 0 ? "Artifacts" : $"Artifacts ({Artifacts.Count})";
+    public string ArtifactsTabLabel => RunFigures.ArtifactsTab(Artifacts.Count);
 
     public int SelectedTab
     {
@@ -368,9 +317,9 @@ internal sealed class PastRunViewModel : ObservableObject
         }
     }
 
-    public bool IsExecutionTab => _selectedTab == 0;
-    public bool IsArtifactsTab => _selectedTab == 1;
-    public bool IsTimelineTab => _selectedTab == 2;
+    public bool IsExecutionTab => _selectedTab == PastRunTabs.Execution;
+    public bool IsArtifactsTab => _selectedTab == PastRunTabs.Artifacts;
+    public bool IsTimelineTab => _selectedTab == PastRunTabs.Timeline;
 
     public RelayCommand ShowExecutionCommand { get; }
     public RelayCommand ShowArtifactsCommand { get; }
@@ -529,17 +478,13 @@ internal sealed class RunsViewModel : ObservableObject
         }
     }
 
-    public IReadOnlyList<string> FilterNames { get; } =
-        ["All runs", "Unfinished", "Completed", "Older than a week"];
+    public IReadOnlyList<string> FilterNames { get; } = RunRows.FilterNames;
 
     /// <summary>What a "delete these" would act on: exactly the rows on screen.</summary>
     public IReadOnlyList<RunSummary> Shown { get; private set; } = Array.Empty<RunSummary>();
 
-    /// <summary>
-    /// Named with the COUNT, so the button says how much it destroys before it is pressed rather
-    /// than in a dialog after it.
-    /// </summary>
-    public string DeleteShownLabel => $"Delete these {Shown.Count}";
+    /// <summary>Named with the count (RunRows.DeleteShown, which the service's Runs screen says too).</summary>
+    public string DeleteShownLabel => RunRows.DeleteShown(Shown.Count);
 
     public bool CanDeleteShown => Shown.Count > 0;
 
@@ -561,13 +506,7 @@ internal sealed class RunsViewModel : ObservableObject
                 item => DeleteRequested?.Invoke(item.Record),
                 row.Attempts, row.IsLead, _expanded.Contains(RunHousekeeping.GroupKey(row.Run)), Toggle));
 
-        Status = records.Count == 0
-            ? "No runs recorded in this workspace."
-            : Items.Count == records.Count
-                ? $"{Items.Count} run{(Items.Count == 1 ? "" : "s")}"
-                // Both numbers when a filter is on. "3 runs" over a list that holds 37 is a true
-                // sentence that reads as the whole truth.
-                : $"{Items.Count} of {records.Count} runs";
+        Status = RunRows.Status(Items.Count, records.Count);
 
         OnPropertyChanged(nameof(Shown));
         OnPropertyChanged(nameof(DeleteShownLabel));

@@ -160,13 +160,13 @@ internal sealed class UserStore
             }
         }
 
+        var now = _clock.GetUtcNow();
         if (account is null)
         {
             Hasher.VerifyHashedPassword("", DecoyHash, password);
-            return (SignInVerdict.Wrong, null);
+            return (NoSuchAccount(name, now), null);
         }
 
-        var now = _clock.GetUtcNow();
         // Locked first, and without looking at the password: a right guess during the lockout must not be told apart
         // from a wrong one, or the lockout only slows the guesser down to the speed of reading the answer.
         if (account.LockedUntil is { } until && until > now)
@@ -192,6 +192,38 @@ internal sealed class UserStore
         transaction.Commit();
         return (SignInVerdict.Ok, account);
     }
+
+    /// <summary>
+    /// A name that is no account, counted as an account's wrong passwords are: only accounts could be locked, so five
+    /// wrong passwords told a guesser whether a name was one. Kept in memory - nothing is written for a name nobody has -
+    /// and at most <see cref="NamesCounted"/> of them, so a guesser trying names cannot grow it without end.
+    /// </summary>
+    private SignInVerdict NoSuchAccount(string name, DateTimeOffset now)
+    {
+        lock (_unknown)
+        {
+            if (_unknown.Count >= NamesCounted)
+                foreach (var spent in _unknown.Where(n => n.Value.LockedUntil is not { } until || until <= now).Select(n => n.Key).ToList())
+                    _unknown.Remove(spent);
+            // Every one of them locked: a guesser is trying names faster than the lockouts run out. Forgetting them costs
+            // only the counts; keeping them all is memory without end.
+            if (_unknown.Count >= NamesCounted)
+                _unknown.Clear();
+            var (failures, lockedUntil) = _unknown.GetValueOrDefault(name);
+            if (lockedUntil is { } until && until > now)
+                return SignInVerdict.Locked;
+            if (++failures < FailuresBeforeLockout)
+            {
+                _unknown[name] = (failures, null);
+                return SignInVerdict.Wrong;
+            }
+            _unknown[name] = (0, now + LockoutFor);
+            return SignInVerdict.Locked;
+        }
+    }
+
+    private const int NamesCounted = 10_000;
+    private readonly Dictionary<string, (int Failures, DateTimeOffset? LockedUntil)> _unknown = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The only administrator who can still act. Disabling or demoting that one locks the service out of its own

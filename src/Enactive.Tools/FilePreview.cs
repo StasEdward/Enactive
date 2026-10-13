@@ -1,6 +1,7 @@
 namespace Enactive.Tools;
 
 using System.Text;
+using Enactive.Core;
 using Enactive.Core.Execution;
 
 /// <summary>Bounded scan and retained head/tail, shared by disk and staged readers.</summary>
@@ -28,7 +29,7 @@ internal sealed record FilePreview(string Text, int Characters, int Lines, bool 
         var end = new StringBuilder(tailSize);
         for (var i = count - tailSize; i < count; i++) end.Append(tail[i % budget]);
         var marker = complete
-            ? $"\n… ({count - budget:N0} characters not shown here; the end follows) …\n"
+            ? $"\n… ({Invariant.N0(count - budget)} characters not shown here; the end follows) …\n"
             : "\n… (middle not shown here; end of scanned prefix follows, NOT the file end) …\n";
         return new(head.ToString(0, headSize) + marker + end, count, lines, complete);
     }

@@ -1,0 +1,118 @@
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+@* The window's modal dialog, on the page: a title, what it says, and its buttons - over the screen, which stays where it
+   was underneath. A page asked its questions on pages of their own (ConfirmPage), so answering one lost the screen it
+   was asked from; here the question comes to the screen.
+
+   Modal as the window's is: open, it has the focus and the rest of the page is inert (Dialog.razor.js), so Escape
+   reaches it at once and Tab cannot leave it; closed, the focus goes back to what had it. Drawn over the screen but not
+   in charge of it, Tab walked the rows behind the scrim - another row's Delete could be pressed while a question was
+   open - and Escape did nothing until somebody clicked into the dialog. Escape and the scrim close it, as the window's
+   do, unless the caller's OnClose declines (busy doing what was asked).
+
+   Its keys stop at it: a dialog opened from the narrow screen's drawer (the folder browser, a delete's question) sits in
+   the drawer, and the Escape that closed the dialog went on to close the drawer under it as well. *@
+
+<div class="dialog-scrim" @onclick="CloseAsync">
+    <div class="@("dialog" + (Class is { Length: > 0 } ? " " + Class : ""))" role="dialog" aria-modal="true" aria-labelledby="@_titleId" tabindex="-1" @ref="_dialog"
+         @onclick:stopPropagation="true" @onkeydown="KeyAsync" @onkeydown:stopPropagation="true">
+        <h2 id="@_titleId" class="dialog-title">@Title</h2>
+        @ChildContent
+        @if (Actions is not null)
+        {
+            <div class="dialog-actions">@Actions</div>
+        }
+    </div>
+</div>
+
+@code {
+    // Unique per dialog, so the title names its own dialog even when one opens over another - and the key its hold on the
+    // page is kept under by the script.
+    private readonly string _titleId = "dialog-" + Guid.NewGuid().ToString("N");
+
+    private ElementReference _dialog;
+    private IJSObjectReference? _script;
+
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+
+    /// <summary>A class of the dialog's own beside "dialog" - a wider one for a form of two columns.</summary>
+    [Parameter] public string? Class { get; set; }
+
+    /// <summary>Escape, the scrim, or a Cancel the caller draws; nothing when the dialog may not be left now.</summary>
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    // The page held and the focus taken once the script has loaded - which can be after the dialog is gone: a double
+    // click whose second half lands on the scrim closes it while the import is still on its way. Holding the page then,
+    // for a dialog no longer there, left every control inert with nothing to release it, and focusing the missing dialog
+    // was an exception that took the connection down. So closing waits for the opening to finish (_opening), and the
+    // opening stops wherever it finds the dialog closed (_closed).
+    private Task? _opening;
+    private bool _closed;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+        _opening = OpenAsync();
+        try { await _opening; }
+        catch (Exception e) when (Gone(e))
+        {
+            // The page went away, or the dialog did, while it opened: nothing left to hold or to focus.
+        }
+    }
+
+    private async Task OpenAsync()
+    {
+        var script = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Ui/Dialog.razor.js");
+        if (_closed)
+        {
+            await script.DisposeAsync();
+            return;
+        }
+        _script = script;
+        // The page held first, while the focus is still on what opened the dialog: that is where it goes back.
+        await script.InvokeVoidAsync("hold", _titleId, _dialog);
+        if (!_closed)
+            await _dialog.FocusAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _closed = true;
+        try
+        {
+            if (_opening is not null)
+                await _opening;
+        }
+        catch (Exception e) when (Gone(e))
+        {
+        }
+
+        if (_script is null)
+            return;
+        try
+        {
+            await _script.InvokeVoidAsync("release", _titleId);
+            await _script.DisposeAsync();
+        }
+        catch (Exception e) when (Gone(e))
+        {
+            // The page is gone, and the hold with it.
+        }
+    }
+
+    /// <summary>
+    /// What the script calls end in when the page or the dialog has gone: the connection lost or shutting down, or - for
+    /// a dialog closed while it opened - the element it was to focus no longer there.
+    /// </summary>
+    private bool Gone(Exception e)
+        => e is JSDisconnectedException or OperationCanceledException or ObjectDisposedException || (_closed && e is JSException);
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private Task KeyAsync(KeyboardEventArgs e) => e.Key == "Escape" ? CloseAsync() : Task.CompletedTask;
+}

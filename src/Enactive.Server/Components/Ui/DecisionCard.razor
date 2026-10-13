@@ -1,0 +1,56 @@
+@* USER DECISION REQUIRED, as the window's card: amber, because the run is BLOCKED on a person - caution, not action. The
+   COMPLETE action, never the shortened one: a command is approved by reading it, so it keeps its line breaks and scrolls
+   rather than being cut off. The answers are the caller's to offer - by role, and the remembering ones to the run's
+   owner only - and every one is still the service's to take or refuse. *@
+
+<section class="decision" aria-label="User decision required">
+    <h2 class="decision-head">USER DECISION REQUIRED</h2>
+    <p class="decision-topic">@Topic</p>
+    @if (!string.IsNullOrWhiteSpace(FullText))
+    {
+        <pre class="decision-detail">@FullText</pre>
+    }
+    @if (Answers.Count > 0)
+    {
+        <div class="decision-answers">
+            @foreach (var answer in Answers)
+            {
+                <button type="button" class="@(answer == Recommended ? "btn primary" : "btn")" disabled="@Busy"
+                        @onclick="() => OnAnswer.InvokeAsync(answer)">@answer</button>
+            }
+        </div>
+    }
+    @if (Wait is { Length: > 0 })
+    {
+        <p class="decision-wait">@Wait</p>
+    }
+    @if (Said is { Length: > 0 })
+    {
+        <p class="said" role="alert">@Said</p>
+    }
+</section>
+
+@code {
+    /// <summary>What it asks, in a line.</summary>
+    [Parameter, EditorRequired] public string Topic { get; set; } = "";
+
+    /// <summary>Everything an answer authorises, in full.</summary>
+    [Parameter] public string? FullText { get; set; }
+
+    /// <summary>The answers offered this person, by label; none for somebody who may only read.</summary>
+    [Parameter] public IReadOnlyList<string> Answers { get; set; } = [];
+
+    /// <summary>The answer the run recommends: Ember, the action you are meant to take.</summary>
+    [Parameter] public string? Recommended { get; set; }
+
+    /// <summary>How long it still waits, and where it goes then; null when it waits for as long as it takes.</summary>
+    [Parameter] public string? Wait { get; set; }
+
+    /// <summary>What the service said to the last answer, when it refused it.</summary>
+    [Parameter] public string? Said { get; set; }
+
+    /// <summary>An answer is on its way: a second press is not a second answer.</summary>
+    [Parameter] public bool Busy { get; set; }
+
+    [Parameter] public EventCallback<string> OnAnswer { get; set; }
+}

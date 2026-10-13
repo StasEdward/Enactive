@@ -1,0 +1,132 @@
+@using System.Security.Claims
+@using Enactive.Server.Runs
+@using Enactive.Tools.Mcp
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerSettings Service
+
+@* The window's MCP editor (McpEditWindow.axaml), in a dialog over the settings - but not its JSON boxes, which show the
+   environment and the headers, tokens and all. This page is never handed them (ServerSettings): the form names which
+   are set (McpServerForm.NamesSet), new lines replace them, and Remove takes them away; nothing typed keeps them.
+   Arguments are one per line, so a path with a space in it stays one argument. Save puts the server into the settings'
+   copy; it is written when the settings are saved. *@
+
+<Dialog Title="MCP server" OnClose="OnClose">
+    <ChildContent>
+        <div class="settings-editor-column">
+            <label class="label" for="mcp-id">Server ID</label>
+            <input id="mcp-id" placeholder="e.g. desktop-commander" @bind="Draft.Id" />
+            <div class="settings-checks">
+                <label class="check"><input type="checkbox" @bind="Draft.Enabled" /> Enable</label>
+                <label class="check"><input type="checkbox" @bind="Draft.RequireApproval" /> Ask before every tool call</label>
+            </div>
+
+            <label class="label" for="mcp-transport">Transport</label>
+            <select id="mcp-transport" @bind="Draft.Transport">
+                @foreach (var transport in Enum.GetValues<McpTransportKind>())
+                {
+                    <option value="@transport">@transport</option>
+                }
+            </select>
+
+            @if (Draft.Transport == McpTransportKind.Stdio)
+            {
+                <label class="label" for="mcp-command">Executable</label>
+                <input id="mcp-command" placeholder="node, npx.cmd, uvx, or an executable path" @bind="Draft.Command" />
+                <label class="label" for="mcp-arguments">Arguments, one per line</label>
+                <textarea id="mcp-arguments" rows="3" @bind="_form.Arguments"></textarea>
+                @* The command line is kept in the clear and shown on this page: a token on it is a token no longer kept secret. *@
+                <p class="hint settings-credentials">No token or password in the arguments - they are kept in the clear and shown here. A credential goes in the environment below.</p>
+                <label class="label" for="mcp-folder">Working directory</label>
+                <input id="mcp-folder" placeholder="Blank uses the run's workspace" @bind="Draft.WorkingDirectory" />
+            }
+            else
+            {
+                <label class="label" for="mcp-url">Endpoint</label>
+                <input id="mcp-url" placeholder="https://host/mcp" @bind="Draft.Url" />
+                @* As a provider's address: kept in the clear, shown here and named in the audit trail. *@
+                <p class="hint settings-credentials">No token in the address - it is kept in the clear, shown here and named in the audit trail. A credential goes in a header below.</p>
+            }
+
+            <p class="label">Credentials</p>
+            <p class="hint settings-stored">Set: @McpServerForm.NamesSet(Draft)</p>
+            <label class="label" for="mcp-environment">New environment, NAME=value per line (replaces it)</label>
+            <textarea id="mcp-environment" rows="2" autocomplete="off" @bind="_form.NewEnvironment"></textarea>
+            <label class="label" for="mcp-headers">New headers, Name: value per line (replaces them)</label>
+            <textarea id="mcp-headers" rows="2" autocomplete="off" @bind="_form.NewHeaders"></textarea>
+            <label class="check"><input type="checkbox" @bind="_form.ClearCredentials" /> Remove its environment and headers</label>
+
+            <label class="label" for="mcp-timeout">Connection / call timeout (seconds)</label>
+            <input id="mcp-timeout" @bind="_form.Timeout" />
+
+            <p class="hint">Test starts the configured program or contacts the endpoint and lists tools. A package runner may download software. No tool is called. Environment and headers are encrypted with the service's Windows account when Settings are saved.</p>
+            <p class="hint">External servers have their own access to files and services. Enactive's staging and Undo do not cover their changes. Enable MCP access under AI · Team for the worker that should use it.</p>
+            <p class="hint settings-editor-status" role="status">@_status</p>
+        </div>
+    </ChildContent>
+    <Actions>
+        <button type="button" class="btn" disabled="@_testing" @onclick="TestAsync">Test connection</button>
+        <button type="button" class="btn primary" @onclick="Save">Save</button>
+        <button type="button" class="btn" @onclick="OnClose">Cancel</button>
+    </Actions>
+</Dialog>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The copy the window's MCP pane hands an editor (SettingsViewModel.McpEditRequested).</summary>
+    [Parameter, EditorRequired] public McpServerConfig Draft { get; set; } = default!;
+
+    /// <summary>What to do with it once saved: the settings' copy takes it.</summary>
+    [Parameter, EditorRequired] public Action<McpServerConfig> Saved { get; set; } = default!;
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private McpServerForm _form = new();
+    private McpServerConfig? _formOf;
+    private string? _status;
+    private bool _testing;
+
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_formOf, Draft))
+            return;
+        _formOf = Draft;
+        _form = McpServerForm.Of(Draft);
+        // As the window's editor says it on opening: the server is off until they are entered again.
+        _status = Draft.CredentialsUnavailable
+            ? McpEditorWords.CredentialsUnavailable
+            : null;
+    }
+
+    private async Task Save()
+    {
+        if (_form.ApplyTo(Draft) is { } problem)
+        {
+            _status = problem;
+            return;
+        }
+        Saved(Draft);
+        await OnClose.InvokeAsync();
+    }
+
+    /// <summary>On a copy, with what is typed so far: testing does not change what Save will write.</summary>
+    private async Task TestAsync()
+    {
+        _testing = true;
+        _status = McpEditorWords.Connecting;
+        try
+        {
+            var copy = Draft.Clone();
+            var trial = new McpServerForm
+            {
+                Arguments = _form.Arguments, NewEnvironment = _form.NewEnvironment, NewHeaders = _form.NewHeaders,
+                ClearCredentials = _form.ClearCredentials, Timeout = _form.Timeout
+            };
+            _status = trial.ApplyTo(copy) ?? await Service.TestMcpAsync((await Auth).User, copy, CancellationToken.None);
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
+}

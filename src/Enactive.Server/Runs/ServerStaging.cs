@@ -10,11 +10,11 @@ using Enactive.Server.Accounts;
 using Enactive.Workspace;
 
 /// <summary>A staged run's proposals as a list shows them.</summary>
-internal sealed record StagedSet(string Workspace, string Id, string Owner, string Prompt, DateTimeOffset Started,
+public sealed record StagedSet(string Workspace, string Id, string Owner, string Prompt, DateTimeOffset Started,
     int Pending, int Total, bool Running);
 
 /// <summary>One proposal: a file's next content, and the difference from what it builds on - null when not text.</summary>
-internal sealed record StagedFile(Guid Id, string Path, bool IsNew, bool Applied, bool Rejected, long Bytes, string? Diff);
+public sealed record StagedFile(Guid Id, string Path, bool IsNew, bool Applied, bool Rejected, long Bytes, string? Diff);
 
 /// <summary>
 /// Persistent staging (server plan A4, phase 3): a run from the browser in a workspace set to stage keeps its proposals
@@ -27,7 +27,7 @@ internal sealed record StagedFile(Guid Id, string Path, bool IsNew, bool Applied
 /// first, the file as it was when proposed, later proposals rejected before the ones they build on - are the store's
 /// own (StagingArtifactStore.Reopen), not a copy here.</para>
 /// </summary>
-internal sealed class ServerStaging(UserStore users, ServerEngine engine)
+internal sealed class ServerStaging(UserStore users, KnownWorkspaces workspaces)
 {
     private const string HeaderName = "run.json";
 
@@ -39,6 +39,14 @@ internal sealed class ServerStaging(UserStore users, ServerEngine engine)
     /// <summary>One action at a time on one run's proposals: two pages applying at once must not both pass the checks.</summary>
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// What waits changed: a run began to keep proposals or ended, one was applied or rejected, a set was dropped. The
+    /// rail's dot listens, as it does to the inbox (ServerInbox.Changed) - read only at a navigation it said "waiting"
+    /// over a set applied a moment ago on a page that does not navigate. Raised after the set's lock is let go, never inside
+    /// it: a listener that reads or decides again in answer would wait on the very action that woke it.
+    /// </summary>
+    public event Action? Changed;
+
     public static string Root(string workspace) => Path.Combine(Path.GetFullPath(workspace), ".enactive", "staging");
 
     /// <summary>The folder a run's proposals are kept in, named who started it - before the run writes anything.</summary>
@@ -48,6 +56,7 @@ internal sealed class ServerStaging(UserStore users, ServerEngine engine)
         Directory.CreateDirectory(folder);
         AtomicWrite.Replace(Path.Combine(folder, HeaderName), JsonSerializer.Serialize(new Header(owner, prompt, DateTimeOffset.Now)));
         _running[folder] = 0;
+        Listeners.Tell(Changed, "the proposed changes");
         return folder;
     }
 
@@ -62,12 +71,14 @@ internal sealed class ServerStaging(UserStore users, ServerEngine engine)
         if (pending == 0)
         {
             TryDelete(folder);
+            Listeners.Tell(Changed, "the proposed changes");
             return;
         }
         var info = WorkspaceInfo.For(workspace);
         await InboxStoreFactory.Create(info).AppendAsync(new InboxItem(Guid.NewGuid(), info.Id, "result",
             title, $"{pending} proposed change(s) wait to be applied or rejected", runId ?? Guid.Empty,
             "unread", DateTimeOffset.UtcNow), CancellationToken.None);
+        Listeners.Tell(Changed, "the proposed changes");
     }
 
     /// <summary>Every known workspace's kept proposals, newest first. Anybody signed in reads them, as the history.</summary>
@@ -76,16 +87,25 @@ internal sealed class ServerStaging(UserStore users, ServerEngine engine)
         if (ServerAuth.StillValid(users, user) is null)
             return [];
         var sets = new List<StagedSet>();
-        foreach (var workspace in engine.Workspaces.Entries)
+        foreach (var workspace in workspaces.All)
         {
             var root = Root(workspace.RootPath);
             if (!Directory.Exists(root))
                 continue;
-            foreach (var folder in Directory.EnumerateDirectories(root))
-                // Only what still waits, or is still being written: a folder whose proposals were all decided is
-                // left only when it could not be deleted.
-                if (Read(workspace.RootPath, Path.GetFileName(folder)) is { } set && (set.Pending > 0 || set.Running))
-                    sets.Add(set);
+            try
+            {
+                foreach (var folder in Directory.EnumerateDirectories(root))
+                    // Only what still waits, or is still being written: a folder whose proposals were all decided is
+                    // left only when it could not be deleted.
+                    if (Read(workspace.RootPath, Path.GetFileName(folder)) is { } set && (set.Pending > 0 || set.Running))
+                        sets.Add(set);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // One workspace whose staging cannot be listed now - a drive gone, a folder the service may not read - is
+                // passed over, as one proposal that cannot be read is (Read). Thrown, it took down every page: the rail
+                // asks for this list on each of them.
+            }
         }
         return sets.OrderByDescending(s => s.Started).ToList();
     }
@@ -113,16 +133,25 @@ internal sealed class ServerStaging(UserStore users, ServerEngine engine)
     /// <summary>Applies or rejects one proposal; what to tell the person.</summary>
     public async Task<string> ActAsync(ClaimsPrincipal user, string workspace, string id, Guid change, bool apply, CancellationToken ct)
     {
+        var (said, decided) = await DecideAsync(user, workspace, id, change, apply, ct);
+        // Outside the set's lock (see Changed), and only for a decision that was made: a refusal changed nothing.
+        if (decided)
+            Listeners.Tell(Changed, "the proposed changes");
+        return said;
+    }
+
+    private async Task<(string Said, bool Decided)> DecideAsync(ClaimsPrincipal user, string workspace, string id, Guid change, bool apply, CancellationToken ct)
+    {
         if (ServerAuth.StillValid(users, user) is not { } account)
-            return "Your session has ended. Sign in again.";
+            return ("Your session has ended. Sign in again.", false);
         // The owner or any Operator - and only Operators start runs, so it is the Operators, the owner among them
         // while their role still includes it.
         if (account.Role < Role.Operator)
-            return "Your role does not include applying or rejecting proposed changes.";
+            return ("Your role does not include applying or rejecting proposed changes.", false);
         if (Locate(workspace, id) is not { } found)
-            return "These proposals are no longer kept.";
+            return ("These proposals are no longer kept.", false);
         if (_running.ContainsKey(found.Folder))
-            return "The run is still going; its proposals can be applied or rejected when it has ended.";
+            return ("The run is still going; its proposals can be applied or rejected when it has ended.", false);
 
         var gate = _gates.GetOrAdd(found.Folder, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(ct);
@@ -130,12 +159,14 @@ internal sealed class ServerStaging(UserStore users, ServerEngine engine)
         {
             using var store = StagingArtifactStore.Reopen(found.Root, found.Folder);
             if (store.Changes.FirstOrDefault(c => c.Id == change) is not { } proposal)
-                return "That change is not among these proposals.";
+                return ("That change is not among these proposals.", false);
 
             string said;
+            bool decided;
             if (apply)
             {
                 var result = store.Apply(change);
+                decided = result.Applied;
                 said = result.Applied ? $"Applied: {proposal.RelativePath}." : $"Not applied - {result.Conflict}";
                 if (result.Applied)
                     users.Audit(account.Name, "staged change applied", $"{found.Name}: {proposal.RelativePath}");
@@ -143,6 +174,7 @@ internal sealed class ServerStaging(UserStore users, ServerEngine engine)
             else
             {
                 var result = store.Reject(change);
+                decided = result.Rejected;
                 said = result.Rejected ? $"Rejected: {proposal.RelativePath}." : $"Not rejected - {result.Conflict}";
                 if (result.Rejected)
                     users.Audit(account.Name, "staged change rejected", $"{found.Name}: {proposal.RelativePath}");
@@ -155,11 +187,11 @@ internal sealed class ServerStaging(UserStore users, ServerEngine engine)
                 TryDelete(found.Folder);
                 said += " Every proposal of this run is decided.";
             }
-            return said;
+            return (said, decided);
         }
         catch (IOException ex)
         {
-            return "These proposals cannot be read: " + ex.Message;
+            return ("These proposals cannot be read: " + ex.Message, false);
         }
         finally
         {
@@ -167,10 +199,59 @@ internal sealed class ServerStaging(UserStore users, ServerEngine engine)
         }
     }
 
+    /// <summary>
+    /// Drops the proposals nobody decided within <paramref name="keptFor"/> of their run's start - every known workspace,
+    /// never a run still writing - and says so in the workspace's inbox and the audit trail. The files are as they were:
+    /// a proposal is only ever a proposal until applied. How many sets were dropped.
+    /// </summary>
+    public async Task<int> ExpireAsync(DateTimeOffset now, TimeSpan keptFor, CancellationToken ct)
+    {
+        var dropped = 0;
+        foreach (var workspace in workspaces.All)
+        {
+            var root = Root(workspace.RootPath);
+            if (!Directory.Exists(root))
+                continue;
+            foreach (var folder in Directory.EnumerateDirectories(root))
+            {
+                var id = Path.GetFileName(folder);
+                if (Read(workspace.RootPath, id) is not { Running: false, Pending: > 0 } set || now - set.Started < keptFor)
+                    continue;
+
+                // Under the set's gate: a person applying one of them this moment finishes first, and is not undone.
+                var gate = _gates.GetOrAdd(folder, _ => new SemaphoreSlim(1, 1));
+                await gate.WaitAsync(ct);
+                try
+                {
+                    if (Read(workspace.RootPath, id) is not { Running: false, Pending: > 0 } still)
+                        continue;
+                    TryDelete(folder);
+                    if (Directory.Exists(folder))
+                        continue;   // tried again next time; said only once it is gone
+                    var days = (int)keptFor.TotalDays;
+                    users.Audit("(service)", "staged changes dropped",
+                        $"{workspace.Name}: {still.Pending} proposal(s) of {still.Owner}'s run \"{still.Prompt}\", not decided in {days} days");
+                    var info = WorkspaceInfo.For(workspace.RootPath);
+                    await InboxStoreFactory.Create(info).AppendAsync(new InboxItem(Guid.NewGuid(), info.Id, "result",
+                        still.Prompt, $"{still.Pending} proposed change(s) were not decided in {days} days and are dropped; the files are as they were",
+                        Guid.Empty, "unread", DateTimeOffset.UtcNow), ct);
+                    dropped++;
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            }
+        }
+        if (dropped > 0)
+            Listeners.Tell(Changed, "the proposed changes");
+        return dropped;
+    }
+
     /// <summary>A known workspace's proposal folder by its id - only a run id, so no name walks out of the folder.</summary>
     private (string Root, string Folder, string Name)? Locate(string workspace, string id)
     {
-        if (!Guid.TryParseExact(id, "N", out _) || engine.Workspaces.Find(workspace) is not { } known)
+        if (!Guid.TryParseExact(id, "N", out _) || workspaces.Find(workspace) is not { } known)
             return null;
         var folder = Path.Combine(Root(known.RootPath), id);
         return Directory.Exists(folder) ? (known.RootPath, folder, known.Name) : null;

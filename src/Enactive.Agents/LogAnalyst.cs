@@ -1,5 +1,6 @@
 namespace Enactive.Agents;
 
+using Enactive.Core;
 using Enactive.Core.Chat;
 using Enactive.Core.Diagnostics;
 using Enactive.Core.Providers;
@@ -19,6 +20,12 @@ public sealed record LogAnalysisResult(
     public bool WasExcerpt => LinesSent < LinesTotal;
 
     /// <summary>
+    /// What reading it cost, beside the answer's buttons: the tokens spent, or nothing when the provider did not say. In
+    /// the same digits on every host - the window and the service's page say it from here.
+    /// </summary>
+    public string Cost => PromptTokens + CompletionTokens > 0 ? $"{Invariant.N0(PromptTokens + CompletionTokens)} tokens" : "";
+
+    /// <summary>
     /// What the window says above the answer, so nobody has to guess what was read.
     ///
     /// <para>A digest is a different claim from an excerpt and has to read as one: an excerpt is
@@ -26,14 +33,14 @@ public sealed record LogAnalysisResult(
     /// 40,000,000 lines" about a digest would describe the wrong thing entirely.</para>
     /// </summary>
     public string Provenance => Digest is { } d
-        ? $"{Model} · DIGEST of {d.LinesRead:N0} lines — "
-          + $"{d.DetailLinesDropped:N0} prompt/response detail line(s) dropped, "
-          + $"{d.RecordsKept:N0} record(s) summarised"
-          + (d.TimelineDropped > 0 ? $", {d.TimelineDropped:N0} timeline entries capped" : "")
+        ? $"{Model} · DIGEST of {Invariant.N0(d.LinesRead)} lines — "
+          + $"{Invariant.N0(d.DetailLinesDropped)} prompt/response detail line(s) dropped, "
+          + $"{Invariant.N0(d.RecordsKept)} record(s) summarised"
+          + (d.TimelineDropped > 0 ? $", {Invariant.N0(d.TimelineDropped)} timeline entries capped" : "")
         : WasExcerpt
-            ? $"{Model} · read {LinesSent:N0} of {LinesTotal:N0} lines — the start and the end, "
+            ? $"{Model} · read {Invariant.N0(LinesSent)} of {Invariant.N0(LinesTotal)} lines — the start and the end, "
               + "with the middle omitted"
-            : $"{Model} · read all {LinesTotal:N0} lines";
+            : $"{Model} · read all {Invariant.N0(LinesTotal)} lines";
 }
 
 /// <summary>
@@ -171,8 +178,8 @@ public sealed class LogAnalyst
         {
             ChatMessage.System(SystemPrompt),
             ChatMessage.User(
-                $"This is a DIGEST of a log of {stats.LinesRead:N0} lines, not the log itself. "
-                + $"{stats.DetailLinesDropped:N0} of those lines were prompt and response bodies "
+                $"This is a DIGEST of a log of {Invariant.N0(stats.LinesRead)} lines, not the log itself. "
+                + $"{Invariant.N0(stats.DetailLinesDropped)} of those lines were prompt and response bodies "
                 + "written beneath their records, and they are NOT here — a digest holds what "
                 + "happened, not what was said. Every warning, every error, every tool call and "
                 + "each run/step's totals are here.\n\n"
@@ -181,7 +188,7 @@ public sealed class LogAnalyst
                       + "are shown, with the middle marked.\n\n"
                     : "")
                 + (stats.TimelineDropped > 0
-                    ? $"{stats.TimelineDropped:N0} further timeline entries were capped and are not "
+                    ? $"{Invariant.N0(stats.TimelineDropped)} further timeline entries were capped and are not "
                       + "listed; the per-step totals still count them.\n\n"
                     : "")
                 + "Do NOT report a missing prompt body, a missing response body or a missing line "
@@ -309,7 +316,7 @@ public sealed class LogAnalyst
         var omitted = lines.Count - linesSent;
 
         return string.Join("\n", head)
-             + $"\n{Gap} ({omitted:N0} lines) =====\n"
+             + $"\n{Gap} ({Invariant.N0(omitted)} lines) =====\n"
              + string.Join("\n", tail);
     }
 

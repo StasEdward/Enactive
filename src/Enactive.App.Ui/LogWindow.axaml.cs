@@ -1,6 +1,6 @@
 using Avalonia.Controls;
 using Enactive.Agents;
-using Enactive.App.Ui.ViewModels;
+using Enactive.Application;
 using Enactive.Workspace;
 
 namespace Enactive.App.Ui;
@@ -13,13 +13,16 @@ namespace Enactive.App.Ui;
 /// </summary>
 public sealed partial class LogWindow : Window
 {
+    /// <summary>How often the hub's queued lines are moved onto the list: in batches, never one dispatcher call per line.</summary>
+    private static readonly TimeSpan DrainEvery = TimeSpan.FromMilliseconds(120);
+
     /// <param name="analyse">
     /// How to have a model read the log, or null when none is configured. Supplied by the main
     /// window, which owns the providers and the routing; this window only knows what is on screen.
     /// </param>
     public LogWindow(LogHub hub, Func<string, CancellationToken, Task<LogAnalysisResult>>? analyse = null)
     {
-        var viewModel = new LogWindowViewModel(hub) { Analyse = analyse };
+        var viewModel = new LogWindowViewModel(hub, DispatcherDrain.Every(DrainEvery)) { Analyse = analyse };
         viewModel.AnalysisReady += result => new LogAnalysisWindow(result).Show(this);
         DataContext = viewModel;
         InitializeComponent();

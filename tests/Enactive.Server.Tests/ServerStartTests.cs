@@ -23,6 +23,7 @@ public sealed class ServerStartTests : IDisposable
 
     public void Dispose()
     {
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 
@@ -50,6 +51,15 @@ public sealed class ServerStartTests : IDisposable
         Assert.Contains(problems, p => p.Contains("answer nobody"));
         Assert.Contains(problems, p => p.Contains("HostNames"));
         Assert.Contains(problems, p => p.Contains("does not start without one"));
+    }
+
+    /// <summary>Proposals are kept 30 days unless server.json says otherwise; 0 keeps them until decided, less is no number of days.</summary>
+    [Fact]
+    public void Proposals_are_kept_thirty_days_and_a_negative_number_of_days_is_refused()
+    {
+        Assert.Equal(30, Good().ProposalsKeptDays);
+        Assert.Empty((Good() with { ProposalsKeptDays = 0 }).Problems());
+        Assert.Contains((Good() with { ProposalsKeptDays = -1 }).Problems(), p => p.Contains("ProposalsKeptDays"));
     }
 
     [Theory]
@@ -163,6 +173,29 @@ public sealed class ServerStartTests : IDisposable
 
         Assert.Null(DataFolderLock.TryTake(_root, out var holder));
         Assert.Equal("svc-enactive", holder?.User);
+    }
+
+    /// <summary>
+    /// The service's log, as the container keeps it: written out and closed when the service stops. Registered ready-made,
+    /// the container never disposed it - the hub's last lines were never pumped into the file, and the file stayed open, so
+    /// the data folder could not even be deleted.
+    /// </summary>
+    [Fact]
+    public void The_service_s_log_is_written_out_and_closed_when_it_stops()
+    {
+        var data = Path.Combine(_root, "data");
+        var services = new ServiceCollection();
+        ServerApp.AddServices(services, new ServerOptions(), data);
+        var provider = services.BuildServiceProvider();
+
+        Enactive.Core.Diagnostics.LogSinkExtensions.Info(provider.GetRequiredService<Enactive.Workspace.LogHub>(),
+            Enactive.Core.Diagnostics.LogSource.Host, "the last line before a stop");
+        provider.Dispose();
+
+        var file = Assert.Single(Directory.GetFiles(Path.Combine(data, "logs", "server"), "enactive-*.log"));
+        Assert.Contains("the last line before a stop", File.ReadAllText(file));
+        Enactive.Tests.SqlitePools.ClearUnder(data);
+        Directory.Delete(data, recursive: true);
     }
 
     // ── the pipeline ────────────────────────────────────────────────────────

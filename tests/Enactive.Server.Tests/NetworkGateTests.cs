@@ -56,6 +56,7 @@ public sealed class NetworkGateTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await _app.DisposeAsync();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 
@@ -113,4 +114,37 @@ public sealed class NetworkGateTests : IAsyncLifetime
     [Fact]
     public async Task A_host_name_the_service_is_not_reached_by_is_refused()
         => Assert.Equal(HttpStatusCode.BadRequest, (await GetAsync("/health", "10.20.3.4", host: "attacker.example")).StatusCode);
+
+    /// <summary>
+    /// The subnets come first, whatever the Host says: a network the service does not answer learns nothing from it, not
+    /// even that it would refuse a name. The framework's own host filter ran ahead of everything and answered such a
+    /// client with its "Invalid Hostname" page.
+    /// </summary>
+    [Fact]
+    public async Task A_client_outside_the_subnets_gets_nothing_whatever_the_host()
+    {
+        var response = await GetAsync("/health", "192.168.1.10", host: "attacker.example");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>
+    /// The refusal says why in the service's log: the browser shows only "Invalid Hostname", and a service opened by a
+    /// name server.json did not list (localhost, with HostNames naming the machine) looked broken with nothing said.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_host_name_is_said_in_the_log_with_the_names_it_answers()
+    {
+        var log = _app.Services.GetRequiredService<Enactive.Workspace.LogHub>();
+
+        Assert.Equal(HttpStatusCode.OK, (await GetAsync("/health", "10.20.3.4", host: "localhost:8443")).StatusCode);
+        Assert.DoesNotContain(log.Snapshot(), e => e.Message.Contains("is not a name the service is reached by"));
+
+        var refused = await GetAsync("/health", "10.20.3.4", host: "pcil-0609:8443");
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        var said = Assert.Single(log.Snapshot(), e => e.Message.Contains("is not a name the service is reached by"));
+        Assert.Contains("pcil-0609", said.Message);
+        Assert.Contains("localhost, enactive.lab.local", said.Message);
+    }
 }

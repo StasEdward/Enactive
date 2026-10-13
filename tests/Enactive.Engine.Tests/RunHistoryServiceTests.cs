@@ -143,6 +143,37 @@ public sealed class RunHistoryServiceTests : IDisposable
         finally { File.Delete(outside); }
     }
 
+    /// <summary>
+    /// A path inside the workspace by name that a junction leads out of it is not the workspace's file: File.Delete
+    /// follows the junction and deleted the file it led to (a run can make one with its shell). Reading it was refused
+    /// already (WorkspaceFiles); deleting it was not.
+    /// </summary>
+    [Fact]
+    public void A_file_reached_through_a_link_is_not_the_workspace_s_to_delete()
+    {
+        var elsewhere = Path.Combine(Path.GetDirectoryName(_root)!, "elsewhere-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(elsewhere);
+        var outside = Path.Combine(elsewhere, "outside.txt");
+        File.WriteAllText(outside, "somebody else's");
+        using (var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe",
+                   $"/c mklink /J \"{Path.Combine(_root, "escape")}\" \"{elsewhere}\"")
+               { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true })!)
+            mklink.WaitForExit();
+        try
+        {
+            Assert.Null(RunHistoryService.DeleteFile(_root, "escape\\outside.txt"));
+            var (status, done) = RunHistoryService.DeleteFileNow(_root, "escape\\outside.txt");
+            Assert.Contains("link", status);
+            Assert.True(done);
+            Assert.True(File.Exists(outside));
+        }
+        finally
+        {
+            Directory.Delete(Path.Combine(_root, "escape"));
+            Directory.Delete(elsewhere, recursive: true);
+        }
+    }
+
     [Fact]
     public void A_file_is_deleted_as_it_is_now_after_a_question_that_gives_its_date()
     {

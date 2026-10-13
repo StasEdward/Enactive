@@ -33,6 +33,57 @@ public sealed class RunSessionTests
         return all;
     }
 
+    /// <summary>
+    /// A page that subscribes as the run ends - its watchers just told, the end not yet said - is told it ended. It was
+    /// added after the last watchers were told and waited for an end that never came, showing the run as it was before
+    /// its last events.
+    /// </summary>
+    [Fact]
+    public async Task A_page_that_subscribes_as_the_run_ends_is_told_it_ended()
+    {
+        var engine = new Engine();
+        var session = new RunSession("C:\\work", "alice", "tidy the wiki");
+        RunSession.Subscription? late = null;
+        session.Ending = () => late = session.Subscribe(session.Seq);
+        var drained = session.DrainAsync(engine.Events, CancellationToken.None);
+
+        engine.Emit(Ev(EventKind.TaskCompleted, "Completed"));
+        engine.End();
+        await drained;
+
+        Assert.Empty(await AllOf(late!).WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.False(late!.Behind);
+    }
+
+    /// <summary>
+    /// A page that leaves while it is redrawing stops following without an error. The page disposed what told it it
+    /// had left, then read it again on its next wait, and its listener ended in an exception nobody observed.
+    /// </summary>
+    [Fact]
+    public async Task A_page_that_leaves_while_it_redraws_stops_following_without_an_error()
+    {
+        var engine = new Engine();
+        var session = new RunSession("C:\\work", "alice", "tidy the wiki");
+        var drained = session.DrainAsync(engine.Events, CancellationToken.None);
+        var redrawing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var carryOn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var follower = new RunFollower(session, () => session.Seq, async () =>
+        {
+            redrawing.TrySetResult();
+            await carryOn.Task;
+        });
+        follower.Start();
+
+        engine.Emit(Ev(EventKind.StepStarted, "step 1"));
+        await redrawing.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        follower.Dispose();
+        carryOn.SetResult();
+
+        await follower.Following.WaitAsync(TimeSpan.FromSeconds(5));
+        engine.End();
+        await drained;
+    }
+
     [Fact]
     public async Task A_watcher_gets_every_event_in_order_numbered_and_the_end()
     {
@@ -104,7 +155,7 @@ public sealed class RunSessionTests
         engine.Emit(Ev(EventKind.ToolInvoked, "read_file a.md"));
         await WaitUntil(() => session.Seq == 2);
 
-        var (action, calls, at) = session.Read((feed, activity, seq) => (activity.CurrentAction, activity.ToolCalls, seq));
+        var (action, calls, at) = session.Read((feed, activity, _, seq) => (activity.CurrentAction, activity.ToolCalls, seq));
         var later = session.Subscribe(at);
         engine.Emit(Ev(EventKind.ReviewRequested, "reviewing step 1"));
         engine.End();
@@ -162,6 +213,131 @@ public sealed class RunSessionTests
         await drained;
 
         Assert.Empty(await AllOf(left));
+    }
+
+    /// <summary>
+    /// The status column's figures - which model served each phase, the tokens and where they ran, the files, each
+    /// model's speed - read with the cards under the same lock, at the same event. Without the panel in the session a
+    /// page had the cards and nothing else, and would have had to fold the events a second time to show the rest.
+    /// </summary>
+    [Fact]
+    public async Task The_panel_is_folded_with_the_feed()
+    {
+        var engine = new Engine();
+        var session = new RunSession("C:\\work", "alice", "tidy the wiki",
+            reachOf: id => id == "ollama" ? Enactive.Application.Projections.ModelReach.Local : Enactive.Application.Projections.ModelReach.Cloud);
+        // A call can be reported before the run's first event has said the run's id: it is shown once it has.
+        session.AddMetrics(new Enactive.Core.Chat.ModelCallMetrics("ollama", "qwen", 100, 20, null, 2.0, 0.5, null, Run));
+        var drained = session.DrainAsync(engine.Events, CancellationToken.None);
+
+        engine.Emit(Ev(EventKind.Routed, "Worker -> model ollama/qwen", WorkEventPayload.RoutePayload("worker", "ollama", "qwen")));
+        engine.Emit(Ev(EventKind.UsageReported, "usage", WorkEventPayload.UsagePayload(100, 20, 1, providerId: "ollama")));
+        engine.Emit(Ev(EventKind.ArtifactProduced, "Wrote: wiki.md", WorkEventPayload.ArtifactPayload("document", "wiki.md")));
+        engine.End();
+        await drained;
+
+        var (routes, prompt, completion, reaches, artifacts, models, seq) = session.Read((_, _, panel, at) => (
+            panel.Routing.Rows.Select(r => (r.Phase, r.Model)).ToList(),
+            panel.PromptTokens, panel.CompletionTokens,
+            panel.Work.Rows.Select(r => r.Reach).ToList(),
+            panel.Artifacts,
+            panel.Performance.Rows.Select(r => r.Model).ToList(),
+            at));
+
+        Assert.Equal([("worker", "ollama/qwen")], routes);
+        Assert.Equal((100, 20), (prompt, completion));
+        Assert.Equal([Enactive.Application.Projections.ModelReach.Local], reaches);
+        Assert.Equal(1, artifacts);
+        Assert.Equal(["qwen"], models);
+        Assert.Equal(3L, seq);
+    }
+
+    /// <summary>
+    /// Who else has the run open, for "also watching": each person once however many tabs they have, and gone when
+    /// their last tab leaves - a name kept after its page closed would say somebody is looking who is not.
+    /// </summary>
+    [Fact]
+    public void Watchers_are_named_once_and_leave_when_they_unsubscribe()
+    {
+        var session = new RunSession("C:\\work", "alice", "t");
+        var bobsFirstTab = session.Subscribe(0, "bob");
+        var alice = session.Subscribe(0, "alice");
+        var bobsSecondTab = session.Subscribe(0, "bob");
+        session.Subscribe(0); // nobody named: a test's, or a page that does not say who it is for
+
+        Assert.Equal(["alice", "bob"], session.Watchers);
+
+        session.Unsubscribe(bobsFirstTab);
+        Assert.Equal(["alice", "bob"], session.Watchers);
+        session.Unsubscribe(bobsSecondTab);
+        Assert.Equal(["alice"], session.Watchers);
+        session.Unsubscribe(alice);
+        Assert.Empty(session.Watchers);
+    }
+
+    /// <summary>A watcher dropped for falling behind, and every watcher once the run is over, is no longer watching.</summary>
+    [Fact]
+    public async Task Watchers_leave_when_they_fall_behind_and_when_the_run_ends()
+    {
+        var engine = new Engine();
+        var session = new RunSession("C:\\work", "alice", "a long reply");
+        var asleep = session.Subscribe(0, "asleep");
+        var drained = session.DrainAsync(engine.Events, CancellationToken.None);
+
+        for (var i = 0; i < RunSession.SubscriberBuffer + 1; i++)
+            engine.Emit(Ev(EventKind.AssistantDelta, "x"));
+        await WaitUntil(() => session.Seq == RunSession.SubscriberBuffer + 1);
+        // Subscribed after the burst, so it is not the one that falls behind.
+        session.Subscribe(session.Seq, "awake");
+
+        Assert.True(asleep.Behind);
+        Assert.Equal(["awake"], session.Watchers);
+
+        engine.End();
+        await drained;
+        Assert.Empty(session.Watchers);
+    }
+
+    /// <summary>
+    /// Somebody opening or leaving the run is told to the pages on it, so "also watching" changes when they come and go.
+    /// The names were only read as a page redrew for an event - and a run waiting on a question has none, so a person who
+    /// opened it was not shown to the others until the run moved again, and one who left was shown as watching.
+    /// </summary>
+    [Fact]
+    public async Task Watchers_coming_and_going_are_told()
+    {
+        var engine = new Engine();
+        var session = new RunSession("C:\\work", "alice", "t");
+        var told = 0;
+        session.WatchersChanged += () => Interlocked.Increment(ref told);
+        var drained = session.DrainAsync(engine.Events, CancellationToken.None);
+
+        var bob = session.Subscribe(0, "bob");
+        Assert.Equal(1, told);
+        session.Unsubscribe(bob);
+        Assert.Equal(2, told);
+        // Nobody named: no name came or went.
+        session.Unsubscribe(session.Subscribe(0));
+        Assert.Equal(2, told);
+
+        session.Subscribe(session.Seq, "carol");
+        engine.End();
+        await drained;
+        Assert.Equal(4, told);
+        Assert.Empty(session.Watchers);
+    }
+
+    /// <summary>A page following the run says whose it is, and stops being counted when it leaves.</summary>
+    [Fact]
+    public void A_page_following_the_run_is_named_among_its_watchers()
+    {
+        var session = new RunSession("C:\\work", "alice", "t");
+        var follower = new RunFollower(session, () => session.Seq, () => Task.CompletedTask, watcher: "bob");
+
+        follower.Start();
+        Assert.Equal(["bob"], session.Watchers);
+        follower.Dispose();
+        Assert.Empty(session.Watchers);
     }
 
     private static async Task WaitUntil(Func<bool> condition)

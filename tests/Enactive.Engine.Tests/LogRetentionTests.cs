@@ -40,6 +40,25 @@ public sealed class LogRetentionTests : IDisposable
         => sink.Log(new LogEntry(1, DateTimeOffset.Now, LogLevel.Info, LogSource.System,
                                  null, null, "hello", null, null));
 
+    /// <summary>
+    /// A sink that is disposed writes nothing more, and does not open its file again: a line logged after - by a host's own
+    /// shutdown - reopened it on the roll, and the file stayed open to the end of the process.
+    /// </summary>
+    [Fact]
+    public void A_disposed_sink_writes_nothing_more_and_keeps_its_file_closed()
+    {
+        var sink = new FileLogSink(_dir);
+        WriteSomething(sink);
+        sink.Dispose();
+        var today = Path.Combine(_dir, $"enactive-{DateTime.Now:yyyyMMdd}.log");
+        var written = File.ReadAllText(today);
+
+        WriteSomething(sink);
+
+        Assert.Equal(written, File.ReadAllText(today));
+        File.Delete(today);   // not held open
+    }
+
     [Fact]
     public void A_file_older_than_the_window_goes()
     {

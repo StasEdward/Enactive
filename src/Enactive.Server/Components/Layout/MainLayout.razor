@@ -1,30 +1,40 @@
 @inherits LayoutComponentBase
-@using Microsoft.AspNetCore.Components.Authorization
+@using Enactive.Server.Components.Shell
+@implements IDisposable
+@inject NavigationManager Navigation
 
-<header class="top">
-    <a class="mark" href="/"><img src="brand/mark-loop.svg" alt="" />Enactive</a>
-    <AuthorizeView>
-        <Authorized>
-            <nav class="nav">
-                <a href="/">Runs</a>
-                <a href="inbox">Inbox</a>
-                <a href="proposals">Proposals</a>
-                <a href="workspaces">Workspaces</a>
-                <a href="logs">Log</a>
-                <AuthorizeView Policy="Admin" Context="admin">
-                    <a href="admin/settings">Settings</a>
-                    <a href="admin/users">Accounts</a>
-                    <a href="admin/audit">Audit</a>
-                </AuthorizeView>
-            </nav>
-            <span class="who">@context.User.Identity?.Name</span>
-            <form method="post" action="/signout" class="signout">
-                <AntiforgeryToken />
-                <button type="submit">Sign out</button>
-            </form>
-        </Authorized>
-    </AuthorizeView>
-</header>
-<main>
-    @Body
-</main>
+@* The workspace drawer's state, for the top bar's button and the screen whose column it is. Fixed: it is one object for
+   the page's life, and each of them follows its Changed. *@
+<CascadingValue Value="_drawer" IsFixed="true">
+    <TopBar />
+    <div class="shell">
+        <Rail />
+        <main>
+            @* A page that throws shows that it failed, and a way back. With no boundary, any exception in a page ended the
+               connection and left the page as it was - still saying "Connected" in the top bar, every button dead. The
+               rail and the top bar stay, so another section is one click away; moving to one clears the failure. *@
+            <ErrorBoundary @ref="_failed">
+                <ChildContent>@Body</ChildContent>
+                <ErrorContent>
+                    <div class="page-failed" role="alert">
+                        <p class="label">This page stopped working</p>
+                        <p class="hint">Something went wrong on the service while it was drawn or used. What was saved is saved, and runs go on. Reload the page, or open another section.</p>
+                        <button type="button" class="btn primary" onclick="location.reload()">Reload</button>
+                    </div>
+                </ErrorContent>
+            </ErrorBoundary>
+        </main>
+    </div>
+</CascadingValue>
+
+@code {
+    private DrawerState _drawer = default!;
+    private ErrorBoundary? _failed;
+
+    protected override void OnInitialized() => _drawer = new DrawerState(Navigation);
+
+    // Another page in the same place: the failure was the last page's, and the boundary would go on showing it.
+    protected override void OnParametersSet() => _failed?.Recover();
+
+    public void Dispose() => _drawer.Dispose();
+}

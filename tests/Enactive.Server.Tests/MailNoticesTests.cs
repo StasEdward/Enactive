@@ -34,19 +34,39 @@ public sealed class MailNoticesTests : IDisposable
     public void Dispose()
     {
         _engine.Dispose();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 
     private MailNotices Notices(params string[] to) => new(_engine,
-        new ServerOptions { NoticeRecipients = to, HostNames = ["enactive.lab.local"], Listen = ["0.0.0.0:8443"] },
+        new ServerOptions { WorkspaceRoots = [_root], NoticeRecipients = to, HostNames = ["enactive.lab.local"], Listen = ["0.0.0.0:8443"] },
         new ServerFolders(_root), NullLogger<MailNotices>.Instance,
         (_, message, _) => { _sent.Add(message); return Task.CompletedTask; });
 
-    private Task Arrives(string title, string summary, string status = "unread")
+    private Task Arrives(string title, string summary, string status = "unread", int secondsFromNow = 1)
     {
         var workspace = WorkspaceInfo.For(_workspace);
         return InboxStoreFactory.Create(workspace).AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, "result", title, summary,
-            Guid.Empty, status, DateTimeOffset.UtcNow.AddSeconds(1)), CancellationToken.None);
+            Guid.Empty, status, DateTimeOffset.UtcNow.AddSeconds(secondsFromNow)), CancellationToken.None);
+    }
+
+    /// <summary>
+    /// An item stamped before the newest one mailed, but filed after that mail - a run in another workspace ending while
+    /// the inbox was read - is mailed too. The newest item mailed was the mark, and anything older was never news again.
+    /// </summary>
+    [Fact]
+    public async Task An_item_filed_late_with_an_earlier_time_is_still_mailed()
+    {
+        var notices = Notices("stas@lab.local");
+        await notices.TickAsync(CancellationToken.None);
+        await Arrives("nightly review", "Completed", secondsFromNow: 3);
+        Assert.Equal(1, await notices.TickAsync(CancellationToken.None));
+
+        await Arrives("morning digest", "Completed", secondsFromNow: 2);
+
+        Assert.Equal(1, await notices.TickAsync(CancellationToken.None));
+        Assert.Contains("morning digest", _sent[^1].TextBody);
+        Assert.Equal(0, await notices.TickAsync(CancellationToken.None));
     }
 
     [Fact]
@@ -67,6 +87,30 @@ public sealed class MailNoticesTests : IDisposable
 
         Assert.Equal(0, await notices.TickAsync(CancellationToken.None));
         Assert.Single(_sent);
+    }
+
+    /// <summary>
+    /// The mail says each item's time as the window does, "yyyy-MM-dd HH:mm", whatever the service's culture: under fi-FI
+    /// it wrote "09.05".
+    /// </summary>
+    [Fact]
+    public async Task The_mail_says_each_time_as_the_window_does_in_every_culture()
+    {
+        var was = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("fi-FI");
+            var notices = Notices("stas@lab.local");
+            await notices.TickAsync(CancellationToken.None);
+            await Arrives("morning digest", "Completed");
+
+            Assert.Equal(1, await notices.TickAsync(CancellationToken.None));
+            Assert.Matches(@"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}  ", Assert.Single(_sent).TextBody);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = was;
+        }
     }
 
     /// <summary>A restart reads where the last mail stopped: nothing mailed twice.</summary>

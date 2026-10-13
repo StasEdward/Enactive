@@ -35,8 +35,8 @@ internal static class ServerCertificate
         var at = (now ?? DateTimeOffset.Now).LocalDateTime;
         if (at > certificate.NotAfter || at < certificate.NotBefore)
         {
-            problem = $"The certificate {certificate.Subject} is valid from {certificate.NotBefore:yyyy-MM-dd} to "
-                      + $"{certificate.NotAfter:yyyy-MM-dd}, not now.";
+            problem = $"The certificate {certificate.Subject} is valid from {certificate.NotBefore.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)} to "
+                      + $"{certificate.NotAfter.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}, not now.";
             certificate.Dispose();
             return null;
         }

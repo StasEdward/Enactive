@@ -23,7 +23,7 @@ public sealed class McpSettingsTests : IDisposable
         _users.Add("ada", "correct horse battery", Role.Admin);
         _users.Add("alice", "correct horse battery", Role.Operator);
         _engine = new ServerEngine(_root, new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
-        _settings = new ServerSettings(_users, _engine);
+        _settings = new ServerSettings(_users, _engine, new WorkspaceRoots([]));
 
         var settings = AppSettings.Load(_engine.SettingsFile);
         settings.McpServers.Add(new McpServerConfig
@@ -37,7 +37,7 @@ public sealed class McpSettingsTests : IDisposable
     public void Dispose()
     {
         _engine.Dispose();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 
@@ -65,10 +65,30 @@ public sealed class McpSettingsTests : IDisposable
     [Fact]
     public void The_page_is_told_the_names_never_the_values()
     {
-        var said = McpServerForm.NamesSet(_settings.Open(As("ada")).Opened!.Copy.McpServers.Single());
+        var copy = _settings.Open(As("ada")).Opened!.Copy.McpServers.Single();
+        var said = McpServerForm.NamesSet(copy);
 
         Assert.Contains("Authorization", said);
         Assert.DoesNotContain("tk-very-secret", said);
+        // Nor does the copy the page edits hold them, to be drawn by a box bound to the wrong field.
+        Assert.Equal("", copy.Headers["Authorization"]);
+    }
+
+    /// <summary>
+    /// "Remove its environment and headers" on the page's copy removes them: the copy holds a handle for the credentials
+    /// it never saw, and a save put back whatever a handle named - the box removed nothing.
+    /// </summary>
+    [Fact]
+    public void The_box_removes_them_from_the_page_s_copy_too()
+    {
+        var opened = _settings.Open(As("ada")).Opened!;
+        var server = opened.Copy.McpServers.Single();
+
+        Assert.Null(new McpServerForm { ClearCredentials = true, Timeout = "60" }.ApplyTo(server));
+        Assert.True(_settings.Save(As("ada"), opened).Saved);
+
+        Assert.Empty(Saved().Headers);
+        Assert.Equal("", Saved().SecretsProtected);
     }
 
     [Fact]
@@ -109,5 +129,29 @@ public sealed class McpSettingsTests : IDisposable
 
         Assert.Contains("role does not include", await _settings.TestMcpAsync(As("alice"), server, CancellationToken.None));
         Assert.StartsWith("Could not connect", await _settings.TestMcpAsync(As("ada"), server, CancellationToken.None));
+        // Typed in full, nothing kept was used: nothing to record.
+        Assert.DoesNotContain(_users.AuditTrail(), e => e.Action == "MCP server tested");
+    }
+
+    /// <summary>
+    /// The credentials kept for a server go wherever an Admin points it now - an Admin may do that - and the audit trail
+    /// says where they went, and who sent them, never what they were.
+    /// </summary>
+    [Fact]
+    public async Task A_test_with_the_credentials_kept_for_a_server_is_audited_with_where_they_went()
+    {
+        var server = _settings.Open(As("ada")).Opened!.Copy.McpServers.Single();
+        // With a token of its own in the address (user info is refused by the server's own check): the trail says where,
+        // never what the query carried (ServerSettings.Address).
+        server.Url = "http://127.0.0.1:1/elsewhere?token=tok-in-url#part";
+        server.TimeoutSeconds = 5;
+
+        await _settings.TestMcpAsync(As("ada"), server, CancellationToken.None);
+
+        var entry = Assert.Single(_users.AuditTrail(), e => e.Action == "MCP server tested");
+        Assert.Equal("ada", entry.Account);
+        Assert.Equal("tracker: http://127.0.0.1:1/elsewhere (with the credentials kept for it)", entry.Detail);
+        Assert.DoesNotContain("tk-very-secret", entry.Detail);
+        Assert.DoesNotContain("in-url", entry.Detail);
     }
 }

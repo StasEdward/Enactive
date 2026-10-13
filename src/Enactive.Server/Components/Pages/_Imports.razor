@@ -2,3 +2,7 @@
 @* Every page is a signed-in Viewer's at least, unless it says otherwise: a page that forgets its attribute is closed,
    not open. Pages that need more say [Authorize(Policy = "Operator")] / "Admin" themselves. *@
 @attribute [Authorize(Policy = "Viewer")]
+@* A page whose content depends on its address (route or query) reads it in OnParametersSetAsync, not
+   OnInitializedAsync: pages are live, and a link to the same page with another query keeps the page and only sets its
+   parameters again - what it showed went stale (browsing into a folder still listed the roots; found by
+   tests/server-e2e). *@

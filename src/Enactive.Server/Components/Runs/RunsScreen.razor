@@ -1,0 +1,128 @@
+@page "/"
+@page "/runs/{RunId:guid}"
+@page "/history/{WorkspaceId:guid}/{PastRunId:guid}"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = "Viewer")]
+@using Enactive.Server.Runs
+@using Enactive.Server.Components.Shell
+@using Enactive.Server.Components.Ui
+@using Microsoft.AspNetCore.Components.Authorization
+@implements IDisposable
+@inject IRunControl Runs
+@inject ServerHistory History
+@inject WorkspaceIds Ids
+@inject NavigationManager Navigation
+
+@if (RunId is null && PastRunId is null)
+{
+    <PageTitle>Enactive</PageTitle>
+}
+
+@* The Runs screen, as the main window: the workspace and runs column on the left, the command bar and the run on the
+   right. A run has an address of its own (/runs/{id}) on this same screen, under the bar - the window shows the run it
+   watches where it started it - and is opened from the column's RUNNING list. A past run has one too
+   (/history/{workspace}/{run}), opened from a history row, and is shown read-only in the run's place, as the window
+   shows one over its live run - which goes on: it is the service's, and reading history never interrupts work. ← Back
+   on the past run, and the bar's Stop, are still the run in progress this screen showed last. *@
+
+<div class="runs-screen">
+    @* On a narrow screen the column is a drawer, opened from the top bar's button (DrawerState): beside a 390 px screen
+       there is no room for it, and above the bar it pushed the box and the run a screen down. *@
+    <Drawer Id="@DrawerState.Id" Open="Drawer?.IsOpen == true" OnClose="() => Drawer?.Close()">
+        <WorkspaceColumn WorkspaceId="_wanted" Said="@Said" />
+    </Drawer>
+
+    <section class="runs-main">
+        @* The window's command bar, on the workspace the column shows: Run starts there and opens the run here, and the
+           settings beside it are that workspace's. Its Stop is the open run's - under a past run, the run in progress it
+           is read over; on the screen without a run, none: kept on the last one there, the bar was busy for a run not on
+           screen, Run greyed, and Stop cancelled a run in another workspace. *@
+        <CommandBar Workspace="_shown" OpenRun="RunId ?? (PastRunId is null ? null : _live)" />
+
+        @if (PastRunId is { } past)
+        {
+            @if (_shown is { } workspace)
+            {
+                <PastRun Root="@workspace.RootPath" RunId="past" BackTo="_live" />
+            }
+        }
+        else if (RunId is { } run)
+        {
+            <LiveRun RunId="run" />
+        }
+    </section>
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The layout's workspace drawer, which this screen's column is on a narrow screen.</summary>
+    [CascadingParameter] public DrawerState? Drawer { get; set; }
+
+    protected override void OnInitialized()
+    {
+        if (Drawer is null)
+            return;
+        Drawer.Changed += OnDrawerChanged;
+        Drawer.Offer(true);
+    }
+
+    private void OnDrawerChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        if (Drawer is null)
+            return;
+        Drawer.Changed -= OnDrawerChanged;
+        Drawer.Offer(false);
+    }
+
+    /// <summary>The run shown under the bar, at /runs/{id}; null on the screen without one.</summary>
+    [Parameter] public Guid? RunId { get; set; }
+
+    /// <summary>A past run's workspace, by its id (WorkspaceIds), at /history/{workspace}/{run}.</summary>
+    [Parameter] public Guid? WorkspaceId { get; set; }
+
+    /// <summary>The past run shown in the run's place, at /history/{workspace}/{run}; null on the screen without one.</summary>
+    [Parameter] public Guid? PastRunId { get; set; }
+
+    /// <summary>
+    /// The workspace, by its id (WorkspaceIds). Read as text and parsed here: an address is typed by people, and one
+    /// that is not an id must say "not known" rather than fail the page.
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "ws")] private string? Ws { get; set; }
+
+    /// <summary>What an action that led here said - a folder just added - carried by the navigation (Links.Saying).</summary>
+    private string? Said => Links.SaidOn(Navigation);
+
+    private Guid? _wanted;
+    private Enactive.Workspace.WorkspaceEntry? _shown;
+
+    /// <summary>
+    /// The run in progress this screen showed last - the window's live run, which a past run is read over: ← Back returns
+    /// to it and Stop is still its. The router keeps this screen across its addresses, and with it what it showed.
+    /// </summary>
+    private Guid? _live;
+
+    // Read per address, not once: see Pages/_Imports.razor.
+    protected override async Task OnParametersSetAsync()
+    {
+        var user = (await Auth).User;
+        if (RunId is { } shownRun)
+            _live = shownRun;
+        else if (_live is { } live && Runs.Find(user, live) is null)
+            // Gone from the service (it restarted, or the person may no longer see it): nothing to go back to.
+            _live = null;
+
+        // An id that does not parse names no workspace (Guid.Empty is no folder's), rather than the one used last.
+        _wanted = WorkspaceId is { } pastWorkspace ? pastWorkspace
+            : Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty
+            // A run's address names no workspace: the column shows the run's, as the window's shows the folder of the run
+            // it watches - with the one used last there, Run under a run would have started in another folder than its.
+            : RunId is { } runId && Runs.Find(user, runId) is { } run ? Ids.TryIdOf(run.Workspace)
+            : null;
+
+        // The command bar runs in the workspace the column shows, as the window's does; none when the address names one
+        // the service does not know - a run is never started in another folder than the one on screen.
+        _shown = WorkspaceColumnState.Choose(History.Workspaces(user), _wanted, Ids);
+    }
+}

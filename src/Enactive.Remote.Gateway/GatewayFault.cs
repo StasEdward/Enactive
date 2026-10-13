@@ -1,5 +1,6 @@
 namespace Enactive.Remote.Gateway;
 
+using System.Globalization;
 using Enactive.Remote.Contracts;
 
 /// <summary>
@@ -76,7 +77,7 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
     /// </summary>
     public static GatewayFault EnvelopeMalformed(string field, int maxChars) => new(
         FaultCode.EnvelopeMalformed, 400,
-        $"'{field}' must be a sealed envelope of at most {maxChars:N0} characters.");
+        $"'{field}' must be a sealed envelope of at most {maxChars.ToString("N0", CultureInfo.InvariantCulture)} characters.");
 
     public static GatewayFault UnknownEventKind(string kind) => new(
         FaultCode.UnknownEventKind, 400, $"'{kind}' is not an event kind this gateway understands.");
@@ -137,7 +138,7 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
 
     public static GatewayFault InviteLimit(int max) => new(
         FaultCode.InviteLimit, 409,
-        $"This account already has {max:N0} open {(max == 1 ? "invitation" : "invitations")}. "
+        $"This account already has {max.ToString("N0", CultureInfo.InvariantCulture)} open {(max == 1 ? "invitation" : "invitations")}. "
         + "Wait for one to be used or to expire - each lasts ten minutes - to make another.");
 
     /// <summary>
@@ -195,7 +196,7 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
 
     public static GatewayFault DeviceLimit(int max) => new(
         "device-limit", 409,
-        $"This account already has {max:N0} {(max == 1 ? "device" : "devices")}. "
+        $"This account already has {max.ToString("N0", CultureInfo.InvariantCulture)} {(max == 1 ? "device" : "devices")}. "
         + "Remove one that is no longer used to add another.");
 
     /// <summary>
@@ -207,7 +208,7 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
     public static GatewayFault QuotaExceeded(
         string things, long limit, string remedy = "remove one to add another") => new(
         FaultCode.QuotaExceeded, 409,
-        $"This account already has {limit:N0} {things}, the most it may; {remedy}.");
+        $"This account already has {limit.ToString("N0", CultureInfo.InvariantCulture)} {things}, the most it may; {remedy}.");
 
     /// <summary>
     /// The account's sealed tasks and history would pass its storage limit. Its own sentence, in megabytes and
@@ -216,7 +217,7 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
     /// </summary>
     public static GatewayFault StorageFull(long limitBytes, int retentionDays) => new(
         FaultCode.QuotaExceeded, 409,
-        $"This would take this account past its {limitBytes / (1024.0 * 1024.0):0.#} MB of stored tasks and "
+        $"This would take this account past its {(limitBytes / (1024.0 * 1024.0)).ToString("0.#", CultureInfo.InvariantCulture)} MB of stored tasks and "
         + $"history, the most it may; older runs are removed after {retentionDays} days.");
 
     /// <summary>

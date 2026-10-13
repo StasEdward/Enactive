@@ -22,6 +22,7 @@ using Enactive.App.Ui.ViewModels;
 using Enactive.Core.Events;
 using Enactive.Core.History;
 using Enactive.Core.Inbox;
+using Enactive.Core.Schedules;
 using Enactive.Core.Intents;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
@@ -77,7 +78,11 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
     /// <summary>Everything the window shows. Nothing below touches a control - it sets a property here.</summary>
     private readonly MainWindowViewModel _vm = new();
-    private readonly HashSet<string> _shownArtifacts = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// The live run's files - written, proposed, put back - as every host reads them from its events (RunFiles): which
+    /// card an ArtifactProduced makes, and which cards an ArtifactReverted marks, is decided there, not here.
+    /// </summary>
+    private RunFiles _files = new();
     /// <summary>Workspaces already told about their ignored legacy approvals file — say it once.</summary>
     private readonly HashSet<string> _legacyApprovalsNoted = new(StringComparer.OrdinalIgnoreCase);
 
@@ -100,12 +105,14 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     /// <summary>See where it is started: the badge against work this process did not do.</summary>
     private DispatcherTimer? _inboxPoll;
 
-    // The strip at the foot of the window (RepoBarViewModel): local git every half minute while nothing runs, GitHub at
+    // The strip at the foot of the window (RepoBar): local git every half minute while nothing runs, GitHub at
     // most every two minutes - it is a network call, and a strip is not worth a rate limit.
     private DispatcherTimer? _repoPoll;
-    private DateTimeOffset _pullRequestReadAt = DateTimeOffset.MinValue;
-    private int _repoReads;
-    private static readonly TimeSpan PullRequestEvery = TimeSpan.FromMinutes(2);
+
+    // The schedules, asked every minute while the app is open - in the tray too. See TickSchedulesAsync.
+    private DispatcherTimer? _scheduleTick;
+    private int _scheduleTicking;
+    private static readonly TimeSpan ScheduleTickEvery = TimeSpan.FromMinutes(1);
     private string _currentWorkspaceRoot = string.Empty;
     private readonly WorkspaceRegistry _registry = WorkspaceRegistry.Load(deferWrites: true);
 
@@ -263,6 +270,12 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         _inboxPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         _inboxPoll.Tick += (_, _) => RefreshInboxButton();
         _inboxPoll.Start();
+
+        _scheduleTick = new DispatcherTimer { Interval = ScheduleTickEvery };
+        _scheduleTick.Tick += (_, _) => _ = TickSchedulesAsync();
+        _scheduleTick.Start();
+        // Once at start too: an occurrence that came due while the app was closed is still within its grace now.
+        _ = TickSchedulesAsync();
 
         // After InitializeComponent, or the XAML's own Width/Height would overwrite the saved bounds.
         TrySetIcon();
@@ -597,6 +610,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
             _shuttingDown = true;
             _inboxPoll?.Stop();
+            _scheduleTick?.Stop();
             _vm.StatusPhase = "Stopping…";
             // Begin all shutdown paths before awaiting any one of them. Keep the dispatcher and log
             // alive until recorder, resources and final UI cleanup have finished.
@@ -635,30 +649,17 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     /// </summary>
     /// <summary>The open workspace as a full path, or null when the box is empty.</summary>
     /// <summary>
-    /// Reads the workspace's repository into the strip - and its pull request, when two minutes have passed since it was
-    /// last asked or the person asked by clicking. A read started after this one wins: a slow answer about the folder
-    /// left behind must not overwrite the one now open.
+    /// Reads the workspace's repository into the strip, as every host reads it (RepoBar.ReadAsync): its pull request when
+    /// two minutes have passed since it was last asked, or whenever the person asked by clicking.
     /// </summary>
-    private async Task RefreshRepoAsync(bool forcePullRequest = false)
-    {
-        var read = ++_repoReads;
-        var root = WorkspaceRootOrNull();
-        var repo = root is null ? null : await RepoStatusReader.ReadAsync(root, CancellationToken.None);
-        if (read != _repoReads) return;
-        _vm.Repo.Show(repo);
-        if (repo?.GitHub is null || (!forcePullRequest && DateTimeOffset.UtcNow - _pullRequestReadAt < PullRequestEvery))
-            return;
-        _pullRequestReadAt = DateTimeOffset.UtcNow;
-        var pullRequest = await RepoStatusReader.ReadPullRequestAsync(repo, CancellationToken.None);
-        if (read == _repoReads)
-            _vm.Repo.ShowPullRequest(pullRequest);
-    }
+    private Task RefreshRepoAsync(bool forcePullRequest = false)
+        => _vm.Repo.ReadAsync(WorkspaceRootOrNull(), forcePullRequest);
 
     /// <summary>Opens a pull request's page in the browser - only a github.com address, which is what the strip shows.</summary>
     private void OpenRepoPage(string? url)
     {
-        if (url is null || !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps
-            || !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+        // Qualified: RepoBar here is the strip's Border (x:Name), not the model.
+        if (global::Enactive.Application.Projections.RepoBar.GitHubPage(url) is not { } uri)
             return;
         _ = TopLevel.GetTopLevel(this)?.Launcher.LaunchUriAsync(uri);
     }
@@ -912,6 +913,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 _staging = composed.Artifacts as StagingArtifactStore;
                 _disk = composed.Artifacts as DiskArtifactStore;
                 _stagedShown = 0;
+                _files.Stages = _staging is not null;
 
                 var envLine = composed.Intent.Context.Environment?.OneLine();
                 await Dispatcher.UIThread.InvokeAsync(() => _vm.EnvironmentSummary = envLine ?? "(no environment data)");
@@ -1036,16 +1038,21 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                             Live(() => _vm.AddUsage(used.In, used.Out, usageProvider, ReachOf(usageProvider)));
                         }
                         break;
-                    case EventKind.ArtifactProduced:
-                        if (_staging is not null)
-                            AddStagedArtifact();
-                        else
-                            AddArtifact(ev);
-                        break;
-                    // The step's work was put back after the reviewer rejected it. Its cards must stop
-                    // offering to open or undo a file that is no longer the file they describe.
-                    case EventKind.ArtifactReverted:
-                        MarkRevertedArtifacts(ev.RevertedPaths() ?? []);
+                    case EventKind.ArtifactProduced or EventKind.ArtifactReverted:
+                        switch (_files.Apply(ev))
+                        {
+                            case FileNews.Written written:
+                                AddArtifact(written.Path);
+                                break;
+                            case FileNews.Staged:
+                                AddStagedArtifact();
+                                break;
+                            // The step's work was put back after the reviewer rejected it. Its cards must stop
+                            // offering to open or undo a file that is no longer the file they describe.
+                            case FileNews.Reverted reverted:
+                                MarkRevertedArtifacts(reverted.Paths);
+                                break;
+                        }
                         break;
                 }
         }
@@ -1092,7 +1099,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
         private void UpdateProgress()
         {
-            var progress = _feed.StepsTotal > 0 ? $"{_feed.StepsDone} / {_feed.StepsTotal} steps" : "—";
+            var progress = RunFigures.Steps(_feed.StepsDone, _feed.StepsTotal);
             Live(() => _vm.StatusProgress = progress);
 
             // The one place step counts change, so the one place the live row has to be told. The row
@@ -1106,28 +1113,11 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 });
         }
 
-        private static string FormatElapsed(TimeSpan span)
+        private static string FormatElapsed(TimeSpan span) => RunElapsed.Format(span);
+
+        /// <summary>A card for a file the run wrote - once per file: RunFiles tells a path only the first time.</summary>
+        private void AddArtifact(string relative)
         {
-            if (span.TotalHours >= 1)
-                return $"{(int)span.TotalHours}h {span.Minutes}m {span.Seconds}s";
-            if (span.TotalMinutes >= 1)
-                return $"{span.Minutes}m {span.Seconds}s";
-            return $"{span.Seconds}s";
-        }
-
-        private void AddArtifact(WorkEvent ev)
-        {
-            // The path as a value. Splitting the summary on its first ": " is a guess about a sentence,
-            // and a path is not a sentence.
-            var relative = ev.ArtifactPath()
-                           ?? (ev.Summary.Contains(": ", StringComparison.Ordinal)
-                               ? ev.Summary[(ev.Summary.IndexOf(": ", StringComparison.Ordinal) + 2)..]
-                               : ev.Summary);
-
-            // One card per file: repeated writes to the same path say nothing new.
-            if (!_shownArtifacts.Add(relative))
-                return;
-
             var root = _currentWorkspaceRoot;
 
             // "Undo" used to be an unconditional File.Delete: if the agent EDITED an existing source
@@ -1167,7 +1157,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 if (!paths.Contains(item.RelativePath, StringComparer.OrdinalIgnoreCase))
                     continue;
 
-                item.Status = "put back — the reviewer rejected this step";
+                item.Status = RunFiles.PutBackStatus;
                 item.CanAct = false;
             }
         }
@@ -1333,7 +1323,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             // The run's own state, which the panels are only a view of. Cleared HERE and not in
             // ClearRunPanels, because detaching from a run to look at another workspace empties the
             // panels while the run carries on filling these.
-            _shownArtifacts.Clear();
+            _files = new RunFiles();
             _liveArtifacts.Clear();
             _feed = new RunFeed();
             _cardViews.Clear();
@@ -1526,11 +1516,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             if (entry is null)
                 return;
 
-            var name = await PromptWindow.AskAsync(
-                this,
-                "Name this workspace",
-                "What Enactive calls it. The folder is not touched.",
-                entry.Name);
+            var name = await PromptWindow.AskAsync(this, WorkspaceRows.RenameTitle, WorkspaceRows.RenamePrompt, entry.Name);
 
             if (name is null)
                 return;
@@ -1609,13 +1595,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             if (entry is null)
                 return;
 
-            var forget = await ConfirmWindow.AskAsync(
-                this,
-                $"Forget \u201c{entry.Name}\u201d?",
-                "The folder and everything in it, including its run history, are left exactly where they are. "
-                + "What goes is the name you gave it here and how runs are set up in it.",
-                "Forget",
-                "Keep");
+            var question = WorkspaceRows.Forget(entry.Name);
+            var forget = await ConfirmWindow.AskAsync(this, question.Headline, question.Body, question.Confirm, question.Cancel);
 
             if (!forget)
                 return;
@@ -1682,24 +1663,11 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
         private async Task ShowEnvironmentAsync()
         {
-            var root = _vm.WorkspacePath;
-            if (string.IsNullOrWhiteSpace(root))
-            {
-                ShowViewer("Environment", "Set a workspace first.");
-                return;
-            }
-            try
-            {
-                // Looking at the environment is a read, so this only READS the workspace's id.
-                var ws = WorkspaceInfo.For(root);
-                var (info, snapshot) = await _envProbe.ProbeFullAsync(ws, CancellationToken.None);
-                _vm.EnvironmentSummary = info.OneLine();
-                ShowViewer("Environment", info.Summary() + "\n\n" + snapshot.Describe());
-            }
-            catch (Exception ex)
-            {
-                ShowViewer("Environment", "Probe failed: " + ex.Message);
-            }
+            // The report's words - with no workspace, and when the probe fails - are the service's page's too.
+            var report = await WorkspaceReports.EnvironmentAsync(_vm.WorkspacePath, _envProbe.ProbeFullAsync, CancellationToken.None);
+            if (report.OneLine is { } line)
+                _vm.EnvironmentSummary = line;
+            ShowViewer(WorkspaceReports.EnvironmentTitle, report.Text);
         }
 
         /// <summary>
@@ -1803,6 +1771,119 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             if (execution is null) EndLive(row);
             else _ = ObserveBackgroundAsync(execution);
         }
+
+    /// <summary>
+    /// One tick of the schedules: the pulse, then the most overdue schedule anywhere, run in the background.
+    ///
+    /// <para>The app did not run its own schedules (2026-10-11): only the console's --due-all did, woken by a Windows
+    /// task nobody had registered, so a schedule made in this window never ran while the window was open all day.
+    /// Now the app asks every minute while it is open, the tray included. The console path stays for a machine where
+    /// the app is not running; both take the same claim (DueSchedules), so they do not start one schedule twice.</para>
+    /// </summary>
+    private async Task TickSchedulesAsync()
+    {
+        // One tick at a time: a slow one (a large schedules file, a workspace on a network drive) must not be
+        // overtaken by the next and decide the same schedule twice in this process.
+        if (_shuttingDown || Interlocked.Exchange(ref _scheduleTicking, 1) == 1)
+            return;
+        try
+        {
+            var now = DateTimeOffset.Now;
+            // The pulse first: it says the schedules ARE being asked, which the schedules window reports.
+            Heartbeat.Stamp(now);
+            // No model, no run - and the occurrence is left for a tick within its grace, after it is configured.
+            if (_engineProblem is { Length: > 0 })
+                return;
+
+            // The most overdue schedule anywhere, claimed with its folder - the same steps the console and the service take
+            // (DueSchedules). Busy or broken, it says so where it is reported: busy waits for a later tick, broken is in its Inbox.
+            var take = await Task.Run(() => DueSchedules.TakeFirstAsync(ScheduleStore.Default, RunMarkers.Default, now, CancellationToken.None));
+            if (take.Run is not { } taken)
+                return;
+            await Dispatcher.UIThread.InvokeAsync(() => StartScheduled(taken));
+        }
+        catch (Exception ex)
+        {
+            _log.Warn(LogSource.System, "Could not check the schedules: " + ex.Message);
+        }
+        finally
+        {
+            Volatile.Write(ref _scheduleTicking, 0);
+        }
+    }
+
+    /// <summary>
+    /// A schedule's run, headless, under the schedule's own permissions and with nobody to answer: the same
+    /// run the console's --due-all starts. Its outcome goes to the Inbox under the schedule, which is where the
+    /// schedules window lists it.
+    /// </summary>
+    private void StartScheduled(DueRun taken)
+    {
+        var schedule = taken.Schedule;
+        var workspace = taken.Workspace;
+        var inbox = InboxStoreFactory.Create(workspace);
+        // The schedule's level, not the slider on screen: the slider is about the folder on screen, and the
+        // template's permissions are already narrowed to the schedule's (ScheduledSpec).
+        var request = new RunRequest(workspace, taken.Spec.Goal, IntentSource.Schedule, Spec: taken.Spec)
+            { Defaults = new WorkspaceDefaults((int)schedule.Permissions.Level) };
+
+        if ((_shuttingDown ? "the app was closing" : RunComposer.Refusal(request)) is { } why)
+        {
+            taken.Dispose();
+            _ = inbox.AppendAsync(ScheduledOutcome.CouldNotStart(workspace.Id, schedule.Id, schedule.Name, why, DateTimeOffset.UtcNow),
+                CancellationToken.None);
+            return;
+        }
+
+        var engine = CurrentEngine();
+        var row = BeginLive(schedule.Name, workspace.RootPath, headless: true);
+        _log.Info(LogSource.System, $"Schedule '{schedule.Name}' started in {workspace.RootPath}.");
+
+        var execution = _background.TryStart(async ct =>
+        {
+            using (taken)
+            {
+                try
+                {
+                    // Nobody is here to answer, as at the console: a question is refused, not parked. A schedule's
+                    // template was checked for that before it was taken (ScheduleTick, approvalIsPossible: false).
+                    await using var composed = await RunComposer.ComposeAsync(engine, request, new UnattendedDecisionHandler(), ct);
+                    await BackgroundRunner.RunAsync(composed.Events(ct), inbox, workspace, schedule.Name, ct, schedule.Id);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    var line = InboxLines.For("Cancelled", 0, 0, null);
+                    await inbox.AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, line.Kind, schedule.Name,
+                        line.Summary, Guid.Empty, "unread", DateTimeOffset.UtcNow, schedule.Id), CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    await inbox.AppendAsync(ScheduledOutcome.CouldNotStart(workspace.Id, schedule.Id, schedule.Name,
+                        ex.Message, DateTimeOffset.UtcNow), CancellationToken.None);
+                }
+                finally
+                {
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        EndLive(row);
+                        if (!_shuttingDown) RefreshInboxButton();
+                        if (!_shuttingDown && string.Equals(
+                                WorkspaceRegistry.Normalise(_vm.WorkspacePath), workspace.RootPath,
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            _ = LoadRunsAsync();
+                        }
+                    });
+                }
+            }
+        });
+        if (execution is null)
+        {
+            EndLive(row);
+            taken.Dispose();
+        }
+        else _ = ObserveBackgroundAsync(execution);
+    }
 
     /// <summary>
     /// Carries on a background run that stopped at a question, now answered: from its last step
@@ -2193,12 +2274,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         if (string.IsNullOrEmpty(workspacePath))
             return;
 
-        var workspace = WorkspaceInfo.For(workspacePath);
-        var runStore = RunStoreFactory.Create(workspace);
-        var memory = MemoryStoreFactory.Create(workspace);
-        var runs = await runStore.LoadSummariesAsync(CancellationToken.None);
-        var entries = await memory.LoadAllAsync(CancellationToken.None);
-        ShowViewer("Project Memory", ProjectMemory.Render(runs, entries, workspace.RootPath));
+        // The service's Timeline page reads it the same way and says the same when it cannot (WorkspaceReports).
+        ShowViewer(WorkspaceReports.TimelineTitle, await WorkspaceReports.TimelineAsync(workspacePath, CancellationToken.None));
     }
 
     // ── IDecisionPresenter: the inline approval card ─────────────────────────

@@ -51,4 +51,29 @@ public sealed class LogTextTests
         Assert.Equal(["    | stdout line 1", "    | stdout line 2"], lines[1..3]);
         Assert.EndsWith("second", lines[3]);
     }
+
+    /// <summary>
+    /// The time reads the same on every machine: a format's ":" is the culture's time separator, and under one whose
+    /// separator is not a colon the same line was another text - the export a person compares an answer against too.
+    /// </summary>
+    [Fact]
+    public void A_line_s_time_is_the_same_under_any_culture()
+    {
+        var at = new DateTimeOffset(2026, 10, 12, 9, 30, 15, 250, TimeSpan.Zero);
+        var expected = at.ToLocalTime().ToString("HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture);
+        var was = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            // A culture whose time separator is not a colon, made so whatever the machine's own data says.
+            var odd = (System.Globalization.CultureInfo)System.Globalization.CultureInfo.InvariantCulture.Clone();
+            odd.DateTimeFormat.TimeSeparator = ".";
+            System.Globalization.CultureInfo.CurrentCulture = odd;
+
+            Assert.StartsWith(expected + "  WRN", LogText.Line(Entry(1, at, "dotnet build exited 1")));
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = was;
+        }
+    }
 }

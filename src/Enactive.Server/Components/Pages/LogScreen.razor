@@ -1,0 +1,220 @@
+@page "/log"
+@using System.ComponentModel
+@using Enactive.Agents
+@using Enactive.Application
+@using Enactive.Core.Diagnostics
+@using Enactive.Server.Accounts
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Web.Virtualization
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject ServerLogs Logs
+@inject IJSRuntime JS
+
+<PageTitle>Log - Enactive</PageTitle>
+
+@* The window's global log (LogWindow.axaml) over the service's one log: the toolbar, the source chips, the lines in their
+   level's colour, the selected line's whole payload under them, and the status line. What it shows and decides is the
+   window's own view model (LogWindowViewModel), handed out by ServerLogs; this draws it, and drains the lines that arrive
+   at RunFollower's pace - a page redrawn per line is a browser kept busy for nothing. Clear empties this page only: the
+   service's log is everybody's. Capture raw wire is an Admin's and AI Analyze an Operator's; a role below sees neither,
+   and ServerLogs refuses each to anybody else whatever a page sent. *@
+
+<div class="log-screen">
+    @if (_problem is { } problem)
+    {
+        <p class="said">@problem</p>
+    }
+
+    @if (_log is { } vm)
+    {
+        <div class="log-toolbar" role="toolbar" aria-label="Log">
+            <label class="log-field"><span>Level ≥</span>
+                <select @bind="vm.SelectedLevel">
+                    @foreach (var level in vm.Levels)
+                    {
+                        <option value="@level">@level</option>
+                    }
+                </select>
+            </label>
+            @if (_canCapture)
+            {
+                @* Bound both ways, not drawn one way: a switch the service refuses leaves the view model where it was, and drawn
+                   one way the page drew nothing new - the box stayed ticked in the browser over capture that was off. Bound,
+                   the page takes the box's ticked state as what it last drew, so drawing the view model's puts it back. *@
+                <label class="log-check"><input type="checkbox" @bind:get="vm.CaptureRaw" @bind:set="on => vm.CaptureRaw = on" />
+                    Capture raw wire (Trace)</label>
+            }
+            <input type="search" class="log-search" aria-label="Search" placeholder="search… (#2 = one step)" value="@vm.SearchText"
+                   @oninput="e => vm.SearchText = e.Value?.ToString() ?? string.Empty" />
+            <label class="log-check"><input type="checkbox" @bind="vm.AutoScroll" /> Auto-scroll</label>
+            <label class="log-check"><input type="checkbox" @bind="vm.Pause" /> Pause</label>
+            <button type="button" class="btn" title="Empties this page's view. The service's log is everybody's and stays as it is."
+                    @onclick="() => vm.ClearCommand.Execute(null)">Clear</button>
+            <button type="button" class="btn" @onclick="() => vm.ExportCommand.Execute(null)">Export</button>
+            @if (_canAnalyze)
+            {
+                <button type="button" class="btn" disabled="@(!vm.CanAnalyze)"
+                        title="Hand the log as it is filtered on screen to a model and ask what went wrong."
+                        @onclick="() => vm.AnalyzeCommand.Execute(null)">AI Analyze</button>
+            }
+        </div>
+
+        @* Which planes of the log to show. Filtering here never changes what is recorded. *@
+        <div class="log-sources" role="group" aria-label="Sources">
+            <span class="log-label">Sources:</span>
+            @foreach (var source in vm.Sources)
+            {
+                <button type="button" class="@(source.IsEnabled ? "btn small on" : "btn small")" aria-pressed="@(source.IsEnabled ? "true" : "false")"
+                        @onclick="() => source.IsEnabled = !source.IsEnabled">@source.Name</button>
+            }
+        </div>
+
+        @* Only the lines in view are drawn: the log keeps twenty thousand, and the window's list draws only what is on screen
+           too. Each line a button, so a line is chosen by keyboard as by mouse. *@
+        <div class="log-rows" role="list" aria-label="Lines" @ref="_rows">
+            <Virtualize Items="vm.Rows" ItemSize="18" Context="row">
+                <div role="listitem">
+                    <button type="button" class="@("log-line " + Looks.Log(row.Entry.Level) + (ReferenceEquals(row, vm.SelectedRow) ? " selected" : ""))"
+                            aria-pressed="@(ReferenceEquals(row, vm.SelectedRow) ? "true" : "false")"
+                            @onclick="() => vm.SelectedRow = row">@row.Line</button>
+                </div>
+            </Virtualize>
+        </div>
+
+        @* The payload as the box's value, the property a browser shows a textarea by: its content is only the default
+           value, which the browser stops showing once the box's value has been set. *@
+        <textarea class="log-detail" readonly aria-label="Payload" value="@vm.DetailText"
+                  placeholder="Select a row to see its full payload (prompt / response / arguments)…"></textarea>
+
+        <p class="hint log-status" role="status">@vm.Status</p>
+    }
+
+    @if (_analysis is { } analysis)
+    {
+        @* The window's LogAnalysisWindow, on the page: what was read above the answer, the answer rendered, its Markdown one
+           click away (Source), Copy hands over the Markdown whichever is showing, and what it cost beside the buttons. *@
+        <TextViewer Title="Log analysis" Lead="@analysis.Provenance" Text="@analysis.Answer" Note="@analysis.Cost" CopyLabel="Copy"
+                    CopyTip="Copies the answer as Markdown, whichever view is showing." CloseIsPrimary="true"
+                    SourceTip="Show the model's answer as it was written, in Markdown." OnClose="() => _analysis = null">
+            <Rendered><MarkdownView Text="@analysis.Answer" /></Rendered>
+        </TextViewer>
+    }
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    private LogWindowViewModel? _log;
+    private string? _problem;
+    private bool _canCapture;
+    private bool _canAnalyze;
+    private LogAnalysisResult? _analysis;
+    private ElementReference _rows;
+    private IJSObjectReference? _script;
+    private bool _follow = true;
+    private bool _gone;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await Auth).User;
+        var (log, problem) = Logs.View(user, Drain);
+        _problem = problem;
+        if (log is null)
+            return;
+        // The page can be gone by now: disposed while it waited for who is signed in. DisposeAsync found no view model to
+        // detach then, so one kept here would follow the hub, and its clock run, for a page nobody has.
+        if (_gone)
+        {
+            log.Detach();
+            return;
+        }
+        _log = log;
+        _log.PropertyChanged += Changed;
+        _log.RowsAppended += Appended;
+        _log.AnalysisReady += Analysed;
+        _log.ExportTo = DownloadAsync;
+    }
+
+    // What is offered follows who the page says is signed in, read again whenever that is handed down anew - not once at
+    // opening, which kept offering what the person was when the page first drew. Offered only: ServerLogs refuses the
+    // switch to anybody below an Admin and the analysis below an Operator, whatever a page sent.
+    protected override async Task OnParametersSetAsync()
+    {
+        var role = ServerAuth.RoleOf((await Auth).User);
+        _canCapture = role >= Role.Admin;
+        _canAnalyze = role >= Role.Operator;
+    }
+
+    /// <summary>
+    /// The page's clock for the lines that arrive: every RunFollower.Throttle, on this page's circuit - the view model's lists
+    /// are this page's, and changed from the timer's thread they were changed while the page drew them.
+    /// </summary>
+    private IDisposable Drain(Action drain)
+        => new Timer(_ => _ = InvokeAsync(drain), null, RunFollower.Throttle, RunFollower.Throttle);
+
+    // Each change asks for a redraw; asked many times between two, the page draws once.
+    private void Changed(object? sender, PropertyChangedEventArgs e) => _ = InvokeAsync(StateHasChanged);
+
+    private void Appended()
+    {
+        _follow = true;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void Analysed(LogAnalysisResult result)
+    {
+        _analysis = result;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_log is null || _gone)
+            return;
+        try
+        {
+            _script ??= await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/LogScreen.razor.js");
+            // The tail followed as the window follows it: on opening, and after lines arrive, while Auto-scroll is on.
+            if (_follow && _log.AutoScroll)
+                await _script.InvokeVoidAsync("follow", _rows);
+            _follow = false;
+        }
+        catch (Exception e) when (Gone(e))
+        {
+        }
+    }
+
+    /// <summary>Export's file, handed to the browser as a download (LogScreen.razor.js).</summary>
+    private async Task DownloadAsync(string name, string text)
+    {
+        _script ??= await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/LogScreen.razor.js");
+        await _script.InvokeVoidAsync("download", name, text);
+    }
+
+    private static bool Gone(Exception e) => e is JSDisconnectedException or OperationCanceledException or ObjectDisposedException;
+
+    // Capture is not turned off here: it outlives the Admin's page on purpose, as it outlives the window's log window (which
+    // only detaches), until an Admin turns it off or the service restarts - an Admin may turn it on, leave, and come back to
+    // what it recorded. Nobody is left unaware of it: every log page's status line says the hub's level, and the audit trail
+    // names who turned it on.
+    public async ValueTask DisposeAsync()
+    {
+        _gone = true;
+        if (_log is not null)
+        {
+            // Stops following the hub and the clock: a page that left and went on draining held its circuit's view model
+            // and every line the hub raised.
+            _log.Detach();
+            _log.PropertyChanged -= Changed;
+            _log.RowsAppended -= Appended;
+            _log.AnalysisReady -= Analysed;
+        }
+        if (_script is null)
+            return;
+        try { await _script.DisposeAsync(); }
+        catch (Exception e) when (Gone(e)) { }
+    }
+}

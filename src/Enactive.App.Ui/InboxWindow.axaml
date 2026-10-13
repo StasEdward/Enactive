@@ -41,7 +41,7 @@
                          ItemsSource="{Binding Items}"
                          SelectedItem="{Binding Selected}">
                     <ListBox.ItemTemplate>
-                        <DataTemplate x:DataType="vm:InboxItemViewModel">
+                        <DataTemplate x:DataType="proj:InboxItemViewModel">
                             <!-- The edge is what the item IS - a result, a decision nobody was there
                                  to answer, an error. The ember dot is the one thing that changes when
                                  you read it. -->

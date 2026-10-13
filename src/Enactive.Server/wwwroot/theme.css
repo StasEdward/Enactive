@@ -1,0 +1,929 @@
+/* The web's half of the desktop's palette: src/Enactive.App.Ui/Brand.cs as CSS custom properties (same names, same
+   values), the classes of Styles/Controls.axaml, and one class per state (.tone-*, .tier-*) that Components/Looks.cs
+   hands out - the web's counterpart of Palette.cs. Pages style through these and Looks; they name no hex of their own.
+   LooksTests reads Brand.cs and Palette.cs and holds every value here to the desktop's, so a colour changed on one side
+   alone fails the build instead of making the two windows quietly differ.
+
+   Linked after brand/brand.css (the gateway's brand, still the source of the rules the pages not yet rebuilt use). */
+
+/* The window is dark and only dark. brand.css turns --success, --danger, --bg, --text and the rest into their on-light
+   variants for an OS that prefers light (selectors of this same weight, :root:not([data-theme="dark"]) and
+   :root[data-theme="light"]) - which would paint the desktop's greens and reds, and a status edge, on a pale page. The
+   selector list below repeats those weights and comes later, so it wins in both schemes. */
+:root, :root[data-theme="light"], :root:not([data-theme="dark"]) {
+  color-scheme: dark;
+
+  /* Ink - the environment. */
+  --ink-950: #0A0B0D;
+  --ink-900: #101216;
+  --ink-800: #171A20;
+  --ink-700: #21252E;
+  --ink-600: #2E3440;
+  --ink-500: #414957;
+  --ink-400: #5C6575;
+  --ink-300: #8A93A3;
+  --ink-200: #B9C0CC;
+  --ink-100: #DDE2E9;
+  --ink-50: #F2F4F7;
+
+  /* Ember - action, and nothing else. */
+  --ember-200: #FFC0A4;
+  --ember-300: #FF9C72;
+  --ember-400: #FF7C48;
+  --ember-500: #FF5F26;
+  --ember-600: #E84A14;
+  --ember-700: #BC380F;
+  --ember-800: #8E2B0C;
+  --amber-400: #FFB020;
+
+  /* Semantic. */
+  --success: #34D399;
+  --warning: #FBBF24;
+  --danger: #FF5D7A;
+  --info: #4C8DFF;
+  --info-light: #94B8FF;
+
+  /* Go - the buttons that start a run. */
+  --go-500: #0F9C6C;
+  --go-600: #0B7A55;
+  --go-700: #075A3E;
+
+  /* Fills: white over the ground for a card, black for a well. */
+  --card-fill: rgb(255 255 255 / 10%);
+  --card-fill-hover: rgb(255 255 255 / 14%);
+  --card-fill-active: rgb(255 255 255 / 19%);
+  --input-fill: rgb(0 0 0 / 22%);
+  --input-fill-hover: rgb(0 0 0 / 14%);
+  --scrim: rgb(0 0 0 / 13%);
+  /* The web's own: what lies under a dialog (Ui/Dialog.razor), dark enough that the screen reads as out of reach. The
+     window's dialogs are windows of their own and have none. */
+  --dialog-scrim: rgb(0 0 0 / 45%);
+  --decision-fill: #2A1B05;
+
+  /* The roles brand.css names, pointed at the desktop's surfaces (Bg, Surface, Card, Line, Text...). */
+  --bg: var(--ink-900);
+  --bg-elevated: var(--ink-800);
+  --bg-card: var(--ink-700);
+  --border: var(--ink-600);
+  --border-strong: var(--ink-500);
+  --text: var(--ink-50);
+  --text-body: var(--ink-200);
+  --text-muted: var(--ink-300);
+  --text-faint: var(--ink-400);
+  --accent: var(--ember-500);
+  --accent-text: var(--ember-300);
+  --on-accent: #FFFFFF;
+
+  --font-sans: 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Segoe UI', system-ui, sans-serif;
+  --font-mono: Consolas, Menlo, monospace;
+}
+
+/* ── Base elements ──────────────────────────────────────────────────────────────────────────────────────────────── */
+
+body { margin: 0; font-family: var(--font-sans); background: var(--bg); color: var(--text); line-height: 1.45; }
+a { color: var(--accent-text); }
+h1 { font-family: var(--font-display); letter-spacing: var(--track-display); font-size: 1.6rem; margin: 0.4em 0; }
+h2 { font-family: var(--font-display); font-size: 1.1rem; margin: 1.4em 0 0.4em; }
+pre, code, .path { font-family: var(--font-mono); }
+
+/* ── The shell: the desktop's title strip and icon rail (MainWindow.axaml, Styles/Controls.axaml) ──────────────────── */
+
+/* 40 px of the darkest ink: the loop and the name on the left, who is signed in on the right. */
+.top { display: flex; gap: 12px; align-items: center; box-sizing: border-box; height: 40px; padding: 0 14px 0 12px;
+  background: var(--ink-950); border-bottom: 1px solid var(--border); }
+.mark { display: flex; gap: 8px; align-items: center; font-family: var(--font-display); font-weight: 600; font-size: 13px; color: var(--text); text-decoration: none; }
+.mark img { width: 18px; height: 18px; }
+.host, .conn { font-size: 12px; color: var(--text-muted); }
+
+/* The connection (Shell/ReconnectState.razor). Blazor's script marks the element with a class while the connection is
+   down - the page cannot draw then - so each state's text is in the element and these rules show the one the mark
+   calls for: no mark (or -hide) is connected; -show/-retrying/-paused is trying again; -failed/-rejected/-resume-failed
+   has given up. */
+.conn { display: inline-flex; gap: 6px; align-items: center; }
+.conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+.conn-text, .conn-reload, .conn-block { display: none; }
+.conn .conn-up { display: inline; }
+.conn:is(.components-reconnect-show, .components-reconnect-retrying, .components-reconnect-paused,
+  .components-reconnect-failed, .components-reconnect-rejected, .components-reconnect-resume-failed) .conn-up { display: none; }
+.conn:is(.components-reconnect-show, .components-reconnect-retrying, .components-reconnect-paused) .conn-retrying { display: inline; }
+.conn:is(.components-reconnect-show, .components-reconnect-retrying, .components-reconnect-paused) .conn-dot { background: var(--warning); }
+.conn:is(.components-reconnect-failed, .components-reconnect-rejected, .components-reconnect-resume-failed) .conn-down { display: inline; }
+.conn:is(.components-reconnect-failed, .components-reconnect-rejected, .components-reconnect-resume-failed) .conn-dot { background: var(--danger); }
+/* Over the whole window and transparent: the page stays readable, and a click on it - which the server would never
+   get - lands here instead of on a button that would look pressed and do nothing. */
+.conn:is(.components-reconnect-show, .components-reconnect-retrying, .components-reconnect-paused,
+  .components-reconnect-failed, .components-reconnect-rejected, .components-reconnect-resume-failed) .conn-block {
+  display: block; position: fixed; inset: 0; z-index: 1000; background: transparent; cursor: progress; }
+/* Above the overlay: once the script has given up, reloading is the only way back. */
+.conn:is(.components-reconnect-failed, .components-reconnect-rejected, .components-reconnect-resume-failed) .conn-reload {
+  display: inline-flex; position: relative; z-index: 1001; padding: 1px 8px; font-size: 12px; }
+/* A failure no page caught (App.razor): Blazor's script shows the band - display: block - once the connection's circuit
+   has failed. Across the top and above the connection's overlay: the page is dead from then on, and reloading is the
+   only way back. */
+#blazor-error-ui { display: none; position: fixed; inset: 0 0 auto 0; z-index: 1002; padding: 10px 16px; font-size: 13px;
+  color: var(--text); background: var(--bg-elevated); border-bottom: 2px solid var(--danger); }
+#blazor-error-ui .btn { margin-left: 12px; }
+/* A page that threw, in place of the page (MainLayout's boundary): the rail and the top bar still work around it. */
+.page-failed { margin: 24px; padding: 12px 16px; max-width: 560px; background: var(--bg-card); border: 1px solid var(--danger);
+  border-radius: var(--radius-sm); }
+.page-failed .hint { font-size: 12px; margin: 4px 0 12px; }
+.who { margin-left: auto; font-size: 12px; color: var(--text-muted); }
+.top .pill { padding: 1px 10px; font-size: 11px; }
+.signout { margin: 0; }
+.signout button { padding: 3px 10px; font-size: 12px; }
+
+.shell { display: flex; align-items: stretch; min-height: calc(100vh - 41px); }
+.shell > main { flex: 1; min-width: 0; }
+
+/* 52 px on the same ink as the strip above. Chrome, not content: its icons are quiet until pointed at, and only the
+   section you are in takes ember. Each item is a 38 px square centred in the rail (the desktop's Button.rail: left in
+   a 52 px column it sat 7 px off centre). */
+.rail { display: flex; flex-direction: column; align-items: center; flex: none; box-sizing: border-box; width: 52px;
+  padding: 10px 0; background: var(--ink-950); border-right: 1px solid var(--border); }
+.rail-gap { flex: 1; }
+.rail-item { position: relative; display: flex; align-items: center; justify-content: center; width: 38px; height: 38px;
+  margin-bottom: 2px; border-radius: 6px; color: var(--text-faint); text-decoration: none; }
+.rail-item:hover { color: var(--text); background: var(--card-fill); }
+.rail-item.on { color: var(--ember-500); background: color-mix(in srgb, var(--ember-500) 16%, transparent); }
+.rail-item .badge { position: absolute; top: 1px; right: 0; min-width: 14px; padding: 0 4px; box-sizing: border-box; border-radius: 7px;
+  background: var(--ember-500); color: #fff; font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; }
+.rail-item .dot { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--ember-500); }
+main { padding: 16px; max-width: 1100px; }
+
+/* What only a narrow screen draws (the block at the end of this file): the top bar's drawer button and the rail's More,
+   with the words under More's icons. On a wide screen the drawer is no box and its column stands in place, and More's
+   group stands at the rail's foot as it always did. */
+.drawer-button, .rail-more-button, .rail-away, .rail-text { display: none; }
+.drawer-frame, .drawer, .rail-more, .rail-low { display: contents; }
+/* More is a button among links: without these it wore every button's border and fill, and looked pressed. */
+.rail-more-button { font: inherit; padding: 0; background: transparent; border: 0; cursor: pointer; }
+/* Under an open drawer, as under a dialog: the screen beneath reads as out of reach. */
+.drawer-scrim { position: fixed; inset: 0; z-index: 40; background: var(--dialog-scrim); }
+
+button { font: inherit; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); border-radius: var(--radius-sm); padding: 6px 12px; cursor: pointer; }
+button[type="submit"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+input, textarea { font: inherit; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 8px; box-sizing: border-box; }
+
+.said { color: var(--danger); }
+.cards { padding-left: 0; list-style: none; }
+.body { white-space: pre-wrap; max-width: 760px; }
+th { text-align: left; color: var(--text-muted); font-weight: normal; }
+select { font: inherit; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px; }
+
+/* ── Text, as Styles/Controls.axaml sets it ─────────────────────────────────────────────────────────────────────── */
+
+.label { display: block; font-weight: 700; font-size: 12px; margin: 8px 0 2px; }
+.panel-header { font-weight: 700; font-size: 11px; color: var(--text-muted); margin: 6px 0 0; }
+.hint { font-size: 11px; color: var(--text-muted); }
+
+/* ── Buttons ───────────────────────────────────────────────────────────────────────────────────────────────────────
+   Ember means action: .primary and focus. A destructive button never wears it - that is what --danger is for. */
+
+.btn { font: inherit; display: inline-flex; align-items: center; justify-content: center; padding: 5px 12px; color: var(--text);
+  background: var(--card-fill); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; text-decoration: none; }
+.btn:hover { background: var(--card-fill-hover); border-color: var(--border-strong); }
+.btn:active { background: var(--card-fill-active); }
+
+.btn.primary { color: #fff; font-weight: 600; background: var(--ember-500); border-color: var(--ember-500); }
+.btn.primary:hover { background: var(--ember-400); border-color: var(--ember-400); }
+.btn.primary:active { background: var(--ember-600); border-color: var(--ember-600); }
+
+/* Go starts a run. Its own green, solid with white text, so the deep step of the ramp: the bright green a finished run
+   uses is unreadable under white. */
+.btn.go { color: #fff; font-weight: 600; background: var(--go-600); border-color: var(--go-600); }
+.btn.go:hover { background: var(--go-500); border-color: var(--go-500); }
+.btn.go:active { background: var(--go-700); border-color: var(--go-700); }
+
+.btn.go-soft { color: var(--success); font-weight: 600; background: transparent; border-color: var(--success); }
+.btn.go-soft:hover { color: #fff; background: var(--go-600); border-color: var(--go-600); }
+.btn.go-soft:active { color: #fff; background: var(--go-700); border-color: var(--go-700); }
+
+/* Findable, and not competing with the ember button for the eye: outlined, filled only on hover. */
+.btn.destructive { color: var(--danger); background: transparent; border-color: var(--danger); }
+.btn.destructive:hover { color: #fff; background: var(--danger); }
+
+/* Last, and for every .btn: each variant above repaints the background, and a disabled .primary that kept its ember
+   looked exactly like itself - so a button that was working looked as pressable as one that was not. As heavy as the
+   heaviest variant (.btn.go:hover is a class, a class and a state) and later, so it wins under the pointer too: Run
+   pressed went green again under the finger that pressed it while its run went on, and looked ready for another. */
+.btn:is(:disabled, [aria-disabled="true"]):is(*, :hover, :active) { color: var(--text-faint); background: var(--scrim); border-color: var(--border); cursor: default; }
+
+/* ── Tabs: text with an underline; the underline says where you ARE, which is not an action (so --info, not ember) ── */
+
+.tab { font: inherit; font-size: 12px; padding: 7px 2px; margin: 0 18px 0 0; color: var(--text-muted); background: transparent;
+  border: 0; border-bottom: 2px solid transparent; border-radius: 0; cursor: pointer; text-decoration: none; }
+.tab:hover { color: var(--text); border-bottom-color: var(--border-strong); }
+.tab.on, .tab.on:hover { color: var(--text); border-bottom-color: var(--info); }
+
+/* ── Cards, pills, edges ──────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* A card: white at 10% over the ground, a 4px edge in the status colour (--tone, set by a .tone-* or .tier-* class) and
+   radius 4. Hover and selection are MORE OF THE SAME LIGHT, not another colour - the edge already says the status and
+   a hue change for "you are here" would argue with it. */
+.card { background: var(--card-fill); border: 0; border-left: 4px solid var(--tone, var(--ink-500)); border-radius: 4px; padding: 8px 10px; margin: 0 0 6px; }
+a.card:hover, .card.selectable:hover { background: var(--card-fill-hover); }
+.card.selected { background: var(--card-fill-active); }
+
+/* The edge alone, for a row or panel that is not a card. */
+.edge { border-left: 4px solid var(--tone, var(--ink-500)); }
+
+/* A pill states a fact; it is not an alarm: a tint with the colour carried by its text. */
+.pill { display: inline-block; padding: 2px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--tone, var(--ink-300));
+  background: color-mix(in srgb, var(--tone, var(--ink-300)) 18%, transparent); }
+/* The base blue is too dark on its own tint, so a running pill's word takes the light blue (Brand.PhaseText). */
+.pill.tone-running, .pill.tone-cloud { color: var(--info-light); }
+
+/* ── States: Components/Looks.cs hands these out. Each sets the one --tone that .card, .edge and .pill (and any text
+   that wants it, color: var(--tone)) read. The colour behind each is the one Palette.cs gives that state. ──────────── */
+
+.tone-done { --tone: var(--success); }
+.tone-running { --tone: var(--info); }
+.tone-failed { --tone: var(--danger); }
+.tone-open { --tone: var(--amber-400); }
+.tone-idle { --tone: var(--ink-300); }
+.tone-skipped { --tone: var(--ink-500); }
+.tone-unverified { --tone: var(--warning); }
+.tone-warning { --tone: var(--warning); }
+.tone-local { --tone: var(--success); }
+.tone-cloud { --tone: var(--info); }
+.tone-faint { --tone: var(--ink-400); }
+.tone-plain { --tone: var(--ink-200); }
+.tone-bright { --tone: var(--ink-100); }
+
+/* How much may be done without asking - a risk scale, green through blue and yellow to red. Never ember. */
+.tier-0 { --tone: var(--success); }
+.tier-1 { --tone: var(--info); }
+.tier-2 { --tone: var(--warning); }
+.tier-3 { --tone: var(--danger); }
+
+/* A workspace's edge in the switcher and on the WORKSPACE card (Looks.Workspace), as Palette.WorkspaceEdge. */
+.edge-current { --tone: var(--info); }
+.edge-missing { --tone: var(--danger); }
+.edge-other { --tone: var(--ink-500); }
+/* A template's edge (Palette.Template): where it comes from, and amber for the one chosen. */
+.edge-builtin { --tone: var(--ink-600); }
+.edge-global { --tone: var(--info); }
+.edge-workspace { --tone: var(--success); }
+.edge-selected { --tone: var(--amber-400); }
+
+/* ── The Runs screen (MainWindow.axaml): rail | workspace and runs, 268 px | the run ─────────────────────────────── */
+
+/* The screen fills the shell edge to edge, as the window's columns do; other pages keep the reading margin. */
+.shell > main:has(> .runs-screen) { padding: 0; max-width: none; }
+.runs-screen { display: flex; align-items: stretch; min-height: calc(100vh - 41px); }
+.runs-main { flex: 1; min-width: 0; padding: 16px; max-width: 1100px; }
+
+/* The context column: the window's Border.context - the surface a step up from the ground, a line on its right. */
+.runs-column { flex: none; box-sizing: border-box; width: 268px; padding: 12px 12px 8px; background: var(--bg-elevated);
+  border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 0; }
+.runs-column .said { font-size: 12px; margin: 4px 0; }
+.column-top { display: grid; gap: 8px; }
+.column-rule { height: 1px; background: var(--border); margin: 12px 0 10px; }
+.column-status { margin: 6px 0 0; }
+.panel-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 6px; }
+.panel-row .panel-header { margin: 0; }
+h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
+.btn.small { font-size: 11px; padding: 1px 8px; }
+.missing-note { margin: 0; font-size: 11px; color: var(--danger); }
+
+/* The WORKSPACE card: a 2 px edge in the workspace's colour, a card fill that brightens under the pointer. */
+.switcher-anchor { position: relative; }
+.ws-card { font: inherit; display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; padding: 8px 10px;
+  text-align: left; color: var(--text); background: var(--card-fill); border: 1px solid var(--border);
+  border-left: 2px solid var(--tone, var(--ink-500)); border-radius: 0 5px 5px 0; cursor: pointer; }
+.ws-card:hover { background: var(--card-fill-hover); border-color: var(--border-strong); border-left-color: var(--tone, var(--ink-500)); }
+.ws-card svg { flex: none; color: var(--text-muted); }
+.ws-card-text { display: grid; min-width: 0; flex: 1; gap: 1px; }
+.ws-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-name.missing { color: var(--text-muted); }
+.ws-card-text .path, .ws-row .path { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; direction: rtl; text-align: left; }
+.ws-row .path.missing { color: var(--danger); }
+
+/* The switcher: the darkest surface, so the rows inside - cards of white at 10-19% - can be told apart. */
+.switcher-away { position: fixed; inset: 0; z-index: 20; }
+.switcher { position: absolute; top: calc(100% + 4px); left: 0; z-index: 21; box-sizing: border-box; width: 300px; padding: 10px;
+  background: var(--bg); border: 1px solid var(--border-strong); border-radius: 6px; display: grid; gap: 6px; }
+.ws-rows { list-style: none; margin: 0; padding: 0; max-height: 300px; overflow-y: auto; }
+.ws-row { margin: 0 0 4px; background: var(--card-fill); border-left: 2px solid var(--tone, var(--ink-500)); border-radius: 0 4px 4px 0; }
+.ws-row.current { background: var(--card-fill-active); }
+.ws-row a { display: grid; gap: 1px; padding: 6px 8px; color: var(--text); text-decoration: none; border-radius: 0 4px 4px 0; }
+.ws-row a:hover { background: var(--card-fill-hover); }
+.ws-row .ws-name { font-size: 12.5px; }
+/* A row's Rename and Forget beside its link, as the window's row icons: the link takes the rest of the row. */
+.ws-row:has(.row-icon) { display: flex; align-items: center; gap: 2px; padding-right: 4px; }
+.ws-row:has(.row-icon) a { flex: 1; min-width: 0; }
+.ws-rename-name { width: 100%; }
+.add-folder { width: 100%; font-size: 12px; }
+
+/* Cards of the column: RUNNING's edge is ember (a run is on), UNFINISHED's amber (it waits for a person), the history's
+   the run's own (Looks.Run on the li). */
+.runs-column .cards { list-style: none; margin: 0; padding: 0; }
+.runs-column .card { display: flex; align-items: flex-start; gap: 6px; border-left-width: 3px; padding: 8px 10px; }
+.runs-running .card { --tone: var(--ember-500); align-items: center; }
+.runs-unfinished .card { --tone: var(--amber-400); }
+.runs-running, .runs-unfinished { margin: 0 0 8px; }
+.card-text { display: grid; min-width: 0; flex: 1; gap: 2px; color: inherit; text-decoration: none; }
+.card-title { font-size: 12.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-meta { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history .card:hover { background: var(--card-fill-hover); }
+/* An older attempt sits under its task's row, indented so it reads as belonging to it (Palette.AttemptMargin). */
+.history .card.attempt { margin-left: 16px; }
+
+.filter-row { display: flex; gap: 6px; margin: 0 0 6px; }
+.filter-row .filter { flex: 1; min-width: 0; font-size: 11px; }
+
+/* The attempts pill: a count on a scrim, ember-edged under the pointer (Button.attempts). */
+.pill.attempts { font: inherit; font-size: 11px; font-weight: 600; padding: 1px 8px; margin-top: 1px; color: var(--text-muted);
+  background: var(--scrim); border: 1px solid var(--border); cursor: pointer; flex: none; }
+.pill.attempts:hover { border-color: var(--ember-500); }
+
+/* A small icon on a row: quiet until pointed at; a destructive one goes danger, never ember. */
+.row-icon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0;
+  color: var(--text-muted); background: transparent; border: 0; border-radius: 4px; cursor: pointer; }
+.row-icon:hover { color: var(--text); background: var(--card-fill); }
+.row-icon.destructive:hover { color: var(--danger); }
+.row-icon:disabled { color: var(--text-faint); cursor: default; }
+
+/* ── The command bar (Runs/CommandBar.razor; MainWindow.axaml 459-545): the chips and the keys hint over the 88 px box,
+   then Run 86 / Stop 64 with Run in background under them, a line, and the worker 118 with Stage changes over the level's
+   label and its slider, 252 wide ─────────────────────────────────────────────────────────────────────────────────── */
+
+.command-bar { display: grid; gap: 8px; margin: 0 0 16px; }
+.bar-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.verbs { display: flex; flex-wrap: wrap; gap: 6px; }
+.btn.chip { font-size: 11px; padding: 2px 8px; }
+.bar-top .hint { margin-left: 8px; }
+.bar-row { display: flex; align-items: center; }
+.bar-input { flex: 1; min-width: 0; height: 88px; resize: none; background: var(--input-fill); }
+.bar-input:hover:not(:disabled) { background: var(--input-fill-hover); }
+.run-buttons { flex: none; width: 156px; margin-left: 8px; display: grid; gap: 6px; }
+.run-pair { display: flex; gap: 6px; }
+.run-pair .run { width: 86px; }
+.run-pair .stop { width: 64px; }
+.bar-divider { flex: none; width: 1px; align-self: stretch; margin: 2px 12px; background: var(--border); }
+.run-settings { flex: none; width: 252px; display: grid; gap: 4px; }
+.settings-row { display: flex; align-items: center; }
+.settings-row .worker { width: 118px; font-size: 11px; }
+.settings-row .stage { margin-left: 10px; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; }
+/* The label is ON the slider: the tier's colour (--tone from Looks.Autonomy), close above the track. */
+.autonomy-label { margin-top: 2px; font-size: 11px; color: var(--tone); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-settings input[type="range"] { width: 100%; margin: 0; accent-color: var(--tone); }
+.command-bar .said { margin: 0; font-size: 12px; }
+
+/* ── Dialogs (Ui/Dialog.razor): over a scrim, on the darkest surface, buttons at the bottom right ────────────────── */
+
+.dialog-scrim { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center;
+  background: var(--dialog-scrim); }
+.dialog { box-sizing: border-box; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; padding: 18px 20px;
+  background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; }
+.dialog-title { font-size: 15px; margin: 0 0 10px; }
+.dialog .body { white-space: pre-wrap; color: var(--text-body); font-size: 13px; }
+.dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* The folder browser, in its dialog. */
+.browse-actions { display: flex; gap: 8px; margin: 8px 0; }
+.folders { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+.folders li { border-bottom: 1px solid var(--border); }
+.folder { font: inherit; display: block; width: 100%; padding: 6px 4px; text-align: left; color: var(--accent-text);
+  background: transparent; border: 0; border-radius: 0; cursor: pointer; }
+.folder:hover { background: var(--card-fill); }
+
+/* ── The live run (Runs/LiveRun.razor; MainWindow.axaml 546-920, 1244-1300): the task, the tabs, the run's views over
+   Current action on the left, the status column 300 px on the right, the repository strip at the foot ───────────── */
+
+.live-run, .past-run { display: grid; border-top: 1px solid var(--border); }
+.run-gone { margin: 12px 0; }
+
+/* The task: its title, the request kept verbatim and selectable (three lines, fixed, so the run below does not move), who
+   started it and who else watches - and the phase pill on the right. */
+.task-header { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0 12px; border-bottom: 1px solid var(--border); }
+.task-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.task-title { font-family: var(--font-sans); font-size: 15px; font-weight: 600; letter-spacing: normal; margin: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task-intent { width: 100%; height: 48px; resize: none; padding: 0; font-size: 12px; color: var(--text-muted);
+  background: transparent; border: 0; }
+.task-meta, .also-watching { margin: 0; font-size: 11px; color: var(--text-muted); }
+.task-header .pill { flex: none; }
+
+.tabs { display: flex; align-items: flex-end; height: 36px; border-bottom: 1px solid var(--border); }
+
+.run-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; }
+.run-views { display: grid; grid-template-rows: auto 130px; min-width: 0; }
+.run-view { min-height: 240px; max-height: 60vh; overflow-y: auto; padding: 12px 10px 12px 0; }
+.current-action { display: grid; grid-template-rows: auto 1fr; gap: 8px; padding: 12px 10px 12px 0; border-top: 1px solid var(--border);
+  overflow: hidden; }
+.current-action .panel-header { margin: 0; }
+.current-text { margin: 0; overflow-y: auto; font-size: 12px; color: var(--text-body); white-space: pre-wrap; }
+
+/* A step card: the status on its 4 px edge (--tone, Looks.Card), what it is doing now in that colour, what it did folded
+   behind its tally. */
+.steps { list-style: none; margin: 0; padding: 0; }
+.card.step { padding: 8px 10px 10px 12px; margin: 0 0 8px; }
+.step-title { font-weight: 600; }
+.step-activity { margin-top: 3px; font-size: 12px; color: var(--tone); }
+.disclosure { font: inherit; display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; padding: 0; font-size: 11px;
+  color: var(--text-muted); background: transparent; border: 0; cursor: pointer; }
+.disclosure:hover { color: var(--text); }
+.chevron { font-size: 12px; font-weight: 600; }
+.step-lines { list-style: none; margin: 4px 0 0; padding: 4px 0 0 10px; border-left: 2px solid var(--border); }
+.step-lines li { margin-top: 3px; font-size: 12px; }
+.step-icon { display: inline-block; width: 16px; text-align: center; font-family: var(--font-mono); color: var(--tone); }
+.step-label { color: var(--text-body); }
+.step-label.note { font-weight: 600; }
+.step-detail { margin-left: 20px; font-size: 11px; color: var(--text-muted); }
+
+/* The Artifacts tab: a written file on a card; a kept proposal with the amber edge of a change waiting for a person. */
+.artifacts .said { margin: 0 0 8px; font-size: 12px; }
+.artifact-list { list-style: none; margin: 0 0 8px; padding: 0; }
+.card.artifact { display: flex; align-items: center; gap: 10px; border-left: 0; padding: 10px; }
+.artifact .path, .proposal .path { flex: 1; min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
+.card.proposal { border-left-width: 2px; padding: 10px; }
+.proposal-head { display: flex; align-items: center; gap: 6px; }
+.proposal-text { display: grid; gap: 2px; flex: 1; min-width: 0; margin-right: 4px; }
+.proposal-state { font-size: 11px; color: var(--tone); }
+.diff { margin-top: 8px; padding: 6px; max-height: 320px; overflow: auto; background: var(--scrim); border-radius: 3px; }
+.diff-line { font-family: var(--font-mono); font-size: 11px; white-space: pre; color: var(--tone); }
+
+/* The Log tab: this run's lines, each in its level's colour. */
+.run-log { font-family: var(--font-mono); font-size: 12px; overflow-x: auto; }
+.log-line { white-space: pre; color: var(--tone); }
+
+/* The status column: tiles two by two, ROUTING and WHERE IT RAN as label | value rows, the question, the model figures. */
+.status-column { display: flex; flex-direction: column; gap: 12px; padding: 12px 0 12px 6px; min-width: 0; }
+.status-scroll { display: grid; gap: 8px; align-content: start; }
+.status-column .panel-row { margin: 0; }
+.status-block { display: grid; gap: 2px; margin-top: 6px; }
+.tiles-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.tile { padding: 7px 10px; background: var(--card-fill); border-radius: 6px; }
+.tile-value { font-size: 16px; font-weight: 600; color: var(--text); }
+.tile-label { margin-top: 1px; font-size: 10px; color: var(--text-faint); }
+.routing { display: grid; grid-template-columns: 52px minmax(0, 1fr); margin: 1px 0; }
+.routing-phase { font-size: 11px; color: var(--text-faint); }
+.routing-phase.reach { color: var(--tone); }
+.routing-model { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.status-progress { margin: 0; font-size: 12px; }
+.status-scroll > .pill { justify-self: start; }
+
+/* A decision blocks the run on a person - caution, not action - so it is amber, not ember. Ember belongs to the answer
+   the run recommends. */
+.decision { padding: 12px; background: var(--decision-fill); border: 1px solid var(--amber-400); border-radius: 6px; }
+.decision-head { margin: 0; font-family: var(--font-sans); font-size: 13px; font-weight: 700; letter-spacing: normal; }
+.decision-topic { margin: 4px 0 0; font-size: 12px; }
+.decision-detail { margin: 8px 0 0; padding: 8px; max-height: 220px; overflow: auto; font-size: 12px; white-space: pre;
+  background: var(--input-fill); border-radius: 4px; }
+.decision-answers { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 8px; }
+.decision-wait { margin: 8px 0 0; font-size: 11px; color: var(--text-muted); }
+.decision .said { margin: 8px 0 0; font-size: 12px; }
+
+/* MODEL PERFORMANCE at the foot of the column, folded to a model and its speed until clicked. */
+.performance { display: grid; gap: 8px; padding: 12px; background: var(--card-fill); border-radius: 6px; }
+.performance-head { font: inherit; display: flex; justify-content: space-between; align-items: center; padding: 0;
+  background: transparent; border: 0; color: inherit; cursor: pointer; text-align: left; }
+.performance .hint { margin: 0; }
+.speed { margin-top: 2px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.speeds-open { max-height: 420px; overflow-y: auto; }
+.speed-open { display: grid; gap: 5px; padding: 10px 0 8px; border-top: 1px solid var(--input-fill); }
+.speed-model { font-weight: 600; overflow-wrap: anywhere; }
+.speed-row { display: flex; justify-content: space-between; gap: 8px; }
+.speed-value { font-size: 11.5px; font-weight: 600; }
+
+/* The repository strip at the foot: one size and one line for every part; added green, removed red. */
+.repo-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 4px 12px; font-size: 12px;
+  color: var(--text-body); background: var(--bg-elevated); border-top: 1px solid var(--border); cursor: pointer; }
+.repo-pr { font-weight: 600; color: var(--text); text-decoration: none; }
+.repo-muted { color: var(--text-muted); }
+.repo-changes { display: inline-flex; gap: 4px; }
+.repo-tone { color: var(--tone); }
+.repo-ci { display: inline-flex; align-items: center; gap: 6px; color: var(--text-body); text-decoration: none; }
+.repo-light { width: 8px; height: 8px; border-radius: 50%; background: var(--tone); }
+.repo-again { margin-left: auto; width: 22px; height: 22px; }
+
+/* The viewer (Ui/TextViewer.razor): a document's own text, read-only, monospaced and never wrapped. */
+.dialog:has(.viewer-text, .viewer-rendered) { width: min(820px, calc(100vw - 32px)); }
+.viewer-text { margin: 0; padding: 8px; max-height: 60vh; overflow: auto; font-size: 12px; white-space: pre;
+  background: var(--input-fill); border-radius: 4px; }
+.viewer-rendered { max-height: 60vh; overflow: auto; }
+.viewer-status { align-self: center; margin-right: auto; }
+.btn.on { background: var(--card-fill-active); border-color: var(--border-strong); }
+
+/* A past run (Runs/PastRun.razor; MainWindow.axaml 923-1243), in the live run's frame: Back, the task, then Retry and Run
+   again beside the status pill, and the attempt on a row of its own below them - a label that comes and goes beside the
+   buttons moved them while somebody aimed. */
+.past-run .back { flex: none; align-self: center; }
+.past-actions { display: grid; gap: 4px; flex: none; }
+.past-buttons { display: flex; align-items: center; gap: 8px; }
+.past-buttons .btn { width: 118px; }
+.past-attempt { margin: 0; min-height: 16px; text-align: right; }
+.past-run .run-view { padding-right: 10px; }
+.past-decisions { list-style: none; margin: 6px 0 12px; padding: 0; }
+.past-decisions .card { border-left-width: 2px; padding: 10px; font-size: 12px; color: var(--text-body); }
+.past-timeline { display: grid; gap: 2px; margin-top: 6px; }
+.timeline-row { display: grid; grid-template-columns: auto 130px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.timeline-when { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.timeline-kind { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.timeline-summary { font-size: 12px; color: var(--tone); overflow-wrap: anywhere; }
+.ran-as { gap: 3px; }
+.ran-as-tier { font-size: 11px; color: var(--tone); }
+
+/* A written file's card: its path, what became of it under it, Review and Delete. */
+.artifact-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.artifact-status { overflow-wrap: anywhere; }
+
+/* ── The Inbox (Pages/InboxScreen.razor; InboxWindow.axaml): Refresh, Mark all read, Unread only and the count over the
+   list of what came in, 360 px | the chosen item, its header pinned over its run. ─────────────────────────────────── */
+
+.inbox-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
+.inbox-unread-only { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.inbox-status { margin-left: 8px; }
+.inbox-body { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 10px; align-items: start; }
+.inbox-list { margin: 0; padding: 0; list-style: none; max-height: calc(100vh - 150px); overflow: auto; }
+/* The edge is what the item IS (Looks.Inbox); the ember dot and the weight are the one thing reading it changes. */
+.inbox-item { font: inherit; display: grid; gap: 3px; width: 100%; box-sizing: border-box; text-align: left; color: var(--text); cursor: pointer; }
+.inbox-item-head { display: flex; align-items: center; gap: 6px; }
+.inbox-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.inbox-kind { font-size: 11px; color: var(--tone); }
+.inbox-item-title { font-size: 12.5px; color: var(--text); overflow-wrap: anywhere; }
+.inbox-item.unread .inbox-item-title { font-weight: 700; }
+.inbox-detail { display: flex; flex-direction: column; min-width: 0; max-height: calc(100vh - 150px); }
+.inbox-head { flex: none; display: grid; gap: 4px; margin: 0 0 8px; }
+.inbox-title { margin: 0; font-family: var(--font-sans); font-size: 16px; font-weight: 600; letter-spacing: normal; overflow-wrap: anywhere; }
+.inbox-head p { margin: 0; }
+.inbox-head .inbox-summary { margin-top: 6px; font-size: 13px; color: var(--text-body); overflow-wrap: anywhere; }
+/* Amber, as the window's: the run is stopped on a person - caution, not action. */
+.inbox-question { display: grid; gap: 6px; margin: 10px 0 0; padding: 10px; border: 1px solid var(--amber-400); border-radius: 6px; }
+.inbox-question-topic { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.inbox-question-text { margin: 0; max-height: 220px; overflow: auto; font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap;
+  overflow-wrap: anywhere; }
+.inbox-answers { display: flex; flex-wrap: wrap; gap: 8px; }
+.inbox-run { flex: 1; min-height: 0; overflow: auto; display: grid; gap: 4px; align-content: start; padding-bottom: 12px; }
+.inbox-run .panel-row { margin: 12px 0 0; }
+.inbox-run .panel-row:first-child { margin-top: 0; }
+.inbox-run-header { margin: 0; }
+.inbox-timeline { display: grid; gap: 2px; margin-top: 6px; }
+.inbox-timeline .timeline-kind { color: var(--tone); }
+.inbox-artifacts, .inbox-decisions { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.inbox-artifacts li { margin: 1px 0; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.inbox-decisions li { margin: 1px 0; overflow-wrap: anywhere; }
+.inbox-where { margin: 8px 0 0; }
+
+/* ── Proposed changes (/proposals): what waits, and one run's set with its diffs ───────────────────────────────────── */
+.proposals-screen { max-width: 880px; }
+.proposals-title { margin: 0 0 4px; font-family: var(--font-sans); font-size: 16px; font-weight: 600; letter-spacing: normal; overflow-wrap: anywhere; }
+.proposals-screen p { margin: 4px 0 8px; }
+.proposal-sets { margin: 0; padding: 0; list-style: none; }
+.proposal-set { display: grid; gap: 2px; color: inherit; text-decoration: none; }
+.proposal-set .card-meta { white-space: normal; }
+.proposals-screen .artifact-list { list-style: none; margin: 8px 0 0; padding: 0; }
+
+/* ── Templates (Pages/TemplatesScreen.razor; TemplatesWindow.axaml): the workspace over the library, 300 px | what the
+   chosen one will be asked to do, the form it asks for, Run. ──────────────────────────────────────────────────────── */
+.templates-top { display: grid; gap: 6px; max-width: 300px; margin: 0 0 10px; }
+.templates-body { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 10px; align-items: start; }
+.templates-new { margin: 0 0 8px; }
+.templates-list { margin: 0; padding: 0; list-style: none; max-height: calc(100vh - 190px); overflow: auto; }
+.template-card { font: inherit; display: grid; gap: 2px; width: 100%; box-sizing: border-box; text-align: left; color: var(--text); cursor: pointer; }
+.template-card .card-title, .template-card .card-meta { white-space: normal; overflow-wrap: anywhere; }
+.template-description { margin-top: 3px; }
+.templates-detail { display: grid; gap: 6px; min-width: 0; align-content: start; }
+.templates-detail p { margin: 0; }
+.template-inputs { display: grid; gap: 10px; }
+.template-input input:not([type="checkbox"]), .template-input textarea, .template-input select { display: block; width: 100%; box-sizing: border-box; }
+.template-goal { padding: 8px 10px; border-radius: 4px; background: var(--scrim); color: var(--text-body); white-space: pre-wrap; overflow-wrap: anywhere; }
+.template-problems { padding: 8px 10px; border-radius: 4px; background: var(--scrim); color: var(--warning); white-space: pre-line; }
+.template-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin: 4px 0 0; }
+.templates-where { margin: 8px 0 0; }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+
+/* ── The template editor (Pages/TemplateEditor.razor; TemplateEditWindow.axaml): Form | JSON, Save at the foot. ───── */
+.template-editor { display: grid; gap: 8px; max-width: 820px; }
+.template-form { display: grid; gap: 4px; }
+.template-form .hint { margin: 0 0 4px; }
+.template-form input:not([type="checkbox"]), .template-form textarea, .template-form select { width: 100%; box-sizing: border-box; }
+.template-goal-text { min-height: 180px; }
+.param-row, .check-row { display: grid; gap: 4px; margin: 0 0 6px; }
+.param-row .row-line { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; align-items: center; }
+.param-row .row-line + .row-line { grid-template-columns: 140px 1fr auto; }
+.check-row { grid-template-columns: 1fr 2fr 60px auto auto; align-items: center; }
+.template-form .exit-codes { width: 60px; }
+.template-form > .btn { justify-self: start; }
+.template-form .template-unknown-tools { color: var(--warning); margin: 6px 0 0; }
+.tool-rows { display: grid; gap: 2px; margin: 6px 0 0; }
+.tool-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; font-size: 12px; }
+.limits { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.limits label { display: grid; gap: 2px; }
+.template-review { margin: 10px 0 0; }
+.template-json-tab { display: grid; gap: 6px; }
+.template-json { width: 100%; min-height: 60vh; box-sizing: border-box; font-family: var(--font-mono); font-size: 12px; }
+.template-status { margin: 0; color: var(--warning); white-space: pre-line; }
+.template-editor-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+
+/* ── Schedules (Pages/SchedulesScreen.razor; SchedulesWindow.axaml): the workspace over the schedules, 320 px | what the
+   chosen one will do and what came of it, or the form while one is written. ─────────────────────────────────────── */
+.schedules-top { display: grid; gap: 6px; max-width: 320px; margin: 0 0 10px; }
+/* Over everything, as the window's: not a detail of one schedule - while it shows, none of them will run. */
+.schedules-tick { margin: 0 0 10px; padding: 10px 12px; border-radius: 4px; border-left: 3px solid var(--danger); background: var(--scrim);
+  color: var(--warning); }
+.schedules-body { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 10px; align-items: start; }
+.schedules-cards { margin: 0; padding: 0; list-style: none; max-height: calc(100vh - 230px); overflow: auto; }
+.schedule-card { font: inherit; display: grid; gap: 2px; width: 100%; box-sizing: border-box; text-align: left; color: var(--text); cursor: pointer; }
+.schedule-card .card-title, .schedule-card .card-meta { white-space: normal; overflow-wrap: anywhere; }
+.schedule-next { margin-top: 3px; }
+.schedules-status { margin: 6px 0 0; }
+.schedules-list-actions { display: flex; gap: 8px; margin: 8px 0 0; }
+.schedule-detail, .schedule-form { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.schedule-detail p, .schedule-form p { margin: 0; }
+.schedule-approval { display: grid; gap: 4px; padding: 8px 10px; border-radius: 4px; background: var(--scrim); color: var(--text-body); overflow-wrap: anywhere; }
+.schedule-outcomes { margin: 0; padding: 0; list-style: none; }
+.schedule-outcome { display: grid; gap: 2px; margin: 0 0 6px; }
+.schedule-outcome-summary { color: var(--text-body); overflow-wrap: anywhere; }
+.schedule-field { display: grid; gap: 3px; }
+.schedule-field input:not([type="number"]), .schedule-field select { width: 100%; box-sizing: border-box; }
+.schedule-time { display: flex; align-items: center; gap: 8px; }
+.schedule-time input { width: 110px; }
+.schedule-problems { padding: 8px 10px; border-radius: 4px; background: var(--scrim); color: var(--warning); white-space: pre-line; }
+.schedule-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin: 4px 0 0; }
+.schedules-where { margin: 8px 0 0; }
+
+/* ── The log (Pages/LogScreen.razor; LogWindow.axaml): the toolbar, the source chips, the lines in their level's colour,
+   the chosen line's payload under them, and the status line. ─────────────────────────────────────────────────────── */
+.log-screen { display: grid; grid-template-rows: auto auto minmax(0, 1fr) 190px auto; gap: 6px; height: calc(100vh - 80px); min-width: 0; }
+.log-toolbar, .log-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.log-sources { gap: 4px; }
+.log-field, .log-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-body); }
+.log-field select { width: 110px; }
+.log-search { width: 200px; }
+.log-label { font-size: 13px; color: var(--text-body); margin-right: 2px; }
+.log-rows { min-height: 0; overflow: auto; font-family: var(--font-mono); font-size: 12px; background: var(--input-fill);
+  border: 1px solid var(--border); border-radius: 4px; }
+/* One line per row, a fixed 18 px high: the list draws only the rows in view (Virtualize), and that needs their height. */
+.log-rows .log-line { display: block; width: 100%; height: 18px; padding: 0 6px; margin: 0; border: 0; border-radius: 0; background: transparent;
+  font: inherit; line-height: 18px; text-align: left; overflow: hidden; cursor: pointer; }
+.log-rows .log-line:hover { background: var(--card-fill); }
+.log-rows .log-line.selected { background: var(--card-fill-active); }
+.log-detail { width: 100%; height: 100%; box-sizing: border-box; resize: none; font-family: var(--font-mono); font-size: 12px; white-space: pre;
+  overflow: auto; background: var(--input-fill); color: var(--text-body); border-color: var(--border); }
+.log-status { margin: 0; }
+
+/* The viewer drawn in the page (TextViewer Inline): the Timeline and the Environment, whose screen IS the document. */
+.report-top { display: grid; gap: 6px; max-width: 320px; margin: 0 0 10px; }
+.viewer-inline { display: grid; gap: 8px; min-width: 0; }
+.viewer-title { font-size: 15px; margin: 0; }
+.viewer-inline .viewer-text { max-height: calc(100vh - 240px); }
+.viewer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.viewer-lead { margin: 0 0 10px; }
+
+/* An answer in Markdown (Ui/MarkdownView), as the window's MarkdownRender draws it: sizes close together, so a document whose
+   author started at level three does not read as a footnote; code on the input ground, as the viewer's text. */
+.markdown { color: var(--text-body); font-size: 13px; overflow-wrap: anywhere; }
+.markdown p { margin: 0 0 6px; }
+.markdown .md-heading { color: var(--text); margin: 14px 0 4px; }
+.markdown h3.md-heading { font-size: 17px; }
+.markdown h4.md-heading { font-size: 15px; }
+.markdown h5.md-heading, .markdown h6.md-heading { font-size: 14px; }
+.markdown .md-item { display: flex; gap: 6px; }
+.markdown .md-marker { flex: none; color: var(--text-muted); }
+.markdown .md-indent-1 { padding-left: 18px; }
+.markdown .md-indent-2 { padding-left: 36px; }
+.markdown .md-indent-3 { padding-left: 54px; }
+.markdown .md-indent-4 { padding-left: 72px; }
+.markdown code, .markdown .md-code { font-family: var(--font-mono); font-size: 12px; background: var(--input-fill); border-radius: 3px; }
+.markdown code { padding: 0 3px; }
+.markdown .md-code { margin: 6px 0; padding: 8px; white-space: pre; overflow: auto; }
+.markdown hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+.markdown .md-table { border-collapse: collapse; margin: 6px 0; }
+.markdown .md-table th, .markdown .md-table td { padding: 2px 8px; border: 1px solid var(--border); }
+
+/* ── Settings (Pages/SettingsScreen.razor; SettingsWindow.axaml): the sections, 188 px, on the context surface | the one
+   chosen; what a Save could not do, Save and Cancel at the foot of every section. ─────────────────────────────────── */
+.shell > main:has(> .settings-screen) { padding: 0; max-width: none; }
+.settings-screen { display: grid; grid-template-columns: 188px minmax(0, 860px); grid-template-rows: 1fr auto; column-gap: 16px;
+  min-height: calc(100vh - 41px); }
+.settings-screen > .said { grid-column: 1 / -1; padding: 16px; }
+/* The window's Border.context and its Button.nav: muted until pointed at; the section you are in lit, with its edge. */
+.settings-nav { grid-row: 1 / span 2; display: flex; flex-direction: column; padding: 12px 8px; background: var(--bg-elevated);
+  border-right: 1px solid var(--border); }
+.settings-nav-item { display: block; padding: 6px 10px; margin: 0 0 2px; font-size: 12.5px; color: var(--text-muted); text-decoration: none;
+  border-left: 2px solid transparent; border-radius: 0 4px 4px 0; }
+.settings-nav-item:hover { color: var(--text); background: var(--card-fill); }
+.settings-nav-item.on, .settings-nav-item.on:hover { color: var(--text); background: var(--card-fill-active); border-left-color: var(--accent); }
+.settings-nav-rule { height: 1px; margin: 10px 0 8px 10px; background: var(--border); }
+.settings-nav-group { margin: 0 0 4px 10px; }
+.settings-pane { display: flex; flex-direction: column; gap: 6px; padding: 12px 0; min-width: 0; }
+.settings-pane p { margin: 0; }
+.settings-pane input:not([type="checkbox"]), .settings-pane textarea, .settings-pane select { width: 100%; box-sizing: border-box; }
+.settings-pane .label { margin: 8px 0 0; }
+.settings-foot { grid-column: 2; display: grid; gap: 6px; padding: 8px 0 12px; }
+.settings-foot p { margin: 0; }
+.settings-note { color: var(--warning); }
+.settings-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.settings-field { display: grid; gap: 3px; }
+.settings-label-row { display: inline-flex; align-items: center; gap: 6px; }
+.settings-small { font-size: 12px; }
+.settings-server { display: grid; grid-template-columns: minmax(0, 1fr) 90px; gap: 8px; }
+.settings-problem { color: var(--danger); }
+.settings-stored { color: var(--text-body); }
+.settings-state { margin-top: 8px; }
+.settings-cards { margin: 0; padding: 0; list-style: none; }
+.settings-card { display: flex; align-items: center; gap: 9px; }
+.settings-card-text { display: grid; gap: 1px; flex: 1; min-width: 0; }
+.settings-card-text a.card-title { text-decoration: none; }
+.settings-card-text a.card-title:hover { text-decoration: underline; }
+.settings-wrap { white-space: normal; }
+.settings-reach { flex: none; }
+.settings-section-actions { display: flex; gap: 8px; }
+.row-icons { flex: none; display: inline-flex; gap: 2px; }
+/* What the last check learned: grey until asked (Looks.Health), the sentence and the time in its title. */
+.health-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--tone, var(--text-faint)); }
+.settings-about-name { font-size: 20px; font-weight: 600; }
+.settings-about { display: grid; grid-template-columns: 120px 1fr; gap: 2px 0; margin: 10px 0 0; font-size: 12px; }
+.settings-about dd { margin: 0; overflow-wrap: anywhere; }
+.mono { font-family: var(--font-mono); font-size: 12px; }
+.settings-components { margin: 6px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.settings-components li { display: grid; grid-template-columns: minmax(0, 1fr) 140px 120px; gap: 6px; margin: 0 0 3px; }
+.settings-component-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-roots .card-title { white-space: normal; overflow-wrap: anywhere; }
+/* A standing write grant: its folder wraps as a root's does; an orphan's note in the window's warning colour. */
+.settings-grants .card-title { white-space: normal; overflow-wrap: anywhere; }
+.settings-grants .grant-orphan { color: var(--warning); }
+/* The editors over the settings: the provider's two columns (ProviderEditWindow.axaml), one for the others. */
+.dialog.dialog-wide { width: min(1040px, calc(100vw - 32px)); }
+.settings-editor-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.settings-editor-column { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.settings-editor-column p { margin: 0; }
+.settings-editor-column input:not([type="checkbox"]), .settings-editor-column textarea, .settings-editor-column select { width: 100%; box-sizing: border-box; }
+.settings-editor-column .label { margin: 6px 0 0; }
+.settings-editor-status { white-space: pre-line; color: var(--text-body); margin: 8px 0 0; }
+.settings-fetch { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.settings-test, .settings-checks { display: flex; align-items: center; gap: 8px 24px; flex-wrap: wrap; }
+.settings-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.settings-tools { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+
+/* The window's HintView: a 16 px "?" beside a label; the advice behind it stays until it is closed. */
+.hint-mark { position: relative; display: inline-block; }
+.hint-mark > summary { list-style: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
+  border: 1px solid var(--border-strong); border-radius: 8px; font-size: 10px; font-weight: 700; color: var(--text-muted); cursor: pointer; }
+.hint-mark > summary::-webkit-details-marker { display: none; }
+.hint-mark > summary:hover, .hint-mark[open] > summary { color: var(--accent); border-color: var(--accent); }
+.hint-mark-text { position: absolute; z-index: 30; top: 20px; left: 0; width: 360px; margin: 0; padding: 10px 12px; font-size: 12px; font-weight: 400;
+  color: var(--text-body); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 6px; white-space: pre-line; }
+
+/* ── Accounts and Audit (Pages/AccountsScreen.razor, AuditScreen.razor; web only): the settings' lists on a page of
+   their own - the cards, labels, hints and dialogs of a settings section, one column as wide as a section's pane. ── */
+.admin-screen { display: flex; flex-direction: column; gap: 6px; max-width: 860px; }
+.admin-screen.admin-wide { max-width: none; }
+.admin-screen p { margin: 0; }
+.admin-title { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+/* The trust model (ADR 0002): a card on the warning edge, read before any role is given. */
+.admin-trust { margin: 0 0 4px; color: var(--text-body); font-size: 12px; }
+.admin-said { color: var(--text-body); }
+.admin-form { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.admin-form input:not([type="checkbox"]), .admin-form select { width: 100%; box-sizing: border-box; }
+.admin-form .label { margin: 6px 0 0; }
+.admin-inline { display: flex; align-items: center; gap: 8px; }
+.admin-inline select { flex: 1; }
+.admin-state { flex: 1; font-size: 12px; color: var(--text-body); }
+.audit-scroll { overflow-x: auto; }
+.audit-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.audit-table th { padding: 4px 8px; font-size: 11px; font-weight: 700; color: var(--text-muted); border-bottom: 1px solid var(--border-strong); }
+.audit-table td { padding: 3px 8px; vertical-align: top; color: var(--text-body); border-bottom: 1px solid var(--border); }
+.audit-table tbody tr:hover td { background: var(--card-fill); }
+.audit-when { white-space: nowrap; font-family: var(--font-mono); color: var(--text-muted); }
+.audit-table td.audit-when { color: var(--text-muted); }
+.audit-detail { overflow-wrap: anywhere; }
+
+/* ── Sign in (Pages/SignIn.razor, BareLayout): nobody is signed in, so no top bar and no rail - the brand and the form on
+   a card in the middle of the ground. ─────────────────────────────────────────────────────────────────────────────── */
+main.bare { max-width: none; min-height: 100vh; box-sizing: border-box; display: grid; place-items: center; padding: 16px; }
+.signin { width: min(340px, 100%); }
+.signin-card { display: flex; flex-direction: column; gap: 4px; padding: 20px 22px 22px; background: var(--bg-elevated);
+  border: 1px solid var(--border); border-radius: 6px; }
+.signin-card p { margin: 0; }
+.signin-card form { display: flex; flex-direction: column; gap: 4px; }
+.signin-card input { width: 100%; box-sizing: border-box; background: var(--input-fill); }
+.signin-card .label { margin: 8px 0 0; }
+.signin-card .btn { margin-top: 14px; }
+.signin-brand { display: flex; align-items: center; gap: 8px; font-family: var(--font-display); font-weight: 600; font-size: 13px; color: var(--text); }
+.signin-brand img { width: 20px; height: 20px; }
+.signin-title { font-size: 20px; font-weight: 600; margin: 10px 0 2px; }
+
+/* ── Narrow screens ───────────────────────────────────────────────────────────────────────────────────────────────────
+   One width for every narrow rule, defined here and nowhere else: 900 px. Under it the 52 px rail, the Runs screen's
+   268 px column and a main area that holds the command bar (its box beside Run and Stop, 156, and the run's settings,
+   252) no longer fit side by side, and the page scrolled sideways, the bars with it. A phone gets a layout of its own
+   made of the same parts, not the window squeezed into 390 px: the rail is a bar along the bottom, the Runs column a
+   drawer opened from the top bar, the status column under the run, and a list beside its detail stacked over it. What
+   can be touched is 40 px high at least - a finger is not a pointer. */
+/* max-width rather than the range syntax (width < 900px): iOS Safari before 16.4 ignores a range query, and an iPhone
+   still on it got the desktop squeezed into its screen. 899.98 so that 900 itself is wide, as the range said. */
+@media (max-width: 899.98px) {
+  /* The bottom bar's height over the safe area: a 40 px item, 6 px above and below it, and its top line. */
+  :root { --bottom-bar: 53px; }
+
+  /* The top bar: the drawer's button first. The host's name and the word "Connected" give way (the dot stays, and the
+     words for a lost connection still show), and a long name is cut, so the bar never pushes the page wider. */
+  .top { height: 48px; gap: 8px; padding: 0 8px 0 4px; }
+  .drawer-button { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 40px; height: 40px;
+    padding: 0; color: var(--text-muted); background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
+  .drawer-button:hover, .drawer-button[aria-expanded="true"] { color: var(--text); background: var(--card-fill); }
+  .host, .conn .conn-up { display: none; }
+  .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .top .pill, .signout { flex: none; }
+  .signout button { min-height: 40px; }
+
+  /* The rail, a bar along the bottom: in reach of a thumb on every screen, and clear of a phone's home indicator. The
+     page leaves room under it, so the last of every screen - the command bar's Run among it - can be scrolled above it. */
+  .shell { display: block; min-height: 0; padding-bottom: calc(var(--bottom-bar) + env(safe-area-inset-bottom)); }
+  .rail { position: fixed; z-index: 30; left: 0; right: 0; bottom: 0; flex-direction: row; justify-content: space-around;
+    width: auto; padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); border-right: 0; border-top: 1px solid var(--border); }
+  .rail-gap { display: none; }
+  .rail-item { flex: 1 1 0; width: auto; min-width: 40px; max-width: 56px; height: 40px; margin: 0; }
+  .rail-more { display: flex; position: relative; flex: 1 1 0; min-width: 40px; max-width: 56px; }
+  .rail-more-button { display: flex; max-width: none; }
+  /* More's list opens over the bar, on the darkest surface (as the workspace switcher's), each section with its name. */
+  .rail-low { display: none; }
+  .rail-more.open .rail-low { display: grid; position: absolute; right: 0; bottom: calc(100% + 10px); min-width: 200px; gap: 2px;
+    padding: 6px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 6px; }
+  .rail-low .rail-item { justify-content: flex-start; gap: 10px; max-width: none; padding: 0 10px; }
+  .rail-low .rail-text { display: inline; font-size: 13px; }
+  /* Under the bar's own items (a negative layer of the bar's), over the rest of the page: a tap anywhere else closes More. */
+  .rail-away { display: block; position: fixed; inset: 0; z-index: -1; }
+
+  /* The Runs column, a drawer over the screen from its left edge down to the bottom bar. */
+  .drawer { display: none; }
+  .drawer.open { display: block; position: fixed; z-index: 41; top: 0; left: 0; bottom: calc(var(--bottom-bar) + env(safe-area-inset-bottom));
+    width: min(300px, calc(100vw - 48px)); overflow-y: auto; background: var(--bg-elevated); border-right: 1px solid var(--border-strong); }
+  .runs-screen { display: block; min-height: 0; }
+  .runs-column { width: 100%; min-height: 100%; border-right: 0; }
+  .runs-column .switcher { width: 100%; }
+
+  /* The command bar: the box across the screen, Run and Stop under it, the run's settings under them. */
+  .bar-row { flex-wrap: wrap; gap: 8px; }
+  .bar-input { flex: 1 1 100%; }
+  .run-buttons { width: 100%; margin-left: 0; }
+  .run-pair .run, .run-pair .stop { flex: 1; width: auto; }
+  .bar-divider { display: none; }
+  .run-settings { width: 100%; }
+
+  /* A run: the status column - the question with it - under the run's views rather than beside them. */
+  .run-body { grid-template-columns: minmax(0, 1fr); }
+  .run-view { padding-right: 0; min-height: 0; }
+  /* The views and Current action as tall as what they hold: the window's fixed 240 and 130 px, stacked over the status
+     column, pushed a waiting question two screens down. */
+  .run-views { grid-template-rows: auto auto; }
+  /* And the question first in the status column, right under the run: what the run waits for is not under its figures. */
+  .status-scroll > .decision { order: -1; }
+  .status-column { padding: 12px 0; border-top: 1px solid var(--border); }
+  .tabs { height: auto; overflow-x: auto; }
+  .past-run .task-header { flex-wrap: wrap; }
+  .past-run .task-text { flex: 1 1 200px; }
+  .past-actions { flex: 1 1 100%; }
+  .past-buttons .btn { flex: 1; width: auto; }
+  .past-attempt { text-align: left; }
+  .timeline-row { grid-template-columns: auto minmax(0, 1fr); }
+  .timeline-summary { grid-column: 1 / -1; }
+
+  /* A list beside its detail (the Inbox, Templates, Schedules): the list over the detail, in a box of its own no taller
+     than 40% of the screen, so what was chosen starts on the first screen under it. */
+  .inbox-body, .templates-body, .schedules-body { grid-template-columns: minmax(0, 1fr); }
+  .inbox-list, .templates-list, .schedules-cards { max-height: 40vh; }
+  .inbox-detail { max-height: none; }
+  .inbox-run { overflow: visible; }
+
+  /* Settings: the sections over the one chosen, as one list that wraps. */
+  .settings-screen { display: block; min-height: 0; }
+  .settings-nav { flex-direction: row; flex-wrap: wrap; gap: 4px; padding: 8px 16px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .settings-nav-item { display: flex; align-items: center; margin: 0; }
+  .settings-nav-rule { display: none; }
+  .settings-nav-group { flex-basis: 100%; margin: 6px 0 2px; }
+  .settings-pane, .settings-foot, .settings-screen > .said { padding-left: 16px; padding-right: 16px; }
+  .settings-editor-columns, .settings-pair { grid-template-columns: minmax(0, 1fr); }
+
+  /* The audit as wide as its columns need, scrolling in its box (.audit-scroll): squeezed into the screen, a path in
+     Detail broke one character to a line. */
+  .audit-table { width: max-content; min-width: 100%; }
+  .audit-detail { min-width: 28ch; }
+
+  /* The template editor's rows, two to a line. */
+  .check-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .param-row .row-line, .param-row .row-line + .row-line { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+
+  /* The log: the lines a fixed half of the screen high (the list draws only the rows in view, and needs a box of a known
+     height), the search on a row of its own. */
+  .log-screen { height: auto; grid-template-rows: auto auto 50vh 160px auto; }
+  .log-search { flex: 1 1 100%; width: auto; }
+
+  /* A dialog within the screen's height, whatever the browser's own bars take of it. */
+  .dialog { max-height: calc(100dvh - 32px); padding: 16px; }
+  /* A hint's advice across the screen under its "?": 360 px wide from a mark near the right, it ran off the page. */
+  .hint-mark-text { position: fixed; left: 16px; right: 16px; top: auto; width: auto; }
+
+  .btn, .row-icon, .tab, .ws-card, .ws-row a, .folder, .settings-nav-item, .pill.attempts, .disclosure, .performance-head,
+  select, input:not([type="checkbox"], [type="radio"], [type="range"]) { min-height: 40px; }
+  .row-icon { min-width: 40px; }
+  /* The "?" stays 16 px to the eye and takes a 40 px touch. */
+  .hint-mark > summary { position: relative; }
+  .hint-mark > summary::after { content: ""; position: absolute; inset: -12px; }
+}

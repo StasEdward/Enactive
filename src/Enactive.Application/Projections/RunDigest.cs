@@ -56,19 +56,17 @@ internal sealed record RunDigest(
         return new RunDigest(
             Title: title,
             Subtitle: subtitle,
-            Meta: $"{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {model} · run {record.RunId:N}",
+            Meta: $"{Times.Minute(record.StartedAt)} · {model} · run {record.RunId:N}",
             Status: record.Status,
             AttemptLabel: attemptLabel,
             // Retry re-runs this specification as it was, or - for a typed run - the request, recorded as a value.
             CanRetry: spec is not null || !string.IsNullOrWhiteSpace(request),
             // Null usage: the run predates the counting, or the provider never reported - not zero, and not shown as it.
-            TokensText: record.Usage is { } u ? TokenCounts.Compact(u.Total) : "—",
-            TokensDetail: record.Usage is { } u2
-                ? $"{TokenCounts.Compact(u2.PromptTokens)} in · {TokenCounts.Compact(u2.CompletionTokens)} out"
-                : "nothing reported",
+            TokensText: RunFigures.Tokens(record.Usage),
+            TokensDetail: RunFigures.TokensDetail(record.Usage),
             ToolCalls: record.Events.Count(e => e.Kind == nameof(EventKind.ToolInvoked)),
             ElapsedText: Duration(record.FinishedAt - record.StartedAt),
-            StepsText: cards.Count == 0 ? "—" : $"{done} / {cards.Count} steps",
+            StepsText: RunFigures.Steps(done, cards.Count),
             // What it was ALLOWED to do, as recorded. A run from before this was kept says so, rather than showing
             // today's level and passing it off as history.
             HasSettings: settings is not null,
@@ -83,7 +81,9 @@ internal sealed record RunDigest(
     public static string Duration(TimeSpan span)
     {
         var seconds = Math.Max(0, span.TotalSeconds);
-        return seconds >= 60 ? $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s" : $"{seconds:0}s";
+        return seconds >= 60
+            ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s")
+            : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{seconds:0}s");
     }
 
     /// <summary>

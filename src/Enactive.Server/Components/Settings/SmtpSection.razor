@@ -1,0 +1,57 @@
+@using Enactive.Application
+
+@* The window's SMTP pane (SettingsWindow.axaml): the account send_email sends from, and the only addresses it may send
+   to. The password is the one place it differs: this page is never handed the stored password (ServerSettings), so
+   its box opens empty, an empty box keeps what is stored, and Remove takes it away - where the window's box holds a
+   placeholder and emptying it removes the password. *@
+
+<h2 class="label">SMTP</h2>
+<p class="hint">The account the send_email tool sends from. Until a host and at least one recipient are set, the tool tells the agent it is unavailable rather than failing halfway through a task.</p>
+
+<span class="label" id="smtp-server">Server</span>
+<div class="settings-server" role="group" aria-labelledby="smtp-server">
+    <input aria-label="Host" placeholder="smtp.example.com" @bind="Vm.SmtpHost" @bind:event="oninput" />
+    <input aria-label="Port" placeholder="587" @bind="Vm.SmtpPort" @bind:event="oninput" />
+</div>
+<label class="check"><input type="checkbox" @bind="Vm.SmtpStartTls" /> Upgrade the connection with STARTTLS</label>
+<p class="hint">587 with STARTTLS is what most providers want. For implicit TLS on 465, set the port and clear the box.</p>
+
+<label class="label" for="smtp-user">User</label>
+<input id="smtp-user" placeholder="you@example.com" autocomplete="off" @bind="Vm.SmtpUser" />
+<p class="hint">Leave empty for a relay that wants no credentials — a submission agent on your own network. Nothing is sent to the server then.</p>
+
+<label class="label" for="smtp-password">Password</label>
+<input id="smtp-password" type="password" autocomplete="new-password"
+       placeholder="@(Vm.SmtpPasswordStored ? "stored — type a new one to replace it" : "")" @bind="Vm.SmtpPassword" @bind:event="oninput" />
+@if (Vm.SmtpPasswordStored)
+{
+    <p class="hint settings-stored">A password is stored. Leave the box empty to keep it.</p>
+}
+@if (Vm.SmtpPasswordStored || Vm.SmtpForgetPassword)
+{
+    <label class="check"><input type="checkbox" @bind="Vm.SmtpForgetPassword" /> Remove the stored password</label>
+}
+<p class="hint">Stored encrypted with the service's Windows account, the same as an API key. It is never shown here again.</p>
+
+<label class="label" for="smtp-from">From</label>
+<input id="smtp-from" placeholder="(the user above)" @bind="Vm.SmtpFrom" />
+
+<label class="label" for="smtp-to">May send to</label>
+<textarea id="smtp-to" rows="3" placeholder="you@example.com" @bind="Vm.SmtpRecipients" @bind:event="oninput"></textarea>
+<p class="hint">One address per line, and this list is the whole of what send_email may do. An address that is not on this list is refused, and no task can add one.</p>
+
+@if (Vm.HasSmtpProblem)
+{
+    <p class="hint settings-problem" role="alert">@Vm.SmtpProblem</p>
+}
+
+<label class="check"><input type="checkbox" @bind="Vm.SmtpSendWithoutAsking" /> Send without asking each time</label>
+<p class="hint">@Vm.SmtpAsking</p>
+
+<p class="hint settings-state">@Vm.SmtpState</p>
+
+@code {
+    // Handed down as a cascading value rather than a parameter: the view model is internal to the application layer,
+    // and a component's parameters are public.
+    [CascadingParameter] private SettingsViewModel Vm { get; set; } = default!;
+}
