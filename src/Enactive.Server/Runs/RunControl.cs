@@ -193,10 +193,21 @@ internal interface IRunControl
 /// asked (a test's).
 /// </param>
 /// <param name="inboxOf">The inbox a run's end is filed in; the store the environment names, unless a test's fails.</param>
+/// <param name="known">
+/// The workspaces the service knows (under the roots), which alone a run may start in; null, any folder (a test's).
+/// </param>
 internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor executor, ILogger<RunControl> log,
     TimeSpan? parkQuestionsAfter = null, WorkspaceRoots? roots = null, Func<string, BarSettings, string?>? settingsChanged = null,
-    Func<WorkspaceInfo, IInboxStore>? inboxOf = null) : IRunControl
+    Func<WorkspaceInfo, IInboxStore>? inboxOf = null, KnownWorkspaces? known = null) : IRunControl
 {
+    /// <summary>
+    /// Said when a run is asked for in a folder the service does not know as a workspace. A run used to put such a folder
+    /// back on its own (EngineExecutor touched it into the registry): one forgotten came back in everybody's switcher, with
+    /// the default settings and nobody told, when a stale page pressed Run, a run waiting in the line got its turn or one
+    /// of its schedules came due. Adding a folder is Add folder…'s (ServerHistory.AddWorkspace), never a run's.
+    /// </summary>
+    internal const string NotAWorkspace = "The service does not know that folder as a workspace.";
+
     private readonly Func<WorkspaceInfo, IInboxStore> _inboxOf = inboxOf ?? InboxStoreFactory.Create;
     private readonly object _gate = new();
     private readonly List<ServerRun> _runs = new();
@@ -221,7 +232,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         var root = Workspace.WorkspaceRegistry.Normalise(due.Schedule.WorkspaceRoot);
         // Held to the roots as a person's run is: the schedules file is also the account's desktop's and console tick's,
         // and a schedule there for a folder outside the roots ran an agent there every time it came due.
-        if ((roots?.Refusal(root) ?? RunLauncher.Refusal(root, executor.Problem)) is { } refused)
+        if ((roots?.Refusal(root) ?? Unknown(root) ?? RunLauncher.Refusal(root, executor.Problem)) is { } refused)
         {
             due.Hold.Dispose();
             return new(null, refused);
@@ -327,11 +338,15 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         // run (RunLauncher): a folder that is there, an engine to run on. The other way round, a folder outside the roots
         // was answered "No such folder" or not by whether it existed, which told anybody who could start a run what was on
         // the server's disks.
-        if ((roots?.Refusal(root) ?? RunLauncher.Refusal(root, executor.Problem)) is { } refused)
+        // A folder the service knows as a workspace after the roots, so a folder outside them is still told only that.
+        if ((roots?.Refusal(root) ?? Unknown(root) ?? RunLauncher.Refusal(root, executor.Problem)) is { } refused)
             return refused;
         lock (_gate)
             return _stopping ? "The service is stopping; start the run again when it is back." : null;
     }
+
+    /// <summary>Why a run may not start in <paramref name="root"/> as a workspace the service does not know; null when it does.</summary>
+    private string? Unknown(string root) => known is not null && known.Find(root) is null ? NotAWorkspace : null;
 
     /// <summary>
     /// Sets the run going on the thread pool, never on the caller's thread. A run is started from a page, whose
@@ -691,9 +706,11 @@ internal sealed class EngineExecutor(ServerEngine engine, ServerStaging staging)
         // callback, while several runs go at once. The callback finds the run by this flow (ServerRunScope) - set
         // here, it is this run's for all the engine does on its behalf, and gone when this method returns.
         ServerRunScope.Current = run.Session;
+        // Found, never added: forgotten while the run waited in the line, the folder stays forgotten and the run does not
+        // start (RunControl.NotAWorkspace says why). Looked up before the folder is adopted, so nothing is written there.
+        var saved = engine.Workspaces.Find(run.Workspace) ?? throw new InvalidOperationException(RunControl.NotAWorkspace);
         var composed = engine.Current ?? throw new InvalidOperationException(engine.Problem ?? "There is no engine to run on.");
         var workspace = WorkspaceInfo.Adopt(run.Workspace);
-        var saved = engine.Workspaces.Find(run.Workspace) ?? engine.Workspaces.Touch(run.Workspace);
 
         var scheduled = run.Scheduled;
         var keep = KeepsProposals(run, saved) ? staging.Begin(run.Workspace, run.Id, run.Owner, run.Prompt) : null;

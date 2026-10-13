@@ -1005,6 +1005,8 @@ public sealed class RunControlTests : IDisposable
     public async Task A_due_schedule_runs_in_the_line_unwatched_and_lets_go_when_it_ends()
     {
         var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        // A workspace of the service: a forgotten folder's schedules are passed over (ServerScheduler).
+        engine.Workspaces.Touch(_workspace);
         var policy = new PermissionPolicy(PermissionLevel.Autonomous, ["*"], []);
         var spec = new Enactive.Core.Templates.ResolvedTaskSpec("digest", 1, "Digest", Guid.NewGuid(), "project", _workspace,
             "write the digest", new Dictionary<string, string>(), policy, [], Enactive.Core.Templates.ExecutionLimits.None, null, false);
@@ -1088,6 +1090,8 @@ public sealed class RunControlTests : IDisposable
         Directory.CreateDirectory(elsewhere);
         var control = new RunControl(_users, new RunQueue(2), _engine, NullLogger<RunControl>.Instance, roots: new WorkspaceRoots([elsewhere]));
         var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        // A workspace of the service: a forgotten folder's schedules are passed over (ServerScheduler).
+        engine.Workspaces.Touch(_workspace);
         var policy = new PermissionPolicy(PermissionLevel.Autonomous, ["*"], []);
         var spec = new Enactive.Core.Templates.ResolvedTaskSpec("digest", 1, "Digest", Guid.NewGuid(), "project", _workspace,
             "write the digest", new Dictionary<string, string>(), policy, [], Enactive.Core.Templates.ExecutionLimits.None, null, false);
@@ -1112,6 +1116,8 @@ public sealed class RunControlTests : IDisposable
     public async Task A_schedule_s_run_refused_as_it_starts_says_so_in_the_inbox()
     {
         var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        // A workspace of the service: a forgotten folder's schedules are passed over (ServerScheduler).
+        engine.Workspaces.Touch(_workspace);
         var policy = new PermissionPolicy(PermissionLevel.Autonomous, ["*"], []);
         var spec = new Enactive.Core.Templates.ResolvedTaskSpec("digest", 1, "Digest", Guid.NewGuid(), "project", _workspace,
             "write the digest", new Dictionary<string, string>(), policy, [], Enactive.Core.Templates.ExecutionLimits.None, null, false);
@@ -1146,6 +1152,128 @@ public sealed class RunControlTests : IDisposable
         Assert.Null(carried);
         Assert.Contains("is not under", said);
         Assert.NotNull(Assert.Single(await inbox.ListAsync(As("bob"), CancellationToken.None)).Waiting);
+    }
+
+    // ── a forgotten workspace stays forgotten ──────────────────────────────
+
+    /// <summary>
+    /// The service as the server builds it: its workspaces known under the roots, the history that forgets one, and the
+    /// line of runs that starts only in a workspace it knows.
+    /// </summary>
+    private (ServerEngine Engine, RunControl Control, ServerHistory History) Forgettable(int maxActive = 2)
+    {
+        var engine = new ServerEngine(Path.Combine(_root, "data"), new Enactive.Workspace.FileLogSink(Path.Combine(_root, "logs")));
+        var roots = new WorkspaceRoots([_root]);
+        var known = new KnownWorkspaces(engine, roots);
+        var control = new RunControl(_users, new RunQueue(maxActive), _engine, NullLogger<RunControl>.Instance, roots: roots, known: known);
+        engine.Workspaces.Touch(_workspace);
+        return (engine, control, new ServerHistory(_users, engine, control, known));
+    }
+
+    private Enactive.Core.Schedules.Schedule ScheduleDue(ServerEngine engine, string name = "morning digest")
+    {
+        var policy = new PermissionPolicy(PermissionLevel.Autonomous, ["*"], []);
+        var spec = new Enactive.Core.Templates.ResolvedTaskSpec("digest", 1, "Digest", Guid.NewGuid(), "project", _workspace,
+            "write the digest", new Dictionary<string, string>(), policy, [], Enactive.Core.Templates.ExecutionLimits.None, null, false);
+        var schedule = new Enactive.Core.Schedules.Schedule(Guid.NewGuid(), _workspace, name,
+            Enactive.Core.Schedules.ScheduledWork.FromPastRun(spec.Snapshot()),
+            Enactive.Core.Schedules.ScheduleTiming.Once(DateTimeOffset.Now.AddMinutes(-1)), policy, CreatedAt: DateTimeOffset.Now.AddHours(-1));
+        engine.Schedules.Save(schedule);
+        return schedule;
+    }
+
+    /// <summary>
+    /// A forgotten workspace's schedule coming due is passed over: no run, nothing in its inbox, the schedule kept and the
+    /// folder still forgotten - said once in the log, not every minute. A run used to put the folder back in everybody's
+    /// switcher on its own. Added again, its schedule runs.
+    /// </summary>
+    [Fact]
+    public async Task A_forgotten_workspace_s_schedule_starts_nothing_and_the_workspace_stays_forgotten()
+    {
+        var (engine, control, history) = Forgettable();
+        ScheduleDue(engine);
+        history.ForgetWorkspace(As("alice"), _workspace);
+        var log = new Said<ServerScheduler>();
+        var scheduler = new ServerScheduler(engine, control, log);
+
+        Assert.Empty(await scheduler.TickAsync(DateTimeOffset.Now, CancellationToken.None));
+        Assert.Empty(await scheduler.TickAsync(DateTimeOffset.Now, CancellationToken.None));
+
+        Assert.Null(engine.Workspaces.Find(_workspace));
+        Assert.Empty(control.List(As("alice")));
+        Assert.Empty(await InboxItems());
+        Assert.Single(engine.Schedules.For(_workspace));
+        Assert.Single(log.Lines, l => l.Contains("does not know the folder as a workspace"));
+
+        Assert.Contains("is a workspace of the service now", history.AddWorkspace(As("alice"), _workspace));
+        var run = Assert.Single(await scheduler.TickAsync(DateTimeOffset.Now, CancellationToken.None));
+        await _engine.ReleaseNextAsync();
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>
+    /// Another person's page, still open on a workspace somebody forgot, presses Run: refused in words, by every way a run
+    /// starts, and the folder stays forgotten. A run waiting in the line when it was forgotten does not start either - the
+    /// engine finds the workspace and never adds it (it touched the folder back into the registry).
+    /// </summary>
+    [Fact]
+    public async Task A_stale_page_s_run_in_a_forgotten_workspace_is_refused_and_it_stays_forgotten()
+    {
+        var (engine, control, history) = Forgettable();
+        history.ForgetWorkspace(As("alice"), _workspace);
+
+        Assert.Equal(RunControl.NotAWorkspace, control.Start(As("bob"), _workspace, "write the digest").Refusal);
+        Assert.Equal(RunControl.NotAWorkspace, control.StartBackground(As("bob"), _workspace, "write the digest").Refusal);
+        Assert.Equal(RunControl.NotAWorkspace, control.Refusal(As("bob"), _workspace));
+        Assert.Equal(RunControl.NotAWorkspace, (await control.ResumeAsync(As("bob"), _workspace, Guid.NewGuid())).Refusal);
+        Assert.Empty(control.List(As("bob")));
+        Assert.Null(engine.Workspaces.Find(_workspace));
+
+        var waited = new ServerRun("bob", _workspace, "write the digest", new RunQueue(1).Enqueue(_workspace));
+        var executor = new EngineExecutor(engine, new ServerStaging(_users, new KnownWorkspaces(engine, new WorkspaceRoots([_root]))));
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => executor.ExecuteAsync(waited, new Enactive.Agents.UnattendedDecisionHandler(), CancellationToken.None));
+        Assert.Equal(RunControl.NotAWorkspace, refused.Message);
+        Assert.Null(engine.Workspaces.Find(_workspace));
+    }
+
+    /// <summary>
+    /// Forget says what it stops, and the audit trail too: the runs going there finish where they are, those waiting do
+    /// not start, and its schedules stop until the folder is added again. On the service they may be another Operator's,
+    /// and "forgotten" alone stopped them with nobody told.
+    /// </summary>
+    [Fact]
+    public async Task Forgetting_a_workspace_says_how_many_runs_and_schedules_it_stops()
+    {
+        var (engine, control, history) = Forgettable(maxActive: 1);
+        ScheduleDue(engine, "morning digest");
+        ScheduleDue(engine, "evening digest");
+        var going = control.Start(As("bob"), _workspace, "write the digest").Run!;
+        var waiting = control.Start(As("bob"), _workspace, "mail the digest").Run!;
+        await WaitUntil(() => going.RunningSince is not null);
+        Assert.Null(waiting.RunningSince);
+
+        var said = history.ForgetWorkspace(As("alice"), _workspace);
+
+        Assert.Contains("1 run going there finishes where it is, and 1 waiting will not start.", said);
+        Assert.Contains("Its 2 schedules stop until the folder is added again.", said);
+        var entry = Assert.Single(_users.AuditTrail(), e => e.Action == "workspace forgotten");
+        Assert.EndsWith("(1 run going, 1 waiting, 2 schedules)", entry.Detail);
+
+        var quiet = Path.Combine(_root, "quiet");
+        Directory.CreateDirectory(quiet);
+        history.AddWorkspace(As("alice"), quiet);
+        Assert.Contains("No run is going or waiting there. It has no schedules.", history.ForgetWorkspace(As("alice"), quiet));
+    }
+
+    /// <summary>A log that keeps what it was told, for a test to read.</summary>
+    private sealed class Said<T> : Microsoft.Extensions.Logging.ILogger<T>
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<string> Lines { get; } = new();
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter) => Lines.Enqueue(formatter(state, exception));
     }
 
     // ── in the background (the window's "Run in background") ───────────────

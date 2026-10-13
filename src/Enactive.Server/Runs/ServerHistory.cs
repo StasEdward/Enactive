@@ -371,6 +371,11 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
     /// Forgets a workspace, as the window's Forget: the service's list loses it - its name and how runs are set up in it -
     /// and nothing on disk is touched, the folder and its run history included. Added again under the roots, it is back
     /// with its history. Audited.
+    ///
+    /// <para>What goes on there is said too, and audited: the runs going there finish where they are, those waiting in the
+    /// line do not start (RunControl.NotAWorkspace) and its schedules stop until the folder is added again
+    /// (ServerScheduler). On the service another Operator's runs and schedules may be there, and a forget that said only
+    /// "forgotten" stopped them with nobody told.</para>
     /// </summary>
     public string ForgetWorkspace(ClaimsPrincipal user, string root)
     {
@@ -379,10 +384,41 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         if (workspaces.Find(root) is not { } known)
             return "The service does not know that folder as a workspace.";
 
+        var there = runs.List(user).Where(r => !r.Ended.IsCompleted && SameFolder(r.Workspace, known.RootPath)).ToList();
+        var going = there.Count(r => r.RunningSince is not null);
+        var waiting = there.Count - going;
+        var schedules = engine.Schedules.For(known.RootPath).Count;
         engine.Workspaces.Remove(known.RootPath);
-        users.Audit(account.Name, "workspace forgotten", known.RootPath);
-        return $"\u201c{known.Name}\u201d is forgotten. The folder and its run history are where they were; Add folder\u2026 brings it back.";
+        users.Audit(account.Name, "workspace forgotten",
+            $"{known.RootPath} ({Count(going, "run")} going, {waiting} waiting, {Count(schedules, "schedule")})");
+        return $"\u201c{known.Name}\u201d is forgotten. The folder and its run history are where they were; Add folder\u2026 brings it back. "
+               + Going(going, waiting) + " " + Stopped(schedules);
     }
+
+    private static string Going(int going, int waiting) => (going, waiting) switch
+    {
+        (0, 0) => "No run is going or waiting there.",
+        (1, 0) => "1 run going there finishes where it is.",
+        (_, 0) => $"{going} runs going there finish where they are.",
+        (0, 1) => "1 run waiting there will not start.",
+        (0, _) => $"{waiting} runs waiting there will not start.",
+        (1, _) => $"1 run going there finishes where it is, and {waiting} waiting will not start.",
+        _ => $"{going} runs going there finish where they are, and {waiting} waiting will not start."
+    };
+
+    private static string Stopped(int schedules) => schedules switch
+    {
+        0 => "It has no schedules.",
+        1 => "Its 1 schedule stops until the folder is added again.",
+        _ => $"Its {schedules} schedules stop until the folder is added again."
+    };
+
+    private static string Count(int n, string what) => n == 1 ? $"1 {what}" : $"{n} {what}s";
+
+    // As the registry compares folders: on Windows C:\Repo and c:\repo are one.
+    private static bool SameFolder(string a, string b)
+        => string.Equals(WorkspaceRegistry.Normalise(a), WorkspaceRegistry.Normalise(b),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     // ── adding a workspace (Operators) ──────────────────────────────────────
 
