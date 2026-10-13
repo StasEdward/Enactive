@@ -301,6 +301,43 @@ public sealed class ShellTests : ComponentHost
         Assert.NotEmpty(layout.FindAll("nav [data-rail]"));
     }
 
+    /// <summary>
+    /// Moving to another page clears the failure: the layout is given another body, and the boundary would otherwise go on
+    /// showing the last page's error over it, so no section could be opened again without a reload.
+    /// </summary>
+    [Fact]
+    public void Moving_to_another_page_clears_the_failure()
+    {
+        SignIn("vera");
+        var layout = Render<Enactive.Server.Components.Layout.MainLayout>(p => p.Add(l => l.Body, body =>
+        {
+            body.OpenComponent<Throws>(0);
+            body.CloseComponent();
+        }));
+        Assert.NotEmpty(layout.FindAll("main .page-failed"));
+
+        layout.Render(p => p.Add(l => l.Body, body =>
+        {
+            body.OpenComponent<Draws>(0);
+            body.CloseComponent();
+        }));
+
+        layout.WaitForAssertion(() => Assert.Equal("another page", layout.Find("main .another-page").TextContent));
+        Assert.Empty(layout.FindAll(".page-failed"));
+    }
+
+    /// <summary>A page that draws as it should.</summary>
+    private sealed class Draws : ComponentBase
+    {
+        protected override void BuildRenderTree(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder)
+        {
+            builder.OpenElement(0, "p");
+            builder.AddAttribute(1, "class", "another-page");
+            builder.AddContent(2, "another page");
+            builder.CloseElement();
+        }
+    }
+
     /// <summary>A page that fails as it is drawn.</summary>
     private sealed class Throws : ComponentBase
     {
