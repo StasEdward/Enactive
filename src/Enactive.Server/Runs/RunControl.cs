@@ -82,6 +82,14 @@ internal sealed class ServerRun
     /// <summary>Completes when the run is over, whether it ran or not.</summary>
     public Task Ended => _ended.Task;
 
+    /// <summary>
+    /// A checkpoint still belongs to a live run, or to a recovery waiting its turn. Both must be kept out of
+    /// recovery: checkpoints are written during normal execution too, before there has been any interruption.
+    /// </summary>
+    internal bool UsesCheckpoint(string workspace, Guid runId)
+        => !Ended.IsCompleted && string.Equals(Workspace, WorkspaceRegistry.Normalise(workspace), StringComparison.OrdinalIgnoreCase)
+           && (Session.RunId == runId || Resume?.RunId == runId);
+
     /// <summary>It started, asked, was answered, ended. Raised on whatever thread it happened on.</summary>
     public event Action? Changed;
 
@@ -212,6 +220,11 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
     private readonly object _gate = new();
     private readonly List<ServerRun> _runs = new();
 
+    // Serialize reading a recovery snapshot and enqueueing it. Otherwise a second caller can retain an old snapshot
+    // while the first recovery finishes and deletes it, then enqueue that already-completed work again.
+    private readonly SemaphoreSlim _recovering = new(1, 1);
+    private const string AlreadyRunning = "That run is already running or waiting to resume.";
+
     /// <summary>Each asking run's presenter, which alone holds the router's answer (<see cref="Asking"/>).</summary>
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ServerRun, Asking> _asking = new();
     private bool _stopping;
@@ -268,12 +281,20 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         // named, and whether one was there said something about a folder outside the roots.
         if (Check(user, workspace, out _, out var root) is { } refused)
             return new(null, refused);
-        var checkpoints = await new JsonCheckpointStore(WorkspaceInfo.For(root)).LoadAllAsync(CancellationToken.None);
-        if (checkpoints.FirstOrDefault(c => c.RunId == runId) is not { } checkpoint)
-            return new(null, "There is no such unfinished run in that folder.");
-        if (!checkpoint.IsResumable)
-            return new(null, "That run has no step left to run; it can only be forgotten.");
-        return StartRun(user, root, checkpoint.Request, checkpoint.TaskId, checkpoint, "run resumed");
+        await _recovering.WaitAsync();
+        try
+        {
+            lock (_gate)
+                if (_runs.Any(r => r.UsesCheckpoint(root, runId)))
+                    return new(null, AlreadyRunning);
+            var checkpoint = await new JsonCheckpointStore(WorkspaceInfo.For(root)).LoadAsync(runId, CancellationToken.None);
+            if (checkpoint is null)
+                return new(null, "There is no such unfinished run in that folder.");
+            if (!checkpoint.IsResumable)
+                return new(null, "That run has no step left to run; it can only be forgotten.");
+            return StartRun(user, root, checkpoint.Request, checkpoint.TaskId, checkpoint, "run resumed");
+        }
+        finally { _recovering.Release(); }
     }
 
     public async Task<StartResult> ContinueAsync(ClaimsPrincipal user, string workspace, Agents.ParkedDecision parked, string title)
@@ -283,8 +304,13 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         // As for resuming: checked before the folder's checkpoints and ledger are read, and written.
         if (Check(user, workspace, out _, out var root) is { } refused)
             return new(null, refused);
-        var checkpoint = await BackgroundRun.ContinueFromAsync(parked, root, warning => log.LogWarning("{Warning}", warning), CancellationToken.None);
-        return StartRun(user, root, checkpoint?.Request ?? title, parked.TaskId, checkpoint, "run carried on");
+        await _recovering.WaitAsync();
+        try
+        {
+            var checkpoint = await BackgroundRun.ContinueFromAsync(parked, root, warning => log.LogWarning("{Warning}", warning), CancellationToken.None);
+            return StartRun(user, root, checkpoint?.Request ?? title, parked.TaskId, checkpoint, "run carried on");
+        }
+        finally { _recovering.Release(); }
     }
 
     private StartResult StartRun(ClaimsPrincipal user, string workspace, string prompt, Guid? taskId, RunCheckpoint? resume, string action,
@@ -308,6 +334,9 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         {
             if (_stopping)
                 return new(null, "The service is stopping; start the run again when it is back.");
+            // The check and insertion share the gate for every recovery path, including an inbox answer.
+            if (resume is not null && _runs.Any(r => r.UsesCheckpoint(root, resume.RunId)))
+                return new(null, AlreadyRunning);
             run = new ServerRun(account!.Name, root, prompt.Trim(), queue.Enqueue(root), taskId, resume, spec, executor.ReachOf)
             {
                 Background = background

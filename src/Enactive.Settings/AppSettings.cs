@@ -1,8 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Security.Cryptography;
 using Enactive.Agents;
 using Enactive.Core.Permissions;
 using Enactive.Core.Execution;
+using Enactive.Core.Storage;
 using Enactive.Workspace;
 using Enactive.Core.Providers;
 using Enactive.Secrets;
@@ -492,6 +494,31 @@ public sealed partial class AppSettings
     private static string SettingsFile()
         => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Enactive", "settings.json");
 
+    /// <summary>A copy and the version it actually came from, for an editor that refuses stale saves.</summary>
+    public static (AppSettings Settings, string Version) LoadVersioned(string? path = null)
+    {
+        var file = Path.GetFullPath(path ?? SettingsFile());
+        using var held = LockSettings(file);
+        return (Load(file), VersionOf(file));
+    }
+
+    private static string VersionOf(string file)
+    {
+        if (!File.Exists(file)) return "none";
+        using var stream = File.OpenRead(file);
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
+
+    private static FileLock.Hold LockSettings(string file)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        var held = FileLock.Take(file);
+        // A local-only fallback cannot protect the version check from a desktop or a second server.
+        if (held.IsExclusive) return held;
+        held.Dispose();
+        throw new IOException("Could not lock the settings file against another process.");
+    }
+
     /// <param name="path">
     /// A parameter so a test can point this at a fixture. The rules here are the ones worth
     /// testing - the migrations, the repairs, the decryption - and until this moved out of the
@@ -602,7 +629,7 @@ public sealed partial class AppSettings
     /// write and the replace - is exactly what each STEP's own unit test cannot exercise together,
     /// and until this existed no test ran <c>Save</c> at all rather than risk a real %APPDATA%.
     /// </param>
-    public bool Save(string? path = null, bool replaceUnreadable = false)
+    public bool Save(string? path = null, bool replaceUnreadable = false, string? expectedVersion = null)
     {
         LastSaveError = null;
         if (SaveBlocked && !replaceUnreadable)
@@ -613,8 +640,16 @@ public sealed partial class AppSettings
         }
         try
         {
-            var file = path ?? SettingsFile();
-            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            var file = Path.GetFullPath(path ?? SettingsFile());
+            // All hosts share this lock: checking before taking it lets two pages both pass and
+            // overwrite each other, and lets desktop writers collide on the same temporary file.
+            using var held = LockSettings(file);
+            if (expectedVersion is not null && VersionOf(file) != expectedVersion)
+            {
+                LastSaveError = "The settings were changed since you opened them. Nothing was saved; "
+                    + "open them again and make your change there.";
+                return false;
+            }
             if (SaveBlocked)
             {
                 // Recovery must fail closed if the original cannot be backed up. A unique name

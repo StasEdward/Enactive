@@ -142,7 +142,10 @@ internal sealed class WorkspaceColumnState(ServerHistory history, IRunControl ru
         All = list?.Runs ?? [];
         // A checkpoint with nothing left belongs to a run that finished its steps and died after them: a Resume that runs
         // nothing is a button that lies about what pressing it does (RunsViewModel.ShowResumable).
-        Unfinished = list?.Resumable.Where(c => c.IsResumable).ToList() ?? [];
+        // Read live ownership after the history: a run may have started while its files were being read. Its regular
+        // checkpoints (and a recovery queued from one) are not interrupted runs to resume or forget.
+        var live = runs.List(user);
+        Unfinished = list?.Resumable.Where(c => c.IsResumable && !live.Any(r => r.UsesCheckpoint(Selected.RootPath, c.RunId))).ToList() ?? [];
         Show();
     }
 

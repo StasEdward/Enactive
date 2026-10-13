@@ -203,25 +203,16 @@ public static class RunComposer
         // second host in the same folder is two agents editing the same files (WorkspaceLease). Here, so no
         // host can forget it.
         var lease = WorkspaceLease.Take(workspace.RootPath);
-        McpRunTools tools;
+        McpRunTools? tools = null;
         try
         {
             tools = await McpRunTools.ConnectAsync(engine.BuiltInTools, engine.McpServers, workspace.RootPath, ct);
-        }
-        catch
-        {
-            lease.Dispose();
-            throw;
-        }
+            var memory = MemoryStoreFactory.Create(workspace);
 
-        var memory = MemoryStoreFactory.Create(workspace);
+            // Said once per run, whether or not anything calls them: starting a server is a cost the run has
+            // already paid, and a scheduled run is where it costs most and shows least.
+            engine.Log.Info(LogSource.Tool, tools.Summary());
 
-        // Said once per run, whether or not anything calls them: starting a server is a cost the run has
-        // already paid, and a scheduled run is where it costs most and shows least.
-        engine.Log.Info(LogSource.Tool, tools.Summary());
-
-        try
-        {
             // A resumed run never stages, whatever was asked. Its earlier steps wrote straight to disk -
             // that is the only kind of run that is ever checkpointed - so staging the rest would put half
             // of one piece of work behind a review gate and leave the other half applied.
@@ -299,10 +290,10 @@ public static class RunComposer
         }
         catch
         {
-            // The connections were made before the thing that threw. Nobody else has been handed them
-            // yet, so this is the only place that can close them.
-            await tools.DisposeAsync();
-            lease.Dispose();
+            // Every preparation step can fail, including choosing the memory store. Until ownership
+            // passes to ComposedRun, release the workspace even if closing a tool connection also fails.
+            try { if (tools is not null) await tools.DisposeAsync(); }
+            finally { lease.Dispose(); }
             throw;
         }
     }

@@ -72,6 +72,29 @@ function New-ServerConfig {
     } | ConvertTo-Json -Depth 4
 }
 
+function Get-PrivateKeyFile {
+    param($Key, [string] $KeyRoot = $env:ProgramData)
+    # CSP keys have no CNG Key.UniqueName: interpolating it produced the whole Keys directory,
+    # which exists, so the account received a directory ACL and still could not read its private key.
+    if ($Key.Key.UniqueName) {
+        $name = $Key.Key.UniqueName
+        $folder = 'Microsoft\Crypto\Keys'
+    } elseif ($Key.CspKeyContainerInfo.UniqueKeyContainerName) {
+        $name = $Key.CspKeyContainerInfo.UniqueKeyContainerName
+        $folder = 'Microsoft\Crypto\RSA\MachineKeys'
+    } else {
+        throw 'The certificate private key has no supported on-disk CNG or CSP container.'
+    }
+    if ([string]::IsNullOrWhiteSpace($name) -or [IO.Path]::GetFileName($name) -ne $name) {
+        throw 'The certificate private key container name is not a file name.'
+    }
+    $keyFile = Join-Path (Join-Path $KeyRoot $folder) $name
+    if (-not (Test-Path -LiteralPath $keyFile -PathType Leaf)) {
+        throw "The certificate private key file does not exist: $keyFile"
+    }
+    $keyFile
+}
+
 # Dot-sourced by the test: the functions above, nothing below.
 if ($MyInvocation.InvocationName -eq '.') { return }
 
@@ -114,9 +137,11 @@ if ($CertificateThumbprint) {
     if (-not $cert) { throw "No certificate $thumb in LocalMachine\My." }
     $key = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
     if (-not $key) { throw "The certificate $thumb has no private key on this machine." }
-    $keyFile = Join-Path $env:ProgramData "Microsoft\Crypto\Keys\$($key.Key.UniqueName)"
-    if (-not (Test-Path $keyFile)) { $keyFile = Join-Path $env:ProgramData "Microsoft\Crypto\RSA\MachineKeys\$($key.Key.UniqueName)" }
-    icacls $keyFile /grant "$($ServiceAccount):R" | Out-Null
+    try {
+        $keyFile = Get-PrivateKeyFile -Key $key
+        icacls $keyFile /grant "$($ServiceAccount):R" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Could not grant the service account read access to its private key ($LASTEXITCODE)." }
+    } finally { $key.Dispose() }
 }
 elseif ($PfxPath) {
     icacls $PfxPath /inheritance:r /grant:r "Administrators:F" "SYSTEM:F" "$($ServiceAccount):R" | Out-Null

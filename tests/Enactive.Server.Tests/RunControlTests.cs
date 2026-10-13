@@ -756,6 +756,67 @@ public sealed class RunControlTests : IDisposable
         Assert.Contains("role does not include", (await _control.ResumeAsync(As("vera"), _workspace, interrupted.RunId)).Refusal);
     }
 
+    // The second caller used to queue a copy of the checkpoint, then replay it after the first run had finished.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Two_operators_cannot_resume_the_same_checkpoint_even_while_queued(bool queued)
+    {
+        if (queued)
+            Assert.NotNull(_control.Start(As("alice"), _workspace, "occupy the folder").Run);
+        var checkpoint = Interrupted("Running", "Pending");
+        try
+        {
+            var answers = await Task.WhenAll(
+                Task.Run(() => _control.ResumeAsync(As("alice"), _workspace, checkpoint.RunId)),
+                Task.Run(() => _control.ResumeAsync(As("bob"), _workspace, checkpoint.RunId)));
+            var accepted = Assert.Single(answers, a => a.Run is not null).Run!;
+            Assert.Contains("already", Assert.Single(answers, a => a.Run is null).Refusal);
+            if (queued)
+                Assert.NotNull(accepted.Waiting);
+
+            // A queued recovery is also absent from UNFINISHED, while unrelated interrupted runs remain available.
+            var unrelated = Interrupted("Pending");
+            var history = HistoryOf(out var engine);
+            using (engine)
+            {
+                var ids = new WorkspaceIds(new KnownWorkspaces(engine, new WorkspaceRoots([_root])));
+                var column = new Enactive.Server.Components.Runs.WorkspaceColumnState(history, _control, ids, As("bob"));
+                await column.LoadAsync(ids.IdOf(_workspace), CancellationToken.None);
+                Assert.DoesNotContain(column.Unfinished, c => c.RunId == checkpoint.RunId);
+                Assert.Contains(column.Unfinished, c => c.RunId == unrelated.RunId);
+            }
+        }
+        finally { await _control.StopAsync(TimeSpan.FromSeconds(10)); }
+    }
+
+    [Fact]
+    public async Task A_live_checkpoint_is_neither_offered_as_unfinished_nor_resumed()
+    {
+        var live = _control.Start(As("alice"), _workspace, "mail the digest").Run!;
+        try
+        {
+            await WaitUntil(() => live.Session.RunId is not null);
+            var seed = Interrupted("Running", "Pending");
+            var store = new Enactive.Workspace.JsonCheckpointStore(Enactive.Core.Context.WorkspaceInfo.For(_workspace));
+            await store.SaveAsync(seed with { RunId = live.Session.RunId!.Value }, CancellationToken.None);
+
+            var history = HistoryOf(out var engine);
+            using (engine)
+            {
+                var ids = new WorkspaceIds(new KnownWorkspaces(engine, new WorkspaceRoots([_root])));
+                var column = new Enactive.Server.Components.Runs.WorkspaceColumnState(history, _control, ids, As("bob"));
+                await column.LoadAsync(ids.IdOf(_workspace), CancellationToken.None);
+                Assert.DoesNotContain(column.Unfinished, c => c.RunId == live.Session.RunId);
+                Assert.Contains(column.Unfinished, c => c.RunId == seed.RunId);
+            }
+            var result = await _control.ResumeAsync(As("bob"), _workspace, live.Session.RunId.Value);
+            Assert.Null(result.Run);
+            Assert.Contains("already", result.Refusal);
+        }
+        finally { await _control.StopAsync(TimeSpan.FromSeconds(10)); }
+    }
+
     /// <summary>Said before the button: the step that was running runs again, and what it did outside may happen twice.</summary>
     [Fact]
     public void Resuming_says_which_step_runs_again_and_what_may_be_done_twice()

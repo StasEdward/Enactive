@@ -161,6 +161,9 @@ public static class FileLock
     {
         private int _released;
 
+        /// <summary>Whether other processes are excluded, rather than only callers in this process.</summary>
+        public bool IsExclusive => handle is not null && Volatile.Read(ref _released) == 0;
+
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _released, 1) != 0)

@@ -1,6 +1,7 @@
 namespace Enactive.Engine.Tests;
 
 using Enactive.Settings;
+using Enactive.Core.Storage;
 using Enactive.Tools.Mcp;
 using Xunit;
 
@@ -32,6 +33,71 @@ public sealed class SettingsSaveTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_dir, recursive: true); } catch { /* a temp folder */ }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Settings_writes_and_versioned_reads_wait_for_another_hosts_lock(bool read)
+    {
+        var initial = new AppSettings { KeepRuns = 11 };
+        Assert.True(initial.Save(Path_), initial.LastSaveError);
+        // An independent OS handle stands for a desktop/server in another process, bypassing FileLock's local gate.
+        using var otherHost = new FileStream(FileLock.LockPathFor(Path_), FileMode.OpenOrCreate,
+            FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var operation = Task.Run(() =>
+        {
+            started.SetResult();
+            if (read)
+            {
+                var (settings, version) = AppSettings.LoadVersioned(Path_);
+                Assert.Equal(11, settings.KeepRuns);
+                Assert.NotEqual("none", version);
+            }
+            else
+            {
+                var changed = new AppSettings { KeepRuns = 12 };
+                Assert.True(changed.Save(Path_), changed.LastSaveError);
+            }
+        });
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.NotSame(operation, await Task.WhenAny(operation, Task.Delay(200)));
+            Assert.Equal(11, AppSettings.Load(Path_).KeepRuns);
+        }
+        finally { otherHost.Dispose(); }
+        await operation.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(read ? 11 : 12, AppSettings.Load(Path_).KeepRuns);
+    }
+
+    [Fact]
+    public void A_versioned_save_refuses_a_change_written_by_an_unversioned_host()
+    {
+        var opened = AppSettings.LoadVersioned(Path_);
+        Assert.Equal("none", opened.Version);
+        var desktop = new AppSettings { KeepRuns = 21 };
+        Assert.True(desktop.Save(Path_), desktop.LastSaveError);
+
+        opened.Settings.KeepRuns = 22;
+        Assert.False(opened.Settings.Save(Path_, expectedVersion: opened.Version));
+        Assert.Contains("changed since you opened them", opened.Settings.LastSaveError);
+        Assert.Equal(21, AppSettings.Load(Path_).KeepRuns);
+    }
+
+    [Fact]
+    public void A_save_that_cannot_exclude_other_processes_changes_nothing()
+    {
+        var settings = new AppSettings { KeepRuns = 31 };
+        Assert.True(settings.Save(Path_), settings.LastSaveError);
+        var original = File.ReadAllText(Path_);
+        Directory.CreateDirectory(FileLock.LockPathFor(Path_));
+
+        settings.KeepRuns = 32;
+        Assert.False(settings.Save(Path_));
+        Assert.Contains("Could not lock", settings.LastSaveError);
+        Assert.Equal(original, File.ReadAllText(Path_));
     }
 
     /// <summary>THE MAIN CASE: every family of secret round-trips through Save then Load, and none

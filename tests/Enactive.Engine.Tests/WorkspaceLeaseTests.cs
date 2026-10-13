@@ -125,16 +125,37 @@ public sealed class WorkspaceLeaseTests : IDisposable
         Assert.NotNull(taken);
     }
 
-    /// <summary>A place that takes no lease file is not refused for it - as FileLock gives up rather than stop the work.</summary>
+    /// <summary>No handle means no ownership: an unwritable lease must never permit an unprotected run.</summary>
     [Fact]
-    public void A_place_that_takes_no_lease_file_is_not_refused()
+    public void A_place_that_takes_no_lease_file_is_refused()
     {
         var notAFolder = Path.Combine(_root, "a-file");
         File.WriteAllText(notAFolder, "");
 
         using var lease = WorkspaceLease.TryTake(Path.Combine(notAFolder, "workspace"), out _);
 
-        Assert.NotNull(lease);
+        Assert.Null(lease);
+    }
+
+    [Fact]
+    public void A_readonly_lease_held_elsewhere_is_refused_and_a_failed_take_is_not_cached()
+    {
+        var workspace = Workspace("readonly");
+        var path = WorkspaceLease.PathFor(workspace);
+        using (var other = ForeignHolder(workspace))
+        {
+            File.SetAttributes(path, FileAttributes.ReadOnly);
+            try
+            {
+                using var first = WorkspaceLease.TryTake(workspace, out _);
+                using var second = WorkspaceLease.TryTake(workspace, out _);
+                Assert.Null(first);
+                Assert.Null(second);
+            }
+            finally { File.SetAttributes(path, FileAttributes.Normal); }
+        }
+        using var released = WorkspaceLease.TryTake(workspace, out _);
+        Assert.NotNull(released);
     }
 
     // ── a scheduled run ─────────────────────────────────────────────────────

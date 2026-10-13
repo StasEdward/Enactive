@@ -28,9 +28,8 @@ public sealed record LeaseHolder(string Host, int ProcessId, string User, DateTi
 /// <para><b>What a crash leaves.</b> Windows closes a dead process's handles, so the next taker opens the file
 /// and writes itself over the old holder - no stale lease to clear by hand.</para>
 ///
-/// <para><b>A place that cannot take a lease file</b> - read-only, someone else's - is not held, and the take
-/// still succeeds, as <see cref="FileLock"/> gives up: refusing to run because a lock could not be written would
-/// be a worse answer than the one being prevented.</para>
+/// <para><b>A place that cannot take a lease file</b> is refused. An access error can hide another holder;
+/// proceeding without a handle allowed two hosts to edit the same workspace at once.</para>
 /// </summary>
 public sealed class ProcessLease : IDisposable
 {
@@ -43,8 +42,8 @@ public sealed class ProcessLease : IDisposable
     private ProcessLease(string path) => _path = path;
 
     /// <summary>
-    /// Takes the lease, or returns null and who holds it when another process does. The holder may be null even
-    /// then: it is written just after the file is taken, and a taker that reads in between finds it empty.
+    /// Takes the lease, or returns null when it cannot be held exclusively. The holder may be unknown: the file
+    /// can be unwritable, unreadable, or not yet filled in by the process that took it.
     /// </summary>
     public static ProcessLease? TryTake(string path, out LeaseHolder? holder)
     {
@@ -59,7 +58,7 @@ public sealed class ProcessLease : IDisposable
                 return new ProcessLease(full);
             }
 
-            FileStream? handle;
+            FileStream handle;
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(full)!);
@@ -68,20 +67,15 @@ public sealed class ProcessLease : IDisposable
                 handle = new FileStream(full, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read,
                     bufferSize: 1, FileOptions.DeleteOnClose);
             }
-            catch (IOException) when (IsHeldElsewhere(full))
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                // No handle, no ownership. In particular, a read-only file can report access denied even while
+                // another process holds it; treating that as success bypassed exclusion and cached the false take.
                 holder = ReadHolder(full);
                 return null;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // The place takes no lease file (read-only, another user's, or a holder's file being deleted
-                // as it lets go). Not held, and not refused - see the summary.
-                handle = null;
-            }
 
-            if (handle is not null)
-                Write(handle);
+            Write(handle);
             HeldHere[full] = new Held(handle);
             return new ProcessLease(full);
         }
@@ -109,7 +103,7 @@ public sealed class ProcessLease : IDisposable
             if (!HeldHere.TryGetValue(_path, out var held) || --held.Count > 0)
                 return;
             HeldHere.Remove(_path);
-            try { held.Handle?.Dispose(); }
+            try { held.Handle.Dispose(); }
             catch { /* DeleteOnClose can fail on a folder that vanished; the lease is gone either way */ }
         }
     }
@@ -157,9 +151,9 @@ public sealed class ProcessLease : IDisposable
         catch { /* the lease holds without its name; a refusal then says "another process" */ }
     }
 
-    private sealed class Held(FileStream? handle)
+    private sealed class Held(FileStream handle)
     {
-        public FileStream? Handle { get; } = handle;
+        public FileStream Handle { get; } = handle;
         public int Count { get; set; } = 1;
     }
 }

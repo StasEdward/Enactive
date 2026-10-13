@@ -1,8 +1,6 @@
 namespace Enactive.Server.Runs;
 
-using System.Globalization;
 using System.Security.Claims;
-using System.Security.Cryptography;
 using Enactive.Application;
 using Enactive.Core.Permissions;
 using Enactive.Providers;
@@ -47,8 +45,8 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
     {
         if (Admin(user) is null)
             return (null, NotAdmin(user));
-        var version = VersionNow();
-        return (new OpenedSettings(AppSettings.Load(engine.SettingsFile).WithoutSecrets(), version), null);
+        var (settings, version) = AppSettings.LoadVersioned(engine.SettingsFile);
+        return (new OpenedSettings(settings.WithoutSecrets(), version), null);
     }
 
     /// <summary>
@@ -145,17 +143,12 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
         if (Admin(user) is not { } admin)
             return (false, NotAdmin(user));
 
-        if (VersionNow() != edited.Version)
-            return (false, "The settings were changed since you opened them - by another page, or at the service's own "
-                           + "desktop (last written "
-                           + File.GetLastWriteTime(engine.SettingsFile).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
-                           + "). Nothing was saved; open them again and make your change there.");
-
         // On a copy: the page keeps what it sent, which must go on holding no secret if this is refused. What is kept
         // follows the page's other fields - the mail password a changed SMTP host, a key a changed address; see
         // WithKeptKey for why an Admin may do that.
         var copy = edited.Copy.Clone();
-        // The file is the one the page opened (its version is), so each secret left alone is found in it.
+        // The final save checks the version under the shared file lock; a concurrent change after
+        // this read must refuse the save rather than restore secrets from the wrong version.
         if (copy.RestoreSecrets(AppSettings.Load(engine.SettingsFile)) is { Count: > 0 } missing)
             return (false, NotSaved + string.Join(", ", missing) + " could not be found in the settings as they are now. "
                            + "Open them again and make your change there.");
@@ -165,7 +158,7 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
         if (copy.Validate() is { Count: > 0 } problems)
             return (false, NotSaved + string.Join(" ", problems));
 
-        if (!copy.Save(engine.SettingsFile, replaceUnreadable: true))
+        if (!copy.Save(engine.SettingsFile, replaceUnreadable: true, expectedVersion: edited.Version))
             return (false, NotSaved + (copy.LastSaveError ?? "the file could not be written."));
 
         engine.Reload();
@@ -269,15 +262,6 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
         => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Host.Length > 0
             ? uri.GetComponents(UriComponents.SchemeAndServer | UriComponents.Path, UriFormat.UriEscaped)
             : "(an address that could not be read)";
-
-    /// <summary>The file's content, as a version: what a save compares against.</summary>
-    private string VersionNow()
-    {
-        if (!File.Exists(engine.SettingsFile))
-            return "none";
-        using var stream = File.OpenRead(engine.SettingsFile);
-        return Convert.ToHexString(SHA256.HashData(stream));
-    }
 
     private Account? Admin(ClaimsPrincipal user)
         => ServerAuth.StillValid(users, user) is { Role: Role.Admin } account ? account : null;

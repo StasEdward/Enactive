@@ -40,6 +40,30 @@ public sealed class ServerSettingsTests : IDisposable
     private OpenedSettings Opened() => _settings.Open(As("ada")).Opened!;
 
     [Fact]
+    public async Task Concurrent_editors_of_one_version_have_exactly_one_successful_save()
+    {
+        var user = As("ada");
+        var edits = Enumerable.Range(1, 8).Select(n =>
+        {
+            var opened = Opened();
+            opened.Copy.KeepRuns = n;
+            return opened;
+        }).ToArray();
+        using var ready = new Barrier(edits.Length);
+        // Dedicated callers arrive together, as separate browser circuits; no thread-pool starvation at the barrier.
+        var saves = edits.Select(edit => Task.Factory.StartNew(() =>
+        {
+            Assert.True(ready.SignalAndWait(TimeSpan.FromSeconds(10)));
+            return (edit.Copy.KeepRuns, Result: _settings.Save(user, edit));
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+        var results = await Task.WhenAll(saves);
+        var winner = Assert.Single(results, r => r.Result.Saved);
+        Assert.Equal(winner.KeepRuns, AppSettings.Load(_engine.SettingsFile).KeepRuns);
+        Assert.All(results.Where(r => !r.Result.Saved), r => Assert.Contains("changed since you opened them", r.Result.Said));
+        Assert.Single(_users.AuditTrail(), e => e.Action == "settings saved");
+    }
+
+    [Fact]
     public void An_admin_saves_and_the_file_holds_it()
     {
         var opened = Opened();
