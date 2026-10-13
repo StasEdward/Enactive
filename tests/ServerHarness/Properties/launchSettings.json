@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "ServerHarness": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:53379;http://localhost:53380"
+    }
+  }
+}

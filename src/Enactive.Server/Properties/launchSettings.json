@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "Enactive.Server": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:53381;http://localhost:53382"
+    }
+  }
+}
