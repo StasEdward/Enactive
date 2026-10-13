@@ -65,7 +65,7 @@
                     case "ai-team": <TeamSection /> break;
                     case "ai-phases": <PhasesSection /> break;
                     case "ai-mcp": <McpSection /> break;
-                    case "ai-templates": <TemplatesSection Workspace="_templatesWorkspace" /> break;
+                    case "ai-templates": <TemplatesSection Workspace="_templatesWorkspace" Root="@_templatesRoot" /> break;
                 }
             </CascadingValue>
         </section>
@@ -126,6 +126,7 @@
     private string? _said;
     private IReadOnlyList<string> _roots = [];
     private Guid? _templatesWorkspace;
+    private string? _templatesRoot;
 
     private (string Headline, string Detail, TaskCompletionSource<bool> Answer)? _question;
     private ProviderEditViewModel? _providerEditor;
@@ -155,6 +156,7 @@
         // The workspace the Templates screen opens on, whose templates the Templates section lists with the global ones.
         var workspace = WorkspaceColumnState.Choose(History.Workspaces(user), null, Ids);
         _templatesWorkspace = workspace is null ? null : Ids.TryIdOf(workspace.RootPath);
+        _templatesRoot = workspace?.RootPath;
 
         var (vm, problem) = Service.Edit(user, workspace?.RootPath, said => _said = said);
         _problem = problem;

@@ -119,7 +119,11 @@ internal sealed partial class SettingsViewModel
         RefreshTemplates();
     }
 
-    private void RefreshTemplates()
+    /// <summary>
+    /// The list read again from the files. Internal for a host that deletes a template elsewhere - the service, as the
+    /// person (ServerLibrary) - and shows the list again after.
+    /// </summary>
+    internal void RefreshTemplates()
     {
         if (_templates is null)
             return;

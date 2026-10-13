@@ -361,4 +361,45 @@ public sealed class SettingsTests : ComponentHost
             a => Assert.StartsWith("templates/", a.GetAttribute("href")));
         Assert.Equal(Enactive.Server.Components.Links.NewTemplate(id), screen.FindAll("a.btn").Single(a => a.TextContent.Trim() == "New template").GetAttribute("href"));
     }
+
+    /// <summary>
+    /// Each template's card has the window's row icons (SettingsWindow.axaml): Edit and Duplicate lead to the editor's
+    /// addresses, and Remove - not offered on a built-in - asks in the window's words and is done by the service as the
+    /// person, audited. The cards had none of them.
+    /// </summary>
+    [Fact]
+    public void A_template_s_card_offers_edit_duplicate_and_remove_as_the_window_s()
+    {
+        var workspace = Path.Combine(_roots, "project");
+        Directory.CreateDirectory(workspace);
+        Engine.Workspaces.Touch(workspace);
+        var id = Services.GetRequiredService<WorkspaceIds>().TryIdOf(workspace)!.Value;
+        var (saved, said) = Services.GetRequiredService<ServerLibrary>().SaveTemplate(
+            Enactive.Server.Accounts.ServerAuth.PrincipalOf(Users.Find("alice")!), workspace,
+            """{ "id": "digest", "name": "Digest", "goal": "Write the digest." }""", Enactive.Workspace.TemplateScope.Workspace);
+        Assert.True(saved, said);
+
+        var screen = Screen("ada", "ai-templates");
+        var card = Card(screen, "Digest");
+        Assert.Equal(Enactive.Server.Components.Links.Template(id, "digest"), card.QuerySelector("a.template-edit")!.GetAttribute("href"));
+        Assert.Equal(Enactive.Server.Components.Links.Template(id, "digest", copy: true),
+            card.QuerySelector("a.template-duplicate")!.GetAttribute("href"));
+        Assert.Equal("Delete this template", card.QuerySelector("button.template-remove")!.GetAttribute("title"));
+        // A built-in is customised, never removed: Edit and Duplicate only.
+        var builtin = screen.FindAll(".settings-card").First(c => c.TextContent.Contains("Built-in"));
+        Assert.NotNull(builtin.QuerySelector("a.template-edit"));
+        Assert.Null(builtin.QuerySelector("button.template-remove"));
+
+        screen.InvokeAsync(() => Card(screen, "Digest").QuerySelector("button.template-remove")!.Click()).GetAwaiter().GetResult();
+        Assert.Equal("Delete “Digest”?", screen.Find("[role=dialog] .dialog-title").TextContent.Trim());
+        Assert.Contains("Cancel on this page does not undo it.", screen.Find("[role=dialog] .body").TextContent);
+        screen.InvokeAsync(() => screen.FindAll("[role=dialog] button").Single(b => b.TextContent.Trim() == "Remove").Click())
+            .GetAwaiter().GetResult();
+
+        screen.WaitForAssertion(() => Assert.DoesNotContain(screen.FindAll(".settings-card .card-title"), t => t.TextContent.Trim() == "Digest"));
+        Assert.StartsWith("Deleted 'digest'", screen.Find(".settings-templates-said").TextContent.Trim());
+        Assert.DoesNotContain(new Enactive.Workspace.TemplateStore(workspace).Inventory(),
+            t => t.Template.Id == "digest" && t.Scope == Enactive.Workspace.TemplateScope.Workspace);
+        Assert.Contains(Users.AuditTrail(), e => e is { Account: "ada", Action: "template deleted" });
+    }
 }

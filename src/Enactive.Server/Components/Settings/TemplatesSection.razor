@@ -1,7 +1,19 @@
+@using Enactive.Core.Templates
+@using Enactive.Workspace
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerLibrary Library
+
 @* The window's AI · Templates (SettingsWindow.axaml): the templates as cards, each edged by where it comes from
    (Looks.Template), and the window's hints - templates are FILES, saved by their editor at once, which this page's
    Cancel does not undo. They are edited where the service edits them, the Templates screen's editor: each card leads
-   there, as New template does, rather than a second editor here. *@
+   there, as New template does, rather than a second editor here.
+
+   Each card has the window's row icons: Edit and Duplicate lead to the editor's addresses (on the template, on a copy
+   of it), and Remove - "Reset to the built-in" for a file that replaced one - is asked first in the window's words
+   (TemplateDrafts.Remove) and done by the service as the person (ServerLibrary.DeleteTemplate), audited. The view model
+   here edits no file (editsFilesHere). With no workspace there is no editor address and no library to delete from, and
+   the icons are not offered. *@
 
 <p class="label">Task templates</p>
 <p class="hint">A saved task: what to ask for, the bounds it runs under, and the checks that decide whether it finished. Pick one from Templates on the rail to run it.</p>
@@ -28,18 +40,98 @@
                     <span class="card-meta settings-wrap">@row.Description</span>
                 }
             </span>
+            @if (Workspace is { } id && Root is { Length: > 0 })
+            {
+                <span class="row-icons">
+                    <a class="row-icon template-edit" href="@Links.Template(id, row.Template.Id)" title="Edit" aria-label="@($"Edit {row.Name}")">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                            <path d="M 4,20 L 4,16 L 15.5,4.5 L 19.5,8.5 L 8,20 Z" />
+                            <path d="M 13.5,6.5 L 17.5,10.5" />
+                        </svg>
+                    </a>
+                    <a class="row-icon template-duplicate" href="@Links.Template(id, row.Template.Id, copy: true)" title="Duplicate" aria-label="@($"Duplicate {row.Name}")">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                            <path d="M 8,3 L 20,3 L 20,15 M 4,7 L 16,7 L 16,21 L 4,21 Z" />
+                        </svg>
+                    </a>
+                    @if (row.IsEditable)
+                    {
+                        <button type="button" class="row-icon destructive template-remove" title="@row.RemoveTip"
+                                aria-label="@($"{row.RemoveTip}: {row.Name}")" disabled="@_busy" @onclick="() => AskRemove(row.Entry)">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                                <path d="M 6,6 L 18,18 M 18,6 L 6,18" />
+                            </svg>
+                        </button>
+                    }
+                </span>
+            }
         </li>
     }
 </ul>
+@if (_said is { } said)
+{
+    <p class="hint settings-templates-said" role="status">@said</p>
+}
 <div class="settings-section-actions">
-    <a class="btn" href="@(Workspace is { } id ? Links.NewTemplate(id) : Links.Templates(null))">New template</a>
+    <a class="btn" href="@(Workspace is { } newIn ? Links.NewTemplate(newIn) : Links.Templates(null))">New template</a>
 </div>
 
+@if (_question is { } question)
+{
+    <Dialog Title="@question.Headline" OnClose="Dismiss">
+        <ChildContent><p class="body">@question.Body</p></ChildContent>
+        <Actions>
+            <button type="button" class="btn destructive" disabled="@_busy" @onclick="Remove">@question.Confirm</button>
+            <button type="button" class="btn" disabled="@_busy" @onclick="Dismiss">@question.Cancel</button>
+        </Actions>
+    </Dialog>
+}
+
 @code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
     // Handed down as a cascading value rather than a parameter: the view model is internal to the application layer,
     // and a component's parameters are public.
     [CascadingParameter] private SettingsViewModel Vm { get; set; } = default!;
 
     /// <summary>The workspace the Templates screen opens on, by its id - the one whose templates are listed - or none.</summary>
     [Parameter] public Guid? Workspace { get; set; }
+
+    /// <summary>That workspace's folder, whose library a template is deleted from (ServerLibrary), or none.</summary>
+    [Parameter] public string? Root { get; set; }
+
+    private Question? _question;
+    private StoredTemplate? _removing;
+    private bool _busy;
+    private string? _said;
+
+    // This page's Cancel does not undo a delete: said in the question, as the window's Settings says its own.
+    private void AskRemove(StoredTemplate entry)
+        => (_question, _removing) = (TemplateDrafts.Remove(entry, "Cancel on this page"), entry);
+
+    private async Task Remove()
+    {
+        if (_removing is not { Scope: { } scope } entry || Root is not { } root || _busy)
+            return;
+        // Busy while it is done: a second press is not a second delete.
+        _busy = true;
+        try
+        {
+            _said = Library.DeleteTemplate((await Auth).User, root, entry.Template.Id, scope);
+            // The list read again from the files, as the window's is after a delete.
+            Vm.RefreshTemplates();
+        }
+        finally
+        {
+            _busy = false;
+            Dismiss();
+        }
+    }
+
+    private void Dismiss()
+    {
+        if (_busy)
+            return;
+        (_question, _removing) = (null, null);
+    }
 }
