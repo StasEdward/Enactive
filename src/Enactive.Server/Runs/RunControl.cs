@@ -192,9 +192,12 @@ internal interface IRunControl
 /// Why the settings a page showed are no longer the folder's saved ones, or null (BarSettings.ChangedFor); null, never
 /// asked (a test's).
 /// </param>
+/// <param name="inboxOf">The inbox a run's end is filed in; the store the environment names, unless a test's fails.</param>
 internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor executor, ILogger<RunControl> log,
-    TimeSpan? parkQuestionsAfter = null, WorkspaceRoots? roots = null, Func<string, BarSettings, string?>? settingsChanged = null) : IRunControl
+    TimeSpan? parkQuestionsAfter = null, WorkspaceRoots? roots = null, Func<string, BarSettings, string?>? settingsChanged = null,
+    Func<WorkspaceInfo, IInboxStore>? inboxOf = null) : IRunControl
 {
+    private readonly Func<WorkspaceInfo, IInboxStore> _inboxOf = inboxOf ?? InboxStoreFactory.Create;
     private readonly object _gate = new();
     private readonly List<ServerRun> _runs = new();
 
@@ -376,17 +379,48 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         }
         finally
         {
-            // A schedule's run that never got going - refused by the composer, cancelled in the line - says so where its
-            // owner looks, as one that could not start at all does (ServerScheduler). Its occurrence is spent, and only a
-            // warning in the log said it did not run. One that ran files its own item (EngineExecutor).
-            if (run.Scheduled is { } due && run.Refused is { } why)
-                await ScheduleDidNotRunAsync(run.Workspace, due, why);
-            await LeaveInTheInboxAsync(run, running);
-            run.Ticket.Dispose();
-            // The schedule's claim and its workspace's lease, held from the tick that took it (DueSchedules).
-            run.Scheduled?.Hold.Dispose();
-            users.Audit(owner, "run ended", run.Workspace + ": " + (run.Refused ?? run.Session.Failure ?? "finished"));
-            run.End();
+            // What is said of the end - the inbox, the audit trail - is written to stores that fail in their own ways (a
+            // file, SQLite, MySQL; the service's server.db): each is caught and logged, and letting the run go is in a
+            // finally of its own. A store that threw here (a SqliteException got past a catch of IOException) kept the
+            // slot and the folder held for good, Ended never completed, and a stop of the service waited it out.
+            try
+            {
+                try
+                {
+                    // A schedule's run that never got going - refused by the composer, cancelled in the line - says so
+                    // where its owner looks, as one that could not start at all does (ServerScheduler). Its occurrence is
+                    // spent, and only a warning in the log said it did not run. One that ran files its own item
+                    // (EngineExecutor).
+                    if (run.Scheduled is { } due && run.Refused is { } why)
+                        await ScheduleDidNotRunAsync(run.Workspace, due, why);
+                    await LeaveInTheInboxAsync(run, running);
+                }
+                catch (Exception ex)
+                {
+                    log.LogWarning("The inbox of {Workspace} could not be told how a run of {Owner} ended: {Why}", run.Workspace, owner, ex.Message);
+                }
+                try
+                {
+                    users.Audit(owner, "run ended", run.Workspace + ": " + (run.Refused ?? run.Session.Failure ?? "finished"));
+                }
+                catch (Exception ex)
+                {
+                    log.LogWarning("The end of a run of {Owner} in {Workspace} could not be audited: {Why}", owner, run.Workspace, ex.Message);
+                }
+            }
+            finally
+            {
+                try
+                {
+                    run.Ticket.Dispose();
+                    // The schedule's claim and its workspace's lease, held from the tick that took it (DueSchedules).
+                    run.Scheduled?.Hold.Dispose();
+                }
+                finally
+                {
+                    run.End();
+                }
+            }
         }
     }
 
@@ -439,7 +473,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
 
         try
         {
-            await InboxStoreFactory.Create(workspace).AppendAsync(item, CancellationToken.None);
+            await _inboxOf(workspace).AppendAsync(item, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -454,7 +488,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         try
         {
             var workspace = WorkspaceInfo.For(root);
-            await InboxStoreFactory.Create(workspace).AppendAsync(ScheduledOutcome.CouldNotStart(
+            await _inboxOf(workspace).AppendAsync(ScheduledOutcome.CouldNotStart(
                 workspace.Id, due.Schedule.Id, due.Schedule.Name, why, DateTimeOffset.UtcNow), CancellationToken.None);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

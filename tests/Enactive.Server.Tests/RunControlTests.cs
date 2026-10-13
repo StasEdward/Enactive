@@ -574,6 +574,50 @@ public sealed class RunControlTests : IDisposable
         Assert.Equal("The inbox of project could not be written just now, so the item is still unread. Try again in a moment.", said);
     }
 
+    /// <summary>
+    /// A store that fails as SQLite fails - not an IOException - while a run says how it ended: the run still ends, and its
+    /// slot, folder and schedule claim are let go. Thrown past a catch of IOException, it kept them held for good, Ended
+    /// never completed, and a stop of the service waited it out.
+    /// </summary>
+    [Fact]
+    public async Task A_run_whose_inbox_throws_as_it_ends_still_ends_and_lets_its_slot_go()
+    {
+        var queue = new RunQueue(maxActive: 1);
+        _engine.Refuse = "The workspace is in use by another process.";
+        var control = new RunControl(_users, queue, _engine, NullLogger<RunControl>.Instance, inboxOf: _ => new SqliteFails());
+        var policy = new PermissionPolicy(PermissionLevel.Autonomous, ["*"], []);
+        var spec = new Enactive.Core.Templates.ResolvedTaskSpec("digest", 1, "Digest", Guid.NewGuid(), "project", _workspace,
+            "digest the inbox", new Dictionary<string, string>(), policy, [], Enactive.Core.Templates.ExecutionLimits.None, null, false);
+        var schedule = new Enactive.Core.Schedules.Schedule(Guid.NewGuid(), _workspace, "morning digest",
+            Enactive.Core.Schedules.ScheduledWork.FromPastRun(spec.Snapshot()),
+            Enactive.Core.Schedules.ScheduleTiming.Once(DateTimeOffset.Now.AddMinutes(-1)), policy, DateTimeOffset.Now.AddHours(-1));
+        var hold = new Held();
+
+        var run = control.StartScheduled(new DueRun(schedule, Enactive.Core.Context.WorkspaceInfo.For(_workspace), spec, hold, "due")).Run!;
+
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("The workspace is in use by another process.", run.Refused);
+        Assert.True(hold.Disposed);
+        Assert.Equal(0, queue.Active);
+        await queue.Enqueue(_workspace).Started.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    private sealed class Held : IDisposable
+    {
+        public bool Disposed { get; private set; }
+        public void Dispose() => Disposed = true;
+    }
+
+    /// <summary>An inbox store whose database cannot be written: what SQLite throws, which is no IOException.</summary>
+    private sealed class SqliteFails : Enactive.Core.Inbox.IInboxStore
+    {
+        private static Microsoft.Data.Sqlite.SqliteException Locked() => new("database is locked", 5);
+        public Task AppendAsync(Enactive.Core.Inbox.InboxItem item, CancellationToken ct) => throw Locked();
+        public Task<IReadOnlyList<Enactive.Core.Inbox.InboxItem>> LoadAllAsync(CancellationToken ct) => throw Locked();
+        public Task MarkReadAsync(Guid id, CancellationToken ct) => throw Locked();
+        public Task MarkAllReadAsync(CancellationToken ct) => throw Locked();
+    }
+
     /// <summary>An inbox store that reads as empty and cannot be written.</summary>
     private sealed class CannotWrite : Enactive.Core.Inbox.IInboxStore
     {
