@@ -104,7 +104,7 @@ internal sealed class MailNotices(ServerEngine engine, ServerOptions options, Se
             : $"Enactive: {fresh.Count} new in the inbox";
         var body = new StringBuilder();
         foreach (var (workspace, item) in fresh.OrderBy(f => f.Item.At))
-            body.AppendLine($"{item.At.ToLocalTime():yyyy-MM-dd HH:mm}  {workspace}  {item.Title}")
+            body.AppendLine($"{Enactive.Application.Projections.Times.Minute(item.At)}  {workspace}  {item.Title}")
                 .AppendLine($"    {item.Summary}")
                 .AppendLine();
         body.AppendLine(options.HostNames.Count > 0

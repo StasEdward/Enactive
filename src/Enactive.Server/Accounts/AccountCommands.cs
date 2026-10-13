@@ -55,7 +55,7 @@ internal static class AccountCommands
             foreach (var account in users.All())
                 output.WriteLine($"{account.Name,-24} {account.Role,-9}"
                                  + (account.Disabled ? " disabled" : "")
-                                 + (account.LockedUntil is { } until && until > DateTimeOffset.UtcNow ? $" locked until {until.ToLocalTime():HH:mm}" : ""));
+                                 + (account.LockedUntil is { } until && until > DateTimeOffset.UtcNow ? $" locked until {Enactive.Application.Projections.Times.Clock(until)}" : ""));
             return 0;
         }
 

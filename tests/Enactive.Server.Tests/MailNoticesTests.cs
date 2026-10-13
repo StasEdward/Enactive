@@ -89,6 +89,30 @@ public sealed class MailNoticesTests : IDisposable
         Assert.Single(_sent);
     }
 
+    /// <summary>
+    /// The mail says each item's time as the window does, "yyyy-MM-dd HH:mm", whatever the service's culture: under fi-FI
+    /// it wrote "09.05".
+    /// </summary>
+    [Fact]
+    public async Task The_mail_says_each_time_as_the_window_does_in_every_culture()
+    {
+        var was = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("fi-FI");
+            var notices = Notices("stas@lab.local");
+            await notices.TickAsync(CancellationToken.None);
+            await Arrives("morning digest", "Completed");
+
+            Assert.Equal(1, await notices.TickAsync(CancellationToken.None));
+            Assert.Matches(@"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}  ", Assert.Single(_sent).TextBody);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = was;
+        }
+    }
+
     /// <summary>A restart reads where the last mail stopped: nothing mailed twice.</summary>
     [Fact]
     public async Task A_restart_mails_nothing_again()

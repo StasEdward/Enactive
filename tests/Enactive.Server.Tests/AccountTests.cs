@@ -231,4 +231,27 @@ public sealed class AccountTests : IDisposable
         Assert.Contains("alice", said);
         Assert.Matches(@"bob\s+Viewer\s+disabled", said);
     }
+
+    /// <summary>A locked account says until when as the window writes a time, "HH:mm", in every culture: fi-FI wrote "09.20".</summary>
+    [Fact]
+    public void A_locked_account_says_until_when_in_every_culture()
+    {
+        _users.Add("alice", Password, Role.Admin);
+        _users.Add("bob", Password, Role.Viewer);
+        // Locked from now: the list says a lockout only while it lasts, by the machine's clock.
+        _clock.Now = DateTimeOffset.UtcNow;
+        for (var i = 0; i < UserStore.FailuresBeforeLockout; i++)
+            _users.SignIn("bob", "guess " + i + "xxxxxxxx");
+        var was = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("fi-FI");
+            var (_, said, _) = Run(["--list-users"]);
+            Assert.Matches(@"bob\s+Viewer\s+locked until \d{2}:\d{2}", said);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = was;
+        }
+    }
 }

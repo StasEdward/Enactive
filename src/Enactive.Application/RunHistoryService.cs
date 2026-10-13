@@ -217,7 +217,7 @@ internal sealed class RunHistoryService(Func<int> keepRuns)
     public static Question? DeleteFile(string root, string relative)
         => FileOf(root, relative) is { } full && File.Exists(full) && WorkspaceFiles.LinkOnTheWay(root, full) is null
             ? new($"Delete “{relative}”?",
-                $"This deletes the file as it is on disk now, last changed {File.GetLastWriteTime(full):yyyy-MM-dd HH:mm} "
+                $"This deletes the file as it is on disk now, last changed {Times.Minute(File.GetLastWriteTime(full))} "
                 + "- not the version this run wrote. There is no undo.",
                 "Delete", "Keep")
             : null;

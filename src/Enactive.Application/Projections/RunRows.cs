@@ -36,11 +36,11 @@ internal static class RunRows
     public static string Meta(RunSummary record) => $"{Ago(record.StartedAt)} · {Outcome(record)}";
 
     public static string Tooltip(RunSummary record)
-        => $"{RunTitle.For(record)}\n{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {record.Status} · {RunDigest.Duration(record.FinishedAt - record.StartedAt)}";
+        => $"{RunTitle.For(record)}\n{Times.Minute(record.StartedAt)} · {record.Status} · {RunDigest.Duration(record.FinishedAt - record.StartedAt)}";
 
     /// <summary>An unfinished run's second line: when it stopped, and how far it got.</summary>
     public static string Meta(RunCheckpoint checkpoint)
-        => $"stopped {checkpoint.At.ToLocalTime():MMM d, HH:mm} · {checkpoint.Finished} of {checkpoint.Steps.Count} steps done";
+        => $"stopped {Times.Day(checkpoint.At)}, {Times.Clock(checkpoint.At)} · {checkpoint.Finished} of {checkpoint.Steps.Count} steps done";
 
     public static string Tooltip(RunCheckpoint checkpoint)
         => $"{checkpoint.Request}\n\nResume runs the {checkpoint.Remaining} step(s) that are left, "
@@ -64,7 +64,7 @@ internal static class RunRows
         if (days > 1 && days < 7)
             return $"{days} days ago";
         if (days >= 7)
-            return local.ToString("MMM d");
+            return Times.Day(at);
 
         var span = DateTimeOffset.Now - at;
         if (span.TotalMinutes < 1)

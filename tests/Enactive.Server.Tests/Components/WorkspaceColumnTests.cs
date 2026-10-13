@@ -233,4 +233,26 @@ public sealed class WorkspaceColumnTests : ComponentHost
         screen.Find(".history .attempts").Click();
         Assert.Equal(2, screen.FindAll(".history > li").Count);
     }
+
+    /// <summary>
+    /// A run in flight says when it started as the window writes a time, "HH:mm", in every culture: the service's own
+    /// culture wrote it, and fi-FI wrote "09.05".
+    /// </summary>
+    [Fact]
+    public void A_running_row_says_when_it_started_in_every_culture()
+    {
+        var root = Known("project");
+        var run = new ServerRun("alice", root, "write the digest", new Enactive.Application.RunQueue(1).Enqueue(root));
+        var was = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("fi-FI");
+            Assert.EndsWith(" · started " + run.StartedAt.ToString("HH':'mm", System.Globalization.CultureInfo.InvariantCulture),
+                WorkspaceColumnState.Row(run).Tooltip);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = was;
+        }
+    }
 }

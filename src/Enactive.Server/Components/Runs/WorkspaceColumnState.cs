@@ -226,7 +226,8 @@ internal sealed class WorkspaceColumnState(ServerHistory history, IRunControl ru
         Rows = RunHousekeeping.Rows(Shown, _expanded);
     }
 
-    private static RunningRow Row(ServerRun run)
+    /// <summary>A run in flight as its RUNNING row; internal for the test of the time its tooltip says.</summary>
+    internal static RunningRow Row(ServerRun run)
     {
         var title = RunState.Title(run);
         var (done, total) = run.Session.Read((feed, _, _, _) => (feed.StepsDone, feed.StepsTotal));
@@ -237,7 +238,7 @@ internal sealed class WorkspaceColumnState(ServerHistory history, IRunControl ru
             : RunColumn.Meta(new Enactive.Core.History.LiveRun(run.Id, run.Id, title, run.Background, done, total, run.StartedAt,
                 Waiting: run.Questions.Pending is not null));
         return new RunningRow(run.Id, RunTitle.OneLine(title), meta,
-            $"{run.Owner} · {run.Workspace} · started {run.StartedAt:HH:mm}");
+            $"{run.Owner} · {run.Workspace} · started {Times.Clock(run.StartedAt)}");
     }
 
     // The registry keeps a folder as it was added; one written another way (a trailing separator, another case) is the

@@ -56,7 +56,7 @@ internal sealed record RunDigest(
         return new RunDigest(
             Title: title,
             Subtitle: subtitle,
-            Meta: $"{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {model} · run {record.RunId:N}",
+            Meta: $"{Times.Minute(record.StartedAt)} · {model} · run {record.RunId:N}",
             Status: record.Status,
             AttemptLabel: attemptLabel,
             // Retry re-runs this specification as it was, or - for a typed run - the request, recorded as a value.
@@ -81,7 +81,9 @@ internal sealed record RunDigest(
     public static string Duration(TimeSpan span)
     {
         var seconds = Math.Max(0, span.TotalSeconds);
-        return seconds >= 60 ? $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s" : $"{seconds:0}s";
+        return seconds >= 60
+            ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s")
+            : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{seconds:0}s");
     }
 
     /// <summary>

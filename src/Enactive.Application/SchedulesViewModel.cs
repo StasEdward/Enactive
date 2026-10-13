@@ -38,7 +38,7 @@ internal sealed class ScheduleOutcomeLine
 {
     public ScheduleOutcomeLine(InboxItem item)
     {
-        When = item.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+        When = Projections.Times.Minute(item.At);
         Summary = item.Summary;
         Kind = item.Kind;
     }
@@ -69,7 +69,7 @@ internal sealed class WorkChoice
 
     /// <summary>A finished run, repeated exactly as it ran. See ScheduledWork.FromPastRun.</summary>
     public static WorkChoice PastRun(RunSummary run)
-        => new($"Past run · {run.Title} ({run.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm})", null, run.Spec);
+        => new($"Past run · {run.Title} ({Projections.Times.Minute(run.StartedAt)})", null, run.Spec);
 
     public ScheduledWork ToWork(IReadOnlyDictionary<string, string>? parameters = null)
         => TemplateId is { Length: > 0 }

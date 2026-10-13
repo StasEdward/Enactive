@@ -75,7 +75,7 @@ internal static class InboxRows
     /// A time as the inbox writes it. The colon is quoted: in a format string an unquoted ':' is the culture's time
     /// separator, and the invariant culture's is a colon only by its own choice.
     /// </summary>
-    public static string When(DateTimeOffset at) => at.ToLocalTime().ToString("yyyy-MM-dd HH':'mm", CultureInfo.InvariantCulture);
+    public static string When(DateTimeOffset at) => Times.Minute(at);
 
     /// <summary>The chosen item's line under its title: what it is, and when it came.</summary>
     public static string Meta(InboxItemViewModel item) => $"{item.Kind} · {item.When}";
