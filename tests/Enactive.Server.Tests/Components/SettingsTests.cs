@@ -1,5 +1,7 @@
 namespace Enactive.Server.Tests.Components;
 
+using Enactive.Core.Permissions;
+
 using Bunit;
 using Enactive.Core.Providers;
 using Enactive.Server.Components.Pages;
@@ -124,8 +126,42 @@ public sealed class SettingsTests : ComponentHost
         var pane = screen.Find(".settings-pane");
         Assert.Equal([_roots], pane.QuerySelectorAll(".settings-roots .card-title").Select(e => e.TextContent.Trim()));
         Assert.Contains("WorkspaceRoots in server.json", pane.TextContent);
-        // Nothing to add, revoke or type: they are set at install.
+        // Nothing to add or type: they are set at install. With no grant kept, nothing to revoke either - and the window's
+        // words for that.
         Assert.Empty(pane.QuerySelectorAll("button, input, textarea, select"));
+        Assert.StartsWith("No workspace has been given a folder outside itself.", pane.QuerySelector(".settings-grants-empty")!.TextContent.Trim());
+    }
+
+    /// <summary>
+    /// The grants an Operator kept from a decision card ("keep for this workspace") are listed under the roots as the
+    /// window lists them - the folder, its workspace, the window's words - and an Admin's Revoke takes one back at once,
+    /// through the service, audited. Before, the section showed only the roots: a grant made on the service could be
+    /// neither seen nor taken back from a page.
+    /// </summary>
+    [Fact]
+    public void Writable_folders_list_the_kept_grants_and_an_admin_revokes_one()
+    {
+        var workspace = Path.Combine(_roots, "project");
+        var outside = Path.Combine(_roots, "shared");
+        Directory.CreateDirectory(workspace);
+        Directory.CreateDirectory(outside);
+        Engine.Workspaces.Touch(workspace);
+        var grants = Services.GetRequiredService<WritableRoots>();
+        Assert.Null(grants.Add(workspace, outside));
+
+        var screen = Screen("ada", "writable-folders");
+        var pane = screen.Find(".settings-pane");
+        Assert.Contains("those are listed here. Revoking takes effect at once", pane.TextContent);
+        var card = Assert.Single(pane.QuerySelectorAll(".settings-grants .settings-card"));
+        Assert.Equal(outside, card.QuerySelector(".card-title")!.TextContent.Trim(), ignoreCase: true);
+        Assert.Equal(workspace, card.QuerySelector(".card-meta")!.TextContent.Trim(), ignoreCase: true);
+
+        screen.InvokeAsync(() => screen.Find(".settings-grants button").Click()).GetAwaiter().GetResult();
+
+        screen.WaitForAssertion(() => Assert.Empty(screen.FindAll(".settings-grants .settings-card")));
+        Assert.StartsWith("Revoked:", screen.Find(".settings-grants-said").TextContent.Trim());
+        Assert.Empty(grants.For(workspace));
+        Assert.Contains(Users.AuditTrail(), e => e is { Account: "ada", Action: "writable folder revoked" });
     }
 
     [Fact]

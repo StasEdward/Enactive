@@ -741,6 +741,9 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .settings-components li { display: grid; grid-template-columns: minmax(0, 1fr) 140px 120px; gap: 6px; margin: 0 0 3px; }
 .settings-component-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-roots .card-title { white-space: normal; overflow-wrap: anywhere; }
+/* A standing write grant: its folder wraps as a root's does; an orphan's note in the window's warning colour. */
+.settings-grants .card-title { white-space: normal; overflow-wrap: anywhere; }
+.settings-grants .grant-orphan { color: var(--warning); }
 /* The editors over the settings: the provider's two columns (ProviderEditWindow.axaml), one for the others. */
 .dialog.dialog-wide { width: min(1040px, calc(100vw - 32px)); }
 .settings-editor-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }

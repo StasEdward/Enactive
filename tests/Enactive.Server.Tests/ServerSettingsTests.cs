@@ -221,6 +221,46 @@ public sealed class ServerSettingsTests : IDisposable
         Assert.Contains("role does not include", settings.WorkspaceRoots(As("alice")).Problem);
     }
 
+    /// <summary>
+    /// The standing write grants are the settings' to show (the window's rows) and an Admin's to revoke, through the
+    /// service, audited - the view model the page edits writes no file on the service (editsFilesHere). An Operator, who
+    /// can make a grant from a decision card, cannot take one back from the settings; an orphan goes whole, as the window's.
+    /// </summary>
+    [Fact]
+    public void A_kept_grant_is_listed_and_only_an_admin_revokes_it_audited()
+    {
+        var grants = new Enactive.Core.Permissions.WritableRoots(Path.Combine(_root, "writable-roots.json"));
+        var settings = new ServerSettings(_users, _engine, new WorkspaceRoots([_root]), grants);
+        var workspace = Path.Combine(_root, "project");
+        var gone = Path.Combine(_root, "forgotten");
+        var outside = Path.Combine(_root, "shared");
+        Directory.CreateDirectory(workspace);
+        Directory.CreateDirectory(outside);
+        _engine.Workspaces.Touch(workspace);
+        Assert.Null(grants.Add(workspace, outside));
+        Assert.Null(grants.Add(gone, outside));
+
+        var rows = settings.Edit(As("ada"), null, _ => { }).View!.WritableRootRows;
+        Assert.Equal(2, rows.Count);
+        var known = rows.Single(r => !r.IsOrphan);
+        var orphan = rows.Single(r => r.IsOrphan);
+        Assert.Equal(workspace, known.Workspace, ignoreCase: true);
+
+        var (refused, why) = settings.RevokeWritableFolder(As("alice"), known.Key, known.Folder);
+        Assert.False(refused);
+        Assert.Contains("role does not include", why);
+        Assert.NotEmpty(grants.For(workspace));
+
+        Assert.True(settings.RevokeWritableFolder(As("ada"), known.Key, known.Folder).Revoked);
+        Assert.Empty(grants.For(workspace));
+        Assert.Contains(_users.AuditTrail(), e => e is { Account: "ada", Action: "writable folder revoked" } && e.Detail?.Contains(workspace, StringComparison.OrdinalIgnoreCase) == true);
+        // Revoked since the page was drawn: said, not done twice.
+        Assert.False(settings.RevokeWritableFolder(As("ada"), known.Key, known.Folder).Revoked);
+
+        Assert.True(settings.RevokeWritableFolder(As("ada"), orphan.Key, orphan.Folder).Revoked);
+        Assert.Empty(grants.Review([]));
+    }
+
     /// <summary>An OpenAI-compatible endpoint that answers one request for its models, and says what it was sent.</summary>
     private sealed class OneAnswerProvider : IDisposable
     {

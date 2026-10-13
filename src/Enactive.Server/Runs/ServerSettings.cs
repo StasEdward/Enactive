@@ -31,8 +31,14 @@ internal sealed record OpenedSettings(AppSettings Copy, string Version);
 /// (RestoreSecrets). A page says whether one is kept, takes a new one, and removes one only on purpose. Testing a
 /// provider or an MCP server with what is kept happens here, as the service, for the same reason.</para>
 /// </summary>
-internal sealed class ServerSettings(UserStore users, ServerEngine engine, WorkspaceRoots roots)
+/// <param name="grants">
+/// The standing write grants the service's runs are checked against - its account's own (WritableRoots.Default, which
+/// RunEngineResources uses); a test's file otherwise.
+/// </param>
+internal sealed class ServerSettings(UserStore users, ServerEngine engine, WorkspaceRoots roots, WritableRoots? grants = null)
 {
+    private readonly WritableRoots _grants = grants ?? WritableRoots.Default;
+
     /// <summary>What a refused save starts with, so a host that says "Not saved" itself can say it once.</summary>
     public const string NotSaved = "Not saved - ";
 
@@ -79,9 +85,10 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
             toolNames: engine.ToolNames(),
             hostPane: null,
             providerCalls: new AsTheAdmin(this, user),
-            // Its engine's grants and its own workspaces: the files the service's runs read.
-            writableRoots: WritableRoots.Default,
-            knownWorkspaces: () => engine.Workspaces.Entries.Select(e => e.RootPath));
+            // Its engine's grants and its own workspaces: the files the service's runs read. Shown, and revoked through
+            // RevokeWritableFolder - the view model's own Revoke is off here (editsFilesHere).
+            writableRoots: _grants,
+            knownWorkspaces: GrantedWorkspaces);
         return (view, null);
     }
 
@@ -91,6 +98,46 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
     /// </summary>
     public (IReadOnlyList<string>? Roots, string? Problem) WorkspaceRoots(ClaimsPrincipal user)
         => Admin(user) is null ? (null, NotAdmin(user)) : (roots.All, null);
+
+    /// <summary>
+    /// Takes back one standing write grant - a folder outside a workspace that runs there may write to, kept from a
+    /// decision card's "keep for this workspace" - for an Admin, at once and audited, as the window's Revoke is at once
+    /// (WritableRootsSettingsViewModel.RevokeWritableRoot). On the service any Operator can make such a grant from a card;
+    /// without this the settings listed none of them and nothing on a page could take one back.
+    ///
+    /// <para>The grant is found again in the store by its key and folder, not taken from the page: one revoked since the
+    /// page was drawn is said to be gone rather than revoked twice. An orphan - its workspace no longer known - is
+    /// forgotten whole, as the window does, there being no path left to name one folder by.</para>
+    /// </summary>
+    public (bool Revoked, string Said) RevokeWritableFolder(ClaimsPrincipal user, string key, string folder)
+    {
+        if (Admin(user) is not { } admin)
+            return (false, NotAdmin(user));
+
+        var entry = _grants.Review(GrantedWorkspaces())
+            .FirstOrDefault(g => g.Key == key && g.Roots.Contains(folder, StringComparer.OrdinalIgnoreCase));
+        if (entry is null)
+            return (false, $"{folder} is no longer kept for that workspace.");
+
+        if (entry.IsOrphan)
+            _grants.Forget(entry.Key);
+        else
+            _grants.Revoke(entry.WorkspaceRoot!, folder);
+
+        users.Audit(admin.Name, "writable folder revoked", entry.IsOrphan
+            ? $"{string.Join(", ", entry.Roots)} for a workspace the service no longer knows"
+            : $"{folder} for {entry.WorkspaceRoot}");
+        return (true, entry.IsOrphan
+            ? $"Revoked: every folder kept for that workspace ({string.Join(", ", entry.Roots)})."
+            : $"Revoked: runs in {entry.WorkspaceRoot} are asked again before writing to {folder}.");
+    }
+
+    /// <summary>
+    /// The workspaces the grants are named by: every one the service's registry knows, not only those under the roots
+    /// (KnownWorkspaces) - read through the roots, a grant of a workspace outside them read as an orphan, and its Revoke
+    /// forgot every folder kept for it.
+    /// </summary>
+    private IEnumerable<string> GrantedWorkspaces() => engine.Workspaces.Entries.Select(e => e.RootPath);
 
     /// <summary>Saves an edited copy, if nothing changed the file since it was opened; what to tell the person.</summary>
     public (bool Saved, string Said) Save(ClaimsPrincipal user, OpenedSettings edited)

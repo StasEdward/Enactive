@@ -11,8 +11,17 @@ using Enactive.Workspace;
 /// the workspace is gone.
 /// </param>
 /// <param name="Folder">The folder outside that workspace which runs there may write to.</param>
+/// <param name="Key">
+/// The store's key for the workspace (GrantedTo.Key): what a host that revokes elsewhere - the service, as the person -
+/// names the grant by, as an orphan has no path left to name it with.
+/// </param>
 internal sealed record WritableRootRow(
-    string Workspace, string Folder, bool IsOrphan, RelayCommand RevokeCommand);
+    string Workspace, string Folder, bool IsOrphan, RelayCommand RevokeCommand, string Key = "")
+{
+    /// <summary>Said under an orphan's row: what its Revoke takes away. Every host says it in these words.</summary>
+    public string OrphanNote =>
+        "Still in force. Revoking removes every folder kept for that workspace, because there is no path left to name one by.";
+}
 
 internal sealed partial class SettingsViewModel
 {
@@ -37,6 +46,12 @@ internal sealed partial class SettingsViewModel
         + "answer \"keep for this workspace\" on the card that asks about a command writing "
         + "somewhere else.";
 
+    /// <summary>What the section is: where the grants come from, and that a revoke is at once. Every host says it so.</summary>
+    public string WritableRootsHint =>
+        "A run may only write inside its workspace. When a command tries to write somewhere else you are asked, and one of "
+        + "the answers is \"keep for this workspace\" — those are listed here. Revoking takes effect at once and is not "
+        + "undone by Cancel: taking a permission away is not a setting.";
+
     private Func<IEnumerable<string>> _knownWorkspaces = () => WorkspaceRegistry.Load().Entries.Select(e => e.RootPath);
 
     private void InitializeWritableRoots(WritableRoots? writableRoots, Func<IEnumerable<string>>? knownWorkspaces)
@@ -51,8 +66,10 @@ internal sealed partial class SettingsViewModel
     /// Rebuilt from the store each time rather than mutated in place. The file is shared with every
     /// run of the engine, which adds to it while this window is open; a list edited in memory would
     /// be showing a state that was true when the window opened.
+    ///
+    /// <para>Internal for a host that revokes elsewhere (the service, as the person) and shows the list again after.</para>
     /// </summary>
-    private void ReloadWritableRoots()
+    internal void ReloadWritableRoots()
     {
         WritableRootRows.Clear();
 
@@ -73,7 +90,8 @@ internal sealed partial class SettingsViewModel
                         : captured.WorkspaceRoot!,
                     target,
                     captured.IsOrphan,
-                    new RelayCommand(() => RevokeWritableRoot(captured, target))));
+                    new RelayCommand(() => RevokeWritableRoot(captured, target)),
+                    captured.Key));
             }
         }
     }

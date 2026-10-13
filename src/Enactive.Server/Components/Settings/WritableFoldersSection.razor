@@ -1,6 +1,17 @@
-@* The folders the service runs tasks in, from server.json (WorkspaceRoots), read only: they are set when the service is
-   installed, and a page that could add one could open any folder of the server to a run with a shell. The window's
-   add and remove are not offered. *@
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerSettings Service
+
+@* The window's Writable folders (SettingsWindow.axaml): what has been granted, and the one place it can be taken back -
+   with the folders the service runs tasks in above them, which the window has no need of.
+
+   The roots come from server.json (WorkspaceRoots) and are read only: they are set when the service is installed, and a
+   page that could add one could open any folder of the server to a run with a shell.
+
+   The grants are the window's rows in the window's words (WritableRootRow): a folder outside a workspace kept from a
+   decision card's "keep for this workspace", which any Operator can answer. Revoke goes to the service as the person
+   (ServerSettings.RevokeWritableFolder), checked and audited there - the view model's own Revoke writes no file on the
+   service - and takes effect at once, as the window's: taking a permission away is not a setting. *@
 
 <h2 class="label">Writable folders</h2>
 <p class="hint">A run may only write inside its workspace, and a workspace of the service is a folder under one of these. They are set when the service is installed - WorkspaceRoots in server.json - and changed there by an administrator of the server, who then restarts the service.</p>
@@ -19,7 +30,66 @@ else
     </ul>
 }
 
+<p class="hint">@Vm.WritableRootsHint</p>
+
+@if (Vm.WritableRootRows.Count == 0)
+{
+    <p class="hint settings-grants-empty">@Vm.WritableRootsEmpty</p>
+}
+else
+{
+    <ul class="cards settings-cards settings-grants" aria-label="Folders kept for a workspace">
+        @foreach (var row in Vm.WritableRootRows)
+        {
+            <li class="card settings-card">
+                <span class="settings-card-text">
+                    <span class="card-title path">@row.Folder</span>
+                    <span class="card-meta">@row.Workspace</span>
+                    @if (row.IsOrphan)
+                    {
+                        <span class="card-meta settings-wrap grant-orphan">@row.OrphanNote</span>
+                    }
+                </span>
+                <button type="button" class="btn small destructive" disabled="@_busy" @onclick="() => RevokeAsync(row)">Revoke</button>
+            </li>
+        }
+    </ul>
+}
+
+@if (_said is { } said)
+{
+    <p class="hint settings-grants-said" role="status">@said</p>
+}
+
 @code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    // Handed down as a cascading value rather than a parameter: the view model is internal to the application layer,
+    // and a component's parameters are public.
+    [CascadingParameter] private SettingsViewModel Vm { get; set; } = default!;
+
     /// <summary>The roots as the service has them (ServerSettings.WorkspaceRoots).</summary>
     [Parameter, EditorRequired] public IReadOnlyList<string> Roots { get; set; } = [];
+
+    private bool _busy;
+    private string? _said;
+
+    private async Task RevokeAsync(WritableRootRow row)
+    {
+        // Busy while it is done: a second press is not a second revoke.
+        if (_busy)
+            return;
+        _busy = true;
+        try
+        {
+            (_, _said) = Service.RevokeWritableFolder((await Auth).User, row.Key, row.Folder);
+            // Read again from the store, as the window's list is after a revoke: an Operator may have kept another
+            // folder since the page was drawn.
+            Vm.ReloadWritableRoots();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
 }

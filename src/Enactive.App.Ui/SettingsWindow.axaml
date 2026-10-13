@@ -410,7 +410,7 @@
                 <Panel IsVisible="{Binding IsWritableRoots}">
                     <DockPanel LastChildFill="True" Margin="12">
                         <TextBlock DockPanel.Dock="Top" Classes="hint" Margin="0,0,0,8"
-                                   Text="A run may only write inside its workspace. When a command tries to write somewhere else you are asked, and one of the answers is &quot;keep for this workspace&quot; — those are listed here. Revoking takes effect at once and is not undone by Cancel: taking a permission away is not a setting." />
+                                   Text="{Binding WritableRootsHint}" />
 
                         <TextBlock DockPanel.Dock="Top" Classes="hint" Margin="0,0,0,8"
                                    IsVisible="{Binding !WritableRootRows.Count}"
@@ -428,7 +428,7 @@
                                                     <TextBlock Classes="hint"
                                                                IsVisible="{Binding IsOrphan}"
                                                                Foreground="{DynamicResource Brand.Warning}"
-                                                               Text="Still in force. Revoking removes every folder kept for that workspace, because there is no path left to name one by." />
+                                                               Text="{Binding OrphanNote}" />
                                                 </StackPanel>
                                                 <Button Grid.Column="1" Classes="danger"
                                                         VerticalAlignment="Center"

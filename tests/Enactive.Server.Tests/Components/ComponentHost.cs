@@ -46,6 +46,9 @@ public abstract class ComponentHost : BunitContext
         // compose a model from settings nobody wrote here), and a fixed signed-in person instead of the circuit's.
         Services.AddSingleton<IRunExecutor>(new EndsAtOnce(new ApprovalStore(Path.Combine(data, "permissions.json"))));
         Services.AddScoped<AuthenticationStateProvider>(_ => _signedIn);
+        // The standing write grants the settings list and revoke: a file of the test's, never the developer's own
+        // (WritableRoots.Default, which the service uses).
+        Services.AddSingleton(new WritableRoots(Path.Combine(data, "writable-roots.json")));
         // bUnit registers a stand-in that throws for every authorization check, and the server's registration of the
         // real one (with the Viewer, Operator and Admin policies) does not replace it: a page asking whether the
         // person may do something failed before it was shown.
