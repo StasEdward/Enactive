@@ -141,7 +141,9 @@ public sealed class McpSettingsTests : IDisposable
     public async Task A_test_with_the_credentials_kept_for_a_server_is_audited_with_where_they_went()
     {
         var server = _settings.Open(As("ada")).Opened!.Copy.McpServers.Single();
-        server.Url = "http://127.0.0.1:1/elsewhere";
+        // With a token of its own in the address (user info is refused by the server's own check): the trail says where,
+        // never what the query carried (ServerSettings.Address).
+        server.Url = "http://127.0.0.1:1/elsewhere?token=tok-in-url#part";
         server.TimeoutSeconds = 5;
 
         await _settings.TestMcpAsync(As("ada"), server, CancellationToken.None);
@@ -150,5 +152,6 @@ public sealed class McpSettingsTests : IDisposable
         Assert.Equal("ada", entry.Account);
         Assert.Equal("tracker: http://127.0.0.1:1/elsewhere (with the credentials kept for it)", entry.Detail);
         Assert.DoesNotContain("tk-very-secret", entry.Detail);
+        Assert.DoesNotContain("in-url", entry.Detail);
     }
 }

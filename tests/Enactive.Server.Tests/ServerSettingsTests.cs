@@ -182,6 +182,36 @@ public sealed class ServerSettingsTests : IDisposable
     }
 
     /// <summary>
+    /// An address may carry a credential of its own - user info, a key or a token in the query: the audit trail says
+    /// where a kept key went by scheme, host, port and path only, as written whole it put that credential in the trail.
+    /// </summary>
+    [Fact]
+    public async Task A_kept_key_sent_to_an_address_with_its_own_credentials_is_audited_without_them()
+    {
+        var stored = AppSettings.Load(_engine.SettingsFile);
+        stored.Providers.Add(new ProviderConfig { Id = "box", BaseUrl = "http://127.0.0.1:1/v1", ApiKey = "sk-kept-key", Models = ["qwen"] });
+        Assert.True(stored.Save(_engine.SettingsFile, replaceUnreadable: true));
+        var (view, _) = _settings.Edit(As("ada"), null, _ => { });
+        var typed = view!.Providers.Single(p => p.Name == "box").Config.Clone();
+        typed.BaseUrl = "http://admin:hunter2@127.0.0.1:1/v1?key=sk-in-the-url&x=1#part";
+
+        await view.ProviderCalls.CheckAsync(typed, "qwen");
+
+        var entry = Assert.Single(_users.AuditTrail(), e => e.Action == "provider checked");
+        Assert.Equal("box: http://127.0.0.1:1/v1 (with the credentials kept for it)", entry.Detail);
+    }
+
+    [Theory]
+    [InlineData("https://user:pass@api.example.org:8443/v1/chat?token=t#f", "https://api.example.org:8443/v1/chat")]
+    [InlineData("https://api.example.org/v1?key=k", "https://api.example.org/v1")]
+    [InlineData("http://[::1]:5000/mcp", "http://[::1]:5000/mcp")]
+    [InlineData("not an address", "(an address that could not be read)")]
+    [InlineData("", "(an address that could not be read)")]
+    [InlineData(null, "(an address that could not be read)")]
+    public void Only_where_an_address_goes_is_audited(string? url, string audited)
+        => Assert.Equal(audited, ServerSettings.Address(url));
+
+    /// <summary>
     /// A provider's headers through the page's editor: named, never valued; left alone they are saved as they were, new
     /// ones replace them, and Remove takes them away. A key in Authorization is a provider's key like any other.
     /// </summary>

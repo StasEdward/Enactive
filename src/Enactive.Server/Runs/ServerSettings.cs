@@ -197,7 +197,7 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
         if (usesKept)
             AuditKeptUse(admin, "MCP server tested", config.Id,
                 // The command without its arguments: they are the person's to type and may hold what they should not.
-                config.Transport == McpTransportKind.Stdio ? config.Command : config.Url);
+                config.Transport == McpTransportKind.Stdio ? config.Command : Address(config.Url));
         try
         {
             // Started in the data folder unless the server names its own: the service has no "current" project.
@@ -248,7 +248,7 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
         var usesKept = kept.NamesKeptSecrets();
         kept.RestoreSecrets(AppSettings.Load(engine.SettingsFile));
         if (usesKept)
-            AuditKeptUse(admin, action, typed.Id, typed.BaseUrl + what);
+            AuditKeptUse(admin, action, typed.Id, Address(typed.BaseUrl) + what);
         return kept.Providers[0];
     }
 
@@ -259,6 +259,16 @@ internal sealed class ServerSettings(UserStore users, ServerEngine engine, Works
     /// </summary>
     private void AuditKeptUse(Account admin, string action, string id, string endpoint)
         => users.Audit(admin.Name, action, $"{id}: {endpoint} (with the credentials kept for it)");
+
+    /// <summary>
+    /// Where an address goes - its scheme, host, port and path - and nothing else. An address an Admin types may carry a
+    /// credential of its own (https://user:pass@host, ?key=..., ?token=...), and written whole into the audit trail it put
+    /// that credential where every Admin reads it. One that cannot be read is not written at all: what it holds is unknown.
+    /// </summary>
+    internal static string Address(string? url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Host.Length > 0
+            ? uri.GetComponents(UriComponents.SchemeAndServer | UriComponents.Path, UriFormat.UriEscaped)
+            : "(an address that could not be read)";
 
     /// <summary>The file's content, as a version: what a save compares against.</summary>
     private string VersionNow()
