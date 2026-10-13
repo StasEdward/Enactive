@@ -3,10 +3,12 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @inject ServerStaging Staging
 
-@* The run's Artifacts tab (MainWindow.axaml 616-688): the files it wrote, each with Review and Delete (WrittenFiles) -
-   and, once the run has ended, the changes it proposed and the service kept (ServerStaging), amber down the edge while
-   they wait for a person, each with its diff, Apply and Reject. Not before the end: the store is still being written,
-   and the service refuses then anyway. Every action is the service's to decide; what it said is under the list. *@
+@* The run's Artifacts tab (MainWindow.axaml 616-688): the files it wrote, each with Review and Delete (WrittenFiles), a
+   file a rejected step put back saying so and offering nothing - and, once the run has ended, the changes it proposed and
+   the service kept (ServerStaging), amber down the edge while they wait for a person, each with its diff, Apply and
+   Reject. A staging run's proposals are never listed as files it wrote: the file on disk is the person's, unchanged, and
+   Delete would have deleted it. While the run goes they are only counted here: the store is still being written, and the
+   service refuses to apply them then anyway. Every action is the service's to decide; what it said is under the list. *@
 
 <div class="artifacts">
     @if (Said is { Length: > 0 } said)
@@ -14,12 +16,17 @@
         <p class="said" role="alert">@said</p>
     }
 
-    @if (Paths.Count == 0 && _state is not { Files.Count: > 0 })
+    @if (Files.Written.Count == 0 && _state is not { Files.Count: > 0 } && (Ended || Files.Staged.Count == 0))
     {
         <p class="hint">Nothing written yet.</p>
     }
 
-    <WrittenFiles Root="@Root" Paths="Paths" />
+    <WrittenFiles Root="@Root" Paths="Files.Written" PutBack="Files.PutBack" />
+
+    @if (!Ended && Files.Staged.Count > 0)
+    {
+        <p class="hint proposed-while-running">@ProposedWhileRunning(Files.Staged.Count)</p>
+    }
 
     @if (_state is { Files.Count: > 0 } state)
     {
@@ -33,8 +40,8 @@
     /// <summary>The run's workspace, where its files are.</summary>
     [Parameter, EditorRequired] public string Root { get; set; } = "";
 
-    /// <summary>The files the run wrote, in the order first written (RunPanel.ArtifactPaths).</summary>
-    [Parameter] public IReadOnlyList<string> Paths { get; set; } = [];
+    /// <summary>The run's files - written, put back, proposed (RunPanel.Files).</summary>
+    [Parameter] public RunFilesView Files { get; set; } = RunFilesView.Empty;
 
     /// <summary>The run, whose kept proposals are named by its id (ServerStaging.Begin).</summary>
     [Parameter] public Guid RunId { get; set; }
@@ -68,6 +75,12 @@
                        && problem.StartsWith("These proposals cannot be read", StringComparison.Ordinal) ? problem : null;
         }
     }
+
+    /// <summary>What a staging run's proposals are while it goes: counted, to apply or reject here once it is over.</summary>
+    internal static string ProposedWhileRunning(int count)
+        => count == 1
+            ? "1 change proposed - to apply or reject here once the run is over."
+            : $"{count.ToString(System.Globalization.CultureInfo.InvariantCulture)} changes proposed - to apply or reject here once the run is over.";
 
     private Task ActAsync((StagedFile File, bool Apply) act) => _state!.ActAsync(act.File, act.Apply, CancellationToken.None);
 }

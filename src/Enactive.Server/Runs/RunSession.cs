@@ -124,6 +124,17 @@ internal sealed class RunSession
     }
 
     /// <summary>
+    /// The run stages its changes: what it produces is proposed, kept for a person to apply or reject, and the files on
+    /// disk are unchanged (RunFiles.Stages). Said once it is composed, before its first event - the composer decides it.
+    /// Without it the page listed each proposal as a file the run wrote, whose Delete deleted the person's own file.
+    /// </summary>
+    public void Staging()
+    {
+        lock (_gate)
+            _panel.Files.Stages = true;
+    }
+
+    /// <summary>
     /// A model call this run made, for the panel's speed figures: from the engine's callback, found by the run's flow
     /// (ServerRunScope). Under the lock: the call is reported on the engine's thread while a page may be reading.
     /// </summary>

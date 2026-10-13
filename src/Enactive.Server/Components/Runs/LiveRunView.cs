@@ -30,6 +30,18 @@ public sealed record WorkLine(string Label, string Detail, string Tone);
 public sealed record SpeedLine(string Provider, string Model, string Speed, string SpeedLabel, string Times, string Tokens,
     string Cache, string First, string Requests, string Explanation);
 
+/// <summary>
+/// The run's files as its Artifacts tab shows them (RunFiles): those it wrote, those of them a rejected step put back, and
+/// the changes it proposed instead of writing - each a different card, never one list of "files the run wrote".
+/// </summary>
+public sealed record RunFilesView(IReadOnlyList<string> Written, IReadOnlyList<string> PutBack, IReadOnlyList<string> Staged)
+{
+    public static readonly RunFilesView Empty = new([], [], []);
+
+    /// <summary>The ARTIFACTS tile and tab: a card for each file written and each change proposed (RunPanel.Artifacts).</summary>
+    public int Count => Written.Count + Staged.Count;
+}
+
 /// <summary>The run as its page shows it, at one event (<see cref="Seq"/>).</summary>
 public sealed record LiveRunView(
     string Title,
@@ -42,7 +54,7 @@ public sealed record LiveRunView(
     bool AgentVisible,
     bool AgentReviewing,
     int ToolCalls,
-    IReadOnlyList<string> Artifacts,
+    RunFilesView Artifacts,
     int PromptTokens,
     int CompletionTokens,
     IReadOnlyList<RoutingLine> Routing,
@@ -50,7 +62,7 @@ public sealed record LiveRunView(
     IReadOnlyList<SpeedLine> Speeds,
     long Seq)
 {
-    public static readonly LiveRunView Empty = new("", null, 0, 0, [], "", "", false, false, 0, [], 0, 0, [], [], [], 0);
+    public static readonly LiveRunView Empty = new("", null, 0, 0, [], "", "", false, false, 0, RunFilesView.Empty, 0, 0, [], [], [], 0);
 
     /// <summary>The tile, as the window's (RunFigures).</summary>
     public string TokensText => RunFigures.Tokens(RunFigures.Reported(PromptTokens, CompletionTokens));
@@ -85,7 +97,7 @@ internal sealed class LiveRunReader
             feed.Cards.Select(Card).ToList(),
             activity.CurrentAction, activity.AgentLabel, activity.AgentVisible, activity.Agent == AgentKind.Reasoner,
             activity.ToolCalls,
-            panel.ArtifactPaths.ToList(),
+            new RunFilesView(panel.Files.Written.ToList(), panel.Files.Reverted, panel.Files.Staged.ToList()),
             panel.PromptTokens, panel.CompletionTokens,
             panel.Routing.Rows.Select(r => new RoutingLine(r.Phase, r.Model)).ToList(),
             panel.Work.Rows.Select(r => new WorkLine(r.Label, r.Detail, Looks.Reach(r.Reach))).ToList(),

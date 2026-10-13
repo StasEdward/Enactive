@@ -23,19 +23,17 @@ internal sealed class RunPanel(Func<string?, ModelReach> reachOf)
     public int PromptTokens { get; private set; }
     public int CompletionTokens { get; private set; }
     /// <summary>
-    /// Files the run produced, one per path, case-insensitive. Matches the window's artifact cards (one card per file,
-    /// MainWindow.AddArtifact): counting every event made a step that wrote report.md twice read 2 here and 1 there.
+    /// The run's files - written, proposed, put back (<see cref="RunFiles"/>). A host's Artifacts tab lists them from here;
+    /// with a count alone it could show the tile but not the list behind it, and would have folded the events again.
     /// </summary>
-    public int Artifacts => _artifacts.Count;
+    public RunFiles Files { get; } = new();
 
     /// <summary>
-    /// The files counted in <see cref="Artifacts"/>, in the order first written - a host's Artifacts tab. With the count
-    /// alone a second host could show the tile but not the list behind it, and would have folded the events again for it.
+    /// The ARTIFACTS tile: one per file written and one per change proposed, as the window has a card for each
+    /// (MainWindow.AddArtifact, AddStagedArtifact). Counting every event made a step that wrote report.md twice read 2
+    /// here and 1 there.
     /// </summary>
-    public IReadOnlyList<string> ArtifactPaths => _artifactPaths;
-
-    private readonly HashSet<string> _artifacts = new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<string> _artifactPaths = new();
+    public int Artifacts => Files.Written.Count + Files.Staged.Count;
 
     /// <summary>Folds one event in. True when a figure changed, so a host redraws only for events that matter.</summary>
     public bool Apply(WorkEvent ev)
@@ -56,18 +54,8 @@ internal sealed class RunPanel(Func<string?, ModelReach> reachOf)
                 Work.Add(provider, reachOf(provider), used.In, used.Out);
                 return true;
 
-            case EventKind.ArtifactProduced:
-                // The path the window uses, with its fallback for a run recorded before the payload named one:
-                // the text after the first ": " in the summary, else the summary itself.
-                var path = ev.ArtifactPath()
-                           ?? (ev.Summary.Contains(": ", StringComparison.Ordinal)
-                               ? ev.Summary[(ev.Summary.IndexOf(": ", StringComparison.Ordinal) + 2)..]
-                               : ev.Summary);
-                // A repeated write to a known path says nothing new.
-                if (!_artifacts.Add(path))
-                    return false;
-                _artifactPaths.Add(path);
-                return true;
+            case EventKind.ArtifactProduced or EventKind.ArtifactReverted:
+                return Files.Apply(ev) is not FileNews.None;
 
             default:
                 return false;

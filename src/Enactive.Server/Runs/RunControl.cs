@@ -669,6 +669,9 @@ internal sealed class EngineExecutor(ServerEngine engine, ServerStaging staging)
         {
             await using var composedRun = await RunComposer.ComposeAsync(composed, request, decisions, ct);
             artifacts = composedRun.Artifacts;
+            // As the window decides it (MainWindow: _staging): the composed store is a staging one or it is not.
+            if (artifacts is StagingArtifactStore)
+                run.Session.Staging();
             await run.Session.DrainAsync(composedRun.Events(ct), ct);
         }
         finally

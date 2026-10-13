@@ -78,7 +78,11 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
     /// <summary>Everything the window shows. Nothing below touches a control - it sets a property here.</summary>
     private readonly MainWindowViewModel _vm = new();
-    private readonly HashSet<string> _shownArtifacts = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// The live run's files - written, proposed, put back - as every host reads them from its events (RunFiles): which
+    /// card an ArtifactProduced makes, and which cards an ArtifactReverted marks, is decided there, not here.
+    /// </summary>
+    private RunFiles _files = new();
     /// <summary>Workspaces already told about their ignored legacy approvals file — say it once.</summary>
     private readonly HashSet<string> _legacyApprovalsNoted = new(StringComparer.OrdinalIgnoreCase);
 
@@ -925,6 +929,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 _staging = composed.Artifacts as StagingArtifactStore;
                 _disk = composed.Artifacts as DiskArtifactStore;
                 _stagedShown = 0;
+                _files.Stages = _staging is not null;
 
                 var envLine = composed.Intent.Context.Environment?.OneLine();
                 await Dispatcher.UIThread.InvokeAsync(() => _vm.EnvironmentSummary = envLine ?? "(no environment data)");
@@ -1049,16 +1054,21 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                             Live(() => _vm.AddUsage(used.In, used.Out, usageProvider, ReachOf(usageProvider)));
                         }
                         break;
-                    case EventKind.ArtifactProduced:
-                        if (_staging is not null)
-                            AddStagedArtifact();
-                        else
-                            AddArtifact(ev);
-                        break;
-                    // The step's work was put back after the reviewer rejected it. Its cards must stop
-                    // offering to open or undo a file that is no longer the file they describe.
-                    case EventKind.ArtifactReverted:
-                        MarkRevertedArtifacts(ev.RevertedPaths() ?? []);
+                    case EventKind.ArtifactProduced or EventKind.ArtifactReverted:
+                        switch (_files.Apply(ev))
+                        {
+                            case FileNews.Written written:
+                                AddArtifact(written.Path);
+                                break;
+                            case FileNews.Staged:
+                                AddStagedArtifact();
+                                break;
+                            // The step's work was put back after the reviewer rejected it. Its cards must stop
+                            // offering to open or undo a file that is no longer the file they describe.
+                            case FileNews.Reverted reverted:
+                                MarkRevertedArtifacts(reverted.Paths);
+                                break;
+                        }
                         break;
                 }
         }
@@ -1121,19 +1131,9 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
         private static string FormatElapsed(TimeSpan span) => RunElapsed.Format(span);
 
-        private void AddArtifact(WorkEvent ev)
+        /// <summary>A card for a file the run wrote - once per file: RunFiles tells a path only the first time.</summary>
+        private void AddArtifact(string relative)
         {
-            // The path as a value. Splitting the summary on its first ": " is a guess about a sentence,
-            // and a path is not a sentence.
-            var relative = ev.ArtifactPath()
-                           ?? (ev.Summary.Contains(": ", StringComparison.Ordinal)
-                               ? ev.Summary[(ev.Summary.IndexOf(": ", StringComparison.Ordinal) + 2)..]
-                               : ev.Summary);
-
-            // One card per file: repeated writes to the same path say nothing new.
-            if (!_shownArtifacts.Add(relative))
-                return;
-
             var root = _currentWorkspaceRoot;
 
             // "Undo" used to be an unconditional File.Delete: if the agent EDITED an existing source
@@ -1173,7 +1173,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 if (!paths.Contains(item.RelativePath, StringComparer.OrdinalIgnoreCase))
                     continue;
 
-                item.Status = "put back — the reviewer rejected this step";
+                item.Status = RunFiles.PutBackStatus;
                 item.CanAct = false;
             }
         }
@@ -1339,7 +1339,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             // The run's own state, which the panels are only a view of. Cleared HERE and not in
             // ClearRunPanels, because detaching from a run to look at another workspace empties the
             // panels while the run carries on filling these.
-            _shownArtifacts.Clear();
+            _files = new RunFiles();
             _liveArtifacts.Clear();
             _feed = new RunFeed();
             _cardViews.Clear();

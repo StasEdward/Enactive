@@ -399,6 +399,59 @@ public sealed class LiveRunTests : ComponentHost
     }
 
     /// <summary>
+    /// A staging run's files are proposals, not files it wrote (RunFiles): its Artifacts tab offers no Review or Delete for
+    /// one - Review showed the person's file on disk, unchanged, and Delete deleted it. While the run goes they are
+    /// counted; once it is over they are its proposals, to apply or reject.
+    /// </summary>
+    [Fact]
+    public async Task A_staging_run_offers_no_delete_on_a_proposed_file()
+    {
+        _script.Stages = true;
+        var run = await StartedAsync();
+        File.WriteAllText(Path.Combine(run.Workspace, "notes.md"), "the person's own");
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: notes.md", WorkEventPayload.ArtifactPayload("document", "notes.md")));
+        await WaitUntil(() => run.Session.Seq == 1);
+
+        var page = Open("alice", run);
+        page.WaitForAssertion(() => Assert.Equal("Artifacts (1)", page.FindAll("[role=tab]")[1].TextContent.Trim()));
+        page.FindAll("[role=tab]")[1].Click();
+        page.WaitForAssertion(() => Assert.Equal("1 change proposed - to apply or reject here once the run is over.",
+            page.Find(".proposed-while-running").TextContent.Trim()));
+        Assert.Empty(page.FindAll(".artifact"));
+        Assert.DoesNotContain(page.FindAll("button"), b => b.TextContent.Trim() == "Delete");
+        Assert.Equal("the person's own", File.ReadAllText(Path.Combine(run.Workspace, "notes.md")));
+    }
+
+    /// <summary>
+    /// A file a rejected step put back says so on its card and offers nothing, as the window marks it: Review would show
+    /// a file that is no longer the one the run wrote, and Delete would delete what was put back.
+    /// </summary>
+    [Fact]
+    public async Task A_file_put_back_says_so_and_offers_no_delete()
+    {
+        var run = await StartedAsync();
+        File.WriteAllText(Path.Combine(run.Workspace, "report.md"), "as it was");
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: report.md", WorkEventPayload.ArtifactPayload("document", "report.md")));
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: notes.md", WorkEventPayload.ArtifactPayload("document", "notes.md")));
+        _script.Emit(Script.Ev(EventKind.ArtifactReverted, "put back: report.md",
+            WorkEventPayload.RevertPayload(1, ["report.md"], [])));
+        await WaitUntil(() => run.Session.Seq == 3);
+
+        var page = Open("alice", run);
+        page.WaitForAssertion(() => Assert.Equal("Artifacts (2)", page.FindAll("[role=tab]")[1].TextContent.Trim()));
+        page.FindAll("[role=tab]")[1].Click();
+        page.WaitForAssertion(() => Assert.Equal(2, page.FindAll(".artifact").Count));
+
+        var putBack = page.FindAll(".artifact").Single(a => a.QuerySelector(".path")!.TextContent.Trim() == "report.md");
+        Assert.Equal("put back — the reviewer rejected this step", putBack.QuerySelector(".artifact-status")!.TextContent.Trim());
+        Assert.Equal(["Review"], putBack.QuerySelectorAll("button").Select(b => b.TextContent.Trim()));
+        Assert.True(putBack.QuerySelector("button")!.HasAttribute("disabled"));
+
+        var written = page.FindAll(".artifact").Single(a => a.QuerySelector(".path")!.TextContent.Trim() == "notes.md");
+        Assert.Equal(["Review", "Delete"], written.QuerySelectorAll("button").Select(b => b.TextContent.Trim()));
+    }
+
+    /// <summary>
     /// Source shows only where there is something to switch between, as the window's viewer: beside a caller's rendering,
     /// which must never be the only way to read the text. With the text alone, a Source button would switch to itself.
     /// </summary>
@@ -616,9 +669,14 @@ public sealed class LiveRunTests : ComponentHost
         /// <summary>The run asks, as a step's tool call would: through the handler it was composed with.</summary>
         public Task<DecisionOutcome> AskAsync(DecisionRequest request) => _decisions!.RequestAsync(request, _ct);
 
+        /// <summary>The run is composed to stage its changes, as the engine's executor says it of a staging store.</summary>
+        public bool Stages { get; set; }
+
         public async Task ExecuteAsync(ServerRun run, IDecisionHandler decisions, CancellationToken ct)
         {
             (_decisions, _ct) = (decisions, ct);
+            if (Stages)
+                run.Session.Staging();
             var drained = run.Session.DrainAsync(_events.Reader.ReadAllAsync(ct), ct);
             _started.TrySetResult();
             await drained;

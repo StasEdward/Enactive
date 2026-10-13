@@ -120,6 +120,53 @@ public sealed class RunPanelTests
         panel.Apply(wrote("notes.md"));
         panel.Apply(wrote("REPORT.md"));
 
-        Assert.Equal(["report.md", "notes.md"], panel.ArtifactPaths);
+        Assert.Equal(["report.md", "notes.md"], panel.Files.Written);
+    }
+
+    /// <summary>
+    /// A staging run's ArtifactProduced is a proposal, not a file it wrote - as the window takes it (AddStagedArtifact).
+    /// Read as written, the service's page offered Review of the unchanged file on disk and Delete of the person's own.
+    /// Every event is told as a proposal, a repeated path too: the window shows one card per change the store kept.
+    /// </summary>
+    [Fact]
+    public void A_staging_run_s_files_are_proposed_not_written()
+    {
+        var panel = new RunPanel(ReachOf);
+        panel.Files.Stages = true;
+        Func<string, WorkEvent> made = path => Event(EventKind.ArtifactProduced, "Wrote: " + path,
+            WorkEventPayload.ArtifactPayload("document", path));
+
+        Assert.Equal(new FileNews.Staged("notes.md"), panel.Files.Apply(made("notes.md")));
+        Assert.Equal(new FileNews.Staged("notes.md"), panel.Files.Apply(made("notes.md")));
+        Assert.True(panel.Apply(Event(EventKind.ArtifactProduced, "Wrote: old.md")));
+
+        Assert.Empty(panel.Files.Written);
+        Assert.Equal(["notes.md", "old.md"], panel.Files.Staged);
+        Assert.Equal(2, panel.Artifacts);
+    }
+
+    /// <summary>
+    /// A rejected step's files are put back: the written ones its event names are marked, as the window marks their cards,
+    /// and only those - the paths are the payload's values, never read out of the sentence. They stay among the files
+    /// written (the card is still there, saying put back), and a later write to the same path makes no second card.
+    /// </summary>
+    [Fact]
+    public void Files_a_rejected_step_wrote_are_put_back()
+    {
+        var panel = new RunPanel(ReachOf);
+        Func<string, WorkEvent> wrote = path => Event(EventKind.ArtifactProduced, "Wrote: " + path,
+            WorkEventPayload.ArtifactPayload("document", path));
+        panel.Apply(wrote("report.md"));
+        panel.Apply(wrote("notes.md"));
+
+        var news = panel.Files.Apply(Event(EventKind.ArtifactReverted, "put back: REPORT.md; NOT put back: notes.md",
+            WorkEventPayload.RevertPayload(1, ["REPORT.md", "elsewhere.md"], ["notes.md"])));
+
+        Assert.Equal(["REPORT.md", "elsewhere.md"], Assert.IsType<FileNews.Reverted>(news).Paths);
+        Assert.Equal(["report.md"], panel.Files.Reverted);
+        Assert.True(panel.Files.IsReverted("report.md"));
+        Assert.False(panel.Files.IsReverted("notes.md"));
+        Assert.Equal(["report.md", "notes.md"], panel.Files.Written);
+        Assert.IsType<FileNews.None>(panel.Files.Apply(wrote("report.md")));
     }
 }
