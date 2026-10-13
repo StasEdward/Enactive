@@ -171,7 +171,7 @@ internal sealed class RunSession
             foreach (var watcher in watchers)
                 watcher.Complete();
             if (watchers.Any(w => w.Watcher is not null))
-                WatchersChanged?.Invoke();
+                Listeners.Tell(WatchersChanged, "who watches a run");
             _ended.TrySetResult();
         }
     }
@@ -207,7 +207,7 @@ internal sealed class RunSession
                 _watchers.RemoveAll(dropped.Contains);
         }
         if (dropped?.Any(w => w.Watcher is not null) == true)
-            WatchersChanged?.Invoke();
+            Listeners.Tell(WatchersChanged, "who watches a run");
     }
 
     /// <summary>
@@ -240,7 +240,7 @@ internal sealed class RunSession
             _watchers.Add(subscription);
         }
         if (watcher is not null)
-            WatchersChanged?.Invoke();
+            Listeners.Tell(WatchersChanged, "who watches a run");
         return subscription;
     }
 
@@ -252,7 +252,7 @@ internal sealed class RunSession
             removed = _watchers.Remove(subscription);
         subscription.Complete();
         if (removed && subscription.Watcher is not null)
-            WatchersChanged?.Invoke();
+            Listeners.Tell(WatchersChanged, "who watches a run");
     }
 
     /// <summary>One watcher's feed of events.</summary>

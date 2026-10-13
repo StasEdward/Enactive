@@ -56,7 +56,7 @@ internal sealed class ServerStaging(UserStore users, KnownWorkspaces workspaces)
         Directory.CreateDirectory(folder);
         AtomicWrite.Replace(Path.Combine(folder, HeaderName), JsonSerializer.Serialize(new Header(owner, prompt, DateTimeOffset.Now)));
         _running[folder] = 0;
-        Changed?.Invoke();
+        Listeners.Tell(Changed, "the proposed changes");
         return folder;
     }
 
@@ -71,14 +71,14 @@ internal sealed class ServerStaging(UserStore users, KnownWorkspaces workspaces)
         if (pending == 0)
         {
             TryDelete(folder);
-            Changed?.Invoke();
+            Listeners.Tell(Changed, "the proposed changes");
             return;
         }
         var info = WorkspaceInfo.For(workspace);
         await InboxStoreFactory.Create(info).AppendAsync(new InboxItem(Guid.NewGuid(), info.Id, "result",
             title, $"{pending} proposed change(s) wait to be applied or rejected", runId ?? Guid.Empty,
             "unread", DateTimeOffset.UtcNow), CancellationToken.None);
-        Changed?.Invoke();
+        Listeners.Tell(Changed, "the proposed changes");
     }
 
     /// <summary>Every known workspace's kept proposals, newest first. Anybody signed in reads them, as the history.</summary>
@@ -136,7 +136,7 @@ internal sealed class ServerStaging(UserStore users, KnownWorkspaces workspaces)
         var (said, decided) = await DecideAsync(user, workspace, id, change, apply, ct);
         // Outside the set's lock (see Changed), and only for a decision that was made: a refusal changed nothing.
         if (decided)
-            Changed?.Invoke();
+            Listeners.Tell(Changed, "the proposed changes");
         return said;
     }
 
@@ -244,7 +244,7 @@ internal sealed class ServerStaging(UserStore users, KnownWorkspaces workspaces)
             }
         }
         if (dropped > 0)
-            Changed?.Invoke();
+            Listeners.Tell(Changed, "the proposed changes");
         return dropped;
     }
 

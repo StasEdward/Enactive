@@ -30,7 +30,7 @@ internal sealed class ServerRun
         Prompt = prompt;
         Ticket = ticket;
         Session = new RunSession(workspace, owner, RunLauncher.Title(prompt), reachOf);
-        Questions.Changed += () => Changed?.Invoke();
+        Questions.Changed += () => Listeners.Tell(Changed, "a run");
     }
 
     public Guid Id => Session.Id;
@@ -85,13 +85,13 @@ internal sealed class ServerRun
     /// <summary>It started, asked, was answered, ended. Raised on whatever thread it happened on.</summary>
     public event Action? Changed;
 
-    internal void Notify() => Changed?.Invoke();
+    internal void Notify() => Listeners.Tell(Changed, "a run");
 
     internal void End()
     {
         EndedAt ??= DateTimeOffset.UtcNow;
         _ended.TrySetResult();
-        Changed?.Invoke();
+        Listeners.Tell(Changed, "a run");
     }
 }
 

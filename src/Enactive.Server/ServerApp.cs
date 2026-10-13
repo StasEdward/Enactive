@@ -68,6 +68,8 @@ internal static class ServerApp
         adjust?.Invoke(builder);
 
         var app = builder.Build();
+        // A page's listener that throws is written where the service's own lines go (Runs.Listeners).
+        Runs.Listeners.Log = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(Runs.Listeners).FullName!);
 
         // First, before anything answers: the subnets, the origin, the Host header (NetworkGate).
         var gate = app.Services.GetRequiredService<NetworkGate>();

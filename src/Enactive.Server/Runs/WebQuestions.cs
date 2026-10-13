@@ -45,14 +45,14 @@ internal sealed class WebQuestions
     public void Answered(Guid question, string by, string answer)
     {
         _answered = new AnsweredQuestion(question, by, answer);
-        Changed?.Invoke();
+        Listeners.Tell(Changed, "a run's question");
     }
 
     /// <summary>Puts the question up for every page watching the run.</summary>
     public void Show(DecisionRequest request, IReadOnlyList<DecisionChoice> choices)
     {
         _pending = new WebQuestion(request, choices, DateTimeOffset.UtcNow);
-        Changed?.Invoke();
+        Listeners.Tell(Changed, "a run's question");
     }
 
     /// <summary>Takes THIS question down - a later one already up in its place stays.</summary>
@@ -61,7 +61,7 @@ internal sealed class WebQuestions
         if (_pending?.Request.Id == request.Id)
         {
             _pending = null;
-            Changed?.Invoke();
+            Listeners.Tell(Changed, "a run's question");
         }
     }
 }

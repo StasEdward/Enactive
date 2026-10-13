@@ -102,7 +102,7 @@ internal sealed class ServerInbox(UserStore users, KnownWorkspaces workspaces, I
         {
             return $"The inbox of {known.Name} could not be written just now, so the item is still unread. Try again in a moment.";
         }
-        Changed?.Invoke();
+        Listeners.Tell(Changed, "the inbox");
         return null;
     }
 
@@ -120,7 +120,7 @@ internal sealed class ServerInbox(UserStore users, KnownWorkspaces workspaces, I
             try { await _inboxOf(WorkspaceInfo.For(workspace.RootPath)).MarkAllReadAsync(ct); }
             catch (Exception) when (!ct.IsCancellationRequested) { /* see above */ }
         }
-        Changed?.Invoke();
+        Listeners.Tell(Changed, "the inbox");
         return null;
     }
 
@@ -167,7 +167,7 @@ internal sealed class ServerInbox(UserStore users, KnownWorkspaces workspaces, I
         {
             said += " The item could not be marked read just now.";
         }
-        Changed?.Invoke();
+        Listeners.Tell(Changed, "the inbox");
         return (said, carried);
     }
 
