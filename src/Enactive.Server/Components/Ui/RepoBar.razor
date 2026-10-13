@@ -54,9 +54,6 @@
     /// </summary>
     [Parameter] public int Reads { get; set; }
 
-    /// <summary>GitHub is asked at most this often unless the person clicks: a network call, and a strip is not worth a rate limit.</summary>
-    internal static readonly TimeSpan PullRequestEvery = TimeSpan.FromMinutes(2);
-
     /// <summary>
     /// A click asks GitHub again, but not more often than this. Each ask is a <c>gh pr view</c> started as the service's
     /// account against its GitHub sign-in, and anybody signed in - a Viewer too - can click: unthrottled, a few quick
@@ -64,14 +61,10 @@
     /// </summary>
     internal static readonly TimeSpan ClickedEvery = TimeSpan.FromSeconds(15);
 
-    /// <summary>Whether the pull request is asked about now, <paramref name="since"/> the last time it was.</summary>
-    internal static bool AsksPullRequest(bool clicked, TimeSpan since) => since >= (clicked ? ClickedEvery : PullRequestEvery);
-
-    private readonly Model _bar = new();
+    // The reading is the window's (RepoBar.ReadAsync), with the service's floor under a click.
+    private readonly Model _bar = new(ClickedEvery);
     private string? _root;
     private int _reads = -1;
-    private int _reading;
-    private DateTimeOffset _pullRequestReadAt = DateTimeOffset.MinValue;
     private readonly CancellationTokenSource _gone = new();
 
     protected override Task OnParametersSetAsync()
@@ -80,38 +73,19 @@
             return Task.CompletedTask;
         var moved = Root != _root;
         (_root, _reads) = (Root, Reads);
-        // Another folder's pull request is asked about at once: when this one's was last read says nothing about it.
+        // Another folder's pull request is asked about at once: when this one's was last asked says nothing about it.
         if (moved)
-            _pullRequestReadAt = DateTimeOffset.MinValue;
-        return ReadAsync(forcePullRequest: moved);
+            _bar.Moved();
+        return ReadAsync(forcePullRequest: false);
     }
 
-    /// <summary>
-    /// Reads the repository - and its pull request when two minutes have passed or the person asked. A read started after
-    /// this one wins, as the window's: a slow answer about the folder left behind must not overwrite the one now open.
-    /// </summary>
     private async Task ReadAsync(bool forcePullRequest)
     {
-        var read = ++_reading;
-        var root = _root;
         // Taken once: read from the source after the page left, it threw - the source is disposed with the page.
         var gone = _gone.Token;
         try
         {
-            var repo = root is null ? null : await RepoStatusReader.ReadAsync(root, gone);
-            if (read != _reading || gone.IsCancellationRequested)
-                return;
-            _bar.Show(repo);
-            StateHasChanged();
-            if (repo?.GitHub is null || !AsksPullRequest(forcePullRequest, DateTimeOffset.UtcNow - _pullRequestReadAt))
-                return;
-            _pullRequestReadAt = DateTimeOffset.UtcNow;
-            var pullRequest = await RepoStatusReader.ReadPullRequestAsync(repo, gone);
-            if (read == _reading && !gone.IsCancellationRequested)
-            {
-                _bar.ShowPullRequest(pullRequest);
-                StateHasChanged();
-            }
+            await _bar.ReadAsync(_root, forcePullRequest, StateHasChanged, gone);
         }
         catch (OperationCanceledException) when (gone.IsCancellationRequested)
         {

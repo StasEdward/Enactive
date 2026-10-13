@@ -18,6 +18,14 @@ public sealed class InboxRowsTests
     private static InboxItem Item(string status, DateTimeOffset at, string kind = "result")
         => new(Guid.NewGuid(), Guid.NewGuid(), kind, "digest", "done", Guid.NewGuid(), status, at);
 
+    /// <summary>The Inbox's name on the rail, which the window and the service's rail wrote each their own.</summary>
+    [Fact]
+    public void The_rail_names_the_inbox_with_what_is_unread()
+    {
+        Assert.Equal("Inbox", InboxRows.Tooltip(0));
+        Assert.Equal("Inbox — 3 unread", InboxRows.Tooltip(3));
+    }
+
     [Fact]
     public void Rows_are_newest_first_and_unread_is_the_item_s_status_in_any_case()
     {

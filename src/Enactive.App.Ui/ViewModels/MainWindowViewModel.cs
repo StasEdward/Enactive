@@ -441,7 +441,7 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     public bool HasUnread => InboxUnread > 0;
 
-    public string InboxTooltip => InboxUnread > 0 ? $"Inbox — {InboxUnread} unread" : "Inbox";
+    public string InboxTooltip => InboxRows.Tooltip(InboxUnread);
 
     public RelayCommand TimelineCommand { get; }
     public RelayCommand LogCommand { get; }

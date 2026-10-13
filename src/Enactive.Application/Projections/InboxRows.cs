@@ -61,6 +61,10 @@ internal static class InboxRows
     /// <summary>Whether the list shows this row: every row, or with "Unread only" the unread ones.</summary>
     public static bool Shows(InboxItemViewModel row, bool unreadOnly) => !unreadOnly || row.IsUnread;
 
+    /// <summary>The Inbox's name on the rail: "Inbox — 3 unread" while any are, else "Inbox". Every host's rail says it so.</summary>
+    public static string Tooltip(int unread)
+        => unread > 0 ? string.Create(CultureInfo.InvariantCulture, $"Inbox — {unread} unread") : "Inbox";
+
     /// <summary>The line beside the buttons: how many are unread, of how many.</summary>
     public static string Status(int unread, int total)
         => total == 0

@@ -113,9 +113,6 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     private DispatcherTimer? _scheduleTick;
     private int _scheduleTicking;
     private static readonly TimeSpan ScheduleTickEvery = TimeSpan.FromMinutes(1);
-    private DateTimeOffset _pullRequestReadAt = DateTimeOffset.MinValue;
-    private int _repoReads;
-    private static readonly TimeSpan PullRequestEvery = TimeSpan.FromMinutes(2);
     private string _currentWorkspaceRoot = string.Empty;
     private readonly WorkspaceRegistry _registry = WorkspaceRegistry.Load(deferWrites: true);
 
@@ -652,24 +649,11 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     /// </summary>
     /// <summary>The open workspace as a full path, or null when the box is empty.</summary>
     /// <summary>
-    /// Reads the workspace's repository into the strip - and its pull request, when two minutes have passed since it was
-    /// last asked or the person asked by clicking. A read started after this one wins: a slow answer about the folder
-    /// left behind must not overwrite the one now open.
+    /// Reads the workspace's repository into the strip, as every host reads it (RepoBar.ReadAsync): its pull request when
+    /// two minutes have passed since it was last asked, or whenever the person asked by clicking.
     /// </summary>
-    private async Task RefreshRepoAsync(bool forcePullRequest = false)
-    {
-        var read = ++_repoReads;
-        var root = WorkspaceRootOrNull();
-        var repo = root is null ? null : await RepoStatusReader.ReadAsync(root, CancellationToken.None);
-        if (read != _repoReads) return;
-        _vm.Repo.Show(repo);
-        if (repo?.GitHub is null || (!forcePullRequest && DateTimeOffset.UtcNow - _pullRequestReadAt < PullRequestEvery))
-            return;
-        _pullRequestReadAt = DateTimeOffset.UtcNow;
-        var pullRequest = await RepoStatusReader.ReadPullRequestAsync(repo, CancellationToken.None);
-        if (read == _repoReads)
-            _vm.Repo.ShowPullRequest(pullRequest);
-    }
+    private Task RefreshRepoAsync(bool forcePullRequest = false)
+        => _vm.Repo.ReadAsync(WorkspaceRootOrNull(), forcePullRequest);
 
     /// <summary>Opens a pull request's page in the browser - only a github.com address, which is what the strip shows.</summary>
     private void OpenRepoPage(string? url)

@@ -10,12 +10,41 @@ using Enactive.Workspace;
 /// of the folder's history without leaving the window. Read-only: nothing here changes the repository.
 ///
 /// <para>Moved from the window (it was RepoBarViewModel), unchanged, so the service's live run shows the same strip from
-/// the same reading of the repository - a second copy of what "↑2 ↓1" or "no changes" means would drift.</para>
+/// the same reading of the repository - a second copy of what "↑2 ↓1" or "no changes" means would drift. So is the
+/// reading itself (<see cref="ReadAsync"/>): which read wins and how often GitHub is asked were written once in the window
+/// and again in the service's strip.</para>
 /// </summary>
 internal sealed class RepoBar : ObservableObject
 {
+    /// <summary>GitHub is asked at most this often unless the person asks: a network call, and a strip is not worth a rate limit.</summary>
+    public static readonly TimeSpan PullRequestEvery = TimeSpan.FromMinutes(2);
+
+    private readonly TimeSpan _askedEvery;
+    private readonly Func<string, CancellationToken, Task<RepoStatus?>> _read;
+    private readonly Func<RepoStatus, CancellationToken, Task<PullRequestStatus?>> _readPullRequest;
+    private readonly TimeProvider _clock;
     private RepoStatus? _repo;
     private PullRequestStatus? _pullRequest;
+    private int _reads;
+    private DateTimeOffset _pullRequestReadAt = DateTimeOffset.MinValue;
+
+    /// <param name="askedEvery">
+    /// How often a read the person asked for (a click) may ask GitHub: zero, every time - the window's, whose person is the
+    /// only one at it. A host where anybody signed in can click (the service, as its own account) gives a floor.
+    /// </param>
+    /// <param name="read">Reads the repository; git, unless a test stands in for it.</param>
+    /// <param name="readPullRequest">Asks GitHub about the branch's pull request; gh, unless a test stands in for it.</param>
+    /// <param name="clock">The time, for how long ago GitHub was asked; a test's own.</param>
+    public RepoBar(TimeSpan askedEvery = default,
+        Func<string, CancellationToken, Task<RepoStatus?>>? read = null,
+        Func<RepoStatus, CancellationToken, Task<PullRequestStatus?>>? readPullRequest = null,
+        TimeProvider? clock = null)
+    {
+        _askedEvery = askedEvery;
+        _read = read ?? RepoStatusReader.ReadAsync;
+        _readPullRequest = readPullRequest ?? RepoStatusReader.ReadPullRequestAsync;
+        _clock = clock ?? TimeProvider.System;
+    }
 
     /// <summary>Whether there is a repository to show. Not in one, or without git, the strip is not there.</summary>
     public bool IsVisible => _repo is not null;
@@ -81,6 +110,39 @@ internal sealed class RepoBar : ObservableObject
            && uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
             ? uri
             : null;
+
+    /// <summary>Whether GitHub is asked now, <paramref name="since"/> it last was - asked for by the person, or not.</summary>
+    public bool AsksPullRequest(bool asked, TimeSpan since) => since >= (asked ? _askedEvery : PullRequestEvery);
+
+    /// <summary>
+    /// The strip is another folder's now: its pull request is asked about at the next read, as when GitHub was last asked
+    /// says nothing about this one.
+    /// </summary>
+    public void Moved() => _pullRequestReadAt = DateTimeOffset.MinValue;
+
+    /// <summary>
+    /// Reads the repository of <paramref name="root"/> into the strip - and its pull request when two minutes have passed
+    /// since GitHub was last asked, or the person asked (<paramref name="asked"/>) and the host's floor allows. A read
+    /// started after this one wins: a slow answer about the folder left behind must not overwrite the one now open.
+    /// <paramref name="drawn"/> is called each time the strip changed, on the caller's context - the awaits here keep it.
+    /// </summary>
+    public async Task ReadAsync(string? root, bool asked, Action? drawn = null, CancellationToken ct = default)
+    {
+        var read = ++_reads;
+        var repo = root is null ? null : await _read(root, ct);
+        if (read != _reads || ct.IsCancellationRequested)
+            return;
+        Show(repo);
+        drawn?.Invoke();
+        if (repo?.GitHub is null || !AsksPullRequest(asked, _clock.GetUtcNow() - _pullRequestReadAt))
+            return;
+        _pullRequestReadAt = _clock.GetUtcNow();
+        var pullRequest = await _readPullRequest(repo, ct);
+        if (read != _reads || ct.IsCancellationRequested)
+            return;
+        ShowPullRequest(pullRequest);
+        drawn?.Invoke();
+    }
 
     /// <summary>The repository as it now stands - or null, and the strip goes. A different repository forgets the pull request.</summary>
     public void Show(RepoStatus? repo)

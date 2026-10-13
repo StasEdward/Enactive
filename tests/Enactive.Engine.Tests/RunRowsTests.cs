@@ -27,6 +27,19 @@ public sealed class RunRowsTests
     public void The_delete_button_says_how_many_it_takes()
         => Assert.Equal("Delete these 3", RunRows.DeleteShown(3));
 
+    /// <summary>
+    /// The RUNS line, which the window's column and the service's said separately: none, a count, and both numbers under a
+    /// filter - "3 runs" over a list of 37 reads as the whole truth.
+    /// </summary>
+    [Fact]
+    public void The_runs_line_says_how_many_are_shown_of_how_many()
+    {
+        Assert.Equal("No runs recorded in this workspace.", RunRows.Status(0, 0));
+        Assert.Equal("1 run", RunRows.Status(1, 1));
+        Assert.Equal("37 runs", RunRows.Status(37, 37));
+        Assert.Equal("3 of 37 runs", RunRows.Status(3, 37));
+    }
+
     /// <summary>A folder that is gone is red even where you are: being gone is the thing to see.</summary>
     [Theory]
     // By name: WorkspacePlace is internal, and a public test method cannot take it.

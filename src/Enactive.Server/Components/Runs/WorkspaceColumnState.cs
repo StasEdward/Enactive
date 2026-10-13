@@ -89,12 +89,8 @@ internal sealed class WorkspaceColumnState(ServerHistory history, IRunControl ru
 
     public bool CanDelete => Shown.Count > 0;
 
-    /// <summary>"3 runs", or "3 of 37 runs" under a filter - a count alone over a filtered list reads as the whole truth.</summary>
-    public string Status => All.Count == 0
-        ? "No runs recorded in this workspace."
-        : Rows.Count == All.Count
-            ? $"{Rows.Count} run{(Rows.Count == 1 ? "" : "s")}"
-            : $"{Rows.Count} of {All.Count} runs";
+    /// <summary>"3 runs", or "3 of 37 runs" under a filter, as the window's (RunRows.Status).</summary>
+    public string Status => RunRows.Status(Rows.Count, All.Count);
 
     /// <summary>
     /// The workspace an address names by its id, among <paramref name="known"/> (the ones this person may read), or -

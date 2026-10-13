@@ -103,4 +103,67 @@ public sealed class RepoBarTests
     [InlineData(null, false)]
     public void Only_a_github_page_over_https_is_opened(string? url, bool opened)
         => Assert.Equal(opened, RepoBar.GitHubPage(url) is not null);
+
+    /// <summary>
+    /// The reading both hosts do, in one place: a read started after another wins - a slow answer about the folder left
+    /// behind must not overwrite the one now open. It was written in the window and again in the service's strip.
+    /// </summary>
+    [Fact]
+    public async Task A_read_started_later_wins_over_a_slower_one()
+    {
+        var slow = new TaskCompletionSource<RepoStatus?>();
+        var bar = new RepoBar(read: (root, _) => root == "left" ? slow.Task : Task.FromResult<RepoStatus?>(Repo(branch: "open")),
+            readPullRequest: (_, _) => Task.FromResult<PullRequestStatus?>(null));
+
+        var left = bar.ReadAsync("left", asked: false);
+        await bar.ReadAsync("open", asked: false);
+        slow.SetResult(Repo(branch: "left-behind"));
+        await left;
+
+        Assert.Equal("open", bar.Branch);
+    }
+
+    /// <summary>
+    /// GitHub is asked at most every two minutes while nobody asks; a click asks at once in the window (its floor is
+    /// zero - one person at it), and not more often than the host's floor where it has one. Another folder is asked about
+    /// at once (Moved).
+    /// </summary>
+    [Fact]
+    public async Task Github_is_asked_every_two_minutes_and_on_a_click_above_the_host_s_floor()
+    {
+        var clock = new Clock();
+        var asked = 0;
+        RepoBar Bar(TimeSpan floor) => new(floor, (_, _) => Task.FromResult<RepoStatus?>(Repo()),
+            (_, _) => { asked++; return Task.FromResult<PullRequestStatus?>(new PullRequestStatus(7, "https://github.com/o/r/pull/7", 1, 1, CiState.Passing)); },
+            clock);
+
+        var window = Bar(TimeSpan.Zero);
+        await window.ReadAsync("w", asked: false);
+        Assert.Equal((1, "#7"), (asked, window.PullRequest));
+        await window.ReadAsync("w", asked: false);
+        Assert.Equal(1, asked);
+        await window.ReadAsync("w", asked: true);
+        Assert.Equal(2, asked);
+        clock.Now += RepoBar.PullRequestEvery;
+        await window.ReadAsync("w", asked: false);
+        Assert.Equal(3, asked);
+
+        asked = 0;
+        var service = Bar(TimeSpan.FromSeconds(15));
+        await service.ReadAsync("w", asked: false);
+        await service.ReadAsync("w", asked: true);
+        Assert.Equal(1, asked);
+        clock.Now += TimeSpan.FromSeconds(15);
+        await service.ReadAsync("w", asked: true);
+        Assert.Equal(2, asked);
+        service.Moved();
+        await service.ReadAsync("elsewhere", asked: false);
+        Assert.Equal(3, asked);
+    }
+
+    private sealed class Clock : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = new(2026, 10, 13, 9, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
 }

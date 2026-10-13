@@ -104,7 +104,7 @@
             @{
                 var on = item.IsIn(CurrentPath);
                 var inbox = item.Href == "/inbox" && _unread > 0;
-                var label = inbox ? $"Inbox — {_unread.ToString(CultureInfo.InvariantCulture)} unread" : item.Label;
+                var label = inbox ? Enactive.Application.Projections.InboxRows.Tooltip(_unread) : item.Label;
             }
             <a class="@("rail-item" + (on ? " on" : ""))" href="@item.Link" data-rail="@item.Href" aria-label="@label" title="@label"
                aria-current="@(on ? "page" : null)">

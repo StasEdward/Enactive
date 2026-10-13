@@ -506,13 +506,7 @@ internal sealed class RunsViewModel : ObservableObject
                 item => DeleteRequested?.Invoke(item.Record),
                 row.Attempts, row.IsLead, _expanded.Contains(RunHousekeeping.GroupKey(row.Run)), Toggle));
 
-        Status = records.Count == 0
-            ? "No runs recorded in this workspace."
-            : Items.Count == records.Count
-                ? $"{Items.Count} run{(Items.Count == 1 ? "" : "s")}"
-                // Both numbers when a filter is on. "3 runs" over a list that holds 37 is a true
-                // sentence that reads as the whole truth.
-                : $"{Items.Count} of {records.Count} runs";
+        Status = RunRows.Status(Items.Count, records.Count);
 
         OnPropertyChanged(nameof(Shown));
         OnPropertyChanged(nameof(DeleteShownLabel));

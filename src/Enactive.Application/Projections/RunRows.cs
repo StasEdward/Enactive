@@ -1,5 +1,6 @@
 namespace Enactive.Application.Projections;
 
+using System.Globalization;
 using Enactive.Core.History;
 
 /// <summary>
@@ -19,6 +20,17 @@ internal static class RunRows
     /// Named with the COUNT, so the button says how much it destroys before it is pressed rather than in a dialog after it.
     /// </summary>
     public static string DeleteShown(int count) => $"Delete these {count}";
+
+    /// <summary>
+    /// The RUNS line: "No runs recorded in this workspace.", "3 runs", or both numbers under a filter - "3 of 37 runs":
+    /// "3 runs" over a list that holds 37 is a true sentence that reads as the whole truth. Every host's column says it so.
+    /// </summary>
+    public static string Status(int shown, int total)
+        => total == 0
+            ? "No runs recorded in this workspace."
+            : shown == total
+                ? string.Create(CultureInfo.InvariantCulture, $"{shown} run{(shown == 1 ? "" : "s")}")
+                : string.Create(CultureInfo.InvariantCulture, $"{shown} of {total} runs");
 
     /// <summary>A finished run's second line: when, and what came of it.</summary>
     public static string Meta(RunSummary record) => $"{Ago(record.StartedAt)} · {Outcome(record)}";
