@@ -174,6 +174,9 @@ internal static class ServerApp
         // window probes its own.
         services.AddSingleton<Enactive.Application.ProbeEnvironment>(new Enactive.Workspace.EnvironmentProbe().ProbeFullAsync);
         services.AddSingleton<Runs.ServerReports>();
+        // The repository strips' reading, one for the service: GitHub is asked about a folder's branch at most every 15 s
+        // by every page together, not by each page on its own (Ui/RepoReads).
+        services.AddSingleton(_ => new Components.Ui.RepoReads());
         // The live run's page moves its clock every second while the run goes (Runs/LiveRun).
         services.AddSingleton(Components.Runs.LiveRunClock.EverySecond);
         services.AddHostedService<Runs.RunsStopWithTheService>();

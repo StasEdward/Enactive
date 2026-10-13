@@ -21,7 +21,7 @@ internal sealed class RepoBar : ObservableObject
 
     private readonly TimeSpan _askedEvery;
     private readonly Func<string, CancellationToken, Task<RepoStatus?>> _read;
-    private readonly Func<RepoStatus, CancellationToken, Task<PullRequestStatus?>> _readPullRequest;
+    private readonly Func<string, RepoStatus, CancellationToken, Task<PullRequestStatus?>> _readPullRequest;
     private readonly TimeProvider _clock;
     private RepoStatus? _repo;
     private PullRequestStatus? _pullRequest;
@@ -33,16 +33,19 @@ internal sealed class RepoBar : ObservableObject
     /// only one at it. A host where anybody signed in can click (the service, as its own account) gives a floor.
     /// </param>
     /// <param name="read">Reads the repository; git, unless a test stands in for it.</param>
-    /// <param name="readPullRequest">Asks GitHub about the branch's pull request; gh, unless a test stands in for it.</param>
+    /// <param name="readPullRequest">
+    /// Asks GitHub about the pull request of the branch of the folder (the first argument); gh, unless a host shares its
+    /// asking between strips (the service's, one clock for every page) or a test stands in for it.
+    /// </param>
     /// <param name="clock">The time, for how long ago GitHub was asked; a test's own.</param>
     public RepoBar(TimeSpan askedEvery = default,
         Func<string, CancellationToken, Task<RepoStatus?>>? read = null,
-        Func<RepoStatus, CancellationToken, Task<PullRequestStatus?>>? readPullRequest = null,
+        Func<string, RepoStatus, CancellationToken, Task<PullRequestStatus?>>? readPullRequest = null,
         TimeProvider? clock = null)
     {
         _askedEvery = askedEvery;
         _read = read ?? RepoStatusReader.ReadAsync;
-        _readPullRequest = readPullRequest ?? RepoStatusReader.ReadPullRequestAsync;
+        _readPullRequest = readPullRequest ?? ((_, repo, ct) => RepoStatusReader.ReadPullRequestAsync(repo, ct));
         _clock = clock ?? TimeProvider.System;
     }
 
@@ -134,10 +137,10 @@ internal sealed class RepoBar : ObservableObject
             return;
         Show(repo);
         drawn?.Invoke();
-        if (repo?.GitHub is null || !AsksPullRequest(asked, _clock.GetUtcNow() - _pullRequestReadAt))
+        if (root is null || repo?.GitHub is null || !AsksPullRequest(asked, _clock.GetUtcNow() - _pullRequestReadAt))
             return;
         _pullRequestReadAt = _clock.GetUtcNow();
-        var pullRequest = await _readPullRequest(repo, ct);
+        var pullRequest = await _readPullRequest(root, repo, ct);
         if (read != _reads || ct.IsCancellationRequested)
             return;
         ShowPullRequest(pullRequest);

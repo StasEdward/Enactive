@@ -113,7 +113,7 @@ public sealed class RepoBarTests
     {
         var slow = new TaskCompletionSource<RepoStatus?>();
         var bar = new RepoBar(read: (root, _) => root == "left" ? slow.Task : Task.FromResult<RepoStatus?>(Repo(branch: "open")),
-            readPullRequest: (_, _) => Task.FromResult<PullRequestStatus?>(null));
+            readPullRequest: (_, _, _) => Task.FromResult<PullRequestStatus?>(null));
 
         var left = bar.ReadAsync("left", asked: false);
         await bar.ReadAsync("open", asked: false);
@@ -134,7 +134,7 @@ public sealed class RepoBarTests
         var clock = new Clock();
         var asked = 0;
         RepoBar Bar(TimeSpan floor) => new(floor, (_, _) => Task.FromResult<RepoStatus?>(Repo()),
-            (_, _) => { asked++; return Task.FromResult<PullRequestStatus?>(new PullRequestStatus(7, "https://github.com/o/r/pull/7", 1, 1, CiState.Passing)); },
+            (_, _, _) => { asked++; return Task.FromResult<PullRequestStatus?>(new PullRequestStatus(7, "https://github.com/o/r/pull/7", 1, 1, CiState.Passing)); },
             clock);
 
         var window = Bar(TimeSpan.Zero);

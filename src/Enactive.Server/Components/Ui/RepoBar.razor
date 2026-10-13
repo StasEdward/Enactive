@@ -1,6 +1,7 @@
 @using Enactive.Workspace
 @using Model = Enactive.Application.Projections.RepoBar
 @implements IDisposable
+@inject RepoReads Reading
 
 @* The window's repository strip, at the foot of the run (MainWindow.axaml 1262-1310): the branch's pull request with its
    checks when GitHub can be asked, then the repository, the branch, how far from its upstream, and what is not committed
@@ -57,15 +58,20 @@
     /// <summary>
     /// A click asks GitHub again, but not more often than this. Each ask is a <c>gh pr view</c> started as the service's
     /// account against its GitHub sign-in, and anybody signed in - a Viewer too - can click: unthrottled, a few quick
-    /// clicks were as many processes on the server and as many calls against the service's rate limit.
+    /// clicks were as many processes on the server and as many calls against the service's rate limit. The strip's own
+    /// floor; the service's, which a reload or another tab does not reset, is RepoReads'.
     /// </summary>
-    internal static readonly TimeSpan ClickedEvery = TimeSpan.FromSeconds(15);
+    internal static readonly TimeSpan ClickedEvery = RepoReads.AskedEvery;
 
-    // The reading is the window's (RepoBar.ReadAsync), with the service's floor under a click.
-    private readonly Model _bar = new(ClickedEvery);
+    // The reading is the window's (RepoBar.ReadAsync), with the service's floor under a click - and every ask of GitHub
+    // through the one place all pages share (RepoReads), as this strip's clock goes with the page.
+    private Model _bar = null!;
     private string? _root;
     private int _reads = -1;
     private readonly CancellationTokenSource _gone = new();
+
+    protected override void OnInitialized()
+        => _bar = new Model(ClickedEvery, Reading.ReadAsync, Reading.PullRequestAsync, Reading.Clock);
 
     protected override Task OnParametersSetAsync()
     {
