@@ -131,10 +131,12 @@ internal static class ServerApp
         // One log for the process: the service's own lines and the engine's, kept recent in memory for the log page and
         // written to the daily file. They were two - the page would have shown the engine and not the request that
         // started its run.
-        var logFile = new FileLogSink(Path.Combine(dataFolder, "logs", "server"));
-        var log = new LogHub(minLevel: Enactive.Core.Diagnostics.LogLevel.Debug, downstream: [logFile]);
-        services.AddSingleton(logFile);
-        services.AddSingleton(log);
+        // Made by the container, not handed to it ready-made: the container disposes only what it made, and at the
+        // service's stop the hub then drains its pump into the file and the file is closed. Registered as instances, the
+        // last lines before a stop were lost and the file stayed open to the end of the process.
+        services.AddSingleton(_ => new FileLogSink(Path.Combine(dataFolder, "logs", "server")));
+        services.AddSingleton(sp => new LogHub(minLevel: Enactive.Core.Diagnostics.LogLevel.Debug,
+            downstream: [sp.GetRequiredService<FileLogSink>()]));
         // The keys that protect sign-in cookies and the antiforgery tokens: in the service's data folder, encrypted
         // for its account. Left to the default they went into the profile's ASP.NET folder, apart from everything else
         // the service keeps and from its backups.

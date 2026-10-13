@@ -20,6 +20,11 @@ public abstract class ComponentHost : BunitContext
 {
     private const string Password = "correct horse battery";
 
+    // Every wait for a page to draw (WaitForAssertion, WaitForState) gets 10 s, once for all the page tests. bUnit's own
+    // second was enough alone and not under a full parallel run, where pages that read on a thread of their own failed
+    // for having taken a little longer.
+    static ComponentHost() => DefaultWaitTimeout = TimeSpan.FromSeconds(10);
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), "enactive-components", Guid.NewGuid().ToString("N"));
     private readonly SignedIn _signedIn = new();
 

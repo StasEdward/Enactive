@@ -15,12 +15,19 @@ internal sealed class ServerEngine : IDisposable
     private readonly HttpClient _http = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
     private readonly LogHub _log;
     private readonly object _gate = new();
+
+    /// <summary>The hub this engine made for itself (a test's), which it disposes; the service's is the container's.</summary>
+    private readonly LogHub? _ownLog;
     private (ComposedEngine? Engine, string? Problem, AppSettings Settings) _now;
 
-    /// <summary>A test's: an engine with a log of its own, into this file.</summary>
+    /// <summary>
+    /// A test's: an engine with a log of its own, into this file - closed with the engine. Left open, every test's log
+    /// file kept its temp folder from being deleted.
+    /// </summary>
     public ServerEngine(string dataFolder, FileLogSink logFile)
         : this(dataFolder, new LogHub(minLevel: Core.Diagnostics.LogLevel.Debug, downstream: [logFile]))
     {
+        _ownLog = _log;
     }
 
     /// <param name="log">The service's one log - its own lines and the engine's, so a run and the request that started it read in one place.</param>
@@ -126,5 +133,9 @@ internal sealed class ServerEngine : IDisposable
     /// </summary>
     public Core.Diagnostics.LogLevel NormalLogLevel { get; }
 
-    public void Dispose() => _http.Dispose();
+    public void Dispose()
+    {
+        _http.Dispose();
+        _ownLog?.Dispose();
+    }
 }

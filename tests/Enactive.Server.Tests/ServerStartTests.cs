@@ -175,6 +175,29 @@ public sealed class ServerStartTests : IDisposable
         Assert.Equal("svc-enactive", holder?.User);
     }
 
+    /// <summary>
+    /// The service's log, as the container keeps it: written out and closed when the service stops. Registered ready-made,
+    /// the container never disposed it - the hub's last lines were never pumped into the file, and the file stayed open, so
+    /// the data folder could not even be deleted.
+    /// </summary>
+    [Fact]
+    public void The_service_s_log_is_written_out_and_closed_when_it_stops()
+    {
+        var data = Path.Combine(_root, "data");
+        var services = new ServiceCollection();
+        ServerApp.AddServices(services, new ServerOptions(), data);
+        var provider = services.BuildServiceProvider();
+
+        Enactive.Core.Diagnostics.LogSinkExtensions.Info(provider.GetRequiredService<Enactive.Workspace.LogHub>(),
+            Enactive.Core.Diagnostics.LogSource.Host, "the last line before a stop");
+        provider.Dispose();
+
+        var file = Assert.Single(Directory.GetFiles(Path.Combine(data, "logs", "server"), "enactive-*.log"));
+        Assert.Contains("the last line before a stop", File.ReadAllText(file));
+        Enactive.Tests.SqlitePools.ClearUnder(data);
+        Directory.Delete(data, recursive: true);
+    }
+
     // ── the pipeline ────────────────────────────────────────────────────────
 
     /// <summary>The test server leaves the client's address empty; the gate is NetworkGateTests' to test.</summary>

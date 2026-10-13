@@ -20,7 +20,9 @@ public sealed class ServerRunScopeTests
     {
         public async Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
         {
-            await Task.Run(() => bothIn.SignalAndWait(TimeSpan.FromSeconds(10)), ct);
+            // Asserted: unchecked, a barrier that timed out let the calls through one after the other, and the test passed
+            // without the overlap it is about.
+            Assert.True(await Task.Run(() => bothIn.SignalAndWait(TimeSpan.FromSeconds(10)), ct), "The two calls were never in flight together.");
             return new ChatCompletion(ChatMessage.Assistant("done"), "stop", 100, 20);
         }
 
