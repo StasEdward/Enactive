@@ -406,7 +406,11 @@ public sealed class CommandBarTests : ComponentHost
 
         var run = Runs.Start(As("alice"), workspace.RootPath, "write the digest").Run!;
         var busy = Bar("alice", workspace, run.Id);
-        Assert.Equal(Enactive.Application.RunButton.Tip(busy: true), Button(busy, "Run").GetAttribute("title"));
+        Assert.Equal(Enactive.Application.RunButton.Tip(busy: true, CommandBarState.RunHeld), Button(busy, "Run").GetAttribute("title"));
+        // The window's reason is not the service's: the bar is held by the run open under it alone, and greys Run in
+        // background too.
+        Assert.DoesNotContain("one foreground run at a time", Button(busy, "Run").GetAttribute("title"));
+        Assert.DoesNotContain("not held by it", Button(busy, "Run").GetAttribute("title"));
     }
 
     /// <summary>

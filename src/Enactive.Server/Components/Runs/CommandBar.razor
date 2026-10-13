@@ -49,7 +49,7 @@
 
             <div class="run-buttons">
                 <div class="run-pair">
-                    <button type="button" class="btn go run" title="@RunButton.Tip(busy)" disabled="@busy"
+                    <button type="button" class="btn go run" title="@RunButton.Tip(busy, CommandBarState.RunHeld)" disabled="@busy"
                             @onclick="RunAsync">Run</button>
                     @* Stop throws away work that is half done - the same act as Reject, so the danger colour; outlined, so it is
                        found without competing with Run. *@

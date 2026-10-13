@@ -16,6 +16,14 @@ using Enactive.Workspace;
 /// </summary>
 internal sealed class CommandBarState(IRunControl runs, ServerHistory history, ClaimsPrincipal user)
 {
+    /// <summary>
+    /// Why the bar's Run is greyed (RunButton.Tip): the run open under it holds it, and only that one - the service takes
+    /// every other run in its line, so the window's "one foreground run at a time" was untrue here, and so was "Run in
+    /// background is not held by it": the bar greys that too.
+    /// </summary>
+    public const string RunHeld =
+        "Run is held by the run open below until it ends. A run started from another workspace, or by somebody else, waits its turn in the service's line meanwhile.";
+
     private string _root = "";
     private WorkspaceEntry? _workspace;
 

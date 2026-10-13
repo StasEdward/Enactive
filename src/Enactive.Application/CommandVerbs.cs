@@ -26,12 +26,19 @@ public static class CommandVerbs
 public static class RunButton
 {
     /// <summary>
-    /// Why Run is greyed, when it is (<paramref name="busy"/>): a run holds the foreground, and once a person can walk away
-    /// from it the reason stops being obvious - the run holding Run may be in a workspace that is not on screen.
+    /// Why the window greys Run: it runs one foreground run at a time, and once a person can walk away from it the reason
+    /// stops being obvious - the run holding Run may be in a workspace that is not on screen.
     /// </summary>
-    public static string Tip(bool busy)
+    public const string OneForegroundRun =
+        "Enactive runs one foreground run at a time, and that run may be in another workspace. Run in background is not held by it.";
+
+    /// <summary>
+    /// What Run says, and - when it is greyed (<paramref name="busy"/>) - why, in the host's own words
+    /// (<paramref name="heldBecause"/>): what holds Run is the host's. The window's reason was every host's, and on the
+    /// service, whose bar is held only by the run open under it while other runs wait in the service's line, it was untrue.
+    /// </summary>
+    public static string Tip(bool busy, string heldBecause = OneForegroundRun)
         => busy
-            ? "A run is already in progress. Enactive runs one foreground run at a time, and that "
-              + "run may be in another workspace. Run in background is not held by it."
+            ? "A run is already in progress. " + heldBecause
             : "Run this here, and watch it.";
 }
