@@ -779,6 +779,7 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .settings-editor-column input:not([type="checkbox"]), .settings-editor-column textarea, .settings-editor-column select { width: 100%; box-sizing: border-box; }
 .settings-editor-column .label { margin: 6px 0 0; }
 .settings-editor-status { white-space: pre-line; color: var(--text-body); margin: 8px 0 0; }
+.settings-test .settings-editor-status { margin: 0; }
 .settings-fetch { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .settings-test, .settings-checks { display: flex; align-items: center; gap: 8px 24px; flex-wrap: wrap; }
 .settings-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

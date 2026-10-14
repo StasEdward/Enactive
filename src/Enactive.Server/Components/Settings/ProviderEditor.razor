@@ -138,12 +138,13 @@
                     <button type="button" class="btn" title="Ask this provider for its model list, and check that the first model above is among them"
                             @onclick="() => Editor.TestCommand.ExecuteAsync()">Test</button>
                     <span class="@($"health-dot {Looks.Health(Editor.Health)}")" role="img" aria-label="@Editor.Health.ToString()"></span>
+                    @* What Test or Fetch answered, beside the light it lit: under the dialog's two columns it was read far
+                       from the button that asked. *@
+                    <span class="hint settings-editor-status" role="status">@Editor.Status</span>
                 </div>
             </div>
         </div>
 
-        <p class="hint settings-editor-status" role="status">@Editor.Status</p>
-        <p class="hint">Apply puts this back in Settings. It is written to disk when you press Save there - Cancel there discards it.</p>
     </ChildContent>
     <Actions>
         <button type="button" class="btn primary" @onclick="() => Editor.SaveCommand.Execute(null)">Apply</button>

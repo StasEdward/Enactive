@@ -537,6 +537,16 @@ test('settings show their short values in short boxes, six to a row on a wide sc
   const url = await editor.getByLabel('Base URL', { exact: true }).boundingBox();
   expect(Math.abs(models.x - contextWindow.x)).toBeLessThanOrEqual(1);
   expect(models.x).toBeGreaterThan(url.x + url.width);
+  // What Test answered is said beside the button and its light, not under the dialog's columns; and the dialog says
+  // nothing of Apply and Save under its buttons.
+  await editor.getByRole('button', { name: 'Test', exact: true }).click();
+  const said = editor.getByRole('status');
+  await expect(said).not.toHaveText('');
+  const test = await editor.getByRole('button', { name: 'Test', exact: true }).boundingBox();
+  const saidBox = await said.boundingBox();
+  expect(saidBox.x).toBeGreaterThan(test.x + test.width);
+  expect(Math.abs((saidBox.y + saidBox.height / 2) - (test.y + test.height / 2))).toBeLessThan(test.height);
+  await expect(editor.getByText(/^Apply puts this back/)).toHaveCount(0);
   await editor.getByRole('button', { name: 'Cancel' }).click();
 
   // A phone: two to a row, and nothing wider than the screen.
