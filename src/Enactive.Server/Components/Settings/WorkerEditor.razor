@@ -6,8 +6,11 @@
    tools the engine registers as ticks (WorkerTools, whose hint says what the ticks permit), the level, the model and
    its fallback with "(none)" first. Apply puts the change into the settings' copy; it is written when they are saved. *@
 
-<Dialog Title="Team member" OnClose="() => Editor.CancelCommand.Execute(null)">
+@* Half as wide again as a dialog, in two columns - who the member is and what it is told on the left, what it may use
+   and run on on the right: in one narrow column the tools wrapped into five rows and the dialog ran past the screen. *@
+<Dialog Title="Team member" Class="dialog-team" OnClose="() => Editor.CancelCommand.Execute(null)">
     <ChildContent>
+        <div class="settings-editor-columns">
         <div class="settings-editor-column">
             <label class="label" for="worker-id">Id</label>
             <input id="worker-id" placeholder="id — unique, e.g. developer, architect" @bind="Editor.Id" />
@@ -16,9 +19,11 @@
             <input id="worker-role" placeholder="role name shown in the picker" @bind="Editor.Role" />
 
             <label class="label" for="worker-instructions">Instructions</label>
-            <textarea id="worker-instructions" rows="6" placeholder="base instructions (honesty rules + global instructions are added automatically)"
+            <textarea id="worker-instructions" rows="14" placeholder="base instructions (honesty rules + global instructions are added automatically)"
                       @bind="Editor.Instructions"></textarea>
+        </div>
 
+        <div class="settings-editor-column">
             <span class="settings-label-row"><span class="label" id="worker-tools">Tools</span><HintMark Text="@Editor.ToolsHint" Of="Tools" /></span>
             <div class="settings-tools" role="group" aria-labelledby="worker-tools">
                 @foreach (var tool in Editor.Tools)
@@ -50,9 +55,10 @@
                     <option value="@model">@model</option>
                 }
             </select>
-
-            <p class="hint">Apply puts this back in Settings. It is written to disk when you press Save there - Cancel there discards it.</p>
         </div>
+        </div>
+
+        <p class="hint">Apply puts this back in Settings. It is written to disk when you press Save there - Cancel there discards it.</p>
     </ChildContent>
     <Actions>
         <button type="button" class="btn primary" @onclick="() => Editor.SaveCommand.Execute(null)">Apply</button>

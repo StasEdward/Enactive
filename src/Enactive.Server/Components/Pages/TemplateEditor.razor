@@ -39,23 +39,29 @@ else if (_editor is { } t)
         @if (t.IsForm)
         {
             <div class="template-form">
-                <label class="label" for="t-id">Id</label>
-                <input id="t-id" @bind="t.Id" @bind:event="oninput" disabled="@(!t.IdEditable)" placeholder="lowercase-with-dashes" />
-                <p class="hint">The id is the file name and it is how a scheduled run names this template. An existing template keeps its id — duplicate it to make one under another name. Saving under a built-in's id replaces that built-in until you delete the file.</p>
-
-                <label class="label" for="t-name">Name</label>
-                <input id="t-name" @bind="t.Name" @bind:event="oninput" placeholder="Release Check" />
+                @* Id, Name and Category are short, side by side; the description is a line of its own under them. One to a
+                   line, the four ran the goal half a screen down. A field's comment is the "?" beside its name. *@
+                <div class="template-head">
+                    <div class="template-head-field">
+                        <span class="settings-label-row"><label class="label" for="t-id">Id</label><HintMark Of="Id" Text="The id is the file name and it is how a scheduled run names this template. An existing template keeps its id — duplicate it to make one under another name. Saving under a built-in's id replaces that built-in until you delete the file." /></span>
+                        <input id="t-id" @bind="t.Id" @bind:event="oninput" disabled="@(!t.IdEditable)" placeholder="lowercase-with-dashes" />
+                    </div>
+                    <div class="template-head-field">
+                        <label class="label" for="t-name">Name</label>
+                        <input id="t-name" @bind="t.Name" @bind:event="oninput" placeholder="Release Check" />
+                    </div>
+                    <div class="template-head-field">
+                        <label class="label" for="t-category">Category</label>
+                        <input id="t-category" @bind="t.Category" @bind:event="oninput" placeholder="Development, Maintenance, …" />
+                    </div>
+                </div>
 
                 <label class="label" for="t-description">Description</label>
                 <input id="t-description" @bind="t.Description" @bind:event="oninput" placeholder="One line, shown in the library" />
 
-                <label class="label" for="t-category">Category</label>
-                <input id="t-category" @bind="t.Category" @bind:event="oninput" placeholder="Development, Maintenance, …" />
-
-                <label class="label" for="t-goal">Goal</label>
+                <span class="settings-label-row"><label class="label" for="t-goal">Goal</label><HintMark Of="Goal" Text="Every {placeholder} here must match a parameter below. A parameter nobody filled in leaves nothing behind — not its own name." /></span>
                 <textarea id="t-goal" class="template-goal-text" @bind="t.Goal" @bind:event="oninput"
                           placeholder="What to do. Write {parameter_id} where a value goes."></textarea>
-                <p class="hint">Every {placeholder} here must match a parameter below. A parameter nobody filled in leaves nothing behind — not its own name.</p>
 
                 <h2 class="label">Parameters</h2>
                 @foreach (var row in t.Parameters)
@@ -85,8 +91,7 @@ else if (_editor is { } t)
                 }
                 <button type="button" class="btn" @onclick="() => t.AddParameterCommand.Execute(null)">Add parameter</button>
 
-                <h2 class="label">Checks that decide whether it finished</h2>
-                <p class="hint">Each runs as a command; its exit code decides. A required check that fails keeps the run out of Completed. With no checks at all, the run report says nothing was verified — which is true.</p>
+                <span class="settings-label-row"><h2 class="label">Checks that decide whether it finished</h2><HintMark Of="Checks" Text="Each runs as a command; its exit code decides. A required check that fails keeps the run out of Completed. With no checks at all, the run report says nothing was verified — which is true." /></span>
                 @foreach (var row in t.Criteria)
                 {
                     <div class="card check-row">
@@ -100,8 +105,7 @@ else if (_editor is { } t)
                 }
                 <button type="button" class="btn" @onclick="() => t.AddCriterionCommand.Execute(null)">Add check</button>
 
-                <h2 class="label">Permissions</h2>
-                <p class="hint">A template can only NARROW what the workspace already allows — there is no way to grant more. Denying a tool steers the model away from it; while a shell is allowed it is not a sandbox, because most tools can be reached through a command.</p>
+                <span class="settings-label-row"><h2 class="label">Permissions</h2><HintMark Of="Permissions" Text="A template can only NARROW what the workspace already allows — there is no way to grant more. Denying a tool steers the model away from it; while a shell is allowed it is not a sandbox, because most tools can be reached through a command." /></span>
                 <label class="label" for="t-level">Highest autonomy this template may use</label>
                 @* The empty choice is "no cap of its own", which is not the same as Autonomous (TemplateEditViewModel.MaxLevel). *@
                 <select id="t-level" value="@(t.MaxLevel?.ToString() ?? "")" @onchange="LevelChanged">
@@ -125,8 +129,7 @@ else if (_editor is { } t)
                     }
                 </div>
 
-                <h2 class="label">Limits</h2>
-                <p class="hint">Blank means no limit of its own, which is not the same as zero. Limits are checked between steps, never inside one — a step that has started always finishes.</p>
+                <span class="settings-label-row"><h2 class="label">Limits</h2><HintMark Of="Limits" Text="Blank means no limit of its own, which is not the same as zero. Limits are checked between steps, never inside one — a step that has started always finishes." /></span>
                 <div class="limits">
                     <label><span class="hint">Max steps</span><input @bind="t.MaxSteps" @bind:event="oninput" /></label>
                     <label><span class="hint">Max tokens</span><input @bind="t.MaxTokens" @bind:event="oninput" /></label>

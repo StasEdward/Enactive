@@ -607,6 +607,10 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 /* ── The template editor (Pages/TemplateEditor.razor; TemplateEditWindow.axaml): Form | JSON, Save at the foot. ───── */
 .template-editor { display: grid; gap: 8px; max-width: 820px; }
 .template-form { display: grid; gap: 4px; }
+/* Id, Name and Category in one row of short boxes, the description under them across. */
+.template-head { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.template-head-field { display: grid; gap: 4px; align-content: end; min-width: 0; }
+.template-form .settings-label-row h2 { margin: 0; }
 .template-form .hint { margin: 0 0 4px; }
 .template-form input:not([type="checkbox"]), .template-form textarea, .template-form select { width: 100%; box-sizing: border-box; }
 .template-goal-text { min-height: 180px; }
@@ -767,6 +771,8 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .settings-grants .grant-orphan { color: var(--warning); }
 /* The editors over the settings: the provider's two columns (ProviderEditWindow.axaml), one for the others. */
 .dialog.dialog-wide { width: min(1040px, calc(100vw - 32px)); }
+/* The team member editor: half as wide again as a dialog (520 px), for its two columns. */
+.dialog.dialog-team { width: min(780px, calc(100vw - 32px)); }
 .settings-editor-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 .settings-editor-column { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .settings-editor-column p { margin: 0; }
@@ -952,4 +958,6 @@ main.bare { max-width: none; min-height: 100vh; box-sizing: border-box; display:
 /* A phone held upright: two short boxes to a row - three left a box too narrow for a five-digit value and its label. */
 @media (max-width: 479.98px) {
   .short-fields, .settings-editor-column .short-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* A template's id, name and category one to a line: three across left a box narrower than an id. */
+  .template-head { grid-template-columns: minmax(0, 1fr); }
 }
