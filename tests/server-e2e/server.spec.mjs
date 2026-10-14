@@ -313,6 +313,10 @@ test('a past run is tried again from its page, and deleted after its question', 
   const past = page.getByRole('region', { name: 'Past run' });
   await expect(past.getByRole('heading', { name: 'kept in the history' })).toBeVisible();
   const address = page.url();
+  // The status pill is as tall as the buttons beside it.
+  const retry = await past.getByRole('button', { name: 'Retry' }).boundingBox();
+  const status = await past.locator('.past-buttons .pill').boundingBox();
+  expect(Math.abs(status.height - retry.height)).toBeLessThanOrEqual(1);
 
   // Retry: a run of the same task starts, opens at its own address, and asks its question again.
   await past.getByRole('button', { name: 'Retry' }).click();

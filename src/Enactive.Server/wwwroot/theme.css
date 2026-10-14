@@ -525,7 +525,10 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
    buttons moved them while somebody aimed. */
 .past-run .back { flex: none; align-self: center; }
 .past-actions { display: grid; gap: 4px; flex: none; }
-.past-buttons { display: flex; align-items: center; gap: 8px; }
+.past-buttons { display: flex; align-items: stretch; gap: 8px; }
+/* The status pill as tall as Retry and Run again beside it, its words in the middle: a thin pill beside two tall buttons
+   read as a label stuck on, not the run's state. The font stays the pill's. */
+.past-buttons .pill { display: inline-flex; align-items: center; }
 .past-buttons .btn { width: 118px; }
 .past-attempt { margin: 0; min-height: 16px; text-align: right; }
 .past-run .run-view { padding-right: 10px; }
