@@ -351,7 +351,10 @@ public sealed class ShellTests : ComponentHost
 
         var bar = Render<TopBar>();
 
-        Assert.Equal("alice", bar.Find(".who").TextContent.Trim());
+        // Each said for what it is - a name and a role that match read as one word twice.
+        Assert.Equal("User: alice", bar.Find(".who").TextContent.Trim());
+        Assert.Equal("alice", bar.Find(".who-name").TextContent.Trim());
+        Assert.Equal("Role: Operator", bar.Find(".who-role").TextContent.Trim());
         Assert.Equal("Operator", bar.Find(".pill").TextContent.Trim());
         Assert.Equal("localhost", bar.Find(".host").TextContent.Trim());
         var signOut = bar.Find("form.signout");

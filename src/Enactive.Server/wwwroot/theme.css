@@ -129,6 +129,8 @@ pre, code, .path { font-family: var(--font-mono); }
   border-radius: var(--radius-sm); }
 .page-failed .hint { font-size: 12px; margin: 4px 0 12px; }
 .who { margin-left: auto; font-size: 12px; color: var(--text-muted); }
+.who-name { color: var(--text-body); }
+.who-role { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-muted); }
 .top .pill { padding: 1px 10px; font-size: 11px; }
 .signout { margin: 0; }
 .signout button { padding: 3px 10px; font-size: 12px; }
@@ -959,6 +961,8 @@ main.bare { max-width: none; min-height: 100vh; box-sizing: border-box; display:
 /* A phone held upright: two short boxes to a row - three left a box too narrow for a five-digit value and its label. */
 @media (max-width: 479.98px) {
   .short-fields, .settings-editor-column .short-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* On a phone the name and the role without their words: with them the top bar ran past the screen. */
+  .who-label { display: none; }
   /* A template's id, name and category one to a line: three across left a box narrower than an id. */
   .template-head { grid-template-columns: minmax(0, 1fr); }
 }

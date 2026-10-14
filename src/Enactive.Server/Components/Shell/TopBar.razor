@@ -25,8 +25,10 @@
     }
     @if (_user?.Identity?.IsAuthenticated == true)
     {
-        <span class="who">@_user.Identity.Name</span>
-        <span class="pill tone-plain">@_user.FindFirstValue(ClaimTypes.Role)</span>
+        @* Each named for what it is: a name and a role side by side read as one word twice when they matched (admin,
+           Admin). *@
+        <span class="who"><span class="who-label">User:</span> <span class="who-name">@_user.Identity.Name</span></span>
+        <span class="who-role"><span class="who-label">Role:</span> <span class="pill tone-plain">@_user.FindFirstValue(ClaimTypes.Role)</span></span>
         <form method="post" action="/signout" class="signout">
             <AntiforgeryToken />
             <button type="submit">Sign out</button>
