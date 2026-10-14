@@ -81,50 +81,61 @@
             <div class="settings-editor-column">
                 <p class="panel-header">MODEL</p>
 
-                <label class="label" for="provider-window">Context window (tokens)</label>
-                <input id="provider-window" placeholder="blank = assume 16000 — nothing can ask the provider" @bind="Editor.ContextWindowText" />
+                @* The model's numbers side by side in short boxes; what their long placeholders said is behind each "?". *@
+                <div class="short-fields">
+                    <div class="short-field">
+                        <span class="settings-label-row"><label class="settings-small" for="provider-window">Context window (tokens)</label><HintMark Text="Blank = assume 16000 — nothing can ask the provider." Of="Context window" /></span>
+                        <input id="provider-window" inputmode="numeric" placeholder="16000" @bind="Editor.ContextWindowText" />
+                    </div>
+                    <div class="short-field">
+                        <span class="settings-label-row"><label class="settings-small" for="provider-handover">Hand a step over at</label><HintMark Text="75% of the window, 80000 tokens, or both; blank = after 60 turns." Of="Hand a step over at" /></span>
+                        <input id="provider-handover" placeholder="75%" @bind="Editor.HandoverText" />
+                    </div>
+                    <div class="short-field">
+                        <span class="settings-label-row"><label class="settings-small" for="provider-reserve">Kept free for the answer</label><HintMark Text="Tokens kept free for the answer. Blank = an eighth of the context window." Of="Tokens kept free for the answer" /></span>
+                        <input id="provider-reserve" inputmode="numeric" placeholder="auto" @bind="Editor.AnswerReserveText" />
+                    </div>
+                    <div class="short-field">
+                        <span class="settings-label-row"><label class="settings-small" for="provider-max">Max output tokens</label><HintMark Text="Blank = auto (adjusts to the model's cap)." Of="Max output tokens" /></span>
+                        <input id="provider-max" inputmode="numeric" placeholder="auto" @bind="Editor.MaxTokensText" />
+                    </div>
+                    <div class="short-field">
+                        <span class="settings-label-row"><label class="settings-small" for="provider-reasoning">Reasoning tokens</label><HintMark Text="Extra generation tokens for reasoning. Blank = the profile's default; 0 = no extra allowance." Of="Extra generation tokens for reasoning" /></span>
+                        <input id="provider-reasoning" inputmode="numeric" placeholder="default" @bind="Editor.ReasoningAllowanceText" />
+                    </div>
+                    <div class="short-field">
+                        <span class="settings-label-row"><label class="settings-small" for="provider-temperature">Temperature</label><HintMark Text="Blank = the engine's (0.2 worker, 0 review); a number; server = the server's own." Of="Temperature" /></span>
+                        <input id="provider-temperature" placeholder="engine" @bind="Editor.TemperatureText" />
+                    </div>
+                    @if (Editor.ShowsEffort)
+                    {
+                        <div class="short-field">
+                            <span class="settings-label-row"><label class="settings-small" for="provider-effort">Effort</label><HintMark Text="low, medium, high, xhigh or max. Blank = the model's default (Sonnet 5: high)." Of="Effort" /></span>
+                            <input id="provider-effort" placeholder="default" @bind="Editor.EffortText" />
+                        </div>
+                    }
+                    @if (Editor.ShowsKeepAlive)
+                    {
+                        <div class="short-field">
+                            <span class="settings-label-row"><label class="settings-small" for="provider-keepalive">Keep loaded (s)</label><HintMark Text="Seconds the model stays loaded. Blank = the server's default; 0 = unload; -1 = keep resident." Of="Keep the model loaded" /></span>
+                            <input id="provider-keepalive" inputmode="numeric" placeholder="default" @bind="Editor.OllamaKeepAliveText" />
+                        </div>
+                    }
+                    <div class="short-field">
+                        <label class="settings-small" for="provider-idle">Stream idle timeout (s)</label>
+                        <input id="provider-idle" inputmode="numeric" placeholder="300" @bind="Editor.StreamIdleTimeoutText" />
+                    </div>
+                    <div class="short-field">
+                        <label class="settings-small" for="provider-deadline">Non-streaming timeout (s)</label>
+                        <input id="provider-deadline" inputmode="numeric" placeholder="900" @bind="Editor.CompletionTimeoutText" />
+                    </div>
+                </div>
 
-                <label class="label" for="provider-handover">Hand a step over at</label>
-                <input id="provider-handover" placeholder="75% of the window, 80000 tokens, or both; blank = after 60 turns" @bind="Editor.HandoverText" />
-
-                <label class="label" for="provider-reserve">Tokens kept free for the answer</label>
-                <input id="provider-reserve" placeholder="blank = an eighth of the context window" @bind="Editor.AnswerReserveText" />
-
-                <label class="label" for="provider-max">Max output tokens</label>
-                <input id="provider-max" placeholder="blank = auto (adjusts to the model's cap)" @bind="Editor.MaxTokensText" />
-
-                <label class="label" for="provider-reasoning">Extra generation tokens for reasoning</label>
-                <input id="provider-reasoning" placeholder="blank = profile default; 0 = no extra allowance" @bind="Editor.ReasoningAllowanceText" />
-
-                <label class="label" for="provider-temperature">Temperature</label>
-                <input id="provider-temperature" placeholder="blank = the engine's (0.2 worker, 0 review); a number; server = the server's own" @bind="Editor.TemperatureText" />
-
-                @if (Editor.ShowsEffort)
-                {
-                    <label class="label" for="provider-effort">Effort (low, medium, high, xhigh, max)</label>
-                    <input id="provider-effort" placeholder="blank = the model's default (Sonnet 5: high)" @bind="Editor.EffortText" />
-                }
-                @if (Editor.ShowsKeepAlive)
-                {
-                    <label class="label" for="provider-keepalive">Keep the model loaded (seconds)</label>
-                    <input id="provider-keepalive" placeholder="blank = server default; 0 = unload; -1 = keep resident" @bind="Editor.OllamaKeepAliveText" />
-                }
                 @if (Editor.ShowsOpenAiOptions)
                 {
                     <label class="check"><input type="checkbox" @bind="Editor.OpenAiReasoningProfile" /> OpenAI reasoning compatibility (developer role, no temperature)</label>
                     <label class="check"><input type="checkbox" @bind="Editor.SendReasoningBack" /> Send the model's reasoning back with its earlier turns (Qwen3.6 preserve_thinking, llama.cpp --reasoning-preserve)</label>
                 }
-
-                <div class="settings-pair">
-                    <span>
-                        <label class="label" for="provider-idle">Stream idle timeout (s)</label>
-                        <input id="provider-idle" placeholder="300" @bind="Editor.StreamIdleTimeoutText" />
-                    </span>
-                    <span>
-                        <label class="label" for="provider-deadline">Non-streaming timeout (s)</label>
-                        <input id="provider-deadline" placeholder="900" @bind="Editor.CompletionTimeoutText" />
-                    </span>
-                </div>
             </div>
         </div>
 

@@ -55,8 +55,12 @@
             <textarea id="mcp-headers" rows="2" autocomplete="off" @bind="_form.NewHeaders"></textarea>
             <label class="check"><input type="checkbox" @bind="_form.ClearCredentials" /> Remove its environment and headers</label>
 
-            <label class="label" for="mcp-timeout">Connection / call timeout (seconds)</label>
-            <input id="mcp-timeout" @bind="_form.Timeout" />
+            <div class="short-fields">
+                <div class="short-field">
+                    <label class="settings-small" for="mcp-timeout">Connection / call timeout (s)</label>
+                    <input id="mcp-timeout" inputmode="numeric" @bind="_form.Timeout" />
+                </div>
+            </div>
 
             <p class="hint">Test starts the configured program or contacts the endpoint and lists tools. A package runner may download software. No tool is called. Environment and headers are encrypted with the service's Windows account when Settings are saved.</p>
             <p class="hint">External servers have their own access to files and services. Enactive's staging and Undo do not cover their changes. Enable MCP access under AI · Team for the worker that should use it.</p>

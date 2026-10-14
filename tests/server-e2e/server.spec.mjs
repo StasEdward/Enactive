@@ -512,6 +512,29 @@ test('the workspace chosen in a tab is kept from screen to screen, not the one u
   await again.context.close();
 });
 
+test('settings show their short values in short boxes, six to a row on a wide screen and two on a phone', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'ada');
+  // The rows of boxes: how many boxes share the first row's line, and how wide the widest is.
+  const rows = () => page.evaluate(() => [...document.querySelectorAll('.short-fields')].map(grid => {
+    const boxes = [...grid.querySelectorAll('.short-field input')].map(b => b.getBoundingClientRect());
+    return { first: boxes.filter(b => Math.abs(b.top - boxes[0].top) < 2).length, widest: Math.max(...boxes.map(b => b.width)) };
+  }));
+
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto('/settings/ai-general');
+  await expect(page.getByLabel('Planner', { exact: true })).toBeVisible();
+  let shown = await rows();
+  // Context length and the five output budgets on one line, each box a short one - not a line of its own across the page.
+  expect(shown[0].first).toBe(6);
+  for (const row of shown) expect(row.widest).toBeLessThan(200);
+
+  // A phone: two to a row, and nothing wider than the screen.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(async () => (await rows())[0].first).toBe(2);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await context.close();
+});
+
 test('the workspace switcher adds a folder and switches to it, and nothing outside the roots is offered', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
   // The switcher's Add folder… opens the folder browser in a dialog over the Runs screen.

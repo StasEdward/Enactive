@@ -729,6 +729,16 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .settings-field { display: grid; gap: 3px; }
 .settings-label-row { display: inline-flex; align-items: center; gap: 6px; }
 .settings-small { font-size: 12px; }
+/* Short values - token counts, retries, days, seconds - in short boxes side by side, six to a row on the page: one to a
+   line, each box ran the width of the page for a four-digit value, and a section scrolled for what fits in two rows. The
+   label sits over its box, the boxes in a line whatever their label's length. In an editor's column, as many as fit. */
+.short-fields { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px 12px; align-items: end; margin: 2px 0 6px; }
+.settings-editor-column .short-fields { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.short-field { display: grid; gap: 3px; min-width: 0; }
+.short-field > label, .short-field .settings-label-row label { overflow-wrap: anywhere; }
+/* A "?" in a box on the right opens its advice leftward: opened rightward, it ran off the page. */
+.short-field:nth-child(6n+4) .hint-mark-text, .short-field:nth-child(6n+5) .hint-mark-text,
+.short-field:nth-child(6n) .hint-mark-text { left: auto; right: 0; }
 .settings-server { display: grid; grid-template-columns: minmax(0, 1fr) 90px; gap: 8px; }
 .settings-problem { color: var(--danger); }
 .settings-stored { color: var(--text-body); }
@@ -885,6 +895,8 @@ main.bare { max-width: none; min-height: 100vh; box-sizing: border-box; display:
   .status-column { padding: 12px 0; border-top: 1px solid var(--border); }
   /* Under the run, not over it: the bottom bar is the foot of a phone's screen, and a strip kept above it covered the run. */
   .repo-bar { position: static; }
+  /* Three short boxes to a row on a narrow screen; six were too narrow to hold a number. */
+  .short-fields, .settings-editor-column .short-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .tabs { height: auto; overflow-x: auto; }
   .past-run .task-header { flex-wrap: wrap; }
   .past-run .task-text { flex: 1 1 200px; }
@@ -935,4 +947,9 @@ main.bare { max-width: none; min-height: 100vh; box-sizing: border-box; display:
   /* The "?" stays 16 px to the eye and takes a 40 px touch. */
   .hint-mark > summary { position: relative; }
   .hint-mark > summary::after { content: ""; position: absolute; inset: -12px; }
+}
+
+/* A phone held upright: two short boxes to a row - three left a box too narrow for a five-digit value and its label. */
+@media (max-width: 479.98px) {
+  .short-fields, .settings-editor-column .short-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
