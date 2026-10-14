@@ -37,6 +37,40 @@ public sealed class ListenersTests : IDisposable
         Assert.Equal(["first", "third"], told);
     }
 
+    /// <summary>
+    /// A log that cannot take the line - the host it belongs to stopping - is passed over too: the warning threw out of
+    /// the catch, and the listeners after the faulty one were not told after all.
+    /// </summary>
+    [Fact]
+    public void A_log_that_throws_does_not_stop_the_listeners_after_a_faulty_one()
+    {
+        var told = new List<string>();
+        Action listeners = Faulty;
+        listeners += () => told.Add("after");
+        var before = Listeners.Log;
+        Listeners.Log = new GoneLog();
+        try
+        {
+            Listeners.Tell(listeners, "a test's");
+        }
+        finally
+        {
+            Listeners.Log = before;
+        }
+
+        Assert.Equal(["after"], told);
+    }
+
+    /// <summary>A logger whose host has gone: every line throws, as a disposed logger factory's does.</summary>
+    private sealed class GoneLog : Microsoft.Extensions.Logging.ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => throw new ObjectDisposedException("the service's log");
+    }
+
     [Fact]
     public void A_question_goes_up_on_every_page_though_one_throws()
     {

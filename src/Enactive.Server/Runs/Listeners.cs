@@ -31,7 +31,10 @@ internal static class Listeners
             }
             catch (Exception ex)
             {
-                Log?.LogWarning(ex, "A page told that {What} changed failed; the others were still told.", what);
+                // Written if it can be: a log that cannot take the line - its host stopping, a sink disposed - threw from
+                // here, out of the catch, and the listeners after the faulty one were not told after all.
+                try { Log?.LogWarning(ex, "A page told that {What} changed failed; the others were still told.", what); }
+                catch (Exception) { }
             }
         }
     }
