@@ -637,7 +637,7 @@ test('the command bar buttons are no taller than the box beside them, Run in bac
   await context.close();
 });
 
-test('a question with a long line in its detail stays inside the status column', async ({ browser }) => {
+test('a question with a long line in its detail stays inside the status column, MODEL PERFORMANCE at its foot', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
   await page.setViewportSize({ width: 1600, height: 900 });
   await startRun(page, 'a question with a long detail');
@@ -653,6 +653,12 @@ test('a question with a long line in its detail stays inside the status column',
   expect(Math.abs(after.width - before.width)).toBeLessThanOrEqual(1);
   expect(card.x + card.width).toBeLessThanOrEqual(after.x + after.width + 1);
   await answerWhateverWaits(page);
+  // Answered, the column holds less than the screen: MODEL PERFORMANCE at its foot, over the strip's place, not hanging
+  // under the figures.
+  const performance = await page.locator('.status-column > .performance').boundingBox();
+  const figures = await page.locator('.status-scroll').boundingBox();
+  expect(performance.y + performance.height).toBeGreaterThan(900 - 48);
+  expect(performance.y).toBeGreaterThan(figures.y + figures.height + 40);
   await context.close();
 });
 
