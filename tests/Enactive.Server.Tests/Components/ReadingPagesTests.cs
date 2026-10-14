@@ -73,10 +73,12 @@ public sealed class ReadingPagesTests : ComponentHost
         Page<RunsScreen>($"/?ws={WorkspaceInfo.For(root).Id}", "digest the inbox");
 
         var past = PastRun(root, run.RunId);
+        // Waited for, not read at once: the screen's repository strip draws when git answers, and a click handled while
+        // it draws is drawn a moment after.
         past.FindAll(".past-run [role=tab]").Single(t => t.TextContent.Trim() == "Timeline").Click();
-        Assert.Contains("write_file digest.md", past.Find(".past-run .run-view").TextContent);
+        past.WaitForAssertion(() => Assert.Contains("write_file digest.md", past.Find(".past-run .run-view").TextContent));
         past.FindAll(".past-run [role=tab]").Single(t => t.TextContent.Trim() == "Artifacts (1)").Click();
-        Assert.Equal("digest.md", past.Find(".past-run .artifact .path").TextContent.Trim());
+        past.WaitForAssertion(() => Assert.Equal("digest.md", past.Find(".past-run .artifact .path").TextContent.Trim()));
     }
 
     /// <summary>The Runs screen on a past run (/history/{workspace}/{run}), for a Viewer, once it is drawn.</summary>
@@ -152,14 +154,15 @@ public sealed class ReadingPagesTests : ComponentHost
         await RunStoreFactory.Create(WorkspaceInfo.For(root)).SaveAsync(run, CancellationToken.None);
         var past = PastRun(root, run.RunId);
         past.FindAll(".past-run [role=tab]").Single(t => t.TextContent.Trim() == "Artifacts (2)").Click();
+        past.WaitForAssertion(() => Assert.Equal(2, past.FindAll(".past-run .artifact").Count));
 
         Review(past, "digest.md");
-        Assert.Equal("three mails <script>alert(1)</script>", past.Find("[role=dialog] pre").TextContent);
+        past.WaitForAssertion(() => Assert.Equal("three mails <script>alert(1)</script>", past.Find("[role=dialog] pre").TextContent));
         Assert.DoesNotContain("<script>alert(1)", past.Find("[role=dialog]").InnerHtml);
         past.FindAll("[role=dialog] button").Single(b => b.TextContent.Trim() == "Close").Click();
 
         Review(past, @"..\secret.txt");
-        Assert.Contains("not in this workspace", past.Find("[role=dialog] .said").TextContent);
+        past.WaitForAssertion(() => Assert.Contains("not in this workspace", past.Find("[role=dialog] .said").TextContent));
         Assert.DoesNotContain("the service's own", past.Markup);
     }
 

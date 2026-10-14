@@ -368,13 +368,15 @@ public sealed class CommandBarTests : ComponentHost
         var screen = Render<RunsScreen>();
         screen.Find(".command-bar textarea").Input("write the digest");
         screen.FindAll(".command-bar button").Single(b => b.TextContent.Trim() == "Run").Click();
-        Assert.Equal(beta.RootPath, Assert.Single(Runs.List(As("alice"))).Workspace);
+        // Waited for: the screen's repository strip draws when git answers, and a click handled while it draws is a
+        // moment later.
+        screen.WaitForAssertion(() => Assert.Equal(beta.RootPath, Assert.Single(Runs.List(As("alice"))).Workspace));
 
         navigation.NavigateTo($"/?ws={Guid.NewGuid()}");
         screen = Render<RunsScreen>();
         screen.Find(".command-bar textarea").Input("write the digest");
         screen.FindAll(".command-bar button").Single(b => b.TextContent.Trim() == "Run").Click();
-        Assert.Equal("Name the folder the run is to work in.", screen.Find(".command-bar .said").TextContent.Trim());
+        screen.WaitForAssertion(() => Assert.Equal("Name the folder the run is to work in.", screen.Find(".command-bar .said").TextContent.Trim()));
         Assert.Single(Runs.List(As("alice")));
     }
 

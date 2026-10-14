@@ -48,8 +48,14 @@
         }
         else if (RunId is { } run)
         {
-            <LiveRun RunId="run" />
+            <LiveRun RunId="run" FilesMayHaveChanged="() => _repoReads++" />
         }
+
+        @* The workspace's repository strip at the foot of the screen, whatever is open above it - the bar alone, a run, a
+           past run - as the window's status strip is: on the run alone, it was gone the moment no run was open. Keyed
+           by the folder, so choosing another workspace shows that one's strip from a fresh reading rather than the
+           last one's figures until git answers. *@
+        <RepoBar @key="_shown?.RootPath" Root="@_shown?.RootPath" Reads="_repoReads" />
     </section>
 </div>
 
@@ -97,6 +103,9 @@
 
     private Guid? _wanted;
     private Enactive.Workspace.WorkspaceEntry? _shown;
+
+    /// <summary>Bumped when the open run may have changed files: the repository strip reads the folder again then.</summary>
+    private int _repoReads;
 
     /// <summary>
     /// The run in progress this screen showed last - the window's live run, which a past run is read over: ← Back returns

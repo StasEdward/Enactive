@@ -472,6 +472,32 @@ test('a run fills the screen beside the column, its repository strip at the foot
   expect(Math.abs(box.bar.bottom - box.height)).toBeLessThanOrEqual(1);
 
   await answerWhateverWaits(page);
+
+  // The strip is the Runs screen's, not the run's: there with no run open, and it follows the workspace chosen - another
+  // repository's figures when another is chosen, none on a folder that is no repository, back when it is chosen again.
+  const other = own('other-checkout');
+  const otherFolder = path.join(process.env.E2E_DATA, other);
+  mkdirSync(otherFolder, { recursive: true });
+  for (const args of [['init', '-q'], ['-c', 'user.name=e2e', '-c', 'user.email=e2e@example.com', 'commit', '-q', '--allow-empty', '-m', 'start']]) {
+    const done = spawnSync('git', args, { cwd: otherFolder, encoding: 'utf8' });
+    if (done.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${done.stderr}`);
+  }
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: `Workspace: ${name}` })).toBeVisible();
+  await expect(strip.locator('.repo-name')).toHaveText(name);
+  await page.getByRole('button', { name: /^Workspace:/ }).click();
+  await page.getByRole('button', { name: 'Add workspace…' }).click();
+  const adding = page.getByRole('dialog', { name: 'Add workspace' });
+  await adding.getByRole('button', { name: process.env.E2E_DATA, exact: true }).click();
+  await adding.getByRole('button', { name: other, exact: true }).click();
+  await adding.getByRole('button', { name: 'Make this folder a workspace' }).click();
+  await expect(page.getByRole('button', { name: `Workspace: ${other}` })).toBeVisible();
+  await expect(strip.locator('.repo-name')).toHaveText(other);
+  await onProject(page);
+  await expect(strip).toHaveCount(0);
+  await page.getByRole('button', { name: /^Workspace:/ }).click();
+  await page.locator('.switcher').getByRole('link', { name: new RegExp(`^${name}`) }).click();
+  await expect(strip.locator('.repo-name')).toHaveText(name);
   await context.close();
 });
 

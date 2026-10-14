@@ -49,6 +49,13 @@ public abstract class ComponentHost : BunitContext
         // The standing write grants the settings list and revoke: a file of the test's, never the developer's own
         // (WritableRoots.Default, which the service uses).
         Services.AddSingleton(new WritableRoots(Path.Combine(data, "writable-roots.json")));
+        // The repository strip on the Runs screen asks git about the folder shown; a page test's folders are no
+        // repositories, so it answers "none" at once. Asked of git, each screen started a process whose answer drew the
+        // strip a moment later, and a click made in that moment was drawn after the test had read the page. A test of
+        // the strip registers its own (RepoBarTests).
+        Services.AddSingleton(new Enactive.Server.Components.Ui.RepoReads(
+            (_, _) => Task.FromResult<Enactive.Workspace.RepoStatus?>(null),
+            (_, _) => Task.FromResult<Enactive.Workspace.PullRequestStatus?>(null)));
         // bUnit registers a stand-in that throws for every authorization check, and the server's registration of the
         // real one (with the Viewer, Operator and Admin policies) does not replace it: a page asking whether the
         // person may do something failed before it was shown.

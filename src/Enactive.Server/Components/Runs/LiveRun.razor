@@ -117,8 +117,6 @@
             </Decision>
         </StatusColumn>
     </div>
-
-    <RepoBar Root="@run.Workspace" Reads="_repoReads" />
 </section>
 
 @code {
@@ -126,6 +124,12 @@
 
     /// <summary>The run on the service (ServerRun.Id).</summary>
     [Parameter] public Guid RunId { get; set; }
+
+    /// <summary>
+    /// Said when the run may have changed its folder's files - a step ended, the run is over, half a minute went by - for
+    /// the Runs screen's repository strip, which is the screen's and not the run's, to read the repository again then.
+    /// </summary>
+    [Parameter] public EventCallback FilesMayHaveChanged { get; set; }
 
     /// <summary>The repository is read again this often while the run goes, as the window's strip: a step changes files.</summary>
     private const int RepoEveryTicks = 30;
@@ -150,7 +154,6 @@
     /// <summary>The question this page last drew a card for, and the one whose answer was taken from this page.</summary>
     private Guid? _lastShown, _answeredHere;
     private bool _answering;
-    private int _repoReads;
     private (int Steps, bool Ended) _repoSeen;
 
     // Read per address, not once (Pages/_Imports.razor): the screen keeps this page when it moves to another run.
@@ -217,7 +220,7 @@
         if (_run is { } run && (_shownView.View.StepsDone, run.Ended.IsCompleted) is var seen && seen != _repoSeen)
         {
             _repoSeen = seen;
-            _repoReads++;
+            _ = FilesMayHaveChanged.InvokeAsync();
         }
         // A refusal is about its own question: once another is up, it is forgotten - kept, it came back as that one's card
         // went, and said a question was answered that had nothing to do with it.
@@ -243,7 +246,7 @@
                 await InvokeAsync(() =>
                 {
                     if (readRepo)
-                        _repoReads++;
+                        _ = FilesMayHaveChanged.InvokeAsync();
                     Redraw();
                 });
                 // Over: the figures stand still, and one last drawing (the follower's) shows where it ended.
