@@ -3,6 +3,7 @@
 // questions two pages and two people answer, the inbox, the other screens, every role, a lost connection, and a phone.
 import { test, expect } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 const password = 'e2e password 1234';
@@ -424,6 +425,49 @@ test('an operator is offered no accounts page and is refused it', async ({ brows
     await expect(page.getByText("Your account's role does not include this page.")).toBeVisible();
     await expect(page.getByRole('heading', { name: /^(Accounts|Audit)$/ })).toHaveCount(0);
   }
+  await context.close();
+});
+
+test('a run fills the screen beside the column, its repository strip at the foot edge to edge', async ({ browser }) => {
+  // A folder that is a repository, so the run has its strip: git's own command line, as a person's checkout would be.
+  const name = own('checkout');
+  const folder = path.join(process.env.E2E_DATA, name);
+  mkdirSync(folder, { recursive: true });
+  for (const args of [['init', '-q'], ['-c', 'user.name=e2e', '-c', 'user.email=e2e@example.com', 'commit', '-q', '--allow-empty', '-m', 'start']]) {
+    const done = spawnSync('git', args, { cwd: folder, encoding: 'utf8' });
+    if (done.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${done.stderr}`);
+  }
+
+  const { context, page } = await signedIn(browser, 'alice');
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.getByRole('button', { name: /^Workspace:/ }).click();
+  await page.getByRole('button', { name: 'Add folder…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add folder' });
+  await dialog.getByRole('button', { name: process.env.E2E_DATA, exact: true }).click();
+  await dialog.getByRole('button', { name, exact: true }).click();
+  await dialog.getByRole('button', { name: 'Make this folder a workspace' }).click();
+  await expect(page.getByRole('button', { name: `Workspace: ${name}` })).toBeVisible();
+
+  await page.getByLabel('Task', { exact: true }).fill('a run in a checkout');
+  await page.getByRole('button', { name: 'Run', exact: true }).click();
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
+  const strip = page.locator('.repo-bar');
+  await expect(strip).toBeVisible();
+
+  // The run's area reaches the window's right edge - no reading width left as a band of empty screen - and the strip is
+  // its foot: across the whole area, at the bottom of the screen under a run this short.
+  const box = await page.evaluate(() => {
+    const area = document.querySelector('.runs-main').getBoundingClientRect();
+    const bar = document.querySelector('.repo-bar').getBoundingClientRect();
+    return { width: innerWidth, height: innerHeight, area: { left: area.left, right: area.right },
+      bar: { left: bar.left, right: bar.right, bottom: bar.bottom } };
+  });
+  expect(Math.abs(box.area.right - box.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.bar.left - box.area.left)).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.bar.right - box.area.right)).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.bar.bottom - box.height)).toBeLessThanOrEqual(1);
+
+  await answerWhateverWaits(page);
   await context.close();
 });
 

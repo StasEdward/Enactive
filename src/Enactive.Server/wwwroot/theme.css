@@ -272,7 +272,11 @@ a.card:hover, .card.selectable:hover { background: var(--card-fill-hover); }
 /* The screen fills the shell edge to edge, as the window's columns do; other pages keep the reading margin. */
 .shell > main:has(> .runs-screen) { padding: 0; max-width: none; }
 .runs-screen { display: flex; align-items: stretch; min-height: calc(100vh - 41px); }
-.runs-main { flex: 1; min-width: 0; padding: 16px; max-width: 1100px; }
+.runs-main { flex: 1; min-width: 0; padding: 16px; display: flex; flex-direction: column; }
+/* The run fills what is left under the command bar, as the window's run does: its repository strip is then the foot of the
+   screen. Capped at a reading width and as tall as its content, the run left a band of empty screen on its right and the
+   strip floating in the middle under a short run. */
+.runs-main > .live-run, .runs-main > .past-run { flex: 1; }
 
 /* The context column: the window's Border.context - the surface a step up from the ground, a line on its right. */
 .runs-column { flex: none; box-sizing: border-box; width: 268px; padding: 12px 12px 8px; background: var(--bg-elevated);
@@ -393,7 +397,7 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 /* ── The live run (Runs/LiveRun.razor; MainWindow.axaml 546-920, 1244-1300): the task, the tabs, the run's views over
    Current action on the left, the status column 300 px on the right, the repository strip at the foot ───────────── */
 
-.live-run, .past-run { display: grid; border-top: 1px solid var(--border); }
+.live-run, .past-run { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
 .run-gone { margin: 12px 0; }
 
 /* The task: its title, the request kept verbatim and selectable (three lines, fixed, so the run below does not move), who
@@ -492,7 +496,10 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 
 /* The repository strip at the foot: one size and one line for every part; added green, removed red. */
 .repo-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 4px 12px; font-size: 12px;
-  color: var(--text-body); background: var(--bg-elevated); border-top: 1px solid var(--border); cursor: pointer; }
+  color: var(--text-body); background: var(--bg-elevated); border-top: 1px solid var(--border); cursor: pointer;
+  /* The foot of the screen, edge to edge of the run's area, as the window's status strip: pushed down under a short run,
+     kept in sight over a long one; the negative margins take back the area's padding. */
+  margin: auto -16px -16px; position: sticky; bottom: 0; }
 .repo-pr { font-weight: 600; color: var(--text); text-decoration: none; }
 .repo-muted { color: var(--text-muted); }
 .repo-changes { display: inline-flex; gap: 4px; }
@@ -876,6 +883,8 @@ main.bare { max-width: none; min-height: 100vh; box-sizing: border-box; display:
   /* And the question first in the status column, right under the run: what the run waits for is not under its figures. */
   .status-scroll > .decision { order: -1; }
   .status-column { padding: 12px 0; border-top: 1px solid var(--border); }
+  /* Under the run, not over it: the bottom bar is the foot of a phone's screen, and a strip kept above it covered the run. */
+  .repo-bar { position: static; }
   .tabs { height: auto; overflow-x: auto; }
   .past-run .task-header { flex-wrap: wrap; }
   .past-run .task-text { flex: 1 1 200px; }
