@@ -166,6 +166,8 @@ internal static class ServerApp
         services.AddSingleton<Runs.KnownWorkspaces>();
         services.AddSingleton<Runs.ServerHistory>();
         services.AddSingleton<Runs.WorkspaceIds>();
+        // The workspace a tab is on, carried from screen to screen; per circuit, so per tab and per person.
+        services.AddScoped<Components.Runs.ChosenWorkspace>();
         services.AddSingleton<Runs.ServerInbox>();
         services.AddSingleton<AccountAdmin>();
         services.AddSingleton<Runs.ServerSettings>();

@@ -14,6 +14,7 @@
 @inject ServerLibrary Library
 @inject ServerHistory History
 @inject WorkspaceIds Ids
+@inject ChosenWorkspace Chosen
 @inject NavigationManager Navigation
 
 <PageTitle>Template - Enactive</PageTitle>
@@ -196,12 +197,14 @@ else if (_editor is { } t)
         _saved = null;
         Show(null);
 
-        Guid? wanted = Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null;
-        if (WorkspaceColumnState.Choose(History.Workspaces(_user), wanted, Ids) is not { } workspace)
+        var known = History.Workspaces(_user);
+        Guid? wanted = Chosen.Wanted(Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null, known, Ids);
+        if (WorkspaceColumnState.Choose(known, wanted, Ids) is not { } workspace)
         {
             _problem = "The service does not know that workspace.";
             return;
         }
+        Chosen.Shown(workspace, Ids);
         _root = workspace.RootPath;
         // A known folder whose id cannot be read is Guid.Empty: its links name no workspace, and lead to "not known".
         _workspaceId = Ids.TryIdOf(_root) ?? Guid.Empty;

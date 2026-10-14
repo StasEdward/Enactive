@@ -5,6 +5,7 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @inject ServerHistory History
 @inject WorkspaceIds Ids
+@inject ChosenWorkspace Chosen
 
 @* A report the window shows a workspace as, in its viewer (ViewerWindow) - the Timeline, the Environment - as a screen: the
    workspace chosen in the switcher, as on the Runs screen, and the report under it with Copy all. No Source: the window
@@ -61,8 +62,9 @@
     {
         var user = (await Auth).User;
         var known = History.Workspaces(user);
-        Guid? wanted = Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null;
+        Guid? wanted = Chosen.Wanted(Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null, known, Ids);
         var selected = WorkspaceColumnState.Choose(known, wanted, Ids);
+        Chosen.Shown(selected, Ids);
         _switcher = WorkspaceColumnState.Switcher(known, selected, Ids);
 
         if (selected is null)

@@ -12,6 +12,7 @@
 @inject ServerLibrary Library
 @inject ServerHistory History
 @inject WorkspaceIds Ids
+@inject ChosenWorkspace Chosen
 @inject NavigationManager Navigation
 
 <PageTitle>Templates - Enactive</PageTitle>
@@ -198,8 +199,9 @@
         _said = Links.SaidOn(Navigation);
 
         var known = History.Workspaces(_user);
-        Guid? wanted = Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null;
+        Guid? wanted = Chosen.Wanted(Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null, known, Ids);
         var selected = WorkspaceColumnState.Choose(known, wanted, Ids);
+        Chosen.Shown(selected, Ids);
         _switcher = WorkspaceColumnState.Switcher(known, selected, Ids);
         if (selected is null)
         {

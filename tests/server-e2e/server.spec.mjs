@@ -471,6 +471,38 @@ test('a run fills the screen beside the column, its repository strip at the foot
   await context.close();
 });
 
+test('the workspace chosen in a tab is kept from screen to screen, not the one used last', async ({ browser }) => {
+  // Two workspaces at least: one more folder, added as the switcher adds one.
+  const name = own('elsewhere');
+  mkdirSync(path.join(process.env.E2E_DATA, name), { recursive: true });
+  const { context, page } = await signedIn(browser, 'alice');
+  await page.getByRole('button', { name: /^Workspace:/ }).click();
+  await page.getByRole('button', { name: 'Add folder…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add folder' });
+  await dialog.getByRole('button', { name: process.env.E2E_DATA, exact: true }).click();
+  await dialog.getByRole('button', { name, exact: true }).click();
+  await dialog.getByRole('button', { name: 'Make this folder a workspace' }).click();
+  await expect(page.getByRole('button', { name: `Workspace: ${name}` })).toBeVisible();
+
+  // The one used last, as a tab with no choice of its own opens on it: the one to choose is the other.
+  const fresh = await context.newPage();
+  await fresh.goto('/templates');
+  const usedLast = (await fresh.getByRole('button', { name: /^Workspace:/ }).getAttribute('aria-label')).replace('Workspace: ', '');
+  await fresh.close();
+  const chosen = usedLast === 'project' ? name : 'project';
+  await page.getByRole('button', { name: /^Workspace:/ }).click();
+  await page.locator('.switcher').getByRole('link', { name: new RegExp(`^${chosen}`) }).click();
+  await expect(page.getByRole('button', { name: `Workspace: ${chosen}` })).toBeVisible();
+
+  // Every screen about a workspace opens on the one chosen, by the rail's links, which name none - and back on Runs.
+  const rail = page.getByRole('navigation', { name: 'Sections' });
+  for (const section of ['Templates · a saved task', 'Schedules · run it on a day and a time', 'Timeline · project memory', 'Runs']) {
+    await rail.getByRole('link', { name: section, exact: true }).click();
+    await expect(page.getByRole('button', { name: `Workspace: ${chosen}` })).toBeVisible();
+  }
+  await context.close();
+});
+
 test('the workspace switcher adds a folder and switches to it, and nothing outside the roots is offered', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
   // The switcher's Add folder… opens the folder browser in a dialog over the Runs screen.

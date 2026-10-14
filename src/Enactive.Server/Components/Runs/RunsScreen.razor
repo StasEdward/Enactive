@@ -10,6 +10,7 @@
 @inject IRunControl Runs
 @inject ServerHistory History
 @inject WorkspaceIds Ids
+@inject ChosenWorkspace Chosen
 @inject NavigationManager Navigation
 
 @if (RunId is null && PastRunId is null)
@@ -114,15 +115,19 @@
             _live = null;
 
         // An id that does not parse names no workspace (Guid.Empty is no folder's), rather than the one used last.
-        _wanted = WorkspaceId is { } pastWorkspace ? pastWorkspace
+        var known = History.Workspaces(user);
+        _wanted = Chosen.Wanted(
+            WorkspaceId is { } pastWorkspace ? pastWorkspace
             : Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty
             // A run's address names no workspace: the column shows the run's, as the window's shows the folder of the run
             // it watches - with the one used last there, Run under a run would have started in another folder than its.
             : RunId is { } runId && Runs.Find(user, runId) is { } run ? Ids.TryIdOf(run.Workspace)
-            : null;
+            : null,
+            known, Ids);
 
         // The command bar runs in the workspace the column shows, as the window's does; none when the address names one
         // the service does not know - a run is never started in another folder than the one on screen.
-        _shown = WorkspaceColumnState.Choose(History.Workspaces(user), _wanted, Ids);
+        _shown = WorkspaceColumnState.Choose(known, _wanted, Ids);
+        Chosen.Shown(_shown, Ids);
     }
 }
