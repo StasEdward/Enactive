@@ -156,7 +156,7 @@
         var user = (await Auth).User;
         // The workspace the Templates screen opens on, whose templates the Templates section lists with the global ones.
         var known = History.Workspaces(user);
-        var workspace = WorkspaceColumnState.Choose(known, Chosen.Wanted(null, known, Ids), Ids);
+        var workspace = WorkspaceColumnState.Choose(known, Chosen.Wanted(null, known, Ids, user), Ids);
         _templatesWorkspace = workspace is null ? null : Ids.TryIdOf(workspace.RootPath);
         _templatesRoot = workspace?.RootPath;
 

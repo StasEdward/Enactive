@@ -501,6 +501,15 @@ test('the workspace chosen in a tab is kept from screen to screen, not the one u
     await expect(page.getByRole('button', { name: `Workspace: ${chosen}` })).toBeVisible();
   }
   await context.close();
+
+  // Signed in again in another browser - the connection, the tab and the session all gone: still the one chosen, kept
+  // for the account on the service.
+  const again = await signedIn(browser, 'alice');
+  await expect(again.page.getByRole('button', { name: `Workspace: ${chosen}` })).toBeVisible();
+  await again.page.goto('/settings');
+  await again.page.goto('/templates');
+  await expect(again.page.getByRole('button', { name: `Workspace: ${chosen}` })).toBeVisible();
+  await again.context.close();
 });
 
 test('the workspace switcher adds a folder and switches to it, and nothing outside the roots is offered', async ({ browser }) => {

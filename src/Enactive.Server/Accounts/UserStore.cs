@@ -65,6 +65,9 @@ internal sealed class UserStore
                 action  TEXT NOT NULL,
                 detail  TEXT,
                 remote  TEXT);
+            CREATE TABLE IF NOT EXISTS chosen_workspace (
+                account   TEXT PRIMARY KEY COLLATE NOCASE,
+                workspace TEXT NOT NULL);
             """);
     }
 
@@ -250,6 +253,33 @@ internal sealed class UserStore
         using var db = Open();
         Execute(db, $"UPDATE users SET {assignments}, stamp = $stamp WHERE name = $name", value, ("$stamp", NewStamp()), ("$name", name));
         return null;
+    }
+
+    // ── the workspace each person is on ─────────────────────────────────────
+
+    /// <summary>
+    /// The workspace this account chose last, by its id (WorkspaceIds), or null. Kept on the service, not in a tab: a
+    /// tab's choice went with its connection, and a page opened again after a dropped connection, a restart of the
+    /// service or a sign-in opened on the folder of the latest run anybody started - as the window opens on the folder it
+    /// was left in, the person's own. A preference, so neither the sessions' stamp nor the audit is touched.
+    /// </summary>
+    public Guid? ChosenWorkspace(string account)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT workspace FROM chosen_workspace WHERE account = $account";
+        command.Parameters.AddWithValue("$account", account);
+        return command.ExecuteScalar() is string text && Guid.TryParse(text, out var id) ? id : null;
+    }
+
+    /// <summary>Keeps <paramref name="workspace"/> as the one this account chose last.</summary>
+    public void ChooseWorkspace(string account, Guid workspace)
+    {
+        using var db = Open();
+        Execute(db, """
+            INSERT INTO chosen_workspace (account, workspace) VALUES ($account, $workspace)
+            ON CONFLICT (account) DO UPDATE SET workspace = excluded.workspace
+            """, ("$account", account), ("$workspace", workspace.ToString("D")));
     }
 
     // ── audit ───────────────────────────────────────────────────────────────

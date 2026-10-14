@@ -62,9 +62,9 @@
     {
         var user = (await Auth).User;
         var known = History.Workspaces(user);
-        Guid? wanted = Chosen.Wanted(Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null, known, Ids);
+        Guid? wanted = Chosen.Wanted(Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null, known, Ids, user);
         var selected = WorkspaceColumnState.Choose(known, wanted, Ids);
-        Chosen.Shown(selected, Ids);
+        Chosen.Shown(selected, Ids, user);
         _switcher = WorkspaceColumnState.Switcher(known, selected, Ids);
 
         if (selected is null)

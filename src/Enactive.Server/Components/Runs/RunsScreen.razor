@@ -123,11 +123,11 @@
             // it watches - with the one used last there, Run under a run would have started in another folder than its.
             : RunId is { } runId && Runs.Find(user, runId) is { } run ? Ids.TryIdOf(run.Workspace)
             : null,
-            known, Ids);
+            known, Ids, user);
 
         // The command bar runs in the workspace the column shows, as the window's does; none when the address names one
         // the service does not know - a run is never started in another folder than the one on screen.
         _shown = WorkspaceColumnState.Choose(known, _wanted, Ids);
-        Chosen.Shown(_shown, Ids);
+        Chosen.Shown(_shown, Ids, user);
     }
 }
