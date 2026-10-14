@@ -528,9 +528,22 @@ test('settings show their short values in short boxes, six to a row on a wide sc
   expect(shown[0].first).toBe(6);
   for (const row of shown) expect(row.widest).toBeLessThan(200);
 
+  // The provider editor: the models under the model's numbers, in the right column, not a screen down on the left.
+  await page.goto('/settings/ai-providers');
+  await page.getByRole('button', { name: /^Edit/ }).first().click();
+  const editor = page.getByRole('dialog', { name: 'Provider' });
+  const models = await editor.getByLabel('Models', { exact: true }).boundingBox();
+  const contextWindow = await editor.getByLabel('Context window (tokens)').boundingBox();
+  const url = await editor.getByLabel('Base URL').boundingBox();
+  expect(Math.abs(models.x - contextWindow.x)).toBeLessThanOrEqual(1);
+  expect(models.x).toBeGreaterThan(url.x + url.width);
+  await editor.getByRole('button', { name: 'Cancel' }).click();
+
   // A phone: two to a row, and nothing wider than the screen.
+  await page.goto('/settings/ai-general');
+  await expect(page.getByLabel('Planner', { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect.poll(async () => (await rows())[0].first).toBe(2);
+  await expect.poll(async () => (await rows())[0]?.first).toBe(2);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await context.close();
 });

@@ -54,28 +54,6 @@
                 <textarea id="provider-headers" rows="2" autocomplete="off" placeholder="extra headers — one Header-Name: value per line"
                           @bind="Editor.NewHeadersText"></textarea>
                 <label class="check"><input type="checkbox" @bind="Editor.ForgetHeaders" /> Remove its headers</label>
-
-                <label class="label" for="provider-models">Models</label>
-                <textarea id="provider-models" rows="6" placeholder="models — one per line" @bind="Editor.ModelsText"></textarea>
-
-                @* Ask the provider what it actually serves, then pick one to add to the list above. *@
-                <div class="settings-fetch">
-                    <select aria-label="Fetched models" value="" @onchange="Pick">
-                        <option value="">fetched models…</option>
-                        @foreach (var model in Editor.FetchedModels)
-                        {
-                            <option value="@model">@model</option>
-                        }
-                    </select>
-                    <button type="button" class="btn" @onclick="() => Editor.FetchCommand.ExecuteAsync()">Fetch</button>
-                </div>
-
-                @* Test asks whether it is there AND has the first model listed: the light is the answer, grey until asked. *@
-                <div class="settings-test">
-                    <button type="button" class="btn" title="Ask this provider for its model list, and check that the first model above is among them"
-                            @onclick="() => Editor.TestCommand.ExecuteAsync()">Test</button>
-                    <span class="@($"health-dot {Looks.Health(Editor.Health)}")" role="img" aria-label="@Editor.Health.ToString()"></span>
-                </div>
             </div>
 
             <div class="settings-editor-column">
@@ -136,6 +114,30 @@
                     <label class="check"><input type="checkbox" @bind="Editor.OpenAiReasoningProfile" /> OpenAI reasoning compatibility (developer role, no temperature)</label>
                     <label class="check"><input type="checkbox" @bind="Editor.SendReasoningBack" /> Send the model's reasoning back with its earlier turns (Qwen3.6 preserve_thinking, llama.cpp --reasoning-preserve)</label>
                 }
+
+                @* The models under the model's numbers: in the connection's column the editor ran a screen down on the left
+                   while the right one stood half empty. *@
+                <label class="label" for="provider-models">Models</label>
+                <textarea id="provider-models" rows="6" placeholder="models — one per line" @bind="Editor.ModelsText"></textarea>
+
+                @* Ask the provider what it actually serves, then pick one to add to the list above. *@
+                <div class="settings-fetch">
+                    <select aria-label="Fetched models" value="" @onchange="Pick">
+                        <option value="">fetched models…</option>
+                        @foreach (var model in Editor.FetchedModels)
+                        {
+                            <option value="@model">@model</option>
+                        }
+                    </select>
+                    <button type="button" class="btn" @onclick="() => Editor.FetchCommand.ExecuteAsync()">Fetch</button>
+                </div>
+
+                @* Test asks whether it is there AND has the first model listed: the light is the answer, grey until asked. *@
+                <div class="settings-test">
+                    <button type="button" class="btn" title="Ask this provider for its model list, and check that the first model above is among them"
+                            @onclick="() => Editor.TestCommand.ExecuteAsync()">Test</button>
+                    <span class="@($"health-dot {Looks.Health(Editor.Health)}")" role="img" aria-label="@Editor.Health.ToString()"></span>
+                </div>
             </div>
         </div>
 
