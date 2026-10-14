@@ -771,8 +771,8 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .settings-grants .grant-orphan { color: var(--warning); }
 /* The editors over the settings: the provider's two columns (ProviderEditWindow.axaml), one for the others. */
 .dialog.dialog-wide { width: min(1040px, calc(100vw - 32px)); }
-/* The team member editor: half as wide again as a dialog (520 px), for its two columns. */
-.dialog.dialog-team { width: min(780px, calc(100vw - 32px)); }
+/* The team member editor: wider than a dialog (520 px), for its two columns. */
+.dialog.dialog-team { width: min(880px, calc(100vw - 32px)); }
 .settings-editor-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 .settings-editor-column { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .settings-editor-column p { margin: 0; }

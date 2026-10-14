@@ -12,11 +12,17 @@
     <ChildContent>
         <div class="settings-editor-columns">
         <div class="settings-editor-column">
-            <label class="label" for="worker-id">Id</label>
-            <input id="worker-id" placeholder="id — unique, e.g. developer, architect" @bind="Editor.Id" />
-
-            <label class="label" for="worker-role">Role</label>
-            <input id="worker-role" placeholder="role name shown in the picker" @bind="Editor.Role" />
+            @* Id and Role are short, side by side: one to a line, they pushed the instructions down for two words. *@
+            <div class="settings-pair">
+                <span class="settings-field">
+                    <span class="settings-label-row"><label class="label" for="worker-id">Id</label><HintMark Of="Id" Text="Unique among the team, e.g. developer, architect." /></span>
+                    <input id="worker-id" placeholder="e.g. developer" @bind="Editor.Id" />
+                </span>
+                <span class="settings-field">
+                    <span class="settings-label-row"><label class="label" for="worker-role">Role</label><HintMark Of="Role" Text="The role's name, as the Runs screen's picker shows it." /></span>
+                    <input id="worker-role" placeholder="e.g. Developer" @bind="Editor.Role" />
+                </span>
+            </div>
 
             <label class="label" for="worker-instructions">Instructions</label>
             <textarea id="worker-instructions" rows="14" placeholder="base instructions (honesty rules + global instructions are added automatically)"

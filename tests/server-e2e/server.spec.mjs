@@ -558,19 +558,25 @@ test('settings show their short values in short boxes, six to a row on a wide sc
   await context.close();
 });
 
-test('the team member editor is half as wide again in two columns, and a template id, name and category share a row', async ({ browser }) => {
+test('the team member editor is wider and in two columns, and a template id, name and category share a row', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'ada');
   await page.setViewportSize({ width: 1600, height: 900 });
   const box = (locator) => locator.boundingBox();
 
-  // Team member: 780 px across, who it is on the left, what it may use on the right.
+  // Team member: 880 px across, who it is on the left, what it may use on the right.
   await page.goto('/settings/ai-team');
   await page.getByRole('button', { name: /^Edit/ }).first().click();
   const member = page.getByRole('dialog', { name: 'Team member' });
-  expect(Math.round((await box(member)).width)).toBe(780);
+  expect(Math.round((await box(member)).width)).toBe(880);
   const instructions = await box(member.getByLabel('Instructions', { exact: true }));
   const level = await box(member.getByLabel('Permission level', { exact: true }));
   expect(level.x).toBeGreaterThan(instructions.x + instructions.width);
+  // Id and Role side by side over the instructions.
+  const memberId = await box(member.getByLabel('Id', { exact: true }));
+  const role = await box(member.getByLabel('Role', { exact: true }));
+  expect(Math.abs(role.y - memberId.y)).toBeLessThanOrEqual(1);
+  expect(role.x).toBeGreaterThan(memberId.x + memberId.width);
+  expect(role.x + role.width).toBeLessThanOrEqual(instructions.x + instructions.width + 1);
   await member.getByRole('button', { name: 'Cancel' }).click();
 
   // A template: Id, Name and Category in one row, the description under them across the form.
