@@ -368,6 +368,8 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .run-pair { display: flex; gap: 6px; }
 .run-pair .run { width: 86px; }
 .run-pair .stop { width: 64px; }
+/* One line, as tall as Run: wrapped onto two, it made the two rows of buttons taller than the box beside them. */
+.run-buttons .run-background { white-space: nowrap; padding-left: 6px; padding-right: 6px; }
 .bar-divider { flex: none; width: 1px; align-self: stretch; margin: 2px 12px; background: var(--border); }
 .run-settings { flex: none; width: 252px; display: grid; gap: 4px; }
 .settings-row { display: flex; align-items: center; }

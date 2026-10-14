@@ -595,6 +595,18 @@ test('the team member editor is wider and in two columns, and a template id, nam
   await context.close();
 });
 
+test('the command bar buttons are no taller than the box beside them, Run in background on one line', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'alice');
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const task = await page.getByLabel('Task', { exact: true }).boundingBox();
+  const run = await page.getByRole('button', { name: 'Run', exact: true }).boundingBox();
+  const background = await page.getByRole('button', { name: 'Run in background', exact: true }).boundingBox();
+  // As tall as Run - one line, not two - and the two rows end where the box does, or above.
+  expect(Math.abs(background.height - run.height)).toBeLessThanOrEqual(1);
+  expect(background.y + background.height).toBeLessThanOrEqual(task.y + task.height + 1);
+  await context.close();
+});
+
 test('the workspace switcher adds a folder and switches to it, and nothing outside the roots is offered', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
   // The switcher's Add workspace… opens the folder browser in a dialog over the Runs screen.

@@ -55,7 +55,7 @@
                        found without competing with Run. *@
                     <button type="button" class="btn destructive stop" disabled="@(!busy)" @onclick="State.Stop">Stop</button>
                 </div>
-                <button type="button" class="btn go-soft" disabled="@busy" @onclick="RunInBackground"
+                <button type="button" class="btn go-soft run-background" disabled="@busy" @onclick="RunInBackground"
                         title="Runs it headless: the window stays free and it reports back to the Inbox when it is done.">Run in background</button>
             </div>
 
