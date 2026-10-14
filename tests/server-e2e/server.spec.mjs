@@ -688,16 +688,15 @@ test('an admin adds a provider with its key on the settings page, and the key ne
   await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Providers' }).click();
   await expect(page).toHaveURL(/\/settings\/ai-providers$/);
 
-  // Added in the window's provider editor, over the settings; Apply puts it into the copy, Save writes it.
+  // Added in the window's provider editor, over the settings; its Save writes it, with no Save of the page.
   await page.getByRole('button', { name: 'Add', exact: true }).click();
   let editor = page.getByRole('dialog', { name: 'Provider' });
   await editor.getByLabel('Id', { exact: true }).fill(box);
   await editor.getByLabel('Base URL', { exact: true }).fill('http://127.0.0.1:8080/v1');
   await editor.getByLabel('API key', { exact: true }).fill('sk-e2e-secret');
   await editor.getByLabel('Models', { exact: true }).fill('qwen');
-  await editor.getByRole('button', { name: 'Apply' }).click();
+  await editor.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByRole('list', { name: 'Providers' }).getByText(box, { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByText(/^Saved\./)).toBeVisible();
 
   // Opened again, the key is said to be kept - and is nowhere on the page, not even as the value of its box.
@@ -727,9 +726,9 @@ test('an admin adds an MCP server with a token header, and the page names the he
   await editor.getByLabel('Transport').selectOption('Http');
   await editor.getByLabel('Endpoint', { exact: true }).fill('https://mcp.example.com/');
   await editor.getByLabel(/New headers/).fill('Authorization: Bearer tk-e2e-secret');
+  // Its Save writes it: reloaded with no Save of the page, the server and its header's name are there.
   await editor.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByRole('list', { name: 'MCP servers' }).getByText(tracker, { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByText(/^Saved\./)).toBeVisible();
 
   await page.reload();

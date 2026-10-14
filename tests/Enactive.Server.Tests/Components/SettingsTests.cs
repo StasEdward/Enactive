@@ -319,8 +319,9 @@ public sealed class SettingsTests : ComponentHost
     }
 
     /// <summary>
-    /// A provider added in the window's editor, its key typed there, is in the settings once they are saved - encrypted on
-    /// disk, and said as kept, never shown, when they are opened again.
+    /// A provider added in the window's editor, its key typed there, is in the settings when the editor's Save is pressed -
+    /// written at once, not left in the page's copy for a Save below the sections; encrypted on disk, and said as kept,
+    /// never shown, when they are opened again.
     /// </summary>
     [Fact]
     public void A_provider_added_with_its_key_is_saved_and_its_key_kept()
@@ -332,11 +333,9 @@ public sealed class SettingsTests : ComponentHost
         screen.Find("#provider-url").Change("http://127.0.0.1:8080/v1");
         screen.Find("#provider-key").Input("sk-typed-here");
         screen.Find("#provider-models").Change("qwen");
-        Press(screen, "Apply");
+        screen.FindAll("[role='dialog'] button").Single(b => b.TextContent.Trim() == "Save").Click();
+
         screen.WaitForAssertion(() => Assert.Contains(screen.FindAll(".settings-card .card-title"), t => t.TextContent.Trim() == "box"));
-
-        Press(screen, "Save");
-
         screen.WaitForAssertion(() => Assert.StartsWith("Saved.", screen.Find(".settings-said").TextContent.Trim()));
         var box = AppSettings.Load(Engine.SettingsFile).Providers.Single(p => p.Id == "box");
         Assert.Equal("sk-typed-here", box.ApiKey);

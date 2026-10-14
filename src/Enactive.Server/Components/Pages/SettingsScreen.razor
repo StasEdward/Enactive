@@ -112,7 +112,7 @@
 
 @if (_mcpEditor is { } mcpEditor)
 {
-    <McpEditor Draft="mcpEditor.Draft" Saved="mcpEditor.Saved" OnClose="() => _mcpEditor = null" />
+    <McpEditor Draft="mcpEditor.Draft" Saved="@(draft => { mcpEditor.Saved(draft); WriteNow(); })" OnClose="() => _mcpEditor = null" />
 }
 
 @code {
@@ -244,10 +244,19 @@
         question.Answer.TrySetResult(yes);
     }
 
+    /// <summary>
+    /// An editor's Save writes the settings now, as the page's Save does (ServerSettings: the person, the file's version,
+    /// the audit): put only into the page's copy, a server, a provider or a team member added in its window was gone at
+    /// the next reload when the page's own Save, out of sight below the sections, was not pressed too. The copy is one
+    /// for the page, so what else was changed on it is written with it. A refusal is said under the sections, and the
+    /// copy keeps every change for another try.
+    /// </summary>
+    private void WriteNow() => _ = InvokeAsync(SaveAsync);
+
     private void EditProvider(ProviderConfig config, Action saved)
     {
         // Asked as the settings ask, so Test and Fetch use the key kept for this provider (ServerSettings).
-        var editor = new ProviderEditViewModel(config, saved, _vm!.ProviderCalls);
+        var editor = new ProviderEditViewModel(config, () => { saved(); WriteNow(); }, _vm!.ProviderCalls);
         editor.CloseRequested += () =>
         {
             _providerEditor = null;
@@ -259,7 +268,7 @@
 
     private void EditWorker(WorkerConfig config, IReadOnlyList<string> catalog, Action saved)
     {
-        var editor = new WorkerEditViewModel(config, catalog, _vm!.ToolNames, saved);
+        var editor = new WorkerEditViewModel(config, catalog, _vm!.ToolNames, () => { saved(); WriteNow(); });
         editor.CloseRequested += () =>
         {
             _workerEditor = null;
