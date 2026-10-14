@@ -5,7 +5,7 @@
 
 @* The window's repository strip, at the foot of the run (MainWindow.axaml 1262-1310): the branch's pull request with its
    checks when GitHub can be asked, then the repository, the branch, how far from its upstream, and what is not committed
-   - added green, removed red, as git and GitHub show them. Only where there is a repository. The number and the checks
+   - added green, removed red, as git and GitHub show them; "No git repository" for a folder that is none. The number and the checks
    open their pages; anywhere else on the strip reads it again. What it says is RepoBar's, the window's own. *@
 
 @if (_bar.IsVisible)
@@ -44,6 +44,17 @@
                 @onclick="() => ReadAsync(forcePullRequest: true)" @onclick:stopPropagation="true">⟳</button>
     </div>
 }
+else
+{
+    @* Always there, the foot of the screen whatever the folder: gone for a folder with no repository, the screen's foot
+       moved with the workspace chosen, and nothing said whether git had been asked at all. Read again on a click, as
+       for a repository - a folder made one since is shown then. *@
+    <div class="repo-bar repo-none" title="Read the folder again" @onclick="() => ReadAsync(forcePullRequest: true)">
+        <span class="repo-muted">@Absent</span>
+        <button type="button" class="row-icon repo-again" aria-label="Read the repository again" title="Read the repository again"
+                @onclick="() => ReadAsync(forcePullRequest: true)" @onclick:stopPropagation="true">⟳</button>
+    </div>
+}
 
 @code {
     /// <summary>The workspace's folder; none, no strip.</summary>
@@ -67,6 +78,11 @@
     // through the one place all pages share (RepoReads), as this strip's clock goes with the page.
     private Model _bar = null!;
     private string? _root;
+
+    /// <summary>The folder git has answered about; until it has, the strip says nothing rather than "no repository".</summary>
+    private string? _answeredFor;
+
+    private string Absent => _root is null ? "No workspace" : _answeredFor == _root ? "No git repository" : "";
     private int _reads = -1;
     private readonly CancellationTokenSource _gone = new();
 
@@ -91,7 +107,13 @@
         var gone = _gone.Token;
         try
         {
-            await _bar.ReadAsync(_root, forcePullRequest, StateHasChanged, gone);
+            var reading = _root;
+            await _bar.ReadAsync(reading, forcePullRequest, StateHasChanged, gone);
+            if (!gone.IsCancellationRequested && reading == _root)
+            {
+                _answeredFor = reading;
+                StateHasChanged();
+            }
         }
         catch (OperationCanceledException) when (gone.IsCancellationRequested)
         {

@@ -493,8 +493,10 @@ test('a run fills the screen beside the column, its repository strip at the foot
   await adding.getByRole('button', { name: 'Make this folder a workspace' }).click();
   await expect(page.getByRole('button', { name: `Workspace: ${other}` })).toBeVisible();
   await expect(strip.locator('.repo-name')).toHaveText(other);
+  // A folder that is no repository still has the strip, which says so.
   await onProject(page);
-  await expect(strip).toHaveCount(0);
+  await expect(strip).toHaveText(/No git repository/);
+  await expect(strip.locator('.repo-name')).toHaveCount(0);
   await page.getByRole('button', { name: /^Workspace:/ }).click();
   await page.locator('.switcher').getByRole('link', { name: new RegExp(`^${name}`) }).click();
   await expect(strip.locator('.repo-name')).toHaveText(name);
@@ -659,6 +661,10 @@ test('a question with a long line in its detail stays inside the status column, 
   const figures = await page.locator('.status-scroll').boundingBox();
   expect(performance.y + performance.height).toBeGreaterThan(900 - 48);
   expect(performance.y).toBeGreaterThan(figures.y + figures.height + 40);
+  // Current action too: its fixed height, at the foot of the run's views, whatever the feed above it holds.
+  const current = await page.locator('.current-action').boundingBox();
+  expect(Math.abs(current.height - 130)).toBeLessThanOrEqual(1);
+  expect(current.y + current.height).toBeGreaterThan(900 - 48);
   await context.close();
 });
 

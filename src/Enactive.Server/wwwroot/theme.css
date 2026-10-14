@@ -423,7 +423,10 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .runs-main > .live-run > .run-body { flex: 1; }
 .run-body > .status-column { align-self: stretch; }
 .status-column > .performance { margin-top: auto; }
-.run-views { display: grid; grid-template-rows: auto 130px; min-width: 0; }
+/* The views over Current action, the whole height of the run's body: Current action its fixed 130 px at the foot, over
+   the repository strip, as the window's; the views above it take what is left. Sized by their content, Current action
+   rose and fell with a short run's feed. */
+.run-views { display: grid; grid-template-rows: minmax(240px, 1fr) 130px; min-width: 0; align-self: stretch; }
 .run-view { min-height: 240px; max-height: 60vh; overflow-y: auto; padding: 12px 10px 12px 0; }
 .current-action { display: grid; grid-template-rows: auto 1fr; gap: 8px; padding: 12px 10px 12px 0; border-top: 1px solid var(--border);
   overflow: hidden; }

@@ -73,3 +73,25 @@ public sealed class RepoBarSharedReadingTests : ComponentHost
         public override DateTimeOffset GetUtcNow() => Now;
     }
 }
+
+/// <summary>
+/// The strip is always there on the Runs screen: a folder that is no repository says so, and so does a screen with no
+/// workspace - gone for either, the screen's foot moved with the workspace chosen. Until git has answered it says nothing,
+/// not "no repository" about a folder it has not read. (ComponentHost answers git with "none", at once.)
+/// </summary>
+public sealed class RepoBarAbsentTests : ComponentHost
+{
+    [Fact]
+    public void A_folder_that_is_no_repository_says_so()
+    {
+        var strip = Render<RepoBar>(p => p.Add(x => x.Root, Path.GetTempPath()));
+        strip.WaitForAssertion(() => Assert.Equal("No git repository", strip.Find(".repo-bar .repo-muted").TextContent.Trim()));
+    }
+
+    [Fact]
+    public void No_workspace_is_said_as_none()
+    {
+        var strip = Render<RepoBar>();
+        strip.WaitForAssertion(() => Assert.Equal("No workspace", strip.Find(".repo-bar .repo-muted").TextContent.Trim()));
+    }
+}
