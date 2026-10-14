@@ -637,6 +637,25 @@ test('the command bar buttons are no taller than the box beside them, Run in bac
   await context.close();
 });
 
+test('a question with a long line in its detail stays inside the status column', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'alice');
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await startRun(page, 'a question with a long detail');
+  await expect(question(page)).toBeVisible();
+  const column = page.getByRole('complementary', { name: 'Status' });
+  const before = await column.boundingBox();
+  // A success check's command as the planner writes it: one line, far wider than the column.
+  await page.locator('.decision-detail').evaluate((detail) => {
+    detail.textContent = 'if (-not (Test-Path report.md) -or (Get-Item report.md).Length -eq 0) { exit 1 } '.repeat(6);
+  });
+  const after = await column.boundingBox();
+  const card = await question(page).boundingBox();
+  expect(Math.abs(after.width - before.width)).toBeLessThanOrEqual(1);
+  expect(card.x + card.width).toBeLessThanOrEqual(after.x + after.width + 1);
+  await answerWhateverWaits(page);
+  await context.close();
+});
+
 test('the workspace switcher adds a folder and switches to it, and nothing outside the roots is offered', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
   // The switcher's Add workspace… opens the folder browser in a dialog over the Runs screen.

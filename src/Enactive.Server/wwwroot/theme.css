@@ -460,7 +460,9 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 
 /* The status column: tiles two by two, ROUTING and WHERE IT RAN as label | value rows, the question, the model figures. */
 .status-column { display: flex; flex-direction: column; gap: 12px; padding: 12px 0 12px 6px; min-width: 0; }
-.status-scroll { display: grid; gap: 8px; align-content: start; }
+/* One column no wider than the status column: sized by its widest line, a question whose detail had a long command line
+   pushed the column, its tiles and the card past the run and off the screen. */
+.status-scroll { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-content: start; }
 .status-column .panel-row { margin: 0; }
 .status-block { display: grid; gap: 2px; margin-top: 6px; }
 .tiles-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
@@ -480,7 +482,8 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .decision { padding: 12px; background: var(--decision-fill); border: 1px solid var(--amber-400); border-radius: 6px; }
 .decision-head { margin: 0; font-family: var(--font-sans); font-size: 13px; font-weight: 700; letter-spacing: normal; }
 .decision-topic { margin: 4px 0 0; font-size: 12px; }
-.decision-detail { margin: 8px 0 0; padding: 8px; max-height: 220px; overflow: auto; font-size: 12px; white-space: pre;
+/* Wrapped, never wider than the card: a success check's command is one long line. */
+.decision-detail { margin: 8px 0 0; padding: 8px; max-height: 220px; overflow: auto; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere;
   background: var(--input-fill); border-radius: 4px; }
 .decision-answers { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 8px; }
 .decision-wait { margin: 8px 0 0; font-size: 11px; color: var(--text-muted); }
