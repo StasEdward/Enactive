@@ -391,7 +391,7 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         engine.Workspaces.Remove(known.RootPath);
         users.Audit(account.Name, "workspace forgotten",
             $"{known.RootPath} ({Count(going, "run")} going, {waiting} waiting, {Count(schedules, "schedule")})");
-        return $"\u201c{known.Name}\u201d is forgotten. The folder and its run history are where they were; Add folder\u2026 brings it back. "
+        return $"\u201c{known.Name}\u201d is forgotten. The folder and its run history are where they were; Add workspace\u2026 brings it back. "
                + Going(going, waiting) + " " + Stopped(schedules);
     }
 

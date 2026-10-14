@@ -201,7 +201,7 @@ public sealed class NarrowScreenTests : ComponentHost
             .Add(d => d.Id, DrawerState.Id)
             .Add(d => d.Open, true)
             .Add(d => d.OnClose, () => _closed++)
-            .AddChildContent<Dialog>(d => d.Add(x => x.Title, "Add folder").Add(x => x.OnClose, () => dialogClosed = true)));
+            .AddChildContent<Dialog>(d => d.Add(x => x.Title, "Add workspace").Add(x => x.OnClose, () => dialogClosed = true)));
 
         drawer.Find("[role=dialog]").KeyDown(new KeyboardEventArgs { Key = "Escape" });
 

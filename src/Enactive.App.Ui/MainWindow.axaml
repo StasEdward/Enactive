@@ -256,7 +256,7 @@
                                         </ItemsControl>
                                     </ScrollViewer>
 
-                                    <Button Content="Add folder…" FontSize="12"
+                                    <Button Content="Add workspace…" FontSize="12"
                                             HorizontalAlignment="Stretch"
                                             HorizontalContentAlignment="Center"
                                             Command="{Binding AddWorkspaceCommand}" />

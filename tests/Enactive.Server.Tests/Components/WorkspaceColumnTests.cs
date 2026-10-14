@@ -118,7 +118,7 @@ public sealed class WorkspaceColumnTests : ComponentHost
         // What an Operator is offered on the same screen - so the Viewer's absence of it is the role, not an empty page.
         var operating = Screen("alice", $"/?ws={IdOf(root)}", "tidy the notes");
         operating.Find("button.ws-card").Click();
-        Assert.Contains("Add folder…", Offered(operating));
+        Assert.Contains("Add workspace…", Offered(operating));
         Assert.Contains("Delete these 1", Offered(operating));
         Assert.Contains(Offered(operating), o => o.StartsWith("Resume", StringComparison.Ordinal));
         Assert.Contains("Delete: it can no longer be resumed", Offered(operating));
@@ -128,7 +128,7 @@ public sealed class WorkspaceColumnTests : ComponentHost
         Assert.Contains("digest the inbox", viewing.Markup);
         viewing.Find("button.ws-card").Click();
         var offered = Offered(viewing).ToList();
-        Assert.DoesNotContain("Add folder…", offered);
+        Assert.DoesNotContain("Add workspace…", offered);
         Assert.DoesNotContain(offered, o => o.StartsWith("Delete", StringComparison.Ordinal));
         Assert.DoesNotContain(offered, o => o.StartsWith("Resume", StringComparison.Ordinal));
     }

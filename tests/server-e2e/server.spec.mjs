@@ -441,8 +441,8 @@ test('a run fills the screen beside the column, its repository strip at the foot
   const { context, page } = await signedIn(browser, 'alice');
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.getByRole('button', { name: /^Workspace:/ }).click();
-  await page.getByRole('button', { name: 'Add folder…' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Add folder' });
+  await page.getByRole('button', { name: 'Add workspace…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add workspace' });
   await dialog.getByRole('button', { name: process.env.E2E_DATA, exact: true }).click();
   await dialog.getByRole('button', { name, exact: true }).click();
   await dialog.getByRole('button', { name: 'Make this folder a workspace' }).click();
@@ -477,8 +477,8 @@ test('the workspace chosen in a tab is kept from screen to screen, not the one u
   mkdirSync(path.join(process.env.E2E_DATA, name), { recursive: true });
   const { context, page } = await signedIn(browser, 'alice');
   await page.getByRole('button', { name: /^Workspace:/ }).click();
-  await page.getByRole('button', { name: 'Add folder…' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Add folder' });
+  await page.getByRole('button', { name: 'Add workspace…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add workspace' });
   await dialog.getByRole('button', { name: process.env.E2E_DATA, exact: true }).click();
   await dialog.getByRole('button', { name, exact: true }).click();
   await dialog.getByRole('button', { name: 'Make this folder a workspace' }).click();
@@ -597,10 +597,10 @@ test('the team member editor is wider and in two columns, and a template id, nam
 
 test('the workspace switcher adds a folder and switches to it, and nothing outside the roots is offered', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'alice');
-  // The switcher's Add folder… opens the folder browser in a dialog over the Runs screen.
+  // The switcher's Add workspace… opens the folder browser in a dialog over the Runs screen.
   await page.getByRole('button', { name: /^Workspace:/ }).click();
-  await page.getByRole('button', { name: 'Add folder…' }).click();
-  let dialog = page.getByRole('dialog', { name: 'Add folder' });
+  await page.getByRole('button', { name: 'Add workspace…' }).click();
+  let dialog = page.getByRole('dialog', { name: 'Add workspace' });
   await dialog.getByRole('button', { name: process.env.E2E_DATA, exact: true }).click();
   await dialog.getByRole('button', { name: 'reports', exact: true }).click();
   await dialog.getByRole('button', { name: 'Make this folder a workspace' }).click();
@@ -627,8 +627,8 @@ test('the workspace switcher adds a folder and switches to it, and nothing outsi
 
   // Nothing outside the roots is offered: Up from a root is the list of roots again, never the folder above it.
   await page.getByRole('button', { name: /^Workspace:/ }).click();
-  await page.getByRole('button', { name: 'Add folder…' }).click();
-  dialog = page.getByRole('dialog', { name: 'Add folder' });
+  await page.getByRole('button', { name: 'Add workspace…' }).click();
+  dialog = page.getByRole('dialog', { name: 'Add workspace' });
   await dialog.getByRole('button', { name: process.env.E2E_DATA, exact: true }).click();
   await dialog.getByRole('button', { name: 'Up' }).click();
   await expect(dialog.getByRole('button', { name: process.env.E2E_DATA, exact: true })).toBeVisible();
@@ -1079,11 +1079,11 @@ test('on a phone the runs screen stacks and a run can be started and answered', 
   await expect(button).toBeFocused();
 
   // A dialog opened in the drawer takes its own Escape: the drawer stays, with the focus back in it - what opened the
-  // dialog (Add folder…, in the switcher) is gone - so the next Escape reaches the drawer.
+  // dialog (Add workspace…, in the switcher) is gone - so the next Escape reaches the drawer.
   await button.click();
   await runsColumn(page).getByRole('button', { name: /^Workspace:/ }).click();
-  await page.getByRole('button', { name: 'Add folder…' }).click();
-  const browse = page.getByRole('dialog', { name: 'Add folder' });
+  await page.getByRole('button', { name: 'Add workspace…' }).click();
+  const browse = page.getByRole('dialog', { name: 'Add workspace' });
   await expect(browse).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(browse).toBeHidden();

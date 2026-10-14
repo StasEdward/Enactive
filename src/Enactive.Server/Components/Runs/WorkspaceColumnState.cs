@@ -45,7 +45,7 @@ internal sealed class WorkspaceColumnState(ServerHistory history, IRunControl ru
     public bool SelectedMissing => Current is { Exists: false };
 
     /// <summary>
-    /// Offered the Operator's actions - Add folder…, Delete these, carry on, forget, delete a run. Only offered: the
+    /// Offered the Operator's actions - Add workspace…, Delete these, carry on, forget, delete a run. Only offered: the
     /// service refuses each for anybody else at the action, whatever a page sent.
     /// </summary>
     public bool CanOperate => ServerAuth.RoleOf(user) >= Role.Operator;

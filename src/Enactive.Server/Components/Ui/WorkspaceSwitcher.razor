@@ -3,7 +3,7 @@
 
 @* The window's WORKSPACE card and its popup (MainWindow.axaml): the folder you are in, and on a click every workspace the
    service knows, each with its edge - blue where you are, red where the folder is gone, grey else (Looks.Workspace) -
-   and Add folder…. Choosing one is a link to the Runs screen on it, by its id: an address, so it can be opened in
+   and Add workspace…. Choosing one is a link to the Runs screen on it, by its id: an address, so it can be opened in
    another tab and comes back on reload. Where the page lets this person, each row has the window's Rename and Forget
    beside it (WorkspaceRows' words); the page asks and the service does it. *@
 
@@ -74,7 +74,7 @@
             </ul>
             @if (OnAdd.HasDelegate)
             {
-                <button type="button" class="btn add-folder" @onclick="AddAsync">Add folder…</button>
+                <button type="button" class="btn add-folder" @onclick="AddAsync">Add workspace…</button>
             }
         </div>
     }
@@ -87,7 +87,7 @@
     [Parameter] public SwitcherRow? Current { get; set; }
     [Parameter, EditorRequired] public Func<SwitcherRow, string> Href { get; set; } = _ => "/";
 
-    /// <summary>Add folder… - offered only when set (an Operator's; the service refuses it for anybody else).</summary>
+    /// <summary>Add workspace… - offered only when set (an Operator's; the service refuses it for anybody else).</summary>
     [Parameter] public EventCallback OnAdd { get; set; }
 
     /// <summary>A row's Rename - offered only when set (an Operator's; the service refuses it for anybody else).</summary>

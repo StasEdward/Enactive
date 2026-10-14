@@ -212,7 +212,7 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
     /// Said when a run is asked for in a folder the service does not know as a workspace. A run used to put such a folder
     /// back on its own (EngineExecutor touched it into the registry): one forgotten came back in everybody's switcher, with
     /// the default settings and nobody told, when a stale page pressed Run, a run waiting in the line got its turn or one
-    /// of its schedules came due. Adding a folder is Add folder…'s (ServerHistory.AddWorkspace), never a run's.
+    /// of its schedules came due. Adding a workspace is Add workspace…'s (ServerHistory.AddWorkspace), never a run's.
     /// </summary>
     internal const string NotAWorkspace = "The service does not know that folder as a workspace.";
 
