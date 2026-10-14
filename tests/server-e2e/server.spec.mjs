@@ -727,6 +727,9 @@ test('an operator writes a template and schedules it, and the schedule says when
 
   // Written on the editor's form (the window's), its parameter added on the form too.
   await page.getByRole('link', { name: 'New template', exact: true }).click();
+  // In a window over the library, as the window's editor opens over its Settings.
+  const editor = page.getByRole('dialog', { name: 'Template' });
+  await expect(editor).toBeVisible();
   // Exact: the parameter's own "id" is beside the template's "Id".
   await page.getByLabel('Id', { exact: true }).fill('digest');
   await page.getByLabel('Name', { exact: true }).fill('Digest');
@@ -745,7 +748,8 @@ test('an operator writes a template and schedules it, and the schedule says when
   await page.getByLabel('Kept in').selectOption('Workspace');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
 
-  // Back in the library, on the template saved: what it asks for, and what it will be asked to do.
+  // Back in the library, the window closed, on the template saved: what it asks for, and what it will be asked to do.
+  await expect(editor).toHaveCount(0);
   await expect(page.getByText("Saved 'Digest' to the workspace's library.")).toBeVisible();
   const template = page.getByRole('region', { name: 'Template' });
   await expect(template.getByText('Write the digest of {topic}.')).toBeVisible();

@@ -1,4 +1,6 @@
 @page "/templates"
+@* The editor's address: the library, with the editor in a window over it (TemplateEditor). *@
+@page "/templates/{Edit}"
 @using System.ComponentModel
 @using System.Security.Claims
 @using Enactive.Application
@@ -22,8 +24,8 @@
    to do", why it cannot run yet, and Run. What it shows and decides is the window's own view model (TemplatesViewModel),
    built by ServerLibrary for this workspace at its level; this draws it. The workspace is chosen in the switcher, as on
    the Runs screen. An Operator also has what the window's Settings, Templates section offers on a template - New, Edit
-   (Copy and edit for a built-in), Duplicate, Delete - the editor being a page of its own (TemplateEditor). Every action is
-   ServerLibrary's to decide, which checks the person again. *@
+   (Copy and edit for a built-in), Duplicate, Delete - the editor in a window over the library (TemplateEditor). Every
+   action is ServerLibrary's to decide, which checks the person again. *@
 
 <div class="templates-screen">
     <div class="templates-top">
@@ -149,6 +151,17 @@
     }
 </div>
 
+@* Offered to an Operator only: ServerLibrary refuses a draft to anybody else, and a Viewer at an editor's address reads
+   the template in the library. Closed - Escape, outside it - it is the library on the template it was opened on. *@
+@if (_canOperate && Edit is { Length: > 0 } edited)
+{
+    <Dialog Title="Template" Class="dialog-wide" OnClose="CloseEditor">
+        <ChildContent>
+            <TemplateEditor Id="@edited" />
+        </ChildContent>
+    </Dialog>
+}
+
 @if (_question is { } question)
 {
     <Dialog Title="@question.Headline" OnClose="Dismiss">
@@ -173,6 +186,9 @@
 
     /// <summary>The template to open the library on - the one just saved, or the one the editor was left from.</summary>
     [SupplyParameterFromQuery(Name = "t")] private string? Template { get; set; }
+
+    /// <summary>The template open in the editor over the library (Links.Template), or "New"; null with none open.</summary>
+    [Parameter] public string? Edit { get; set; }
 
 
     private ClaimsPrincipal _user = new();
@@ -213,8 +229,12 @@
         _root = selected.RootPath;
         // A known folder whose id cannot be read is Guid.Empty: its links name no workspace, and lead to "not known".
         _workspaceId = Ids.TryIdOf(_root) ?? Guid.Empty;
-        Load(Template);
+        // Under the editor, the library is on the template being edited.
+        Load(Template ?? (Edit is { } edit && edit != Links.NewTemplateId ? edit : null));
     }
+
+    private void CloseEditor()
+        => Navigation.NavigateTo(Links.Templates(_workspaceId == Guid.Empty ? null : _workspaceId, Edit == Links.NewTemplateId ? null : Edit));
 
     /// <summary>Reads the library again, on the template named when it is listed - as the window's Reload keeps it by id.</summary>
     private void Load(string? template)

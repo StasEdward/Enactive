@@ -89,6 +89,40 @@ public sealed class TemplatesTests : ComponentHost
     // ── the editor ──────────────────────────────────────────────────────────
 
     /// <summary>
+    /// The editor opens in a window over the library, as the window's opens over its Settings: the library stays on the
+    /// template being edited behind it - a page of its own took the library away while a template was being written.
+    /// </summary>
+    [Fact]
+    public void The_editor_opens_in_a_window_over_the_library_on_the_template_it_edits()
+    {
+        Saved();
+        SignIn("alice");
+        Navigation.NavigateTo($"/templates/digest?ws={WorkspaceId}");
+        var screen = Render<TemplatesScreen>(p => p.Add(s => s.Edit, "digest"));
+
+        screen.WaitForAssertion(() => Assert.NotNull(screen.Find("[role='dialog'] .template-editor")));
+        Assert.Equal("digest", screen.Find("[role='dialog'] #t-id").GetAttribute("value"));
+        // Behind it, the library - on the template being edited.
+        Assert.NotEmpty(screen.FindAll(".templates-list .template-card"));
+        Assert.Contains("Write the digest of", screen.Find(".template-goal").TextContent);
+    }
+
+    /// <summary>A Viewer at an editor's address reads the template in the library; no editor is offered.</summary>
+    [Fact]
+    public void A_viewer_at_an_editor_s_address_reads_the_template_and_is_offered_no_editor()
+    {
+        Saved();
+        SignIn("vera");
+        Navigation.NavigateTo($"/templates/digest?ws={WorkspaceId}");
+        var screen = Render<TemplatesScreen>(p => p.Add(s => s.Edit, "digest"));
+
+        screen.WaitForAssertion(() => Assert.NotEmpty(screen.FindAll(".templates-list .template-card")));
+        Assert.Empty(screen.FindAll("[role='dialog']"));
+        Assert.Empty(screen.FindAll(".template-editor"));
+    }
+
+
+    /// <summary>
     /// The form and the JSON are one template (TemplateEditViewModel): written on the form, read on the JSON tab, saved -
     /// and what is in the workspace's library is what the JSON tab showed, in the store's own format. Saving goes back to
     /// the library on the saved template, with what the service said.
