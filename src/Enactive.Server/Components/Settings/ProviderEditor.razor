@@ -27,20 +27,21 @@
                     }
                 </select>
 
-                <label class="label" for="provider-url">Base URL</label>
-                <input id="provider-url" placeholder="e.g. http://localhost:11434/v1" @bind="Editor.BaseUrl" />
                 @* Said where the address is typed: an address is kept in the clear, shown on this page to every Admin and
                    named in the audit trail, so a key typed into it (?api_key=...) is a key no longer kept secret. *@
-                <p class="hint settings-credentials">No key or token in the address - it is kept in the clear, shown here and named in the audit trail. A key goes in API key, any other credential in a header below.</p>
+                <span class="settings-label-row"><label class="label" for="provider-url">Base URL</label><HintMark Class="settings-credentials" Of="Base URL" Text="No key or token in the address - it is kept in the clear, shown here and named in the audit trail. A key goes in API key, any other credential in a header below." /></span>
+                <input id="provider-url" placeholder="e.g. http://localhost:11434/v1" @bind="Editor.BaseUrl" />
 
-                <label class="label" for="provider-key">API key</label>
+                <span class="settings-label-row">
+                    <label class="label" for="provider-key">API key</label>
+                    @if (Editor.KeyStored)
+                    {
+                        <HintMark Class="settings-stored" Of="API key" Text="A key is stored. Leave the box empty to keep it." />
+                    }
+                </span>
                 <input id="provider-key" type="password" autocomplete="new-password"
                        placeholder="@(Editor.KeyStored ? "stored — type a new one to replace it" : "blank for local providers")"
                        @bind="Editor.ApiKey" @bind:event="oninput" />
-                @if (Editor.KeyStored)
-                {
-                    <p class="hint settings-stored">A key is stored. Leave the box empty to keep it.</p>
-                }
                 @if (Editor.KeyStored || Editor.ForgetKey)
                 {
                     <label class="check"><input type="checkbox" @bind="Editor.ForgetKey" /> Remove the stored key</label>

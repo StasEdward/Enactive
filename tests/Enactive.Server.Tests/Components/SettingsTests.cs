@@ -232,6 +232,11 @@ public sealed class SettingsTests : ComponentHost
         StoreSecrets();
         var screen = Screen("ada", "web");
         Assert.Contains("No key or password in the address", screen.Find(".settings-pane .settings-credentials").TextContent);
+        // Said over the field's name - the "?" beside it, its words the tooltip - not as a line under the field: a line
+        // under every field pushed the form down a screen for words most people read once.
+        Assert.Contains("No key or password in the address",
+            screen.Find(".settings-pane .hint-mark.settings-credentials summary").GetAttribute("title"));
+        Assert.Empty(screen.FindAll("p.settings-credentials"));
 
         Go(screen, "ai-providers");
         Edit(screen, "cloud");

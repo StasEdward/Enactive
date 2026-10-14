@@ -7,8 +7,7 @@
    ran a dozen screen-wide boxes for four-digit values, and the section scrolled for what fits in two rows. What their
    long placeholders said is behind the "?" now - a short box shows a short example. *@
 
-<p class="label">Context and output budgets (tokens)</p>
-<p class="hint">Provider limits and remaining context may lower the output ceilings.</p>
+<span class="settings-label-row"><span class="label">Context and output budgets (tokens)</span><HintMark Of="Context and output budgets" Text="Provider limits and remaining context may lower the output ceilings." /></span>
 <div class="short-fields">
     <div class="short-field">
         <span class="settings-label-row"><label class="settings-small" for="ai-numctx">Context length (num_ctx)</label><HintMark Text="@($"{SettingsAdvice.NumCtx} Blank uses whatever the model already has loaded.")" Of="Context length" /></span>
@@ -60,8 +59,7 @@
     </div>
 </div>
 
-<p class="label">Repair consultant (optional)</p>
-<p class="hint">Sends the goal, current diff and error to the chosen model for advice, once per step attempt. The worker stays unchanged.</p>
+<span class="settings-label-row"><span class="label">Repair consultant (optional)</span><HintMark Of="Repair consultant" Text="Sends the goal, current diff and error to the chosen model for advice, once per step attempt. The worker stays unchanged." /></span>
 <input aria-label="Repair consultant model" placeholder="provider-id/model — blank disables consultation" @bind="Vm.RepairModelText" />
 
 <div class="settings-field">

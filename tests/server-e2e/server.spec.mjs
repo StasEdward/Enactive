@@ -534,7 +534,7 @@ test('settings show their short values in short boxes, six to a row on a wide sc
   const editor = page.getByRole('dialog', { name: 'Provider' });
   const models = await editor.getByLabel('Models', { exact: true }).boundingBox();
   const contextWindow = await editor.getByLabel('Context window (tokens)').boundingBox();
-  const url = await editor.getByLabel('Base URL').boundingBox();
+  const url = await editor.getByLabel('Base URL', { exact: true }).boundingBox();
   expect(Math.abs(models.x - contextWindow.x)).toBeLessThanOrEqual(1);
   expect(models.x).toBeGreaterThan(url.x + url.width);
   await editor.getByRole('button', { name: 'Cancel' }).click();
@@ -603,8 +603,8 @@ test('an admin adds a provider with its key on the settings page, and the key ne
   await page.getByRole('button', { name: 'Add', exact: true }).click();
   let editor = page.getByRole('dialog', { name: 'Provider' });
   await editor.getByLabel('Id', { exact: true }).fill(box);
-  await editor.getByLabel('Base URL').fill('http://127.0.0.1:8080/v1');
-  await editor.getByLabel('API key').fill('sk-e2e-secret');
+  await editor.getByLabel('Base URL', { exact: true }).fill('http://127.0.0.1:8080/v1');
+  await editor.getByLabel('API key', { exact: true }).fill('sk-e2e-secret');
   await editor.getByLabel('Models', { exact: true }).fill('qwen');
   await editor.getByRole('button', { name: 'Apply' }).click();
   await expect(page.getByRole('list', { name: 'Providers' }).getByText(box, { exact: true })).toBeVisible();
@@ -616,8 +616,9 @@ test('an admin adds a provider with its key on the settings page, and the key ne
   await expect(page.getByRole('list', { name: 'Providers' }).getByText(box, { exact: true })).toBeVisible();
   await page.getByRole('button', { name: `Edit ${box}`, exact: true }).click();
   editor = page.getByRole('dialog', { name: 'Provider' });
-  await expect(editor.getByText('A key is stored. Leave the box empty to keep it.')).toBeVisible();
-  await expect(editor.getByLabel('API key')).toHaveValue('');
+  // Said over the key's name, as the "?" beside it and its tooltip.
+  await expect(editor.getByLabel('About API key')).toHaveAttribute('title', 'A key is stored. Leave the box empty to keep it.');
+  await expect(editor.getByLabel('API key', { exact: true })).toHaveValue('');
   expect(await page.content()).not.toContain('sk-e2e-secret');
   await context.close();
 });
@@ -635,7 +636,7 @@ test('an admin adds an MCP server with a token header, and the page names the he
   let editor = page.getByRole('dialog', { name: 'MCP server' });
   await editor.getByLabel('Server ID').fill(tracker);
   await editor.getByLabel('Transport').selectOption('Http');
-  await editor.getByLabel('Endpoint').fill('https://mcp.example.com/');
+  await editor.getByLabel('Endpoint', { exact: true }).fill('https://mcp.example.com/');
   await editor.getByLabel(/New headers/).fill('Authorization: Bearer tk-e2e-secret');
   await editor.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByRole('list', { name: 'MCP servers' }).getByText(tracker, { exact: true })).toBeVisible();
@@ -654,18 +655,18 @@ test('a change in one settings section is kept while another is open, and Cancel
   const { context, page } = await signedIn(browser, 'ada');
   await page.goto('/settings/web');
   const sections = page.getByRole('navigation', { name: 'Settings sections' });
-  await page.getByLabel('Let tasks read the web').check();
-  await page.getByLabel('Search server').fill('http://localhost:8888');
+  await page.getByLabel('Let tasks read the web', { exact: true }).check();
+  await page.getByLabel('Search server', { exact: true }).fill('http://localhost:8888');
 
   // Another section is another address of the same page, over the same copy (the window's one working copy).
   await sections.getByRole('link', { name: 'SMTP' }).click();
   await expect(page).toHaveURL(/\/settings\/smtp$/);
   await sections.getByRole('link', { name: 'Web' }).click();
-  await expect(page.getByLabel('Search server')).toHaveValue('http://localhost:8888');
+  await expect(page.getByLabel('Search server', { exact: true })).toHaveValue('http://localhost:8888');
 
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(page.getByLabel('Search server')).toHaveValue('');
-  await expect(page.getByLabel('Let tasks read the web')).not.toBeChecked();
+  await expect(page.getByLabel('Search server', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('Let tasks read the web', { exact: true })).not.toBeChecked();
   await context.close();
 });
 
