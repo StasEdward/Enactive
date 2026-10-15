@@ -117,6 +117,27 @@ public sealed class InboxTests : ComponentHost
         Assert.Equal("read", await StatusOfAsync(item.Id));
     }
 
+    /// <summary>A late click in an old tab must carry the shown question's id through the page to the service.</summary>
+    [Fact]
+    public async Task An_old_question_s_allow_button_does_not_approve_the_next_question()
+    {
+        var (first, _) = await ParkedAsync();
+        var screen = Inbox("alice", 1);
+        Open(screen, "mail the digest");
+        screen.WaitForAssertion(() => Assert.Equal("Approve send_email", screen.Find(".inbox-question-topic").TextContent.Trim()));
+        var ledger = new DecisionLedger(_root);
+        Assert.True(ledger.Answer(first.TaskId, first.RequestId, "deny"));
+        var next = ledger.Park(new DecisionRequest(first.TaskId, "Approve another action", "a different action",
+            [new("allow", "Allow"), new("deny", "Deny")], "allow", Subject: "another_tool"));
+
+        screen.FindAll(".inbox-question button").Single(button => button.TextContent.Trim() == "Allow (recommended)").Click();
+
+        screen.WaitForAssertion(() => Assert.Contains("no longer waiting", screen.Markup));
+        Assert.False(ledger.For(first.TaskId).Single(question => question.RequestId == next.RequestId).Answered);
+        Assert.Empty(Services.GetRequiredService<IRunControl>().List(ServerAuth.PrincipalOf(Users.Find("alice")!)));
+        Assert.DoesNotContain(Users.AuditTrail(), entry => entry.Action == "question answered in the inbox");
+    }
+
     [Fact]
     public async Task A_viewer_reads_and_cannot_answer()
     {

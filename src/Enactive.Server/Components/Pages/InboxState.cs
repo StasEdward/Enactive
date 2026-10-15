@@ -127,13 +127,13 @@ internal sealed class InboxState(ServerInbox inbox, ClaimsPrincipal user)
     /// </summary>
     public async Task<Guid?> AnswerAsync(string optionId, CancellationToken ct)
     {
-        if (_answering || Waiting is null || Selected is not { } card)
+        if (_answering || Waiting is not { } waiting || Selected is not { } card)
             return null;
         _answering = true;
         Waiting = null;   // one answer: the buttons go before anything can be clicked twice
         try
         {
-            var (said, run) = await inbox.AnswerAsync(user, card.Entry.Workspace, card.Row.Item.Id, optionId, ct);
+            var (said, run) = await inbox.AnswerAsync(user, card.Entry.Workspace, card.Row.Item.Id, waiting.RequestId, optionId, ct);
             Answered = said;
             return run;
         }

@@ -167,7 +167,8 @@ public sealed class ServerSettingsTests : IDisposable
     public async Task A_page_whose_admin_was_demoted_saves_nothing()
     {
         var (view, _) = _settings.Edit(As("ada"), null, _ => { });
-        _users.SetRole("ada", Role.Operator);
+        Assert.Null(_users.Add("another-admin", "another long password", Role.Admin));
+        Assert.Null(_users.SetRole("ada", Role.Operator));
         view!.LogRetentionDaysText = "5";
 
         await view.SaveCommand.ExecuteAsync();

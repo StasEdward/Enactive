@@ -128,7 +128,8 @@ internal sealed class ServerInbox(UserStore users, KnownWorkspaces workspaces, I
     /// Answers the question an item waits on and carries its run on. What to tell the person, and the run carried
     /// on when there is one.
     /// </summary>
-    public async Task<(string Said, Guid? Run)> AnswerAsync(ClaimsPrincipal user, string workspace, Guid itemId, string optionId, CancellationToken ct)
+    public async Task<(string Said, Guid? Run)> AnswerAsync(ClaimsPrincipal user, string workspace, Guid itemId, Guid requestId,
+        string optionId, CancellationToken ct)
     {
         if (ServerAuth.StillValid(users, user) is not { } account)
             return ("Your session has ended. Sign in again.", null);
@@ -137,6 +138,10 @@ internal sealed class ServerInbox(UserStore users, KnownWorkspaces workspaces, I
         if (workspaces.Find(workspace) is not { } known)
             return ("The service does not know that folder as a workspace.", null);
         if ((await ListAsync(user, ct)).FirstOrDefault(e => e.Item.Id == itemId && e.Workspace == known.RootPath) is not { Waiting: { } waiting } entry)
+            return ("This question is no longer waiting - it was answered already, or its run has ended.", null);
+        // An inbox item follows the task, whose next question can reuse "allow"/"deny". An old tab's click must answer
+        // only the question it showed, never approve that next, unseen action. The ledger also guards this exact id.
+        if (waiting.RequestId != requestId)
             return ("This question is no longer waiting - it was answered already, or its run has ended.", null);
         // Asked before the answer is recorded: once it is, the question is no longer waiting, and a run refused after
         // that (no engine, a folder outside the roots) left nothing in the inbox to answer and nothing carried on.

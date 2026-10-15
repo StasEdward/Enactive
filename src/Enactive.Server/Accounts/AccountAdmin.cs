@@ -71,15 +71,11 @@ internal sealed class AccountAdmin(UserStore users)
             case Act.Role:
                 if (!TryRole(role, out var changed))
                     return new(false, "A role is Admin, Operator or Viewer.");
-                problem = changed != Accounts.Role.Admin && users.IsLastAdmin(name)
-                    ? "That is the last administrator; make another one first."
-                    : users.SetRole(name, changed);
+                problem = users.SetRole(name, changed);
                 done = $"{name} is now {changed}; its sessions are ended.";
                 break;
             case Act.Disable:
-                problem = users.IsLastAdmin(name)
-                    ? "That is the last administrator; make another one first."
-                    : users.SetDisabled(name, true);
+                problem = users.SetDisabled(name, true);
                 done = $"{name} is disabled; its sessions are ended.";
                 break;
             case Act.Enable:

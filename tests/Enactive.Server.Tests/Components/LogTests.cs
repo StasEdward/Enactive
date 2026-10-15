@@ -136,7 +136,8 @@ public sealed class LogTests : ComponentHost
     {
         var log = Log("ada");
         log.WaitForAssertion(() => Assert.Contains(Offered(log), o => o.StartsWith("Capture raw wire")));
-        Users.SetRole("ada", Role.Operator);
+        Assert.Null(Users.Add("another-admin", "another long password", Role.Admin));
+        Assert.Null(Users.SetRole("ada", Role.Operator));
 
         Act(() => log.Find(".log-check input[type=checkbox]").Change(true));
 

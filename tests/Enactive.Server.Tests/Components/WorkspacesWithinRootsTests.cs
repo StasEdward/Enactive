@@ -137,7 +137,7 @@ public sealed class WorkspacesWithinRootsTests : ComponentHost
         Assert.Null(new TemplateStore(_outside).Inventory().FirstOrDefault(t => t.Template.Id == "weekly" && t.Scope == TemplateScope.Workspace));
 
         Assert.Contains(NotKnown, await Service<ServerInbox>().MarkReadAsync(alice, _outside, item.Id, CancellationToken.None));
-        Assert.Contains(NotKnown, (await Service<ServerInbox>().AnswerAsync(alice, _outside, item.Id, "allow", CancellationToken.None)).Said);
+        Assert.Contains(NotKnown, (await Service<ServerInbox>().AnswerAsync(alice, _outside, item.Id, Guid.NewGuid(), "allow", CancellationToken.None)).Said);
         await Service<ServerInbox>().MarkAllReadAsync(alice, CancellationToken.None);
         Assert.Equal("unread", (await InboxStoreFactory.Create(WorkspaceInfo.For(_outside)).LoadAllAsync(CancellationToken.None)).Single().Status);
 

@@ -172,6 +172,51 @@ public sealed class AccountTests : IDisposable
 
     // ── on the server's own console ─────────────────────────────────────────
 
+    /// <summary>
+    /// Web and CLI can open separate stores on the same database: their last-admin check must be part of the write,
+    /// or both callers can remove an administrator after each has seen that another one still exists.
+    /// </summary>
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public async Task Concurrent_account_changes_leave_one_enabled_administrator(bool disableAlice, bool disableBob)
+    {
+        Assert.Null(_users.Add("alice", Password, Role.Admin));
+        Assert.Null(_users.Add("bob", Password, Role.Admin));
+        var other = new UserStore(_root, _clock);
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task<string?> Change(UserStore store, string name, bool disable)
+        {
+            await start.Task;
+            return disable ? store.SetDisabled(name, true) : store.SetRole(name, Role.Operator);
+        }
+
+        var first = Change(_users, "alice", disableAlice);
+        var second = Change(other, "bob", disableBob);
+        start.SetResult();
+        var results = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Single(results, result => result is null);
+        Assert.Contains("last administrator", Assert.Single(results, result => result is not null));
+        Assert.Single(_users.All(), account => account is { Role: Role.Admin, Disabled: false });
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_refused_last_admin_change_keeps_its_role_enabled_state_and_session(bool disable)
+    {
+        Assert.Null(_users.Add("alice", Password, Role.Admin));
+        var before = _users.Find("alice");
+
+        var problem = disable ? _users.SetDisabled("ALICE", true) : _users.SetRole("ALICE", Role.Viewer);
+
+        Assert.Contains("last administrator", problem);
+        Assert.Equal(before, _users.Find("alice"));
+    }
+
     private (int Code, string Out, string Err) Run(string[] args, params string[] typed)
     {
         var queue = new Queue<string>(typed);

@@ -474,6 +474,34 @@ public sealed class RunControlTests : IDisposable
     }
 
     /// <summary>
+    /// An old tab's Allow is for the question it showed, never for the next question of the same task, whose option
+    /// ids can be the same. Re-reading only the inbox item silently approved the unseen action instead.
+    /// </summary>
+    [Fact]
+    public async Task A_stale_inbox_answer_does_not_answer_the_next_question_of_the_task()
+    {
+        var (first, itemId) = ParkedInTheInbox();
+        var inbox = InboxOf(_control);
+        var shown = Assert.Single(await inbox.ListAsync(As("bob"), CancellationToken.None));
+        Assert.Equal(first.RequestId, shown.Waiting!.RequestId);
+        var ledger = new Enactive.Agents.DecisionLedger(_workspace);
+        Assert.True(ledger.Answer(first.TaskId, first.RequestId, "deny"));
+        var next = ledger.Park(new DecisionRequest(first.TaskId, "Approve another action", "a different action",
+            [new("allow", "Allow"), new("deny", "Deny")], "allow", Subject: "another_tool"));
+
+        var (said, carried) = await inbox.AnswerAsync(As("bob"), _workspace, itemId, shown.Waiting.RequestId, "allow", CancellationToken.None);
+
+        Assert.False(ledger.For(first.TaskId).Single(question => question.RequestId == next.RequestId).Answered);
+        Assert.Null(carried);
+        Assert.Contains("no longer waiting", said);
+        Assert.Empty(_control.List(As("bob")));
+        Assert.DoesNotContain(_users.AuditTrail(), entry => entry.Action == "question answered in the inbox");
+        var items = await Enactive.Workspace.InboxStoreFactory.Create(Enactive.Core.Context.WorkspaceInfo.For(_workspace))
+            .LoadAllAsync(CancellationToken.None);
+        Assert.Equal("unread", Assert.Single(items, item => item.Id == itemId).Status);
+    }
+
+    /// <summary>
     /// The inbox shows the question a run stopped at; answering it carries the run on under the same task - the
     /// recorded answer is what the step is given when it asks again.
     /// </summary>
@@ -486,7 +514,7 @@ public sealed class RunControlTests : IDisposable
         var entry = Assert.Single(await inbox.ListAsync(As("vera"), CancellationToken.None));
         Assert.Equal("Approve send_email", entry.Waiting?.Topic);
 
-        var (said, carried) = await inbox.AnswerAsync(As("bob"), _workspace, itemId, "allow", CancellationToken.None);
+        var (said, carried) = await inbox.AnswerAsync(As("bob"), _workspace, itemId, parked.RequestId, "allow", CancellationToken.None);
 
         Assert.Contains("carries on", said);
         var run = _control.Find(As("bob"), carried!.Value)!;
@@ -508,7 +536,7 @@ public sealed class RunControlTests : IDisposable
         var inbox = InboxOf(new AnsweredMeanwhile(_control,
             () => new Enactive.Agents.DecisionLedger(_workspace).Answer(parked.TaskId, parked.RequestId, "deny")));
 
-        var (said, carried) = await inbox.AnswerAsync(As("bob"), _workspace, itemId, "allow", CancellationToken.None);
+        var (said, carried) = await inbox.AnswerAsync(As("bob"), _workspace, itemId, parked.RequestId, "allow", CancellationToken.None);
 
         Assert.Contains("no longer waiting", said);
         Assert.Null(carried);
@@ -630,10 +658,10 @@ public sealed class RunControlTests : IDisposable
     [Fact]
     public async Task A_viewer_reads_the_inbox_but_cannot_answer_it()
     {
-        var (_, itemId) = ParkedInTheInbox();
+        var (parked, itemId) = ParkedInTheInbox();
         var inbox = InboxOf(_control);
 
-        var (said, carried) = await inbox.AnswerAsync(As("vera"), _workspace, itemId, "allow", CancellationToken.None);
+        var (said, carried) = await inbox.AnswerAsync(As("vera"), _workspace, itemId, parked.RequestId, "allow", CancellationToken.None);
 
         Assert.Null(carried);
         Assert.Contains("role does not include", said);
@@ -1202,13 +1230,13 @@ public sealed class RunControlTests : IDisposable
     [Fact]
     public async Task A_question_whose_run_cannot_carry_on_stays_waiting_in_the_inbox()
     {
-        var (_, itemId) = ParkedInTheInbox();
+        var (parked, itemId) = ParkedInTheInbox();
         var elsewhere = Path.Combine(_root, "roots-only-here");
         Directory.CreateDirectory(elsewhere);
         var control = new RunControl(_users, new RunQueue(2), _engine, NullLogger<RunControl>.Instance, roots: new WorkspaceRoots([elsewhere]));
         var inbox = InboxOf(control);
 
-        var (said, carried) = await inbox.AnswerAsync(As("bob"), _workspace, itemId, "allow", CancellationToken.None);
+        var (said, carried) = await inbox.AnswerAsync(As("bob"), _workspace, itemId, parked.RequestId, "allow", CancellationToken.None);
 
         Assert.Null(carried);
         Assert.Contains("is not under", said);

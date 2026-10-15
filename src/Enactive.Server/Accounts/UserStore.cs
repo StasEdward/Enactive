@@ -119,6 +119,11 @@ internal sealed class UserStore
     public Account? Find(string name)
     {
         using var db = Open();
+        return Find(db, name);
+    }
+
+    private static Account? Find(SqliteConnection db, string name)
+    {
         using var command = db.CreateCommand();
         command.CommandText = "SELECT name, role, disabled, locked_until, stamp FROM users WHERE name = $name";
         command.Parameters.AddWithValue("$name", name);
@@ -228,30 +233,36 @@ internal sealed class UserStore
     private const int NamesCounted = 10_000;
     private readonly Dictionary<string, (int Failures, DateTimeOffset? LockedUntil)> _unknown = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// The only administrator who can still act. Disabling or demoting that one locks the service out of its own
-    /// administration until somebody edits the database - refused from the console and the browser alike.
-    /// </summary>
-    public bool IsLastAdmin(string name)
-        => All().Where(a => a is { Role: Role.Admin, Disabled: false }).Select(a => a.Name).ToList() is [var only]
-           && string.Equals(only, name, StringComparison.OrdinalIgnoreCase);
-
     /// <summary>A new password; ends the account's sessions and lifts a lockout. Why not, or null.</summary>
     public string? SetPassword(string name, string password)
         => PasswordProblem(password) ?? Change(name, "hash = $hash, failures = 0, locked_until = NULL", ("$hash", Hasher.HashPassword(name, password)));
 
     /// <summary>Another role; ends the account's sessions, so a lowered role is lowered now.</summary>
-    public string? SetRole(string name, Role role) => Change(name, "role = $role", ("$role", (int)role));
+    public string? SetRole(string name, Role role)
+        => Change(name, "role = $role", ("$role", (int)role), removesAdmin: role != Role.Admin);
 
     /// <summary>Disabled or enabled; disabling ends the account's sessions.</summary>
-    public string? SetDisabled(string name, bool disabled) => Change(name, "disabled = $disabled", ("$disabled", disabled ? 1 : 0));
+    public string? SetDisabled(string name, bool disabled)
+        => Change(name, "disabled = $disabled", ("$disabled", disabled ? 1 : 0), removesAdmin: disabled);
 
-    private string? Change(string name, string assignments, (string, object?) value)
+    private string? Change(string name, string assignments, (string, object?) value, bool removesAdmin = false)
     {
-        if (Find(name) is null)
-            return $"There is no account '{name}'.";
         using var db = Open();
+        // Take the write reservation BEFORE reading: separate checks in the web and CLI both saw two administrators
+        // and could then disable/demote both. SQLite serializes this transaction across store instances and processes.
+        using var transaction = db.BeginTransaction(deferred: false);
+        if (Find(db, name) is not { } account)
+            return $"There is no account '{name}'.";
+        if (removesAdmin && account is { Role: Role.Admin, Disabled: false })
+        {
+            using var count = db.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM users WHERE role = $admin AND disabled = 0";
+            count.Parameters.AddWithValue("$admin", (int)Role.Admin);
+            if ((long)count.ExecuteScalar()! == 1)
+                return "That is the last administrator; make another one first.";
+        }
         Execute(db, $"UPDATE users SET {assignments}, stamp = $stamp WHERE name = $name", value, ("$stamp", NewStamp()), ("$name", name));
+        transaction.Commit();
         return null;
     }
 

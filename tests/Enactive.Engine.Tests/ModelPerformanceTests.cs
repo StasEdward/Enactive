@@ -1,4 +1,5 @@
 namespace Enactive.Engine.Tests;
+using System.Globalization;
 using System.Net;
 using System.Text;
 using Enactive.Application.Projections;
@@ -72,10 +73,10 @@ public sealed class ModelPerformanceTests
         vm.Add(InRun(new("a", "worker", 100, 100, null, 3, 1, new(1, 1))));
         vm.Add(InRun(new("a", "worker", 100, 900, null, 2, null, null)));
         var row = Assert.Single(vm.Rows);
-        Assert.Equal($"{200.0 / 11:N1} T/s", row.Speed);
+        Assert.Equal("18.2 T/s", row.Speed);
         Assert.Equal("Generation avg", row.SpeedLabel);
         Assert.Contains("decode 2/3", row.Explanation);
-        Assert.Contains($"{50.0:N1}%", row.Cache);
+        Assert.Contains("50.0%", row.Cache);
         vm.Add(InRun(new("b", "worker", null, null, null, 1, null, null)));
         Assert.Equal(2, vm.Rows.Count);
         Assert.Equal("—", vm.Rows[1].Speed);
@@ -90,7 +91,7 @@ public sealed class ModelPerformanceTests
         vm.Add(InRun(new("cloud", "model", 100, null, null, 100, null, null)));
         vm.Add(InRun(new("cloud", "model", 100, 900, null, 0, null, null)));
         var row = Assert.Single(vm.Rows);
-        Assert.Equal($"≈ {200.0 / 12:N1} T/s", row.Speed);
+        Assert.Equal("≈ 16.7 T/s", row.Speed);
         Assert.Equal("Whole request avg", row.SpeedLabel);
         Assert.Contains("including queue, prompt processing and network time", row.Explanation);
     }
@@ -100,9 +101,39 @@ public sealed class ModelPerformanceTests
         var vm = new ModelPerformance(); vm.ShowRun(Run);
         vm.Add(InRun(new("cloud", "zero", 100, 0, null, 2, null, null)));
         vm.Add(InRun(new("cloud", "unknown", 100, 50, null, 0, null, null)));
-        Assert.Equal($"≈ {0.0:N1} T/s", vm.Rows[0].Speed);
+        Assert.Equal("≈ 0.0 T/s", vm.Rows[0].Speed);
         Assert.Equal("—", vm.Rows[1].Speed);
     }
+    /// <summary>The service's culture must not change the shared figures, including their decimal and group separators.</summary>
+    [Theory]
+    [InlineData("ru-RU")]
+    [InlineData("en-US")]
+    public void Performance_figures_use_the_same_format_in_every_culture(string culture)
+    {
+        var was = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(culture);
+            var vm = new ModelPerformance();
+            vm.ShowRun(Run);
+            vm.Add(InRun(new("local", "worker", 2000, 1000, 500, 12.5, 1.25, new(2.5, 10, 0.5))));
+            vm.Add(InRun(new("cloud", "worker", 100, 100, null, 12, null, null)));
+
+            Assert.Equal("100.0 T/s", vm.Rows[0].Speed);
+            Assert.Equal("Tokens  2,000 in / 1,000 out", vm.Rows[0].Tokens);
+            Assert.Contains("25.0%", vm.Rows[0].Cache);
+            Assert.Contains("0.50 s", vm.Rows[0].Cache);
+            Assert.Contains("2.50 s", vm.Rows[0].Times);
+            Assert.Contains("1.25 s", vm.Rows[0].First);
+            Assert.Contains("12.50 s", vm.Rows[0].Requests);
+            Assert.Equal("≈ 8.3 T/s", vm.Rows[1].Speed);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = was;
+        }
+    }
+
     [Fact]
     public async Task Observer_failure_does_not_fail_the_model_call()
     {
