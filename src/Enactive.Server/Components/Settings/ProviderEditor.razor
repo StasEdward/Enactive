@@ -1,0 +1,181 @@
+@using System.ComponentModel
+@using Enactive.Core.Providers
+@implements IDisposable
+
+@* The window's provider editor (ProviderEditWindow.axaml), in a dialog over the settings: CONNECTION on the left, MODEL
+   on the right, a field only one kind of provider reads shown for that kind only (ProviderEditViewModel.Shows*). Apply
+   puts the change into the settings' copy; it is written when the settings are saved.
+
+   The key and the headers are where it differs. This page is never handed a stored key or a header's value, so the key
+   box opens empty, an empty box keeps the key kept for the provider, and Remove takes it away; the headers are named
+   and replaced or removed whole. Test and Fetch ask with what is kept, as the service (ServerSettings). *@
+
+<Dialog Title="Provider" Class="dialog-wide" OnClose="() => Editor.CancelCommand.Execute(null)">
+    <ChildContent>
+        <div class="settings-editor-columns">
+            <div class="settings-editor-column">
+                <p class="panel-header">CONNECTION</p>
+
+                <label class="label" for="provider-id">Id</label>
+                <input id="provider-id" placeholder="e.g. ollama, anthropic, openrouter (used in providerId/model)" @bind="Editor.Id" />
+
+                <label class="label" for="provider-kind">Kind</label>
+                <select id="provider-kind" @bind="Editor.Kind">
+                    @foreach (var kind in Editor.Kinds)
+                    {
+                        <option value="@kind">@kind</option>
+                    }
+                </select>
+
+                @* Said where the address is typed: an address is kept in the clear, shown on this page to every Admin and
+                   named in the audit trail, so a key typed into it (?api_key=...) is a key no longer kept secret. *@
+                <span class="settings-label-row"><label class="label" for="provider-url">Base URL</label><HintMark Class="settings-credentials" Of="Base URL" Text="No key or token in the address - it is kept in the clear, shown here and named in the audit trail. A key goes in API key, any other credential in a header below." /></span>
+                <input id="provider-url" placeholder="e.g. http://localhost:11434/v1" @bind="Editor.BaseUrl" />
+
+                <span class="settings-label-row">
+                    <label class="label" for="provider-key">API key</label>
+                    @if (Editor.KeyStored)
+                    {
+                        <HintMark Class="settings-stored" Of="API key" Text="A key is stored. Leave the box empty to keep it." />
+                    }
+                </span>
+                <input id="provider-key" type="password" autocomplete="new-password"
+                       placeholder="@(Editor.KeyStored ? "stored — type a new one to replace it" : "blank for local providers")"
+                       @bind="Editor.ApiKey" @bind:event="oninput" />
+                @if (Editor.KeyStored || Editor.ForgetKey)
+                {
+                    <label class="check"><input type="checkbox" @bind="Editor.ForgetKey" /> Remove the stored key</label>
+                }
+
+                @* Names only, as the MCP editor has them: a key put in Authorization or api-key is the provider's key, and
+                   this page is never handed one (ServerSettings). New lines replace them all; Remove takes them away. *@
+                <p class="label">Headers</p>
+                <p class="hint settings-stored">Set: @Editor.HeaderNames</p>
+                <label class="label" for="provider-headers">New headers, Header-Name: value per line (replaces them)</label>
+                <textarea id="provider-headers" rows="2" autocomplete="off" placeholder="extra headers — one Header-Name: value per line"
+                          @bind="Editor.NewHeadersText"></textarea>
+                <label class="check"><input type="checkbox" @bind="Editor.ForgetHeaders" /> Remove its headers</label>
+            </div>
+
+            <div class="settings-editor-column">
+                <p class="panel-header">MODEL</p>
+
+                @* The model's numbers side by side in short boxes; what their long placeholders said is behind each "?". *@
+                <div class="short-fields">
+                    <div class="short-field">
+                        <span class="settings-label-row"><label class="settings-small" for="provider-window">Context window (tokens)</label><HintMark Text="Blank = assume 16000 — nothing can ask the provider." Of="Context window" /></span>
+                        <input id="provider-window" inputmode="numeric" placeholder="16000" @bind="Editor.ContextWindowText" />
+                    </div>
+                    <div class="short-field">
+                        <span class="settings-label-row"><label class="settings-small" for="provider-handover">Hand a step over at</label><HintMark Text="75% of the window, 80000 tokens, or both; blank = after 60 turns." Of="Hand a step over at" /></span>
+                        <input id="provider-handover" placeholder="75%" @bind="Editor.HandoverText" />
+                    </div>
+                    <div class="short-field">
+                        <span class="settings-label-row"><label class="settings-small" for="provider-reserve">Kept free for the answer</label><HintMark Text="Tokens kept free for the answer. Blank = an eighth of the context window." Of="Tokens kept free for the answer" /></span>
+                        <input id="provider-reserve" inputmode="numeric" placeholder="auto" @bind="Editor.AnswerReserveText" />
+                    </div>
+                    <div class="short-field">
+                        <span class="settings-label-row"><label class="settings-small" for="provider-max">Max output tokens</label><HintMark Text="Blank = auto (adjusts to the model's cap)." Of="Max output tokens" /></span>
+                        <input id="provider-max" inputmode="numeric" placeholder="auto" @bind="Editor.MaxTokensText" />
+                    </div>
+                    <div class="short-field">
+                        <span class="settings-label-row"><label class="settings-small" for="provider-reasoning">Reasoning tokens</label><HintMark Text="Extra generation tokens for reasoning. Blank = the profile's default; 0 = no extra allowance." Of="Extra generation tokens for reasoning" /></span>
+                        <input id="provider-reasoning" inputmode="numeric" placeholder="default" @bind="Editor.ReasoningAllowanceText" />
+                    </div>
+                    <div class="short-field">
+                        <span class="settings-label-row"><label class="settings-small" for="provider-temperature">Temperature</label><HintMark Text="Blank = the engine's (0.2 worker, 0 review); a number; server = the server's own." Of="Temperature" /></span>
+                        <input id="provider-temperature" placeholder="engine" @bind="Editor.TemperatureText" />
+                    </div>
+                    @if (Editor.ShowsEffort)
+                    {
+                        <div class="short-field">
+                            <span class="settings-label-row"><label class="settings-small" for="provider-effort">Effort</label><HintMark Text="low, medium, high, xhigh or max. Blank = the model's default (Sonnet 5: high)." Of="Effort" /></span>
+                            <input id="provider-effort" placeholder="default" @bind="Editor.EffortText" />
+                        </div>
+                    }
+                    @if (Editor.ShowsKeepAlive)
+                    {
+                        <div class="short-field">
+                            <span class="settings-label-row"><label class="settings-small" for="provider-keepalive">Keep loaded (s)</label><HintMark Text="Seconds the model stays loaded. Blank = the server's default; 0 = unload; -1 = keep resident." Of="Keep the model loaded" /></span>
+                            <input id="provider-keepalive" inputmode="numeric" placeholder="default" @bind="Editor.OllamaKeepAliveText" />
+                        </div>
+                    }
+                    <div class="short-field">
+                        <label class="settings-small" for="provider-idle">Stream idle timeout (s)</label>
+                        <input id="provider-idle" inputmode="numeric" placeholder="300" @bind="Editor.StreamIdleTimeoutText" />
+                    </div>
+                    <div class="short-field">
+                        <label class="settings-small" for="provider-deadline">Non-streaming timeout (s)</label>
+                        <input id="provider-deadline" inputmode="numeric" placeholder="900" @bind="Editor.CompletionTimeoutText" />
+                    </div>
+                </div>
+
+                @if (Editor.ShowsOpenAiOptions)
+                {
+                    <label class="check"><input type="checkbox" @bind="Editor.OpenAiReasoningProfile" /> OpenAI reasoning compatibility (developer role, no temperature)</label>
+                    <label class="check"><input type="checkbox" @bind="Editor.SendReasoningBack" /> Send the model's reasoning back with its earlier turns (Qwen3.6 preserve_thinking, llama.cpp --reasoning-preserve)</label>
+                }
+
+                @* The models under the model's numbers: in the connection's column the editor ran a screen down on the left
+                   while the right one stood half empty. *@
+                <label class="label" for="provider-models">Models</label>
+                <textarea id="provider-models" rows="6" placeholder="models — one per line" @bind="Editor.ModelsText"></textarea>
+
+                @* Ask the provider what it actually serves, then pick one to add to the list above. *@
+                <div class="settings-fetch">
+                    <select aria-label="Fetched models" value="" @onchange="Pick">
+                        <option value="">fetched models…</option>
+                        @foreach (var model in Editor.FetchedModels)
+                        {
+                            <option value="@model">@model</option>
+                        }
+                    </select>
+                    <button type="button" class="btn" @onclick="() => Editor.FetchCommand.ExecuteAsync()">Fetch</button>
+                </div>
+
+                @* Test asks whether it is there AND has the first model listed: the light is the answer, grey until asked. *@
+                <div class="settings-test">
+                    <button type="button" class="btn" title="Ask this provider for its model list, and check that the first model above is among them"
+                            @onclick="() => Editor.TestCommand.ExecuteAsync()">Test</button>
+                    <span class="@($"health-dot {Looks.Health(Editor.Health)}")" role="img" aria-label="@Editor.Health.ToString()"></span>
+                    @* What Test or Fetch answered, beside the light it lit: under the dialog's two columns it was read far
+                       from the button that asked. *@
+                    <span class="hint settings-editor-status" role="status">@Editor.Status</span>
+                </div>
+            </div>
+        </div>
+
+    </ChildContent>
+    <Actions>
+        <button type="button" class="btn primary" @onclick="() => Editor.SaveCommand.Execute(null)">Save</button>
+        <button type="button" class="btn" @onclick="() => Editor.CancelCommand.Execute(null)">Cancel</button>
+    </Actions>
+</Dialog>
+
+@code {
+    // Cascading, not a parameter: the editor is internal to the application layer (as SettingsViewModel is).
+    [CascadingParameter] private ProviderEditViewModel Editor { get; set; } = default!;
+
+    private ProviderEditViewModel? _watched;
+
+    // Test and Fetch answer later, and say so in the editor's own properties.
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_watched, Editor))
+            return;
+        if (_watched is not null)
+            _watched.PropertyChanged -= Changed;
+        _watched = Editor;
+        _watched.PropertyChanged += Changed;
+    }
+
+    private void Changed(object? sender, PropertyChangedEventArgs e) => _ = InvokeAsync(StateHasChanged);
+
+    private void Pick(ChangeEventArgs e) => Editor.SelectedFetchedModel = e.Value?.ToString();
+
+    public void Dispose()
+    {
+        if (_watched is not null)
+            _watched.PropertyChanged -= Changed;
+    }
+}

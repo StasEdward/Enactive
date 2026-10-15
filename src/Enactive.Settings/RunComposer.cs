@@ -9,6 +9,7 @@ using Enactive.Core.Intents;
 using Enactive.Core.Orchestration;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
+using Enactive.Core.Storage;
 using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
@@ -34,6 +35,12 @@ namespace Enactive.Settings;
 /// False when the host's decision handler is an explicit answer for this invocation (the console's
 /// <c>--approve</c>): that answer was given on purpose, and a standing approval must not overrule it.
 /// </param>
+/// <param name="Principal">
+/// Who started the run, for a host that serves several people under one account - the service's browser interface
+/// (<see cref="IntentSource.Web"/>), which must name its signed-in account. Only that person's remembered approvals
+/// answer for the run (ApprovalStore, rule 5) - also when the service runs it in the background (<see cref="IntentSource.Inbox"/>).
+/// Null on the desktop and the console: their runs are the account's own.
+/// </param>
 public sealed record RunRequest(
     WorkspaceInfo Workspace,
     string Prompt,
@@ -43,7 +50,8 @@ public sealed record RunRequest(
     ResolvedTaskSpec? Spec = null,
     string? WorkerId = null,
     bool Stage = false,
-    bool Remembered = true)
+    bool Remembered = true,
+    string? Principal = null)
 {
     /// <summary>
     /// The defaults of the workspace this run is in: its autonomy level and its worker. Required, so no host can
@@ -53,6 +61,14 @@ public sealed record RunRequest(
     /// under; the worker is used when neither this invocation nor the template names one.
     /// </summary>
     public required WorkspaceDefaults Defaults { get; init; }
+
+    /// <summary>
+    /// A folder to keep a staged run's proposals in, so they outlive the process that ran it (StagingArtifactStore's
+    /// keepIn). A host whose person may close the page or whose process may restart before anybody applies them -
+    /// the service's browser - must give one, or staging is refused (<see cref="RunComposer.Refusal"/>). Null: in
+    /// memory, for the window that shows them.
+    /// </summary>
+    public string? KeepProposalsIn { get; init; }
 
     /// <summary>
     /// A task from a phone, governed by what is saved against THE WORKSPACE IT NAMES - its level, its worker,
@@ -74,8 +90,9 @@ public sealed record RunRequest(
 /// <param name="Engine">The orchestrator with the run recorder and the log tap already around it.</param>
 /// <param name="Artifacts">Where the run's changes go - staged for somebody to apply, or straight to disk.</param>
 /// <param name="Resources">
-/// The MCP tool servers this run connected to. They are child processes, and a caller that forgets
-/// them leaves one set per run running until the application is closed.
+/// The MCP tool servers this run connected to, and its hold on the workspace (WorkspaceLease). The servers
+/// are child processes, and a caller that forgets them leaves one set per run running until the application
+/// is closed - and the workspace refused to every other host until then.
 /// </param>
 public sealed record ComposedRun(
     IOrchestrator Engine,
@@ -143,19 +160,36 @@ public static class RunComposer
     /// the same way.
     /// </summary>
     public static string? Refusal(RunRequest request)
+    {
+        // A run from the browser without a name would be answered by the service account's own approvals -
+        // whatever anyone allowed at that machine's desktop - for whoever happened to be signed in.
+        if (request.Source == IntentSource.Web && string.IsNullOrWhiteSpace(request.Principal))
+            return "A run from the browser must name who started it; it was refused rather than run on the "
+                   + "service account's own approvals.";
+
         // Staging that survives a run nobody is watching needs a store that persists its proposals,
         // and there is not one. Running anyway would write to the files directly while the history
         // said the changes were staged - and nobody is at the machine to notice the difference.
-        => request.Stage && !Attended(request)
-            ? "Stage changes is on, and a run nobody is watching cannot stage: it would write to the files "
-              + "directly while the history claimed the changes were staged. Turn Stage changes off for this "
-              + "workspace, or run the task in the foreground on the desktop."
-            : null;
+        if (request.Stage && !Attended(request))
+            return "Stage changes is on, and a run nobody is watching cannot stage: it would write to the files "
+                   + "directly while the history claimed the changes were staged. Turn Stage changes off for this "
+                   + "workspace, or run the task in the foreground on the desktop.";
+
+        // The browser's person IS watching, but proposals in the service's memory are not enough: a closed tab
+        // leaves them with nobody to apply them, and a restart of the service loses them while the history says
+        // the changes were staged. Staged only when they are kept on disk (KeepProposalsIn).
+        if (request.Stage && request.Source == IntentSource.Web && request.Resume is null && request.KeepProposalsIn is null)
+            return "Stage changes is on, and a run from the browser cannot stage without a folder to keep its "
+                   + "proposals in: they would be held only in the service's memory and lost with it.";
+
+        return null;
+    }
 
     /// <summary>Connects the tools and builds the engine and the intent for one run.</summary>
     /// <param name="engine">The host's current engine, built by <see cref="EngineComposition.Build"/> - nothing a host assembles.</param>
     /// <param name="decisions">Who answers this host's permission requests - the one part each host supplies.</param>
     /// <exception cref="InvalidOperationException">The request is refused - see <see cref="Refusal"/>.</exception>
+    /// <exception cref="WorkspaceInUseException">Another process is running in the workspace.</exception>
     public static async Task<ComposedRun> ComposeAsync(
         ComposedEngine engine, RunRequest request, IDecisionHandler decisions, CancellationToken ct)
     {
@@ -164,21 +198,28 @@ public static class RunComposer
 
         var workspace = request.Workspace;
         var spec = request.Spec;
-        var memory = MemoryStoreFactory.Create(workspace);
-        var tools = await McpRunTools.ConnectAsync(
-            engine.BuiltInTools, engine.McpServers, workspace.RootPath, ct);
 
-        // Said once per run, whether or not anything calls them: starting a server is a cost the run has
-        // already paid, and a scheduled run is where it costs most and shows least.
-        engine.Log.Info(LogSource.Tool, tools.Summary());
-
+        // The workspace for this process before anything is connected, held until the run is disposed: a
+        // second host in the same folder is two agents editing the same files (WorkspaceLease). Here, so no
+        // host can forget it.
+        var lease = WorkspaceLease.Take(workspace.RootPath);
+        McpRunTools? tools = null;
         try
         {
+            tools = await McpRunTools.ConnectAsync(engine.BuiltInTools, engine.McpServers, workspace.RootPath, ct);
+            var memory = MemoryStoreFactory.Create(workspace);
+
+            // Said once per run, whether or not anything calls them: starting a server is a cost the run has
+            // already paid, and a scheduled run is where it costs most and shows least.
+            engine.Log.Info(LogSource.Tool, tools.Summary());
+
             // A resumed run never stages, whatever was asked. Its earlier steps wrote straight to disk -
             // that is the only kind of run that is ever checkpointed - so staging the rest would put half
             // of one piece of work behind a review gate and leave the other half applied.
             var staged = request.Stage && request.Resume is null;
-            IArtifactStore artifacts = staged ? new StagingArtifactStore(workspace.RootPath) : new DiskArtifactStore(workspace);
+            IArtifactStore artifacts = staged
+                ? new StagingArtifactStore(workspace.RootPath, request.KeepProposalsIn)
+                : new DiskArtifactStore(workspace);
 
             // What governs the run, and what its history says governed it. A resumed run continues under
             // what it was started with: the slider will have moved by now - it is a control, not a record
@@ -202,7 +243,7 @@ public static class RunComposer
                 // A template's permissions are already the INTERSECTION of its own ceiling and the
                 // workspace's tier (TemplateResolution.Narrow), so this is never more than the slider allows.
                 : spec?.Permissions ?? EngineComposition.PolicyFor(engine.Settings, autonomy);
-            // A run started from the web never runs a shell, and this is where that is true. The decision
+            // A run started from a phone (the remote gateway) never runs a shell, and this is where that is true. The decision
             // handler refuses one too, but a handler only sees what the policy decided to ASK about - and at
             // the Autonomous tier the policy asks about nothing.
             if (request.Source == IntentSource.Remote)
@@ -245,19 +286,39 @@ public static class RunComposer
                     context, DateTimeOffset.UtcNow, workerId),
                 artifacts,
                 request.Resume,
-                tools);
+                new Holding(tools, lease));
         }
         catch
         {
-            // The connections were made before the thing that threw. Nobody else has been handed them
-            // yet, so this is the only place that can close them.
-            await tools.DisposeAsync();
+            // Every preparation step can fail, including choosing the memory store. Until ownership
+            // passes to ComposedRun, release the workspace even if closing a tool connection also fails.
+            try { if (tools is not null) await tools.DisposeAsync(); }
+            finally { lease.Dispose(); }
             throw;
         }
     }
 
-    /// <summary>Only the window's own command bar has somebody at the screen to apply staged changes.</summary>
-    private static bool Attended(RunRequest request) => request.Source == IntentSource.CommandBar;
+    /// <summary>
+    /// What a composed run holds until it is disposed: its tool servers, then the workspace. In one disposable
+    /// because hosts pass <see cref="ComposedRun.Resources"/> on (the remote runner does) and must not have to
+    /// know there are two.
+    /// </summary>
+    private sealed class Holding(IAsyncDisposable tools, ProcessLease lease) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            try { await tools.DisposeAsync(); }
+            finally { lease.Dispose(); }
+        }
+    }
+
+    /// <summary>
+    /// Somebody is at a screen for this run: the command bar of the window or the console, or the service's browser
+    /// interface - a person who started it there and is shown its questions there. Public so a host can check the request
+    /// it builds is read as it means it: the service's background run was composed as a browser run, and so as watched,
+    /// and its owner's approvals for watched runs answered a run nobody watched (ApprovalStore, rule 4).
+    /// </summary>
+    public static bool Attended(RunRequest request) => request.Source is IntentSource.CommandBar or IntentSource.Web;
 
     /// <summary>
     /// The host's decisions, behind the answers a person already gave for good - except for a phone,
@@ -268,8 +329,7 @@ public static class RunComposer
             ? decisions
             : new RememberedApprovals(decisions, request.Workspace.RootPath,
                 engine.Approvals ?? ApprovalStore.Default, engine.Session,
-                // Only the window's command bar and the console's have somebody at the screen.
-                watched: Attended(request));
+                watched: Attended(request), request.Principal);
 
     /// <summary>
     /// The orchestrator with the run's record and the log tap already around it.

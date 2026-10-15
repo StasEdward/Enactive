@@ -1,6 +1,7 @@
 namespace Enactive.Agents;
 
 using System.Text;
+using Enactive.Core;
 using Enactive.Core.Chat;
 using Enactive.Core.Events;
 using Enactive.Core.Tools;
@@ -32,7 +33,7 @@ internal sealed class ModelTurn
                 {
                     _saidAtText = Content.Length;
                     progress = new(EventKind.GenerationProgress,
-                        $"Writing a reply: {Content.Length:N0} characters so far… {RunawayReply.LastLine(Content)}");
+                        $"Writing a reply: {Invariant.N0(Content.Length)} characters so far… {RunawayReply.LastLine(Content)}");
                 }
                 if (_tools.Count == 0) Stopped = _runaway.After(Content);
                 break;
@@ -48,7 +49,7 @@ internal sealed class ModelTurn
                 {
                     _saidAtArguments = _argumentChars;
                     progress = new(EventKind.GenerationProgress,
-                        $"Writing {builder.Name ?? "a tool call"}: {_argumentChars:N0} characters so far…");
+                        $"Writing {builder.Name ?? "a tool call"}: {Invariant.N0(_argumentChars)} characters so far…");
                 }
                 break;
 
@@ -59,7 +60,7 @@ internal sealed class ModelTurn
                 {
                     _saidAtReasoning = Reasoning.Length;
                     progress = new(EventKind.GenerationProgress,
-                        $"Reasoning: {Reasoning.Length:N0} characters so far…");
+                        $"Reasoning: {Invariant.N0(Reasoning.Length)} characters so far…");
                 }
                 // A reasoning that goes round, word for word, is stopped as a reply that does (RunawayReply.LoopIn).
                 if (_tools.Count == 0 && Stopped is null) Stopped = _reasoningLoop.LoopIn(Reasoning);

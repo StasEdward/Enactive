@@ -17,6 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Enactive.Remote.Host\Enactive.Remote.Host.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Core\Enactive.Core.csproj" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Common" Version="10.0.13" />
     <!-- The gateway's own driver, at the gateway's version. -->
     <PackageReference Include="MySqlConnector" Version="2.6.2" />
   </ItemGroup>

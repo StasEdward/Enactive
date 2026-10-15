@@ -1,0 +1,685 @@
+namespace Enactive.Server.Tests.Components;
+
+using System.Text;
+using System.Threading.Channels;
+using Bunit;
+using Enactive.Application;
+using Enactive.Core.Artifacts;
+using Enactive.Core.Events;
+using Enactive.Core.Permissions;
+using Enactive.Server.Accounts;
+using Enactive.Server.Components.Runs;
+using Enactive.Server.Runs;
+using Enactive.Workspace;
+using Microsoft.Extensions.DependencyInjection;
+
+/// <summary>
+/// The live run on the Runs screen, as the window shows it (MainWindow.axaml 546-920, 1244-1300): the task header with who
+/// started it and who else watches, the tabs Execution / Artifacts / Log, the step cards with their tone, Current action,
+/// and the status column - the AI STATUS tiles, ROUTING, WHERE IT RAN, the question card and MODEL PERFORMANCE. The run is
+/// the service's; the page follows it (RunFollower) and every answer is the service's to decide (IRunControl).
+/// </summary>
+public sealed class LiveRunTests : ComponentHost
+{
+    private readonly string _folders = Path.Combine(Path.GetTempPath(), "enactive-live", Guid.NewGuid().ToString("N"));
+    private readonly Script _script;
+
+    public LiveRunTests()
+    {
+        _script = new Script(new ApprovalStore(Path.Combine(_folders, "permissions.json")));
+        Services.AddSingleton<IRunExecutor>(_script);
+        Services.AddSingleton(new WorkspaceRoots([_folders]));
+        // No clock: the page redraws only when it is told something, so a test sees what told it - a page redrawn every
+        // second anyway passed whether or not it had been told.
+        Services.AddSingleton(new LiveRunClock(null));
+        // Copy all is the browser's clipboard.
+        JSInterop.SetupVoid("navigator.clipboard.writeText", _ => true);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        _script.End();
+        base.Dispose(disposing);
+        if (disposing)
+        {
+            Enactive.Tests.SqlitePools.ClearUnder(_folders);
+            try { Directory.Delete(_folders, recursive: true); } catch { /* a temp folder */ }
+        }
+    }
+
+    private IRunControl Runs => Services.GetRequiredService<IRunControl>();
+    private System.Security.Claims.ClaimsPrincipal As(string name) => ServerAuth.PrincipalOf(Users.Find(name)!);
+
+    /// <summary>A folder the service knows as a workspace.</summary>
+    private string Known(string name)
+    {
+        var root = Path.Combine(_folders, name);
+        Directory.CreateDirectory(root);
+        Services.GetRequiredService<ServerEngine>().Workspaces.Touch(root);
+        return root;
+    }
+
+    /// <summary>Alice's run of "check the disks" in a known folder, going once the script has it.</summary>
+    private async Task<ServerRun> StartedAsync(string task = "check the disks")
+    {
+        var run = Runs.Start(As("alice"), Known("project"), task).Run!;
+        await _script.Started.WaitAsync(TimeSpan.FromSeconds(10));
+        return run;
+    }
+
+    private IRenderedComponent<LiveRun> Open(string who, ServerRun run)
+    {
+        SignIn(who);
+        return Render<LiveRun>(p => p.Add(l => l.RunId, run.Id));
+    }
+
+    private static WorkEvent Step(EventKind kind, int step, string summary, string? payload = null)
+        => Script.Ev(kind, summary, payload ?? $"{{\"step\":{step}}}");
+
+    private static DecisionRequest WriteFile(string root)
+        => new(Guid.NewGuid(), "Approve write_file", "digest.md", [new("allow", "Allow"), new("deny", "Deny")], "allow",
+            Subject: "write_file", FullDetail: "write_file {\"path\":\"digest.md\",\n \"content\":\"the whole digest\"}",
+            Action: new(Script.RunId, Guid.NewGuid().ToString(), "write_file", "{}", root));
+
+    private static IEnumerable<string> Answers(IRenderedComponent<LiveRun> page)
+        => page.FindAll(".decision button").Select(b => b.TextContent.Trim());
+
+    [Fact]
+    public async Task The_feed_shows_each_step_with_its_tone()
+    {
+        var run = await StartedAsync();
+        _script.Emit(Script.Ev(EventKind.IntentReceived, "Intent: check the disks"));
+        _script.Emit(Script.Ev(EventKind.PlanCreated, "Disks — 2 steps", WorkEventPayload.PlanPayload("Disks", ["check the disks", "write the report"])));
+        _script.Emit(Step(EventKind.StepStarted, 1, "[1/2] check the disks"));
+        _script.Emit(Step(EventKind.ToolInvoked, 1, """run_command {"command":"chkdsk C:"}"""));
+        _script.Emit(Step(EventKind.StepCompleted, 1, "[1/2] check the disks — done", WorkEventPayload.StepPayload(1, StepOutcomeKind.Succeeded)));
+        _script.Emit(Step(EventKind.StepStarted, 2, "[2/2] write the report"));
+        await WaitUntil(() => run.Session.Seq == 6);
+
+        var page = Open("alice", run);
+
+        page.WaitForAssertion(() =>
+        {
+            var steps = page.FindAll(".step");
+            Assert.Equal(["check the disks", "write the report"], steps.Select(s => s.QuerySelector(".step-title")!.TextContent.Trim()));
+            Assert.Contains("tone-done", steps[0].ClassList);
+            // A running step is blue (Looks.Card), not the history's amber.
+            Assert.Contains("tone-running", steps[1].ClassList);
+        });
+        Assert.Equal("Disks", page.Find(".task-title").TextContent.Trim());
+        Assert.Equal("check the disks", page.Find(".task-intent").TextContent.Trim());
+        Assert.Matches(@"^started by alice at \d\d:\d\d$", page.Find(".task-meta").TextContent.Trim());
+        Assert.Equal(["Execution", "Artifacts", "Log"], page.FindAll("[role=tab]").Select(t => t.TextContent.Trim()));
+
+        // What the step did is folded behind its tally, one click away, as the window's card.
+        page.FindAll(".step")[0].QuerySelector("button.disclosure")!.Click();
+        Assert.Contains("chkdsk C:", page.FindAll(".step")[0].QuerySelector(".step-lines")!.TextContent);
+    }
+
+    [Fact]
+    public async Task A_viewer_sees_the_question_and_no_answer_buttons()
+    {
+        var run = await StartedAsync();
+        _ = _script.AskAsync(WriteFile(run.Workspace));
+        await WaitUntil(() => run.Questions.Pending is not null);
+
+        var page = Open("vera", run);
+
+        page.WaitForAssertion(() => Assert.Contains("USER DECISION REQUIRED", page.Find(".decision").TextContent));
+        Assert.Equal("Approve write_file", page.Find(".decision-topic").TextContent.Trim());
+        // The complete action, never the summary: it is what an answer authorises.
+        Assert.Equal("write_file {\"path\":\"digest.md\",\n \"content\":\"the whole digest\"}", page.Find(".decision pre").TextContent);
+        Assert.Empty(Answers(page));
+        // The service's wait (30 minutes by default), counted from when it was asked.
+        Assert.Equal("waits 30 min more, then goes to the Inbox", page.Find(".decision-wait").TextContent.Trim());
+    }
+
+    /// <summary>
+    /// The answers that remember an approval are the owner's alone (RunControl.Answer): what is remembered binds the person
+    /// it is remembered for. Another Operator is offered the plain answers, and nothing the service would refuse.
+    /// </summary>
+    [Fact]
+    public async Task Only_the_owner_is_offered_to_allow_for_longer()
+    {
+        var run = await StartedAsync();
+        _ = _script.AskAsync(WriteFile(run.Workspace));
+        await WaitUntil(() => run.Questions.Pending is not null);
+
+        var owner = Open("alice", run);
+        owner.WaitForAssertion(() => Assert.Equal(
+            ["Allow", "Deny", "Allow (session)", "Allow (workspace)", "Allow (workspace, unwatched runs too)"], Answers(owner)));
+
+        var other = Open("ada", run);
+        other.WaitForAssertion(() => Assert.Equal(["Allow", "Deny"], Answers(other)));
+    }
+
+    /// <summary>
+    /// Answered in another page, by another person or through the inbox: the card leaves every page that showed it - left
+    /// up, it offered buttons for a question already decided.
+    /// </summary>
+    [Fact]
+    public async Task A_question_answered_elsewhere_leaves_the_card()
+    {
+        var run = await StartedAsync();
+        var asked = _script.AskAsync(WriteFile(run.Workspace));
+        await WaitUntil(() => run.Questions.Pending is not null);
+        var page = Open("alice", run);
+        page.WaitForAssertion(() => Assert.NotEmpty(Answers(page)));
+
+        Assert.Null(Runs.Answer(As("ada"), run.Id, run.Questions.Pending!.Request.Id, "Deny"));
+
+        Assert.Equal("deny", (await asked.WaitAsync(TimeSpan.FromSeconds(10))).OptionId);
+        page.WaitForAssertion(() => Assert.Empty(page.FindAll(".decision")));
+    }
+
+    /// <summary>An answer pressed on the page is the service's to take; a second, too late, is told so under the card.</summary>
+    [Fact]
+    public async Task An_answer_on_the_page_answers_the_run()
+    {
+        var run = await StartedAsync();
+        var asked = _script.AskAsync(WriteFile(run.Workspace));
+        await WaitUntil(() => run.Questions.Pending is not null);
+        var page = Open("alice", run);
+        page.WaitForAssertion(() => Assert.NotEmpty(Answers(page)));
+
+        page.FindAll(".decision button").Single(b => b.TextContent.Trim() == "Allow").Click();
+
+        Assert.Equal("allow", (await asked.WaitAsync(TimeSpan.FromSeconds(10))).OptionId);
+        page.WaitForAssertion(() => Assert.Empty(page.FindAll(".decision")));
+    }
+
+    /// <summary>
+    /// Two people press an answer at once: the service takes the first, and the second - refused - is told in words. The
+    /// card goes from both pages with the question, and the refusal was drawn under that card only: the second person saw
+    /// the card vanish under their pointer and never read why.
+    /// </summary>
+    [Fact]
+    public async Task A_late_answer_is_told_the_question_was_answered_after_its_card_has_gone()
+    {
+        var run = await StartedAsync();
+        var request = WriteFile(run.Workspace);
+        // Up for the pages with no answer for the router behind it: somebody else's got there first.
+        run.Questions.Show(request, [new DecisionChoice("Allow", "allow"), new DecisionChoice("Deny", "deny")]);
+        var page = Open("ada", run);
+        page.WaitForAssertion(() => Assert.NotEmpty(Answers(page)));
+
+        page.FindAll(".decision button").Single(b => b.TextContent.Trim() == "Deny").Click();
+        run.Questions.Clear(request);
+
+        page.WaitForAssertion(() => Assert.Empty(page.FindAll(".decision")));
+        Assert.Equal("That question has already been answered, or withdrawn.", page.Find("[role=alert]").TextContent.Trim());
+
+        // The run asks again: the refusal was about the question before, and is not said again when this one goes.
+        var next = WriteFile(run.Workspace);
+        run.Questions.Show(next, [new DecisionChoice("Allow", "allow")]);
+        page.WaitForAssertion(() => Assert.NotEmpty(Answers(page)));
+        run.Questions.Clear(next);
+        page.WaitForAssertion(() => Assert.Empty(page.FindAll(".decision")));
+        Assert.Empty(page.FindAll("[role=alert]"));
+    }
+
+    /// <summary>
+    /// Two people press an answer at once, and the service takes one. The other press often never reaches its handler:
+    /// by the time it is dispatched the card it was on has been taken away, and the framework drops a press on a component
+    /// that is gone - without a word. So the page that showed the question says who answered it, and with what, whether or
+    /// not its own press came to anything; the page whose answer was taken says nothing of the sort.
+    /// </summary>
+    [Fact]
+    public async Task A_question_answered_by_somebody_else_says_who_answered_it()
+    {
+        var run = await StartedAsync();
+        var asked = _script.AskAsync(WriteFile(run.Workspace));
+        await WaitUntil(() => run.Questions.Pending is not null);
+        var other = Open("ada", run);
+        other.WaitForAssertion(() => Assert.NotEmpty(Answers(other)));
+        var owner = Open("alice", run);
+        owner.WaitForAssertion(() => Assert.NotEmpty(Answers(owner)));
+
+        owner.FindAll(".decision button").Single(b => b.TextContent.Trim() == "Allow").Click();
+
+        Assert.Equal("allow", (await asked.WaitAsync(TimeSpan.FromSeconds(10))).OptionId);
+        other.WaitForAssertion(() =>
+        {
+            Assert.Empty(other.FindAll(".decision"));
+            Assert.Equal("Answered by alice: Allow.", other.Find(".answered-by").TextContent.Trim());
+        });
+        owner.WaitForAssertion(() => Assert.Empty(owner.FindAll(".decision")));
+        Assert.Empty(owner.FindAll(".answered-by"));
+    }
+
+    [Fact]
+    public async Task The_tiles_follow_the_panel()
+    {
+        var run = await StartedAsync();
+        var page = Open("alice", run);
+        page.WaitForAssertion(() => Assert.Equal("—", Tile(page, "TOKENS")));
+
+        _script.Emit(Script.Ev(EventKind.Routed, "Worker -> model ollama/qwen", WorkEventPayload.RoutePayload("worker", "ollama", "qwen")));
+        _script.Emit(Step(EventKind.ToolInvoked, 1, """write_file {"path":"report.md"}"""));
+        _script.Emit(Script.Ev(EventKind.UsageReported, "usage", WorkEventPayload.UsagePayload(1200, 300, 1, providerId: "ollama")));
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: report.md", WorkEventPayload.ArtifactPayload("document", "report.md")));
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: report.md", WorkEventPayload.ArtifactPayload("document", "report.md")));
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: notes.md", WorkEventPayload.ArtifactPayload("document", "notes.md")));
+
+        page.WaitForAssertion(() =>
+        {
+            Assert.Equal("2", Tile(page, "ARTIFACTS"));
+            Assert.Equal("1", Tile(page, "TOOL CALLS"));
+            Assert.Equal("1.5k", Tile(page, "TOKENS"));
+        }, TimeSpan.FromSeconds(5));
+        Assert.Equal("1.2k in · 300 out", TileElement(page, "TOKENS").GetAttribute("title"));
+        Assert.Matches(@"^\d+s$", Tile(page, "ELAPSED"));
+        Assert.Equal("Artifacts (2)", page.FindAll("[role=tab]")[1].TextContent.Trim());
+        Assert.Contains("ollama/qwen", page.Find(".routing").TextContent);
+    }
+
+    private static AngleSharp.Dom.IElement TileElement(IRenderedComponent<LiveRun> page, string label)
+        => page.FindAll(".tile").Single(t => t.QuerySelector(".tile-label")!.TextContent.Trim() == label);
+
+    private static string Tile(IRenderedComponent<LiveRun> page, string label)
+        => TileElement(page, label).QuerySelector(".tile-value")!.TextContent.Trim();
+
+    /// <summary>
+    /// "also watching" names the others with the run open, and changes as they come and go - not only when the run next
+    /// moves: a run waiting on a question has no events, and somebody who had opened it was not shown.
+    /// </summary>
+    [Fact]
+    public async Task Other_watchers_are_named()
+    {
+        var run = await StartedAsync();
+        var page = Open("alice", run);
+        page.WaitForAssertion(() => Assert.Equal(["alice"], run.Session.Watchers));
+        Assert.Empty(page.FindAll(".also-watching"));
+
+        var bob = run.Session.Subscribe(run.Session.Seq, "bob");
+        page.WaitForAssertion(() => Assert.Equal("also watching: bob", page.Find(".also-watching").TextContent.Trim()));
+
+        run.Session.Unsubscribe(bob);
+        page.WaitForAssertion(() => Assert.Empty(page.FindAll(".also-watching")));
+    }
+
+    /// <summary>
+    /// The page is never what the run waits for: with its redraw held, the run's 2,000 events go through and it ends; let go,
+    /// the page reads the run as it ended. A follower that waited on its page would have held the engine - a browser tab
+    /// asleep would hold up a run somebody else relies on.
+    /// </summary>
+    [Fact]
+    public async Task A_slow_redraw_does_not_hold_up_the_run()
+    {
+        var session = new RunSession("C:\\work", "alice", "a long reply");
+        var events = Channel.CreateUnbounded<WorkEvent>();
+        var drained = session.DrainAsync(events.Reader.ReadAllAsync(), CancellationToken.None);
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var redrawing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        long lastRead = -1;
+        using var follower = new RunFollower(session, () =>
+            {
+                var seq = session.Seq;
+                Interlocked.Exchange(ref lastRead, seq);
+                return seq;
+            },
+            async () =>
+            {
+                redrawing.TrySetResult();
+                await held.Task;
+            }, "alice");
+        follower.Start();
+
+        events.Writer.TryWrite(Script.Ev(EventKind.StepStarted, "step 1"));
+        await redrawing.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        for (var i = 0; i < 2_000; i++)
+            events.Writer.TryWrite(Script.Ev(EventKind.AssistantDelta, "x"));
+        events.Writer.Complete();
+
+        // The run ends while the page is still held in its redraw.
+        await drained.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(2_001, session.Seq);
+        Assert.False(held.Task.IsCompleted);
+
+        held.SetResult();
+        await follower.Following.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(2_001, Interlocked.Read(ref lastRead));
+    }
+
+    /// <summary>A file the run wrote is reviewed in the viewer, on the screen - its text, with Copy all.</summary>
+    [Fact]
+    public async Task Review_shows_a_written_file_in_the_viewer()
+    {
+        var run = await StartedAsync();
+        File.WriteAllText(Path.Combine(run.Workspace, "report.md"), "# The disks\nall well\n");
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: report.md", WorkEventPayload.ArtifactPayload("document", "report.md")));
+        await WaitUntil(() => run.Session.Seq == 1);
+        var page = Open("vera", run);
+
+        page.WaitForAssertion(() => Assert.Equal("Artifacts (1)", page.FindAll("[role=tab]")[1].TextContent.Trim()));
+        page.FindAll("[role=tab]")[1].Click();
+        // Waited for: the page's dispatcher may be drawing the run when the click arrives, and the tab changes after it -
+        // read at once, it failed whenever the follower's redraw came first.
+        page.WaitForAssertion(() => Assert.Equal("report.md", page.Find(".artifact .path").TextContent.Trim()));
+        page.FindAll(".artifact button").Single(b => b.TextContent.Trim() == "Review").Click();
+
+        var dialog = page.WaitForElement("[role=dialog]");
+        Assert.Equal("report.md", dialog.QuerySelector(".dialog-title")!.TextContent.Trim());
+        Assert.Equal("# The disks\nall well\n", dialog.QuerySelector("pre")!.TextContent);
+        dialog.QuerySelectorAll("button").Single(b => b.TextContent.Trim() == "Copy all").Click();
+        Assert.Equal("# The disks\nall well\n", JSInterop.VerifyInvoke("navigator.clipboard.writeText").Arguments.Single());
+    }
+
+    /// <summary>
+    /// A file the run wrote can be deleted from its card, as the window's live run offers (MainWindow.axaml 634-644) -
+    /// after the window's question, by an Operator; the card says what became of it. Delete and not the window's Undo:
+    /// the service keeps no copy of what a run overwrote to put back (the window's DiskArtifactStore.Undo), and the
+    /// question says so - it deletes the file as it is now. A Viewer is offered Review only.
+    /// </summary>
+    [Fact]
+    public async Task A_written_file_is_deleted_from_its_card_after_the_window_s_question()
+    {
+        var run = await StartedAsync();
+        File.WriteAllText(Path.Combine(run.Workspace, "report.md"), "# The disks\n");
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: report.md", WorkEventPayload.ArtifactPayload("document", "report.md")));
+        await WaitUntil(() => run.Session.Seq == 1);
+
+        var viewing = Open("vera", run);
+        viewing.WaitForAssertion(() => Assert.Equal("Artifacts (1)", viewing.FindAll("[role=tab]")[1].TextContent.Trim()));
+        viewing.FindAll("[role=tab]")[1].Click();
+        // Waited for: the page's dispatcher may be drawing the run when the click arrives, and the tab changes after it.
+        viewing.WaitForAssertion(() => Assert.Equal(["Review"], viewing.FindAll(".artifact button").Select(b => b.TextContent.Trim())));
+
+        var page = Open("alice", run);
+        page.WaitForAssertion(() => Assert.Equal("Artifacts (1)", page.FindAll("[role=tab]")[1].TextContent.Trim()));
+        page.FindAll("[role=tab]")[1].Click();
+        page.WaitForAssertion(() => Assert.NotEmpty(page.FindAll(".artifact")));
+        page.FindAll(".artifact button").Single(b => b.TextContent.Trim() == "Delete").Click();
+        var dialog = page.WaitForElement("[role=dialog]");
+        Assert.Equal("Delete “report.md”?", dialog.QuerySelector(".dialog-title")!.TextContent.Trim());
+        dialog.QuerySelectorAll("button").Single(b => b.TextContent.Trim() == "Delete").Click();
+
+        page.WaitForAssertion(() => Assert.Equal("deleted", page.Find(".artifact-status").TextContent.Trim()));
+        Assert.False(File.Exists(Path.Combine(run.Workspace, "report.md")));
+    }
+
+    /// <summary>
+    /// A staging run's files are proposals, not files it wrote (RunFiles): its Artifacts tab offers no Review or Delete for
+    /// one - Review showed the person's file on disk, unchanged, and Delete deleted it. While the run goes they are
+    /// counted; once it is over they are its proposals, to apply or reject.
+    /// </summary>
+    [Fact]
+    public async Task A_staging_run_offers_no_delete_on_a_proposed_file()
+    {
+        _script.Stages = true;
+        var run = await StartedAsync();
+        File.WriteAllText(Path.Combine(run.Workspace, "notes.md"), "the person's own");
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: notes.md", WorkEventPayload.ArtifactPayload("document", "notes.md")));
+        await WaitUntil(() => run.Session.Seq == 1);
+
+        var page = Open("alice", run);
+        page.WaitForAssertion(() => Assert.Equal("Artifacts (1)", page.FindAll("[role=tab]")[1].TextContent.Trim()));
+        page.FindAll("[role=tab]")[1].Click();
+        page.WaitForAssertion(() => Assert.Equal("1 change proposed - to apply or reject here once the run is over.",
+            page.Find(".proposed-while-running").TextContent.Trim()));
+        Assert.Empty(page.FindAll(".artifact"));
+        Assert.DoesNotContain(page.FindAll("button"), b => b.TextContent.Trim() == "Delete");
+        Assert.Equal("the person's own", File.ReadAllText(Path.Combine(run.Workspace, "notes.md")));
+    }
+
+    /// <summary>
+    /// A file a rejected step put back says so on its card and offers nothing, as the window marks it: Review would show
+    /// a file that is no longer the one the run wrote, and Delete would delete what was put back.
+    /// </summary>
+    [Fact]
+    public async Task A_file_put_back_says_so_and_offers_no_delete()
+    {
+        var run = await StartedAsync();
+        File.WriteAllText(Path.Combine(run.Workspace, "report.md"), "as it was");
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: report.md", WorkEventPayload.ArtifactPayload("document", "report.md")));
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: notes.md", WorkEventPayload.ArtifactPayload("document", "notes.md")));
+        _script.Emit(Script.Ev(EventKind.ArtifactReverted, "put back: report.md",
+            WorkEventPayload.RevertPayload(1, ["report.md"], [])));
+        await WaitUntil(() => run.Session.Seq == 3);
+
+        var page = Open("alice", run);
+        page.WaitForAssertion(() => Assert.Equal("Artifacts (2)", page.FindAll("[role=tab]")[1].TextContent.Trim()));
+        page.FindAll("[role=tab]")[1].Click();
+        page.WaitForAssertion(() => Assert.Equal(2, page.FindAll(".artifact").Count));
+
+        var putBack = page.FindAll(".artifact").Single(a => a.QuerySelector(".path")!.TextContent.Trim() == "report.md");
+        Assert.Equal("put back — the reviewer rejected this step", putBack.QuerySelector(".artifact-status")!.TextContent.Trim());
+        Assert.Equal(["Review"], putBack.QuerySelectorAll("button").Select(b => b.TextContent.Trim()));
+        Assert.True(putBack.QuerySelector("button")!.HasAttribute("disabled"));
+
+        var written = page.FindAll(".artifact").Single(a => a.QuerySelector(".path")!.TextContent.Trim() == "notes.md");
+        Assert.Equal(["Review", "Delete"], written.QuerySelectorAll("button").Select(b => b.TextContent.Trim()));
+    }
+
+    /// <summary>
+    /// Source shows only where there is something to switch between, as the window's viewer: beside a caller's rendering,
+    /// which must never be the only way to read the text. With the text alone, a Source button would switch to itself.
+    /// </summary>
+    [Fact]
+    public void The_viewer_offers_the_source_only_beside_a_rendering()
+    {
+        var plain = Render<Enactive.Server.Components.Ui.TextViewer>(p => p.Add(v => v.Title, "notes.md").Add(v => v.Text, "# Notes"));
+        Assert.DoesNotContain(plain.FindAll("button"), b => b.TextContent.Trim() == "Source");
+        Assert.Equal("# Notes", plain.Find("pre").TextContent);
+
+        var rendered = Render<Enactive.Server.Components.Ui.TextViewer>(p => p.Add(v => v.Title, "notes.md").Add(v => v.Text, "# Notes")
+            .Add(v => v.Rendered, (Microsoft.AspNetCore.Components.RenderFragment)(b => b.AddMarkupContent(0, "<h1>Notes</h1>"))));
+        Assert.Equal("Notes", rendered.Find(".viewer-rendered h1").TextContent);
+        rendered.FindAll("button").Single(b => b.TextContent.Trim() == "Source").Click();
+        Assert.Equal("# Notes", rendered.Find("pre").TextContent);
+        Assert.Empty(rendered.FindAll(".viewer-rendered"));
+    }
+
+    /// <summary>
+    /// Once the run has ended its kept proposals are in its Artifacts tab, each with its diff, to apply or reject (an
+    /// Operator; ServerStaging rules) - the window's staged cards. While the run goes they are not offered: the store is
+    /// still being written.
+    /// </summary>
+    [Fact]
+    public async Task Once_ended_the_run_s_proposals_are_applied_from_its_artifacts()
+    {
+        var run = await StartedAsync();
+        File.WriteAllText(Path.Combine(run.Workspace, "notes.md"), "old\n");
+        var staging = Services.GetRequiredService<ServerStaging>();
+        var folder = staging.Begin(run.Workspace, run.Id, "alice", run.Prompt);
+        using (var store = new StagingArtifactStore(run.Workspace, folder))
+        {
+            await store.CreateAsync("notes.md", ArtifactKind.FileSet, "notes",
+                s => s.WriteAsync(Encoding.UTF8.GetBytes("new\n")).AsTask(), CancellationToken.None);
+            await staging.EndAsync(run.Workspace, folder, "check the disks", null, store);
+        }
+        _script.End();
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var page = Open("alice", run);
+        page.FindAll("[role=tab]")[1].Click();
+        page.WaitForAssertion(() => Assert.Equal("notes.md", page.Find(".proposal .path").TextContent.Trim()));
+
+        page.FindAll(".proposal button").Single(b => b.TextContent.Trim() == "Diff").Click();
+        Assert.Contains(page.FindAll(".proposal .diff-line"), l => l.TextContent == "- old" && l.ClassList.Contains("tone-failed"));
+        Assert.Contains(page.FindAll(".proposal .diff-line"), l => l.TextContent == "+ new" && l.ClassList.Contains("tone-done"));
+
+        page.FindAll(".proposal button").Single(b => b.TextContent.Trim() == "Apply").Click();
+        page.WaitForAssertion(() => Assert.StartsWith("Applied: notes.md.", page.Find(".artifacts .said").TextContent.Trim()));
+        Assert.Equal("new\n", File.ReadAllText(Path.Combine(run.Workspace, "notes.md")));
+    }
+
+    /// <summary>
+    /// The Runs screen opens a run at its own address under the command bar - whose Stop is then that run's - and says so
+    /// when the service has no such run.
+    /// </summary>
+    [Fact]
+    public async Task The_runs_screen_shows_the_run_at_its_address_under_the_bar()
+    {
+        var run = await StartedAsync();
+        SignIn("alice");
+
+        var screen = Render<RunsScreen>(p => p.Add(s => s.RunId, run.Id));
+
+        screen.WaitForAssertion(() => Assert.Equal("check the disks", screen.Find(".task-title").TextContent.Trim()));
+        Assert.False(screen.FindAll(".command-bar button").Single(b => b.TextContent.Trim() == "Stop").HasAttribute("disabled"));
+
+        var none = Render<RunsScreen>(p => p.Add(s => s.RunId, Guid.NewGuid()));
+        Assert.Contains("There is no such run on the service", none.Markup);
+    }
+
+    /// <summary>
+    /// A question that comes up while the page is open is drawn at once - it is no event of the run's own, and a run
+    /// waiting on a question has none to redraw for (ServerRun.Changed).
+    /// </summary>
+    [Fact]
+    public async Task A_question_asked_while_the_page_is_open_comes_up_on_it()
+    {
+        var run = await StartedAsync();
+        var page = Open("alice", run);
+        Assert.Empty(page.FindAll(".decision"));
+
+        _ = _script.AskAsync(WriteFile(run.Workspace));
+
+        page.WaitForAssertion(() => Assert.Equal("Approve write_file", page.Find(".decision-topic").TextContent.Trim()));
+    }
+
+    /// <summary>
+    /// The screen moves to another run while the last run's follower is about to read: the page's follower wakes on the
+    /// page's own dispatcher, behind the move, and what it reads then is the old run's - which lands nowhere on screen. It
+    /// wrote the old run's view over the new one's.
+    /// </summary>
+    [Fact]
+    public async Task Moving_to_another_run_while_the_last_one_is_read_keeps_the_new_one_on_screen()
+    {
+        var first = await StartedAsync();
+        _script.Emit(Script.Ev(EventKind.PlanCreated, "Disks — 1 step", WorkEventPayload.PlanPayload("Disks", ["check the disks"])));
+        await WaitUntil(() => first.Session.Seq == 1);
+        // In the same folder: it waits its turn, and its page shows its own title.
+        var second = Runs.Start(As("alice"), first.Workspace, "second task").Run!;
+        SignIn("alice");
+        var page = Render<CountingLiveRun>(p => p.Add(l => l.RunId, first.Id));
+        page.WaitForAssertion(() => Assert.Equal("Disks", page.Find(".task-title").TextContent.Trim()));
+
+        await page.InvokeAsync(() =>
+        {
+            // The first run moves; its follower's wake-up is queued on this dispatcher, behind what runs here now.
+            _script.Emit(Step(EventKind.StepStarted, 1, "[1/1] check the disks"));
+            Assert.True(SpinWait.SpinUntil(() => first.Session.Seq == 2, TimeSpan.FromSeconds(5)));
+            Thread.Sleep(200);
+            page.Render(p => p.Add(l => l.RunId, second.Id));
+        });
+
+        // The old follower read its run after the move ...
+        await WaitUntil(() => page.Instance.ReadsOf(first.Id) >= 2);
+        // ... and the screen, drawn again, is still the second run's.
+        page.Render();
+        Assert.Equal("second task", page.Find(".task-title").TextContent.Trim());
+    }
+
+    /// <summary>
+    /// A page that leaves stops following: its name leaves the run's watchers, its handlers come off the run, and its clock
+    /// stops. Left on, a closed tab was still named as watching, and the run kept a page alive that nobody had open.
+    /// </summary>
+    [Fact]
+    public async Task Leaving_the_page_stops_following_the_run()
+    {
+        // A clock that moves, to be seen to stop.
+        Services.AddSingleton(new LiveRunClock(TimeSpan.FromMilliseconds(20)));
+        var run = await StartedAsync();
+        var page = Open("alice", run);
+        page.WaitForAssertion(() => Assert.Equal(["alice"], run.Session.Watchers));
+        Assert.Equal((1, 1), (Handlers(run, "Changed"), Handlers(run.Session, "WatchersChanged")));
+        var ticking = page.Instance.Ticking;
+        Assert.False(ticking.IsCompleted);
+
+        await DisposeComponentsAsync();
+
+        Assert.Empty(run.Session.Watchers);
+        Assert.Equal((0, 0), (Handlers(run, "Changed"), Handlers(run.Session, "WatchersChanged")));
+        await ticking.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>The screen moving to another run moves the page's name and its following there, and off the last one.</summary>
+    [Fact]
+    public async Task Moving_to_another_run_moves_the_watcher_and_the_follower()
+    {
+        var first = await StartedAsync();
+        var second = Runs.Start(As("alice"), first.Workspace, "second task").Run!;
+        var page = Open("alice", first);
+        page.WaitForAssertion(() => Assert.Equal(["alice"], first.Session.Watchers));
+
+        page.Render(p => p.Add(l => l.RunId, second.Id));
+
+        page.WaitForAssertion(() => Assert.Equal(["alice"], second.Session.Watchers));
+        Assert.Empty(first.Session.Watchers);
+        Assert.Equal((0, 0), (Handlers(first, "Changed"), Handlers(first.Session, "WatchersChanged")));
+        Assert.Equal((1, 1), (Handlers(second, "Changed"), Handlers(second.Session, "WatchersChanged")));
+    }
+
+    /// <summary>How many handlers an event has - read off its field, as nothing else says it.</summary>
+    private static int Handlers(object owner, string name)
+        => (owner.GetType().GetField(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(owner) as Delegate)?.GetInvocationList().Length ?? 0;
+
+    /// <summary>The live run, counting its reads of each run.</summary>
+    private sealed class CountingLiveRun : LiveRun
+    {
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, int> _reads = new();
+
+        public int ReadsOf(Guid run) => _reads.GetValueOrDefault(run);
+
+        internal override LiveRunView ReadOf(ServerRun run, LiveRunReader reader)
+        {
+            var view = base.ReadOf(run, reader);
+            _reads.AddOrUpdate(run.Id, 1, (_, n) => n + 1);
+            return view;
+        }
+    }
+
+    private static async Task WaitUntil(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "timed out");
+            await Task.Delay(10);
+        }
+    }
+
+    /// <summary>The engine, scripted: the test says what the run does - its events, its questions - and when it ends.</summary>
+    private sealed class Script(ApprovalStore approvals) : IRunExecutor
+    {
+        public static readonly Guid RunId = Guid.NewGuid();
+
+        private readonly Channel<WorkEvent> _events = Channel.CreateUnbounded<WorkEvent>();
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private IDecisionHandler? _decisions;
+        private CancellationToken _ct;
+
+        public string? Problem => null;
+        public SessionApprovals Session { get; } = new();
+        public ApprovalStore Approvals { get; } = approvals;
+
+        /// <summary>The run has its turn and drains what is emitted.</summary>
+        public Task Started => _started.Task;
+
+        public static WorkEvent Ev(EventKind kind, string summary, string? payload = null)
+            => new(Guid.NewGuid(), Guid.NewGuid(), RunId, DateTimeOffset.UtcNow, kind, summary, payload);
+
+        public void Emit(WorkEvent ev) => Assert.True(_events.Writer.TryWrite(ev));
+
+        public void End() => _events.Writer.TryComplete();
+
+        /// <summary>The run asks, as a step's tool call would: through the handler it was composed with.</summary>
+        public Task<DecisionOutcome> AskAsync(DecisionRequest request) => _decisions!.RequestAsync(request, _ct);
+
+        /// <summary>The run is composed to stage its changes, as the engine's executor says it of a staging store.</summary>
+        public bool Stages { get; set; }
+
+        public async Task ExecuteAsync(ServerRun run, IDecisionHandler decisions, CancellationToken ct)
+        {
+            (_decisions, _ct) = (decisions, ct);
+            if (Stages)
+                run.Session.Staging();
+            var drained = run.Session.DrainAsync(_events.Reader.ReadAllAsync(ct), ct);
+            _started.TrySetResult();
+            await drained;
+        }
+    }
+}

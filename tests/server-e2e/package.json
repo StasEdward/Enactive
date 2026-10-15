@@ -1,0 +1,12 @@
+{
+  "name": "enactive-server-e2e",
+  "private": true,
+  "type": "module",
+  "description": "The service's pages in a real browser, against the real service pipeline over a scripted engine (tests/ServerHarness).",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}

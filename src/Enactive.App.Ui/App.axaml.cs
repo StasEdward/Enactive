@@ -6,7 +6,9 @@ using Avalonia.Platform;
 
 namespace Enactive.App.Ui;
 
-public sealed partial class App : Application
+// Avalonia.Application in full: the namespace Enactive.Application is found before this file's usings
+// and would be taken for the type (see Enactive.Application.csproj).
+public sealed partial class App : Avalonia.Application
 {
     public override void Initialize()
     {

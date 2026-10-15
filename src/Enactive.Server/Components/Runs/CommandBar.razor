@@ -1,0 +1,273 @@
+@using Enactive.Application
+@using Enactive.Server.Runs
+@using Enactive.Workspace
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IRunControl Runs
+@inject ServerHistory History
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+@* The window's command bar (MainWindow.axaml, lines 459-545): the verb chips and the keys hint; the box; Run and Stop,
+   with Run in background under them; a line; and how the next run behaves - the worker, Stage changes, and the level with
+   its label on the slider. Both ways of starting sit beside the box, and the settings that decide what Run does beside
+   them, for the window's reason: a switch out of sight decided what Run did. What it shows and decides is
+   CommandBarState's; the service decides every action, and what it said is under the bar.
+
+   A Viewer sees the settings the workspace runs with, greyed, and nothing to start a run with. *@
+
+@if (_state is null)
+{
+    return;
+}
+@{
+    // Asked once a drawing: every greyed button asked again - seven lookups of the run a draw, each a lock and a search
+    // of every run, and the bar is drawn again with each event of the run beside it.
+    var busy = State.IsBusy;
+}
+
+<section class="command-bar" aria-label="Command bar">
+    @if (State.CanOperate)
+    {
+        <div class="bar-top">
+            <div class="verbs">
+                @foreach (var verb in CommandVerbs.All)
+                {
+                    <button type="button" class="btn chip" disabled="@busy" @onclick="() => Prefix(verb)">@verb</button>
+                }
+            </div>
+            <span class="hint">Ctrl+K to focus · Enter to run · Ctrl+Enter = newline</span>
+        </div>
+    }
+
+    <div class="bar-row">
+        @if (State.CanOperate)
+        {
+            <textarea class="bar-input" aria-label="Task" placeholder="What do you want to accomplish?" @ref="_box"
+                      disabled="@busy" @bind="State.Input" @bind:event="oninput"></textarea>
+
+            <div class="run-buttons">
+                <div class="run-pair">
+                    <button type="button" class="btn go run" title="@RunButton.Tip(busy, CommandBarState.RunHeld)" disabled="@busy"
+                            @onclick="RunAsync">Run</button>
+                    @* Stop throws away work that is half done - the same act as Reject, so the danger colour; outlined, so it is
+                       found without competing with Run. *@
+                    <button type="button" class="btn destructive stop" disabled="@(!busy)" @onclick="State.Stop">Stop</button>
+                </div>
+                <button type="button" class="btn go-soft run-background" disabled="@busy" @onclick="RunInBackground"
+                        title="Runs it headless: the window stays free and it reports back to the Inbox when it is done.">Run in background</button>
+            </div>
+
+            <div class="bar-divider"></div>
+        }
+
+        @* Drawn again from what is saved when a save is refused (_drawn): the browser had already moved the slider, ticked the
+           box or picked the worker, and a redraw with the old value changed nothing on the page - it said a setting the next
+           run would not have. *@
+        <div class="run-settings" @key="_drawn">
+            <div class="settings-row">
+                <select class="worker" aria-label="Worker" title="Which role the worker takes" value="@State.WorkerId"
+                        disabled="@(!CanChange || State.Workers.Count == 0)" @onchange="WorkerChanged">
+                    @foreach (var (id, name) in State.Workers)
+                    {
+                        <option value="@id" selected="@(id == State.WorkerId)">@name</option>
+                    }
+                </select>
+                <label class="stage" title="Write changes to a staging area and review the diff before applying.">
+                    <input type="checkbox" checked="@State.StageChanges" disabled="@(!CanChange || busy)"
+                           @onchange="StageChanged" />
+                    Stage changes
+                </label>
+            </div>
+            @* The label names what the slider is set to, so it is ON the slider, in the tier's colour. *@
+            <span class="@("autonomy-label " + State.AutonomyTone)" title="@State.AutonomyLabel">@State.AutonomyLabel</span>
+            @* As many positions as there are tiers (AutonomyTiers): a literal 3 would hide a tier added there. Saved when it is
+               let go, not at every step of a drag - each save is a line in the audit. *@
+            <input type="range" class="@State.AutonomyTone" min="0" max="@CommandBarState.HighestLevel" step="1"
+                   value="@State.AutonomyLevel" aria-label="Autonomy" aria-valuetext="@State.AutonomyLabel"
+                   disabled="@(!CanChange || busy)" @onchange="LevelChanged" />
+        </div>
+    </div>
+
+    @if (State.Said is { Length: > 0 } said)
+    {
+        <p class="said" role="alert">@said</p>
+    }
+</section>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The workspace the screen is on: where Run runs, and whose settings the bar shows and saves.</summary>
+    [Parameter] public WorkspaceEntry? Workspace { get; set; }
+
+    /// <summary>The run open on the screen, which Stop cancels; null when none is, and then Stop is greyed.</summary>
+    [Parameter] public Guid? OpenRun { get; set; }
+
+    private CommandBarState? _state;
+    private string? _shownRoot;
+    private Guid? _watched;
+    private int _drawn;
+    private ElementReference _box;
+    private IJSObjectReference? _script;
+    private DotNetObjectReference<CommandBar>? _self;
+    private bool _gone;
+    private bool _focusBox;
+    private Task? _attaching;
+    private bool _opening;
+
+    private CommandBarState State => _state!;
+
+    /// <summary>The settings can be changed here: by an Operator, for a workspace to save them to.</summary>
+    private bool CanChange => State.CanOperate && State.HasWorkspace;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _state ??= new CommandBarState(Runs, History, (await Auth).User);
+        // The workspace's settings, read when the bar comes to it - and left alone while it stays, so what is typed and a
+        // refusal under the bar survive the screen drawing itself again.
+        var root = Workspace?.RootPath ?? "";
+        if (root != _shownRoot)
+        {
+            _shownRoot = root;
+            State.Show(Workspace);
+        }
+
+        State.OpenRun = OpenRun;
+        if (OpenRun != _watched)
+        {
+            _watched = OpenRun;
+            // The screen has come to a run - the one Run opened, or another: the press that opened it is done with. Held,
+            // the guard kept every later Enter from running once Run stayed on the page with the run under it.
+            _opening = false;
+            if (OpenRun is { } id && Runs.Find((await Auth).User, id) is { } run)
+                _ = RedrawWhenItEndsAsync(run);
+        }
+    }
+
+    /// <summary>The open run's end lights Run again and greys Stop, as the window's IsBusy turning false does.</summary>
+    private async Task RedrawWhenItEndsAsync(ServerRun run)
+    {
+        await run.Ended;
+        if (!_gone && _watched == run.Id)
+            await InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Attached once the box is there - a Viewer has none - and once only: a second render while the script still
+        // loaded would have attached the keys twice, and Enter would have started two runs.
+        if (_gone || _state is not { CanOperate: true })
+            return;
+        _attaching ??= AttachAsync();
+        try { await _attaching; }
+        catch (Exception e) when (Gone(e))
+        {
+            // The page went away while the script loaded: nothing left to attach to.
+        }
+
+        if (_focusBox && _script is not null)
+        {
+            _focusBox = false;
+            try { await _script.InvokeVoidAsync("focusEnd", _box); }
+            catch (Exception e) when (Gone(e)) { }
+        }
+    }
+
+    private async Task AttachAsync()
+    {
+        var script = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Runs/CommandBar.razor.js");
+        if (_gone)
+        {
+            await script.DisposeAsync();
+            return;
+        }
+        _self = DotNetObjectReference.Create(this);
+        await script.InvokeVoidAsync("attach", _box, _self);
+        _script = script;
+    }
+
+    /// <summary>Enter in the box (CommandBar.razor.js), with what the box holds as it was pressed.</summary>
+    [JSInvokable]
+    public Task RunFromKeyboard(string text)
+    {
+        if (State.IsBusy || _opening)
+            return Task.CompletedTask;
+        State.Input = text;
+        return RunAsync();
+    }
+
+    private Task RunAsync()
+    {
+        // One run per press: a second Enter (or click) that reached the page before it left for the first run's page
+        // started the same task again - the box still held it, as the browser had not yet drawn it cleared. Let go when the
+        // screen gives the bar the run it opened (OnParametersSetAsync).
+        if (_opening)
+            return Task.CompletedTask;
+        if (State.Run() is { } id)
+        {
+            _opening = true;
+            Navigation.NavigateTo($"runs/{id}");
+        }
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private void RunInBackground() => State.RunInBackground();
+
+    private void Prefix(string verb)
+    {
+        State.Prefix(verb);
+        // Back to the box, after the verb, to go on typing - as the window's chip does. Once drawn: focused before, the
+        // caret went to the end of the text the box had before the verb.
+        _focusBox = true;
+    }
+
+    private void LevelChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var level))
+            Saved(State.SetLevel(level));
+    }
+
+    private void WorkerChanged(ChangeEventArgs e) => Saved(State.SetWorker(e.Value?.ToString()));
+
+    private void StageChanged(ChangeEventArgs e) => Saved(State.SetStageChanges(e.Value is true || e.Value?.ToString() == "true"));
+
+    private void Saved(bool saved)
+    {
+        if (!saved)
+            _drawn++;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _gone = true;
+        // Taken off only once it is on: detached while the attach was still on its way, the keys stayed on the page.
+        try
+        {
+            if (_attaching is not null)
+                await _attaching;
+        }
+        catch (Exception e) when (Gone(e))
+        {
+        }
+        if (_script is not null)
+        {
+            try
+            {
+                await _script.InvokeVoidAsync("detach", _box);
+                await _script.DisposeAsync();
+            }
+            catch (Exception e) when (Gone(e))
+            {
+                // The page is gone, and its keys with it.
+            }
+        }
+        _self?.Dispose();
+    }
+
+    /// <summary>What a script call ends in when the page has gone: the connection lost or shutting down, the box no longer there.</summary>
+    private bool Gone(Exception e)
+        => e is JSDisconnectedException or OperationCanceledException or ObjectDisposedException || (_gone && e is JSException);
+}

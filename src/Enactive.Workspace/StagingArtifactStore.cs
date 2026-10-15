@@ -2,6 +2,7 @@ namespace Enactive.Workspace;
 
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Context;
 
@@ -130,7 +131,8 @@ public static class FileHash
 ///    was made, <c>File.WriteAllText</c> quietly erased that change.
 ///
 /// Still true, and stated rather than papered over: proposals use private temporary files and do not survive
-/// closing the app, and shell tools work on the real folder, so a staged run is not a transaction.
+/// closing the app - unless the store is given a folder to keep them in (see the constructor) - and shell tools work
+/// on the real folder, so a staged run is not a transaction.
 /// </summary>
 public sealed class StagingArtifactStore : IOwnedArtifactStore, IDisposable
 {
@@ -144,7 +146,104 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore, IDisposable
     private int _owners = -1;
     private const int Unowned = -1;
 
-    public StagingArtifactStore(string workspaceRoot) => _root = Path.GetFullPath(workspaceRoot);
+    /// <summary>Where proposals are kept, or null when they live as long as this object.</summary>
+    private readonly string? _keepIn;
+
+    /// <param name="workspaceRoot">The workspace the proposals are for.</param>
+    /// <param name="keepIn">
+    /// A folder to keep the proposals in - their bytes and a manifest rewritten after every change - so that they
+    /// outlive this process and are applied or rejected later by <see cref="Reopen"/>. For a host whose runs are not
+    /// watched by the process that has them in memory: the service's browser, where a closed tab or a restart left
+    /// proposals nobody could apply while the history said the changes were staged. Null: in memory, as the window
+    /// has always had them.
+    /// </param>
+    public StagingArtifactStore(string workspaceRoot, string? keepIn = null)
+    {
+        _root = Path.GetFullPath(workspaceRoot);
+        if (keepIn is not null)
+        {
+            _keepIn = Path.GetFullPath(keepIn);
+            Directory.CreateDirectory(_keepIn);
+        }
+    }
+
+    /// <summary>The folder the proposals are kept in, or null for a store in memory.</summary>
+    public string? KeptIn => _keepIn;
+
+    private const string ManifestName = "proposals.json";
+
+    private sealed record KeptChange(Guid Id, Guid? ParentId, string RelativePath, string Key, int Sequence, int Scope,
+        string? BaseHash, string? Old, string New, bool Applied, bool Rejected);
+
+    /// <summary>
+    /// Proposals a kept store left in <paramref name="keepIn"/>, opened to be applied or rejected - with the same
+    /// checks as when they were made: an earlier change to a file first, the file as it was when proposed, later
+    /// proposals rejected before the ones they build on.
+    /// </summary>
+    /// <exception cref="IOException">The folder holds no proposals, or they cannot be read.</exception>
+    public static StagingArtifactStore Reopen(string workspaceRoot, string keepIn)
+    {
+        List<KeptChange> kept;
+        try
+        {
+            kept = JsonSerializer.Deserialize<List<KeptChange>>(File.ReadAllText(Path.Combine(keepIn, ManifestName)))
+                   ?? throw new IOException("The proposals' manifest is empty.");
+        }
+        catch (JsonException ex)
+        {
+            throw new IOException("The proposals' manifest cannot be read: " + ex.Message, ex);
+        }
+
+        var store = new StagingArtifactStore(workspaceRoot, keepIn);
+        var contents = new Dictionary<string, StagedContent>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var entry in kept.OrderBy(k => k.Sequence))
+            {
+                var change = new StagedChange(entry.Id, entry.RelativePath, entry.Key,
+                    entry.Old is null ? null : Content(entry.Old), Content(entry.New),
+                    entry.Sequence, entry.Scope, entry.BaseHash, entry.ParentId);
+                if (entry.Applied) change.MarkApplied();
+                if (entry.Rejected) change.MarkRejected();
+                store._changes.Add(change);
+            }
+        }
+        catch
+        {
+            foreach (var content in contents.Values)
+                content.Dispose();
+            throw;
+        }
+        store._sequence = kept.Count == 0 ? 0 : kept.Max(k => k.Sequence) + 1;
+        store._owners = kept.Count == 0 ? Unowned : Math.Max(Unowned, kept.Max(k => k.Scope));
+        return store;
+
+        StagedContent Content(string name)
+        {
+            // Only a file of this folder: a manifest that names a path elsewhere is not one this store wrote.
+            if (name != Path.GetFileName(name))
+                throw new IOException("The proposals' manifest names a file outside its folder: " + name);
+            if (!contents.TryGetValue(name, out var content))
+                contents[name] = content = StagedContent.Reopen(Path.Combine(store._keepIn!, name));
+            return content;
+        }
+    }
+
+    /// <summary>
+    /// Writes the manifest of a kept store - every proposal, with what became of it. Called under the write gate after
+    /// every change, so what is on disk is never behind what a page was told: a proposal applied and not recorded
+    /// as applied would be offered again, with a "before" the file no longer matches.
+    /// </summary>
+    private void Persist()
+    {
+        if (_keepIn is null)
+            return;
+        KeptChange[] kept;
+        lock (_gate)
+            kept = _changes.Select(c => new KeptChange(c.Id, c.ParentId, c.RelativePath, c.Key, c.Sequence, c.Scope,
+                c.BaseHash, c.OldBytes?.FileName, c.NewBytes.FileName, c.Applied, c.Rejected)).ToArray();
+        AtomicWrite.Replace(Path.Combine(_keepIn, ManifestName), JsonSerializer.Serialize(kept));
+    }
 
     public IReadOnlyList<StagedChange> Changes
     {
@@ -218,14 +317,15 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore, IDisposable
                     await using var input = new FileStream(full, FileMode.Open, FileAccess.Read,
                         FileShare.Read | FileShare.Delete, 8192, FileOptions.Asynchronous);
                     await input.CopyToAsync(output, ct);
-                }, ct);
-            captured = await StagedContent.CaptureAsync(write, ct);
+                }, ct, _keepIn);
+            captured = await StagedContent.CaptureAsync(write, ct, _keepIn);
             var oldContent = pending?.NewBytes ?? original;
             var id = Guid.NewGuid();
             lock (_gate)
                 _changes.Add(new StagedChange(id, relativePath, key, oldContent, captured,
                     _sequence++, owner, oldContent?.Hash, pending?.Id));
             captured = original = null; // ownership passed to the change
+            Persist();
             return new ArtifactRef(id, kind, title, relativePath);
         }
         finally
@@ -356,6 +456,7 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore, IDisposable
         }
 
         change.MarkApplied();
+        Persist();
         return ApplyResult.Ok;
     }
 
@@ -372,8 +473,9 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore, IDisposable
                 if (_changes.Any(c => !c.Rejected && DescendsFrom(c, change.Id)))
                     return new(false, "Later proposals depend on this change; reject them first.");
                 change.MarkRejected();
-                return new(true);
             }
+            Persist();
+            return new(true);
         }
         finally { _writes.Release(); }
     }
@@ -550,6 +652,8 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore, IDisposable
                     reverted.Add(key);
                 }
             }
+            if (reverted.Count > 0)
+                Persist();
         }
         finally { _writes.Release(); }
         return new RevertReport(reverted, kept, reasons);

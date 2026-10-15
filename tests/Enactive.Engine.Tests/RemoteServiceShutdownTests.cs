@@ -1,6 +1,7 @@
 namespace Enactive.Engine.Tests;
 
 using System.Reflection;
+using Enactive.Application;
 using Enactive.App.Ui;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Host;

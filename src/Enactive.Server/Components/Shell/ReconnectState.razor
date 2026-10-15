@@ -1,0 +1,19 @@
+@* The connection, said in the top bar - and while it is down, a transparent overlay over the whole window that takes
+   every click.
+
+   While the connection is down the page cannot draw anything, so this is not drawn per state: Blazor's own script finds
+   the element with id components-reconnect-modal and puts a class on it - components-reconnect-show (and -retrying,
+   -paused) while it tries again, -failed / -rejected / -resume-failed when it has given up, -hide once it is back - and
+   theme.css shows the text, the dot's colour and the overlay that class calls for. Each state's text is here already.
+
+   The overlay because a click on a live page while its connection is down went nowhere: the button looked pressed and
+   nothing happened, and nothing said so (an answer to a run's question, a cancel). Reload sits above it for when the
+   script has given up - the page cannot come back by itself then. *@
+<span id="components-reconnect-modal" class="conn" role="status">
+    <span class="conn-dot"></span>
+    <span class="conn-text conn-up">Connected</span>
+    <span class="conn-text conn-retrying">Reconnecting…</span>
+    <span class="conn-text conn-down">Disconnected</span>
+    <button type="button" class="conn-reload" onclick="location.reload()">Reload</button>
+    <span class="conn-block"></span>
+</span>

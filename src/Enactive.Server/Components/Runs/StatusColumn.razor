@@ -1,0 +1,109 @@
+@using Enactive.Server.Components.Ui
+
+@* The window's status column (MainWindow.axaml 698-920), 300 px on the right whichever tab is showing - a decision that
+   needs answering must not be a tab away: AI STATUS's four tiles two by two, ROUTING (which model actually served each
+   phase, read from the run's Routed events), WHERE IT RAN (this machine green, bought blue; the share is of tokens), the
+   steps, who has the run, the question - and MODEL PERFORMANCE at the foot, folded to a model and its speed until
+   clicked: opened, two models took most of the column. *@
+
+<aside class="status-column" aria-label="Status">
+    <div class="status-scroll">
+        <PanelHeader Text="AI STATUS" />
+        @* Four tiles, two by two: a 300 px column cannot hold four across and still show a number. *@
+        <div class="tiles-grid">
+            <Tile Value="@View.Artifacts.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)" Label="ARTIFACTS" />
+            <Tile Value="@View.ToolCalls.ToString(System.Globalization.CultureInfo.InvariantCulture)" Label="TOOL CALLS" />
+            <Tile Value="@View.TokensText" Label="TOKENS" Title="@View.TokensDetail" />
+            <Tile Value="@Elapsed" Label="ELAPSED" />
+        </div>
+
+        @if (View.Routing.Count > 0)
+        {
+            <section class="status-block">
+                <PanelHeader Text="ROUTING" />
+                @foreach (var row in View.Routing)
+                {
+                    <div class="routing">
+                        <span class="routing-phase">@row.Phase</span>
+                        <span class="routing-model" title="@row.Model">@row.Model</span>
+                    </div>
+                }
+            </section>
+        }
+
+        @if (View.Work.Count > 0)
+        {
+            <section class="status-block">
+                <PanelHeader Text="WHERE IT RAN" />
+                @foreach (var row in View.Work)
+                {
+                    <div class="routing">
+                        <span class="@("routing-phase reach " + row.Tone)">@row.Label</span>
+                        <span class="routing-model" title="@row.Detail">@row.Detail</span>
+                    </div>
+                }
+            </section>
+        }
+
+        <p class="hint status-progress">@View.Progress</p>
+
+        @if (View.AgentVisible && View.AgentLabel.Length > 0)
+        {
+            @* The window's pill is a deep fill under white; the web's pills are a tint of their tone with the word in it -
+               the same hue: green while the coder works, blue while the reviewer has the run. *@
+            <Pill Class="@(View.AgentReviewing ? "tone-running" : "tone-done")">@View.AgentLabel</Pill>
+        }
+
+        @Decision
+    </div>
+
+    <div class="performance">
+        <button type="button" class="performance-head" aria-expanded="@(_open ? "true" : "false")" @onclick="() => _open = !_open">
+            <span class="panel-header">MODEL PERFORMANCE</span>
+            <span class="hint" aria-hidden="true">@(_open ? "▾" : "▸")</span>
+        </button>
+        @if (View.Speeds.Count == 0)
+        {
+            <p class="hint">Statistics appear after a model responds.</p>
+        }
+        else if (!_open)
+        {
+            @foreach (var row in View.Speeds)
+            {
+                <div class="speed" title="@row.Provider">@($"{row.Model} · {row.Speed}")</div>
+            }
+        }
+        else
+        {
+            <p class="hint">This run · completed requests</p>
+            <div class="speeds-open">
+                @foreach (var row in View.Speeds)
+                {
+                    <div class="speed-open" title="@row.Explanation">
+                        <div class="speed-model">@row.Model</div>
+                        <div class="hint">@row.Provider</div>
+                        <div class="speed-row"><span class="hint">@row.SpeedLabel</span><span class="speed-value">@row.Speed</span></div>
+                        <div class="hint">@row.Times</div>
+                        <div class="hint">@row.Tokens</div>
+                        <div class="hint">@row.Cache</div>
+                        <div class="hint">@row.First</div>
+                        <div class="hint">@row.Requests</div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</aside>
+
+@code {
+    [Parameter, EditorRequired] public LiveRunView View { get; set; } = LiveRunView.Empty;
+
+    /// <summary>How long the run has taken, as the ELAPSED tile says it (RunElapsed); an em dash before it ran.</summary>
+    [Parameter] public string Elapsed { get; set; } = "—";
+
+    /// <summary>The question the run waits on, as its card - the caller's, who knows who may answer it.</summary>
+    [Parameter] public RenderFragment? Decision { get; set; }
+
+    // Folded at first, as the window's (ModelPerformance.IsExpanded): opened or not is how this person looks at it.
+    private bool _open;
+}

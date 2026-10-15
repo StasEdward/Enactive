@@ -238,7 +238,8 @@ internal static class Brand
             resources[key] = brush;
     }
 
-    public static void PublishTo(Application app)
+    // Avalonia.Application in full: Enactive.Application is a namespace (see Enactive.Application.csproj).
+    public static void PublishTo(Avalonia.Application app)
     {
         var r = app.Resources;
 

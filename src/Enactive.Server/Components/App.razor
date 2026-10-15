@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <title>Enactive</title>
+    <link rel="stylesheet" href="@Assets["brand/brand.css"]" />
+    <link rel="stylesheet" href="@Assets["theme.css"]" />
+    <HeadOutlet @rendermode="PageRenderMode" />
+</head>
+<body>
+    <Routes @rendermode="PageRenderMode" />
+    @* For an error no page's boundary caught (MainLayout): Blazor's script shows this element when the connection's
+       circuit fails, and the page is dead from then on. Without it the page stayed as it was, still saying "Connected". *@
+    <div id="blazor-error-ui" role="alert" data-nosnippet>
+        <span>This page stopped working: something went wrong on the service. What was saved is saved, and runs go on.</span>
+        <button type="button" class="btn primary" onclick="location.reload()">Reload</button>
+    </div>
+    <script src="_framework/blazor.web.js"></script>
+</body>
+</html>
+
+@code {
+    [CascadingParameter] private HttpContext HttpContext { get; set; } = default!;
+
+    // Every page is live, set here once for all of them, and not drawn ahead of its connection (no prerender): a page
+    // drawn before its connection was up showed inputs and buttons that did nothing yet, and text typed or a click made
+    // then was lost - a run started with an empty folder, an answer that never reached the run (found by
+    // tests/server-e2e). Nothing is shown until the connection is up, so nothing can be lost.
+    // Sign-in is the exception ([ExcludeFromInteractiveRouting], so AcceptsInteractiveRouting is false there): signing
+    // in sets a cookie, which only a real response can do, so that page is drawn and posted as a plain form.
+    private static readonly IComponentRenderMode Live = new InteractiveServerRenderMode(prerender: false);
+
+    private IComponentRenderMode? PageRenderMode => HttpContext.AcceptsInteractiveRouting() ? Live : null;
+}

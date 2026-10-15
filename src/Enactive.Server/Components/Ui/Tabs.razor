@@ -1,0 +1,22 @@
+@* The window's tab strip (Button.tab): text with an underline, the underline where you are - which is not an action, so
+   the info blue, not ember. One is on at a time; the caller holds which and shows its panel. *@
+
+<div class="tabs" role="tablist" aria-label="@Label">
+    @for (var i = 0; i < Names.Count; i++)
+    {
+        var index = i;
+        <button type="button" role="tab" class="@("tab" + (index == Selected ? " on" : ""))" aria-selected="@(index == Selected ? "true" : "false")"
+                @onclick="() => SelectedChanged.InvokeAsync(index)">@Names[index]</button>
+    }
+</div>
+
+@code {
+    /// <summary>What the tabs are of, for a screen reader.</summary>
+    [Parameter] public string? Label { get; set; }
+
+    /// <summary>The tabs' names, in order - a name may carry a count ("Artifacts (2)").</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<string> Names { get; set; } = [];
+
+    [Parameter] public int Selected { get; set; }
+    [Parameter] public EventCallback<int> SelectedChanged { get; set; }
+}

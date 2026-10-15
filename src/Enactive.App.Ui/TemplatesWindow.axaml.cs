@@ -2,7 +2,7 @@ namespace Enactive.App.Ui;
 
 using Avalonia.Controls;
 using Avalonia.Interactivity;
-using Enactive.App.Ui.ViewModels;
+using Enactive.Application;
 using Enactive.Core.Permissions;
 using Enactive.Core.Templates;
 

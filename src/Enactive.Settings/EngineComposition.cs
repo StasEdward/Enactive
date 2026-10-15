@@ -71,14 +71,29 @@ public sealed record ComposedEngine(
     /// default worker instead - which is what the log analysis did for every role whose name was not its
     /// id.</para>
     /// </summary>
-    public string? WorkerIdFor(string? name)
+    public string? WorkerIdFor(string? name) => WorkerNames.Resolve(Workers.All.Select(w => (w.Id, w.Role)), name);
+}
+
+/// <summary>
+/// The one rule a worker's name is read by - for the engine (<see cref="ComposedEngine.WorkerIdFor"/>) and for a host that
+/// has only the settings' workers to look in. Written once so that a step added to it reaches both.
+/// </summary>
+public static class WorkerNames
+{
+    /// <summary>
+    /// The id of the worker a saved or typed name refers to: by id first, then by role name, either way trimmed and
+    /// ignoring case; null when there is none (and for a blank name). Looking a role name up as an id quietly found the
+    /// default worker instead (see <see cref="ComposedEngine.WorkerIdFor"/>).
+    /// </summary>
+    public static string? Resolve(IEnumerable<(string Id, string Role)> workers, string? name)
     {
         if (string.IsNullOrWhiteSpace(name))
             return null;
 
         var wanted = name.Trim();
-        return (Workers.All.FirstOrDefault(w => string.Equals(w.Id, wanted, StringComparison.OrdinalIgnoreCase))
-                ?? Workers.All.FirstOrDefault(w => string.Equals(w.Role.Trim(), wanted, StringComparison.OrdinalIgnoreCase)))?.Id;
+        var all = workers.ToList();
+        return all.Where(w => string.Equals(w.Id, wanted, StringComparison.OrdinalIgnoreCase)).Select(w => w.Id).FirstOrDefault()
+               ?? all.Where(w => string.Equals(w.Role.Trim(), wanted, StringComparison.OrdinalIgnoreCase)).Select(w => w.Id).FirstOrDefault();
     }
 }
 

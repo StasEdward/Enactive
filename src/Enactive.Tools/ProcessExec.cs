@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Enactive.Core;
 using Enactive.Core.Context;
 using Enactive.Core.Execution;
 using Enactive.Core.Tools;
@@ -689,7 +690,7 @@ internal static partial class ProcessExec
                 var text = new StringBuilder(_head.ToString());
                 if (_dropped > 0)
                     text.Append($"… ({_dropped} line(s) in the middle produced and dropped — output passed "
-                                + $"{MaxCapturedChars:N0} characters; the first and the last lines are kept)\n");
+                                + $"{Invariant.N0(MaxCapturedChars)} characters; the first and the last lines are kept)\n");
                 foreach (var line in _tail)
                     text.AppendLine(line);
                 return text.ToString();

@@ -1,6 +1,7 @@
 namespace Enactive.App.Ui;
 
 using Microsoft.Win32;
+using Enactive.Application;
 
 /// <summary>HKCU is the source of truth. Call on a worker thread; no shell process is needed.</summary>
 internal static class StartupEntry

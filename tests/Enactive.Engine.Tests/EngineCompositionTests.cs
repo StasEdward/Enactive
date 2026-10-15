@@ -587,6 +587,17 @@ public sealed class EngineCompositionTests : IDisposable
         Assert.Equal(id, engine.WorkerIdFor(name));
     }
 
+    /// <summary>The rule on its own, for a host with only the settings' workers: an id beats another worker's role of the same text.</summary>
+    [Theory]
+    [InlineData("coder", "coder")]
+    [InlineData(" CODE REVIEWER ", "coder")]
+    [InlineData("reviewer", "reviewer")]
+    [InlineData("nobody", null)]
+    [InlineData("  ", null)]
+    [InlineData(null, null)]
+    public void A_worker_name_is_read_by_one_rule_over_any_list_of_workers(string? name, string? id)
+        => Assert.Equal(id, WorkerNames.Resolve([("coder", "Code Reviewer"), ("reviewer", "Coder")], name));
+
     private sealed class NoProviders : IChatProviderFactory
     {
         public IChatProvider Create(string providerId) => throw new InvalidOperationException("No model is called here.");

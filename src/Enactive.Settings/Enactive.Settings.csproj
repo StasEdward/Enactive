@@ -6,7 +6,8 @@
     <RootNamespace>Enactive.Settings</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="MailKit" Version="4.18.0" />
+    <PackageReference Include="MailKit" Version="4.18.1" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
   </ItemGroup>
   <ItemGroup>
     <!-- AppSettings.Secrets(): the list of settings secrets, which a test checks every protected field against. -->

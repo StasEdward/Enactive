@@ -21,8 +21,13 @@ namespace Enactive.Core.Permissions;
 /// given for unwatched runs too answers (ApprovalStore, rule 4). Not the handler's <c>CanApprove</c>: a background run
 /// parks its questions for later, which can approve, and is still a run nobody is watching.
 /// </param>
+/// <param name="principal">
+/// Who started the run, when the host serves several people (the service's browser interface): only their own answers
+/// count. Null for the account the process runs as - the desktop's and the console's, as always (ApprovalStore, rule 5).
+/// </param>
 public sealed class RememberedApprovals(
-    IDecisionHandler inner, string workspaceRoot, ApprovalStore workspace, SessionApprovals? session, bool watched) : IDecisionHandler
+    IDecisionHandler inner, string workspaceRoot, ApprovalStore workspace, SessionApprovals? session, bool watched,
+    string? principal = null) : IDecisionHandler
 {
     /// <summary>The option a remembered approval answers with. A request without it is not one an approval can answer.</summary>
     public const string AllowOptionId = "allow";
@@ -35,8 +40,8 @@ public sealed class RememberedApprovals(
     /// </summary>
     public bool CanApproveTool(string tool)
         => inner.CanApproveTool(tool)
-           || session?.Approves(workspaceRoot, tool) == true
-           || workspace.Approves(workspaceRoot, tool, unwatched: !watched);
+           || session?.Approves(workspaceRoot, tool, principal) == true
+           || workspace.Approves(workspaceRoot, tool, unwatched: !watched, principal);
 
     public Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
     {
@@ -45,14 +50,14 @@ public sealed class RememberedApprovals(
             && request.Options.Any(o => o.Id == AllowOptionId))
         {
             // Which one answered is carried back, so the timeline can say so (see DecisionOutcome.Because).
-            if (session?.Approves(request) == true)
+            if (session?.Approves(request, principal) == true)
                 return Task.FromResult(new DecisionOutcome(AllowOptionId, "remembered for this session and workspace"));
 
             if (request.MayBeRemembered && request.Action?.WorkingDirectory is { } root)
             {
-                if (workspace.Approves(root, request.Subject, unwatched: true))
+                if (workspace.Approves(root, request.Subject, unwatched: true, principal))
                     return Task.FromResult(new DecisionOutcome(AllowOptionId, "remembered for this workspace, unwatched runs too"));
-                if (watched && workspace.Approves(root, request.Subject))
+                if (watched && workspace.Approves(root, request.Subject, principal: principal))
                     return Task.FromResult(new DecisionOutcome(AllowOptionId, "remembered for this workspace"));
             }
         }

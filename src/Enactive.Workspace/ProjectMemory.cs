@@ -1,5 +1,6 @@
 namespace Enactive.Workspace;
 
+using System.Globalization;
 using System.Text;
 using Enactive.Core.History;
 using Enactive.Core.Memory;
@@ -29,7 +30,7 @@ public static class ProjectMemory
             sb.AppendLine("  (none yet)");
         else
             foreach (var m in mem.Take(50))
-                sb.AppendLine($"  {m.At.ToLocalTime():yyyy-MM-dd HH:mm}  [{m.Kind}] {m.Content}");
+                sb.AppendLine($"  {Local(m.At, "yyyy-MM-dd HH:mm")}  [{m.Kind}] {m.Content}");
         sb.AppendLine();
 
         // ── Artifacts across all runs (what exists), distinct, newest first ──────
@@ -47,7 +48,7 @@ public static class ProjectMemory
             sb.AppendLine("  (none yet)");
         else
             foreach (var a in artifacts.Take(80))
-                sb.AppendLine($"  {a.At.ToLocalTime():yyyy-MM-dd}  {a.Text}");
+                sb.AppendLine($"  {Local(a.At, "yyyy-MM-dd")}  {a.Text}");
         sb.AppendLine();
 
         // ── Run history (chronological, grouped by day) ─────────────────────────
@@ -61,9 +62,9 @@ public static class ProjectMemory
             string? currentDay = null;
             foreach (var run in runs)
             {
-                var day = run.StartedAt.ToLocalTime().ToString("yyyy-MM-dd");
+                var day = Local(run.StartedAt, "yyyy-MM-dd");
                 if (day != currentDay) { sb.AppendLine("  " + day); currentDay = day; }
-                sb.AppendLine($"    {run.StartedAt.ToLocalTime():HH:mm}  {run.Status,-10} {run.Title}");
+                sb.AppendLine($"    {Local(run.StartedAt, "HH:mm")}  {run.Status,-10} {run.Title}");
                 if (run.Decisions.Count > 0)
                     sb.AppendLine($"          decisions: {string.Join("; ", run.Decisions)}");
                 if (run.Artifacts.Count > 0)
@@ -72,4 +73,11 @@ public static class ProjectMemory
         }
         return sb.ToString();
     }
+
+    /// <summary>
+    /// A time here, in the same digits on every machine: a format's ":" is the culture's time separator and its year the
+    /// culture's calendar's, so the same memory read as another text on a machine with other regional settings - and the
+    /// service's account and the person at the desktop need not share them.
+    /// </summary>
+    private static string Local(DateTimeOffset at, string format) => at.ToLocalTime().ToString(format, CultureInfo.InvariantCulture);
 }

@@ -1,6 +1,7 @@
 namespace Enactive.App.Ui.Tests;
 
 using Enactive.App.Ui.ViewModels;
+using Enactive.Application.Projections;
 using Enactive.Workspace;
 
 /// <summary>What deleting an unfinished run would put back, said by file before the person chooses.</summary>

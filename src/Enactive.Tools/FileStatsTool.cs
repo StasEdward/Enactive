@@ -2,6 +2,7 @@ namespace Enactive.Tools;
 
 using System.Text;
 using System.Text.Json;
+using Enactive.Core;
 using Enactive.Core.Context;
 using Enactive.Core.Permissions;
 using Enactive.Core.Tools;
@@ -203,8 +204,8 @@ public sealed class FileStatsTool : ITool
     }
 
     private static string Size(long bytes)
-        => bytes >= 1024 * 1024 ? $"{bytes / (1024.0 * 1024.0):0.0} MB"
-         : bytes >= 1024 ? $"{bytes / 1024.0:0.0} KB"
+        => bytes >= 1024 * 1024 ? $"{Invariant.Format(bytes / (1024.0 * 1024.0), "0.0")} MB"
+         : bytes >= 1024 ? $"{Invariant.Format(bytes / 1024.0, "0.0")} KB"
          : $"{bytes} B";
 
     private static Dictionary<string, object?> Metadata(

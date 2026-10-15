@@ -33,9 +33,7 @@ public sealed partial class LogAnalysisWindow : Window
         Provenance.Text = result.Provenance;
         Body.Content = MarkdownRender.Build(_markdown);
         Source.Text = _markdown;
-        Cost.Text = result.PromptTokens + result.CompletionTokens > 0
-            ? $"{result.PromptTokens + result.CompletionTokens:N0} tokens"
-            : "";
+        Cost.Text = result.Cost;
 
         ShowSource.IsCheckedChanged += (_, _) =>
         {

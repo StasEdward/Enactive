@@ -1,6 +1,7 @@
 namespace Enactive.Engine.Tests;
 
 using System.Runtime.CompilerServices;
+using Enactive.Application;
 using Enactive.App.Ui;
 using Enactive.Agents;
 using Enactive.Core.Events;

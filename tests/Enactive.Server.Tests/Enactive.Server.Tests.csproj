@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The test server, so the service's real pipeline answers in process: what it lets through and what it
+         refuses is decided there, and a copy of it in a test would pass while the real one was wrong. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.13" />
+    <!-- Razor components rendered in process, signed in as a given account (Components/ComponentHost). -->
+    <PackageReference Include="bunit" Version="2.11.3" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <!-- Shared with the other test project: what lets go of a test's own SQLite files (tests/Shared). -->
+    <Compile Include="../Shared/SqlitePools.cs" Link="Shared/SqlitePools.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Enactive.Server\Enactive.Server.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,107 @@
+@using Enactive.Application
+@using Enactive.Core.Guidance
+@using Enactive.Server.Components.Ui
+
+@* The window's AI · General (SettingsWindow.axaml): each explanation behind its own "?" (Core's SettingsAdvice), and the
+   page is the controls themselves. The numbers sit in short boxes side by side (.short-fields): one to a line, the page
+   ran a dozen screen-wide boxes for four-digit values, and the section scrolled for what fits in two rows. What their
+   long placeholders said is behind the "?" now - a short box shows a short example. *@
+
+<span class="settings-label-row"><span class="label">Context and output budgets (tokens)</span><HintMark Of="Context and output budgets" Text="Provider limits and remaining context may lower the output ceilings." /></span>
+<div class="short-fields">
+    <div class="short-field">
+        <span class="settings-label-row"><label class="settings-small" for="ai-numctx">Context length (num_ctx)</label><HintMark Text="@($"{SettingsAdvice.NumCtx} Blank uses whatever the model already has loaded.")" Of="Context length" /></span>
+        <input id="ai-numctx" inputmode="numeric" placeholder="8192" @bind="Vm.NumCtxText" />
+    </div>
+    <div class="short-field">
+        <label class="settings-small" for="ai-planner">Planner</label>
+        <input id="ai-planner" inputmode="numeric" @bind="Vm.GenerationPlannerText" />
+    </div>
+    <div class="short-field">
+        <label class="settings-small" for="ai-action">Short action</label>
+        <input id="ai-action" inputmode="numeric" @bind="Vm.GenerationActionText" />
+    </div>
+    <div class="short-field">
+        <label class="settings-small" for="ai-filewrite">File-write continuation</label>
+        <input id="ai-filewrite" inputmode="numeric" @bind="Vm.GenerationFileWriteText" />
+    </div>
+    <div class="short-field">
+        <label class="settings-small" for="ai-final">Final-answer continuation</label>
+        <input id="ai-final" inputmode="numeric" @bind="Vm.GenerationFinalAnswerText" />
+    </div>
+    <div class="short-field">
+        <label class="settings-small" for="ai-handover">Handover note</label>
+        <input id="ai-handover" inputmode="numeric" @bind="Vm.GenerationHandoverText" />
+    </div>
+</div>
+
+<p class="label">Steps, review and logs</p>
+<div class="short-fields">
+    <div class="short-field">
+        <span class="settings-label-row"><label class="settings-small" for="ai-retries">Review retries</label><HintMark Text="@($"{SettingsAdvice.ReviewRetries} 1 = two tries in total.")" Of="Review retries" /></span>
+        <input id="ai-retries" inputmode="numeric" placeholder="1" @bind="Vm.ReviewRetriesText" />
+    </div>
+    <div class="short-field">
+        <span class="settings-label-row"><label class="settings-small" for="ai-parallel">Parallel steps</label><HintMark Text="@($"{SettingsAdvice.MaxParallelSteps} 1 = one step at a time.")" Of="Parallel steps" /></span>
+        <input id="ai-parallel" inputmode="numeric" placeholder="1" @bind="Vm.MaxParallelStepsText" />
+    </div>
+    <div class="short-field">
+        <span class="settings-label-row"><label class="settings-small" for="ai-evidence">Evidence for the reviewer</label><HintMark Text="@($"{SettingsAdvice.EvidenceBudget} 6000 = the default.")" Of="Evidence shown to the reviewer" /></span>
+        <input id="ai-evidence" inputmode="numeric" placeholder="6000" @bind="Vm.EvidenceBudgetText" />
+    </div>
+    <div class="short-field">
+        <span class="settings-label-row"><label class="settings-small" for="ai-repair-threshold">Failed repairs before advice</label><HintMark Text="Distinct failed repairs before the repair consultant is asked: 0 = off, minimum 2. Choose from observed runs; there is no calibrated default." Of="Failed repairs before advice" /></span>
+        <input id="ai-repair-threshold" inputmode="numeric" placeholder="0" @bind="Vm.RepairThresholdText" />
+    </div>
+    <div class="short-field">
+        <span class="settings-label-row"><label class="settings-small" for="ai-logdays">Keep logs (days)</label><HintMark Text="@($"{SettingsAdvice.LogRetentionDays} 14 = the default, 0 = keep everything.")" Of="Keep logs for" /></span>
+        <input id="ai-logdays" inputmode="numeric" placeholder="14" @bind="Vm.LogRetentionDaysText" />
+    </div>
+</div>
+
+<span class="settings-label-row"><span class="label">Repair consultant (optional)</span><HintMark Of="Repair consultant" Text="Sends the goal, current diff and error to the chosen model for advice, once per step attempt. The worker stays unchanged." /></span>
+<input aria-label="Repair consultant model" placeholder="provider-id/model — blank disables consultation" @bind="Vm.RepairModelText" />
+
+<div class="settings-field">
+    <span class="settings-label-row"><label class="label" for="ai-instructions">Global instructions</label><HintMark Text="@SettingsAdvice.GlobalInstructions" Of="Global instructions" /></span>
+    <textarea id="ai-instructions" rows="10" placeholder="Global instructions — applied to every run" @bind="Vm.GlobalInstructions"></textarea>
+</div>
+
+<div class="settings-field">
+    <span class="settings-label-row"><label class="label" for="ai-shell">Shell commands</label><HintMark Text="@SettingsAdvice.ShellCommands" Of="Shell commands" /></span>
+    @* By its place in the list, as the window's ComboBox: ShellCommandPolicy's order. *@
+    <select id="ai-shell" @bind="Vm.ShellCommandsIndex">
+        <option value="0">Follow the autonomy level (default)</option>
+        <option value="1">Always ask, even when autonomous</option>
+        <option value="2">Off — refuse shell commands</option>
+    </select>
+</div>
+
+<p class="label">Local model behaviour</p>
+
+<span class="settings-label-row">
+    <label class="check"><input type="checkbox" @bind="Vm.DisableThinking" /> Disable local model reasoning (&lt;think&gt;) — recommended for qwen3</label>
+    <HintMark Text="@SettingsAdvice.DisableThinking" Of="Disable local model reasoning" />
+</span>
+<span class="settings-label-row">
+    <label class="check"><input type="checkbox" @bind="Vm.VerifyWrites" /> Verify writes by reading files back — helps weak local models, adds a round-trip</label>
+    <HintMark Text="@SettingsAdvice.VerifyWrites" Of="Verify writes" />
+</span>
+<span class="settings-label-row">
+    <label class="check"><input type="checkbox" @bind="Vm.RevertRejectedSteps" /> Put a rejected step's files back to how they were</label>
+    <HintMark Text="@SettingsAdvice.RevertRejectedSteps" Of="Put a rejected step's files back" />
+</span>
+<span class="settings-label-row">
+    <label class="check"><input type="checkbox" @bind="Vm.AllowImplicitToolCalls" /> Run tool calls the model only described in text — unsafe, off by default</label>
+    <HintMark Text="@SettingsAdvice.AllowImplicitToolCalls" Of="Run tool calls the model only described" />
+</span>
+<span class="settings-label-row">
+    <label class="check"><input type="checkbox" @bind="Vm.LogPromptBodies" /> Write the full text of every prompt to the log</label>
+    <HintMark Text="@SettingsAdvice.LogPromptBodies" Of="Write the full text of every prompt" />
+</span>
+
+@code {
+    // Handed down as a cascading value rather than a parameter: the view model is internal to the application layer,
+    // and a component's parameters are public.
+    [CascadingParameter] private SettingsViewModel Vm { get; set; } = default!;
+}

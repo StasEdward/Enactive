@@ -1,14 +1,18 @@
 namespace Enactive.Engine.Tests;
 
 using Enactive.Agents;
+using Enactive.Application;
 using Enactive.Core.Context;
+using Enactive.Core.Permissions;
 using Enactive.Core.Schedules;
+using Enactive.Core.Storage;
+using Enactive.Core.Templates;
 using Enactive.Workspace;
 using Xunit;
 
 /// <summary>
-/// One tick of the schedules, as the app runs it while it is open: the most overdue schedule anywhere is
-/// claimed, marked as fired and resolved to the task it runs - or, when it cannot be, the Inbox is told.
+/// Taking a due schedule (DueSchedules), as the window, the console's tick and the service's scheduler all do it: they
+/// must not disagree about which runs, when its occurrence is spent, or what a schedule that cannot start leaves.
 /// </summary>
 public sealed class DueSchedulesTests : IDisposable
 {
@@ -17,17 +21,17 @@ public sealed class DueSchedulesTests : IDisposable
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "enactive-due", Guid.NewGuid().ToString("N"));
     private readonly string _workspace;
+    private readonly string _globalTemplates;
     private readonly ScheduleStore _schedules;
     private readonly RunMarkers _markers;
-    private readonly DueSchedules _due;
 
     public DueSchedulesTests()
     {
-        _workspace = Path.Combine(_root, "ws");
+        _workspace = Path.Combine(_root, "project");
         Directory.CreateDirectory(_workspace);
+        _globalTemplates = Path.Combine(_root, "global-templates");
         _schedules = new ScheduleStore(Path.Combine(_root, "schedules.json"));
-        _markers = new RunMarkers(Path.Combine(_root, "markers"));
-        _due = new DueSchedules(_schedules, _markers, Path.Combine(_root, "global-templates"));
+        _markers = new RunMarkers(Path.Combine(_root, "running"));
     }
 
     public void Dispose()
@@ -35,28 +39,130 @@ public sealed class DueSchedulesTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 
-    private Schedule Daily(string templateId, string name = "nightly", IReadOnlyDictionary<string, string>? parameters = null)
+    private static readonly PermissionPolicy Autonomous = new(PermissionLevel.Autonomous, ["*"], []);
+
+    /// <summary>A schedule repeating a past run, due a minute ago.</summary>
+    private Schedule Due(string goal = "digest the inbox", string? template = null)
     {
-        var schedule = new Schedule(Guid.NewGuid(), _workspace, name, ScheduledWork.FromTemplate(templateId, parameters),
+        var spec = new ResolvedTaskSpec("digest", 1, "Digest", Guid.NewGuid(), "project", _workspace, goal,
+            new Dictionary<string, string>(), Autonomous, [], ExecutionLimits.None, null, false);
+        var schedule = new Schedule(Guid.NewGuid(), _workspace, "morning digest",
+            template is null ? ScheduledWork.FromPastRun(spec.Snapshot()) : ScheduledWork.FromTemplate(template),
+            ScheduleTiming.Once(DateTimeOffset.Now.AddMinutes(-1)), Autonomous, CreatedAt: DateTimeOffset.Now.AddHours(-1));
+        _schedules.Save(schedule);
+        return schedule;
+    }
+
+    /// <summary>A daily 07:00 schedule of a template, due at <see cref="Now"/>.</summary>
+    private Schedule Daily(string templateId, string name = "nightly", string? workspace = null)
+    {
+        var schedule = new Schedule(Guid.NewGuid(), workspace ?? _workspace, name, ScheduledWork.FromTemplate(templateId),
             ScheduleTiming.Daily(new TimeOnly(7, 0), "UTC"), AutonomyTiers.PolicyFor(3), Now.AddDays(-10));
         _schedules.Save(schedule);
         return schedule;
     }
 
+    private Task<DueTake> TakeFirstAsync(DateTimeOffset now)
+        => DueSchedules.TakeFirstAsync(_schedules, _markers, now, CancellationToken.None, _globalTemplates);
+
+    // ── one workspace: the service's tick, the console's --due ──────────────
+
     [Fact]
-    public async Task A_due_schedule_is_taken_claimed_and_marked_as_fired()
+    public async Task A_due_schedule_is_taken_claimed_with_its_folder_and_its_occurrence_spent()
+    {
+        var schedule = Due();
+
+        var take = await DueSchedules.TakeAsync(_schedules, _markers, _workspace, DateTimeOffset.Now, CancellationToken.None);
+
+        Assert.NotNull(take.Run);
+        Assert.Equal("digest the inbox", take.Run.Spec.Goal);
+        Assert.True(_markers.IsRunning(schedule.Id));
+        Assert.NotNull(_schedules.For(_workspace).Single().LastFiredAt);
+        // Held by this process: the run's own lease counts; another process would be refused (WorkspaceLeaseTests).
+        Assert.True(File.Exists(WorkspaceLease.PathFor(_workspace)), "The workspace was not held for the run.");
+
+        take.Run.Dispose();
+        Assert.False(_markers.IsRunning(schedule.Id));
+    }
+
+    /// <summary>Refused its folder - another process runs there - it stays due for the next tick, unclaimed and unspent.</summary>
+    [Fact]
+    public async Task A_schedule_whose_folder_is_busy_stays_due_and_unspent()
+    {
+        var schedule = Due();
+        using var other = WorkspaceLeaseTests.ForeignHolder(_workspace);
+
+        var take = await DueSchedules.TakeAsync(_schedules, _markers, _workspace, DateTimeOffset.Now, CancellationToken.None);
+
+        Assert.Null(take.Run);
+        Assert.Contains("next tick", take.Busy);
+        Assert.Null(_schedules.For(_workspace).Single().LastFiredAt);
+        Assert.False(_markers.IsRunning(schedule.Id));
+    }
+
+    /// <summary>A schedule that cannot become a task is said in the inbox, once: its occurrence is spent all the same.</summary>
+    [Fact]
+    public async Task A_schedule_that_cannot_start_is_reported_once_in_the_inbox()
+    {
+        var schedule = Due(template: "gone-template");
+
+        var take = await DueSchedules.TakeAsync(_schedules, _markers, _workspace, DateTimeOffset.Now, CancellationToken.None);
+
+        Assert.Null(take.Run);
+        Assert.Contains("no template 'gone-template'", take.Failed);
+        Assert.NotNull(_schedules.For(_workspace).Single().LastFiredAt);
+        Assert.False(_markers.IsRunning(schedule.Id));
+        var item = Assert.Single(await InboxStoreFactory.Create(WorkspaceInfo.For(_workspace)).LoadAllAsync(CancellationToken.None));
+        Assert.Equal(schedule.Id, item.ScheduleId);
+        Assert.StartsWith("Did not run", item.Summary);
+
+        var again = await DueSchedules.TakeAsync(_schedules, _markers, _workspace, DateTimeOffset.Now, CancellationToken.None);
+        Assert.Null(again.Failed);
+    }
+
+    /// <summary>
+    /// A folder that is gone is not made again: running would create an empty workspace where the project was. Spent,
+    /// so it is not tried every minute, and said. The window's copy of these steps had this and the service's did not.
+    /// </summary>
+    [Fact]
+    public async Task A_schedule_whose_folder_is_gone_is_spent_and_the_folder_not_made_again()
+    {
+        var gone = Path.Combine(_root, "moved-away");
+        var schedule = Daily("release-check", "vanished folder", workspace: gone);
+
+        var take = await TakeFirstAsync(Now);
+
+        Assert.Null(take.Run);
+        Assert.Contains("not there any more", take.Failed);
+        Assert.False(Directory.Exists(gone));
+        Assert.NotNull(_schedules.For(gone).Single().LastFiredAt);
+        Assert.False(_markers.IsRunning(schedule.Id));
+    }
+
+    [Fact]
+    public async Task Nothing_due_takes_nothing()
+    {
+        var take = await DueSchedules.TakeAsync(_schedules, _markers, _workspace, DateTimeOffset.Now, CancellationToken.None);
+
+        Assert.Equal((null, null, null), (take.Run, take.Busy, take.Failed));
+        Assert.Empty(take.Decisions);
+    }
+
+    // ── every workspace: the window's tick, the console's --due-all ─────────
+
+    [Fact]
+    public async Task The_most_overdue_schedule_anywhere_is_taken_with_its_template()
     {
         var schedule = Daily("release-check");
 
-        using var taken = await _due.TakeAsync(Now, CancellationToken.None);
+        using var taken = (await TakeFirstAsync(Now)).Run;
 
         Assert.NotNull(taken);
         Assert.Equal(schedule.Id, taken.Schedule.Id);
         Assert.Equal("release-check", taken.Spec.TemplateId);
         Assert.Equal(Path.GetFullPath(_workspace), taken.Workspace.RootPath);
         Assert.True(_markers.IsRunning(schedule.Id));
-        Assert.Equal(new DateTimeOffset(2026, 10, 12, 7, 0, 0, TimeSpan.Zero),
-            _schedules.For(_workspace).Single().LastFiredAt);
+        Assert.Equal(new DateTimeOffset(2026, 10, 12, 7, 0, 0, TimeSpan.Zero), _schedules.For(_workspace).Single().LastFiredAt);
     }
 
     // Marked as fired before it runs: the next tick a minute later must not start the same occurrence again,
@@ -66,24 +172,24 @@ public sealed class DueSchedulesTests : IDisposable
     {
         Daily("release-check");
 
-        var first = await _due.TakeAsync(Now, CancellationToken.None);
-        first!.Dispose();
-        var second = await _due.TakeAsync(Now.AddMinutes(1), CancellationToken.None);
+        (await TakeFirstAsync(Now)).Run!.Dispose();
 
-        Assert.Null(second);
+        Assert.Null((await TakeFirstAsync(Now.AddMinutes(1))).Run);
     }
 
-    // The claim is the one the console's --due-all takes too: the app and a Windows task on the same machine do
-    // not both start it.
+    // The claim is the one every tick takes: the window, a console from a Windows task and the service on one machine
+    // do not both start it.
     [Fact]
-    public async Task A_schedule_claimed_elsewhere_is_not_taken()
+    public async Task A_schedule_claimed_elsewhere_is_not_taken_and_stays_unspent()
     {
         var schedule = Daily("release-check");
         using var elsewhere = _markers.Claim(schedule.Id);
 
-        var taken = await _due.TakeAsync(Now, CancellationToken.None);
+        var take = await TakeFirstAsync(Now);
 
-        Assert.Null(taken);
+        // Not even due: a schedule running elsewhere is decided as running (ScheduleTick), not taken and refused.
+        Assert.Null(take.Run);
+        Assert.DoesNotContain(take.Decisions, d => d.ShouldRun);
         Assert.Null(_schedules.For(_workspace).Single().LastFiredAt);
     }
 
@@ -92,23 +198,7 @@ public sealed class DueSchedulesTests : IDisposable
     {
         Daily("release-check");
 
-        Assert.Null(await _due.TakeAsync(Now.AddHours(-2), CancellationToken.None));
-    }
-
-    // Reported once, not retried every minute: the occurrence is marked as fired and the Inbox says why it did not run.
-    [Fact]
-    public async Task A_schedule_whose_template_is_gone_is_reported_and_not_retried()
-    {
-        var schedule = Daily("no-such-template", "vanished");
-
-        var taken = await _due.TakeAsync(Now, CancellationToken.None);
-
-        Assert.Null(taken);
-        Assert.NotNull(_schedules.For(_workspace).Single().LastFiredAt);
-        Assert.False(_markers.IsRunning(schedule.Id));
-        var item = Assert.Single(await InboxStoreFactory.Create(WorkspaceInfo.For(_workspace)).LoadAllAsync(CancellationToken.None));
-        Assert.Equal(schedule.Id, item.ScheduleId);
-        Assert.StartsWith("Did not run", item.Summary);
+        Assert.Null((await TakeFirstAsync(Now.AddHours(-2))).Run);
     }
 
     // The schedules window lists a schedule's outcomes by the schedule id on its Inbox items: a run the app started
@@ -140,7 +230,8 @@ public sealed class DueSchedulesTests : IDisposable
     }
 
     // The window is what the person has open: it asks the schedules itself, every minute, with the pulse the
-    // schedules window reads, and runs what is due as the console does - a schedule's run, nobody to answer.
+    // schedules window reads, and runs what is due as the console does - a schedule's run, nobody to answer - through
+    // the same steps as every other host (DueSchedules).
     [Fact]
     public void The_app_asks_the_schedules_every_minute_while_it_is_open()
     {
@@ -149,7 +240,7 @@ public sealed class DueSchedulesTests : IDisposable
         Assert.Contains("ScheduleTickEvery = TimeSpan.FromMinutes(1)", window, StringComparison.Ordinal);
         Assert.Contains("_scheduleTick.Start();", window, StringComparison.Ordinal);
         Assert.Contains("Heartbeat.Stamp(now);", window, StringComparison.Ordinal);
-        Assert.Contains("DueSchedules.Default.TakeAsync(", window, StringComparison.Ordinal);
+        Assert.Contains("DueSchedules.TakeFirstAsync(", window, StringComparison.Ordinal);
         var at = window.IndexOf("private void StartScheduled(", StringComparison.Ordinal);
         Assert.True(at >= 0);
         var start = window[at..(at + 4000)];
@@ -158,14 +249,9 @@ public sealed class DueSchedulesTests : IDisposable
         Assert.Contains("schedule.Name, ct, schedule.Id)", start, StringComparison.Ordinal);
     }
 
+    /// <summary>One copy of the steps: the window's own (Enactive.Workspace) is gone into the shared one.</summary>
     [Fact]
-    public async Task Disposing_what_was_taken_releases_the_claim()
-    {
-        var schedule = Daily("release-check");
-
-        var taken = await _due.TakeAsync(Now, CancellationToken.None);
-        taken!.Dispose();
-
-        Assert.False(_markers.IsRunning(schedule.Id));
-    }
+    public void There_is_one_copy_of_taking_a_due_schedule()
+        => Assert.Null(typeof(WorkspaceInfo).Assembly.GetTypes().FirstOrDefault(t => t.Name == "DueSchedules")
+                       ?? typeof(Enactive.Workspace.InboxStoreFactory).Assembly.GetTypes().FirstOrDefault(t => t.Name == "DueSchedules"));
 }

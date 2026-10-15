@@ -2,6 +2,7 @@ namespace Enactive.Agents;
 
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using Enactive.Core;
 using static Enactive.Agents.ToolCallParsing;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Chat;
@@ -804,7 +805,7 @@ internal sealed class CallAdmission(
                 foreach (var b in await File.ReadAllBytesAsync(full, ct)) if (b == (byte)'\n') lines++;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
-            var size = $"{bytes:N0} bytes, {lines:N0} lines";
+            var size = $"{Invariant.N0(bytes)} bytes, {Invariant.N0(lines)} lines";
             // The scratch is the steps' own working space, and nothing written there is recorded - so whether a file in it
             // was there before the run is not known, and saying "it existed before this run" of a file a step had just
             // made (run f08f1e, 2026-10-09) told the person the wrong thing.
@@ -818,7 +819,7 @@ internal sealed class CallAdmission(
             {
                 BeforeRunState.Absent => $"'{rel}' was made by this run ({size}).",
                 BeforeRunState.Untouched => $"'{rel}' existed before this run ({size}); this run has not changed it.",
-                BeforeRunState.Kept => $"'{rel}' existed before this run ({before.Content!.Length:N0} bytes then); this run has changed it since - now {size}.",
+                BeforeRunState.Kept => $"'{rel}' existed before this run ({Invariant.N0(before.Content!.Length)} bytes then); this run has changed it since - now {size}.",
                 BeforeRunState.Lost => $"'{rel}' existed before this run; this run has changed it since - now {size}.",
                 _ => $"'{rel}' ({size}): whether it existed before this run is not known."
             });

@@ -1,12 +1,15 @@
 namespace Enactive.Engine.Tests;
 
 using Enactive.Agents;
+using Enactive.Core.Inbox;
+using Enactive.Application;
 using Enactive.Core.Diagnostics;
 using Enactive.Core.Events;
 using Enactive.Core.History;
 using Enactive.Core.Intents;
 using Enactive.Core.Orchestration;
 using Enactive.Core.Permissions;
+using Enactive.Core.Storage;
 using Enactive.Core.Templates;
 using Enactive.Core.Workers;
 using Enactive.Mcp.TestServer;
@@ -424,6 +427,191 @@ public sealed class RunComposerTests
 
         Assert.Contains(phone.Requests, r => r.Subject == "write_file");
         Assert.False(fx.Exists("digest.md"));
+    }
+
+    // ── runs from the browser ───────────────────────────────────────────────
+
+    private static RunRequest FromBrowser(EngineFixture fx, string prompt, string? principal, int autonomy = 0, bool stage = false)
+        => new(fx.Workspace, prompt, IntentSource.Web, Stage: stage, Principal: principal) { Defaults = new(autonomy) };
+
+    /// <summary>
+    /// The service runs as one account for everybody signed in to it. A run from the browser is answered by what ITS
+    /// person allowed for good - not by another person's approval, nor by the account's own from the desktop.
+    /// </summary>
+    [Theory]
+    [InlineData("alice", false)]
+    [InlineData("bob", true)]
+    public async Task A_run_from_the_browser_is_answered_only_by_its_own_person_s_approvals(string principal, bool asked)
+    {
+        using var fx = new EngineFixture();
+        var approvals = TempApprovals();
+        approvals.Approve(fx.Root, "write_file", principal: "alice");
+        approvals.Approve(fx.Root, "write_file", unwatched: true);
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
+            Turn.Calls1("write_file", """{"path":"digest.md","content":"mail"}"""), Turn.Says("done")),
+            approvals, EngineFixture.WorkerWith("write_file"));
+        var person = new ScriptedDecisionHandler("deny");
+
+        await RunAsync(engine, FromBrowser(fx, "write the digest", principal), person);
+
+        Assert.Equal(asked, person.Requests.Any(r => r.Subject == "write_file"));
+        Assert.Equal(!asked, fx.Exists("digest.md"));
+    }
+
+    /// <summary>
+    /// A person in the browser is at a screen: their plain "Allow (workspace)" answers their run, as it does at the
+    /// command bar. Composed as a run nobody watches, it used only approvals for unwatched runs.
+    /// </summary>
+    [Fact]
+    public async Task A_run_from_the_browser_is_one_somebody_is_watching()
+    {
+        using var fx = new EngineFixture();
+        var approvals = TempApprovals();
+        approvals.Approve(fx.Root, "write_file", principal: "alice");
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
+            Turn.Calls1("write_file", """{"path":"digest.md","content":"mail"}"""), Turn.Says("done")),
+            approvals, EngineFixture.WorkerWith("write_file"));
+
+        await RunAsync(engine, FromBrowser(fx, "write the digest", "alice"), new ScriptedDecisionHandler("deny"));
+
+        Assert.True(fx.Exists("digest.md"));
+    }
+
+    /// <summary>Without a name, the run would be answered by the account's own approvals for whoever is signed in.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public async Task A_run_from_the_browser_that_names_nobody_is_refused_before_anything_starts(string? principal)
+    {
+        using var fx = new EngineFixture();
+        var request = FromBrowser(fx, "answer", principal);
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
+
+        Assert.Contains("must name who started it", RunComposer.Refusal(request));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => RunComposer.ComposeAsync(engine, request, fx.Decisions, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Watched, but proposals kept in the service's memory are not enough: a closed tab leaves nobody to apply them
+    /// and a restart loses them, while the history says the changes were staged. With a folder to keep them in, it
+    /// stages there.
+    /// </summary>
+    [Fact]
+    public async Task A_run_from_the_browser_stages_only_into_a_folder_that_keeps_the_proposals()
+    {
+        using var fx = new EngineFixture();
+        Assert.Contains("without a folder to keep", RunComposer.Refusal(FromBrowser(fx, "answer", "alice", stage: true)));
+
+        var folder = Path.Combine(fx.Root, ".enactive", "staging", "one");
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
+        await using var staged = await RunComposer.ComposeAsync(engine,
+            FromBrowser(fx, "answer", "alice", stage: true) with { KeepProposalsIn = folder }, fx.Decisions, default);
+
+        Assert.Equal(folder, Assert.IsType<StagingArtifactStore>(staged.Artifacts).KeptIn);
+    }
+
+    /// <summary>
+    /// The browser on the local network is an operator of the machine and may run a shell when allowed to; a phone
+    /// never may (RemotePolicy). Folding the two into one source would take the shell from one or give it to the other.
+    /// </summary>
+    [Theory]
+    [InlineData(IntentSource.Web, true)]
+    [InlineData(IntentSource.Remote, false)]
+    public async Task A_run_from_the_browser_may_run_a_shell_and_one_from_a_phone_may_not(IntentSource source, bool ran)
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer),
+            Turn.Calls1("run_command", """{"command":"echo made> made.txt"}"""), Turn.Says("done")),
+            TempApprovals(), EngineFixture.WorkerWith("run_command"));
+        var request = new RunRequest(fx.Workspace, "make the file", source, Principal: "alice") { Defaults = new(2) };
+
+        await RunAsync(engine, request, new ScriptedDecisionHandler("allow"));
+
+        Assert.Equal(ran, fx.Exists("made.txt"));
+    }
+
+    // ── one process in a workspace ──────────────────────────────────────────
+
+    /// <summary>
+    /// Refused in the composer, so no host can start a run in a folder another process is running in - the window,
+    /// the console and the service each kept only their own runs apart.
+    /// </summary>
+    [Fact]
+    public async Task A_run_is_refused_in_a_workspace_another_process_is_running_in()
+    {
+        using var fx = new EngineFixture();
+        using var other = WorkspaceLeaseTests.ForeignHolder(fx.Root, host: "enactive");
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
+
+        var refused = await Assert.ThrowsAsync<WorkspaceInUseException>(
+            () => RunComposer.ComposeAsync(engine, Request(fx, "answer", IntentSource.CommandBar), fx.Decisions, CancellationToken.None));
+
+        Assert.Equal("enactive", refused.Holder?.Host);
+    }
+
+    /// <summary>Held from composing until the run is disposed - by whichever host disposes it - and let go then.</summary>
+    [Fact]
+    public async Task A_run_holds_its_workspace_until_it_is_disposed()
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer), Turn.Says("done")), TempApprovals(), EngineFixture.WorkerWith());
+        var lease = WorkspaceLease.PathFor(fx.Root);
+
+        var composed = await RunComposer.ComposeAsync(engine, Request(fx, "answer", IntentSource.CommandBar), fx.Decisions, default);
+        Assert.Throws<IOException>(() => new FileStream(lease, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete).Dispose());
+
+        await composed.Resources.DisposeAsync();
+        Assert.False(File.Exists(lease));
+    }
+
+    // ── a run nobody is watching (BackgroundRun) ────────────────────────────
+
+    private static async Task<InboxItem> OnlyInboxItemAsync(EngineFixture fx)
+        => Assert.Single(await InboxStoreFactory.Create(fx.Workspace).LoadAllAsync(CancellationToken.None));
+
+    /// <summary>Its end, whatever it is, is read in the Inbox - nobody was watching anywhere else.</summary>
+    [Fact]
+    public async Task A_background_run_ends_in_the_inbox()
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer), Turn.Says("done")), TempApprovals(), EngineFixture.WorkerWith());
+
+        await BackgroundRun.RunAsync(engine, Request(fx, "answer", IntentSource.Inbox), "answer", CancellationToken.None);
+
+        Assert.Equal("answer", (await OnlyInboxItemAsync(fx)).Title);
+    }
+
+    /// <summary>
+    /// Refused its folder because another process runs there: an end before it began is still an end, and the Inbox
+    /// says whose run is in the way.
+    /// </summary>
+    [Fact]
+    public async Task A_background_run_that_could_not_start_says_why_in_the_inbox()
+    {
+        using var fx = new EngineFixture();
+        using var other = WorkspaceLeaseTests.ForeignHolder(fx.Root, host: "enactive");
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
+
+        await BackgroundRun.RunAsync(engine, Request(fx, "write the digest", IntentSource.Inbox), "write the digest", CancellationToken.None);
+
+        var item = await OnlyInboxItemAsync(fx);
+        Assert.Equal("error", item.Kind);
+        Assert.StartsWith("Failed to start: Another Enactive process", item.Summary);
+    }
+
+    [Fact]
+    public async Task A_background_run_cancelled_before_it_began_is_in_the_inbox_as_cancelled()
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(QuickAnswer)), TempApprovals(), EngineFixture.WorkerWith());
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        await BackgroundRun.RunAsync(engine, Request(fx, "answer", IntentSource.Inbox), "answer", cancelled.Token);
+
+        Assert.Contains("ancel", (await OnlyInboxItemAsync(fx)).Summary);
     }
 
     // ── tools ───────────────────────────────────────────────────────────────

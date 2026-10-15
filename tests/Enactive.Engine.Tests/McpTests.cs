@@ -60,13 +60,10 @@ public sealed class McpTests
     {
         using var fx = new EngineFixture();
         var calls = Path.Combine(fx.Root, "slow-calls.txt");
-        // The short timeout is for the CALL. One setting covers connecting as well, and connecting starts a
-        // process: given two seconds for that too, a loaded build machine did not get through the handshake
-        // (2026-10-03) and the test failed before it reached what it is about. The connection reads the
-        // setting when a call is made, so it is shortened once the server is up.
-        var config = Config();
-        await using var connection = await McpConnection.ConnectAsync(config, fx.Root, default);
-        config.TimeoutSeconds = 2;
+        // Keep startup's ten seconds: two was too short for a loaded build machine. The connection copies its
+        // settings, so changing this timeout after connecting never shortened calls. The fixture's slow tool
+        // records but never answers, making timeout independent of the runner's ordering of two equal timers.
+        await using var connection = await McpConnection.ConnectAsync(Config(), fx.Root, default);
         var slow = connection.Tools.Single(t => t.Definition.Name == McpConnection.ToolName("test", "slow"));
 
         var result = await slow.InvokeAsync(JsonSerializer.Serialize(new { value = calls }), Context(fx), default);

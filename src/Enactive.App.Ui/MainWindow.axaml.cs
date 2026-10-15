@@ -12,6 +12,8 @@ using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Enactive.Application.Projections;
+using Enactive.Application;
 using Enactive.Agents;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Context;
@@ -38,7 +40,7 @@ namespace Enactive.App.Ui;
 
 /// <summary>Three-panel Enactive shell: Workspace + autonomy (left) · plan-step feed (center) ·
 /// AI status + decision card + artifacts (right). Reuses the engine unchanged.</summary>
-public sealed partial class MainWindow : Window, IDecisionHandler
+public sealed partial class MainWindow : Window, IDecisionPresenter
 {
     // ── Reusable singletons ──────────────────────────────────────────────────
     private readonly HttpClient _http = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
@@ -76,15 +78,21 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     /// <summary>Everything the window shows. Nothing below touches a control - it sets a property here.</summary>
     private readonly MainWindowViewModel _vm = new();
-    private readonly HashSet<string> _shownArtifacts = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// The live run's files - written, proposed, put back - as every host reads them from its events (RunFiles): which
+    /// card an ArtifactProduced makes, and which cards an ArtifactReverted marks, is decided there, not here.
+    /// </summary>
+    private RunFiles _files = new();
     /// <summary>Workspaces already told about their ignored legacy approvals file — say it once.</summary>
     private readonly HashSet<string> _legacyApprovalsNoted = new(StringComparer.OrdinalIgnoreCase);
 
     // ── Run state ────────────────────────────────────────────────────────────
     private readonly ForegroundRunSlot _foreground = new();
-    private DecisionCompletion? _pendingDecision;
     private readonly SessionApprovals _sessionApprovals = new();
-    private readonly DecisionQueue _decisionQueue = new();
+    /// <summary>Asks this window's person what runs need answered, through the card (DecisionRouter).</summary>
+    private readonly DecisionRouter _decisions;
+    /// <summary>The question the card is showing, so a late "take it down" leaves a newer one alone.</summary>
+    private Guid? _shownDecision;
     // The live run's step cards, title, phase and step count - the same fold a run reopened from the history
     // is drawn from (RunFeed) - and the card views drawn from it.
     private RunFeed _feed = new();
@@ -97,7 +105,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// <summary>See where it is started: the badge against work this process did not do.</summary>
     private DispatcherTimer? _inboxPoll;
 
-    // The strip at the foot of the window (RepoBarViewModel): local git every half minute while nothing runs, GitHub at
+    // The strip at the foot of the window (RepoBar): local git every half minute while nothing runs, GitHub at
     // most every two minutes - it is a network call, and a strip is not worth a rate limit.
     private DispatcherTimer? _repoPoll;
 
@@ -105,24 +113,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private DispatcherTimer? _scheduleTick;
     private int _scheduleTicking;
     private static readonly TimeSpan ScheduleTickEvery = TimeSpan.FromMinutes(1);
-    private DateTimeOffset _pullRequestReadAt = DateTimeOffset.MinValue;
-    private int _repoReads;
-    private static readonly TimeSpan PullRequestEvery = TimeSpan.FromMinutes(2);
     private string _currentWorkspaceRoot = string.Empty;
     private readonly WorkspaceRegistry _registry = WorkspaceRegistry.Load(deferWrites: true);
 
     /// <summary>What each workspace was left showing in the middle column. See OpenRunMemory.</summary>
     private readonly OpenRunMemory _openRuns = new();
 
-    /// <summary>
-    /// Runs in flight, and the workspace each belongs to.
-    ///
-    /// <para>Held here because nothing else knows: a run is written to the store when it ENDS, so
-    /// between Run and the end this list is the only record that it is happening at all. The
-    /// workspace is carried alongside because a background run keeps going after the workspace has
-    /// been switched, and it must not appear in another project's column.</para>
-    /// </summary>
-    private readonly Dictionary<Guid, (LiveRun Run, string Workspace)> _live = new();
+    /// <summary>Reading and forgetting runs, and the questions asked first (RunHistoryService).</summary>
+    private readonly RunHistoryService _history;
+
+    /// <summary>Runs in flight, and the workspace each belongs to - see LiveRuns.</summary>
+    private readonly LiveRuns _liveRuns = new();
 
     /// <summary>The foreground run's row, so events can find it. Null when nothing is running.</summary>
     private Guid _liveRow;
@@ -151,7 +152,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// until it is replaced.</para>
     /// </summary>
     private readonly List<Action> _liveJournal = new();
-    private string? _liveAgent;
+    /// <summary>Who is working on the live run and what it is doing now (RunActivity).</summary>
+    private RunActivity _activity = new();
     private Guid _renderedRunId;
     private readonly BackgroundRunGroup _background = new();
     private bool _exitRequested;
@@ -167,6 +169,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         _log = new LogHub(minLevel: LogLevel.Debug, downstream: new ILogSink[] { _logFile });
         _settings = AppSettings.Load();
+        // The desktop's questions are its account's own: no principal (ApprovalStore, rule 5).
+        _decisions = new DecisionRouter(this, _sessionApprovals, ApprovalStore.Default);
+        _history = new RunHistoryService(() => _settings.KeepRuns);
 
         // A settings file the app cannot build from must not make the app unlaunchable. Saving is
         // validated now, but a file edited by hand — or written by an older build — can still be
@@ -378,7 +383,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             () => _registry.Entries,
             // The desktop's own handler. RemoteRunner wraps it rather than replacing it, so a
             // permission question from a remote run shows here as well as on the phone.
-            this,
+            _decisions,
             RemoteDatabasePath());
 
         // The service this handler belongs to, not whatever _remote is when the post runs. A restart sets _remote
@@ -542,9 +547,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// <summary>
     /// Work that must be cancelled and drained before this process exits.
     /// </summary>
-    private bool HasWorkInFlight()
-        => _vm.IsBusy || _pendingDecision is not null
-            || _background.Count > 0 || RemoteRunsInFlight > 0;
+    private bool HasWorkInFlight() => InFlight.Any;
+
+    private WorkInFlight InFlight => new(_vm.IsBusy, _decisions.IsPending, _background.Count, RemoteRunsInFlight);
 
     /// <summary>
     /// Runs a phone started that are still going. They die with the process exactly as a background
@@ -553,26 +558,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private int RemoteRunsInFlight => _remote?.Running.Count ?? 0;
 
-    private string DescribeWorkInFlight()
-    {
-        var background = _background.Count;
-        var remote = RemoteRunsInFlight;
-
-        if (_pendingDecision is not null)
-            return "A run is waiting for your decision. Closing now cancels it.";
-
-        if (remote > 0)
-            return remote == 1
-                ? "A task started from your phone is still going. Closing now stops it where it is."
-                : $"{remote} tasks started from your phone are still going. Closing now stops them where they are.";
-        if (_vm.IsBusy && background > 0)
-            return $"A run is going, and {background} more in the background. Closing cancels them and waits for cleanup and recording.";
-        if (_vm.IsBusy)
-            return "A run is going. Closing cancels it and waits for cleanup and recording.";
-        return background == 1
-            ? "A background run is still going. Closing cancels it and waits for cleanup and recording."
-            : $"{background} background runs are still going. Closing cancels them and waits for cleanup and recording.";
-    }
+    private string DescribeWorkInFlight() => InFlight.Describe();
 
     /// <summary>
     /// False when this desktop has no system tray. Then the window has nowhere to hide and closing
@@ -644,7 +630,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
             // Shutdown is explicit now: the lifetime no longer ends with the main window, because the
             // main window comes and goes from the tray.
-            (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+            // Avalonia.Application in full: Enactive.Application is a namespace (see Enactive.Application.csproj).
+            (Avalonia.Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
         }
         finally { _exitRequested = false; }
     }
@@ -662,30 +649,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     /// <summary>The open workspace as a full path, or null when the box is empty.</summary>
     /// <summary>
-    /// Reads the workspace's repository into the strip - and its pull request, when two minutes have passed since it was
-    /// last asked or the person asked by clicking. A read started after this one wins: a slow answer about the folder
-    /// left behind must not overwrite the one now open.
+    /// Reads the workspace's repository into the strip, as every host reads it (RepoBar.ReadAsync): its pull request when
+    /// two minutes have passed since it was last asked, or whenever the person asked by clicking.
     /// </summary>
-    private async Task RefreshRepoAsync(bool forcePullRequest = false)
-    {
-        var read = ++_repoReads;
-        var root = WorkspaceRootOrNull();
-        var repo = root is null ? null : await RepoStatusReader.ReadAsync(root, CancellationToken.None);
-        if (read != _repoReads) return;
-        _vm.Repo.Show(repo);
-        if (repo?.GitHub is null || (!forcePullRequest && DateTimeOffset.UtcNow - _pullRequestReadAt < PullRequestEvery))
-            return;
-        _pullRequestReadAt = DateTimeOffset.UtcNow;
-        var pullRequest = await RepoStatusReader.ReadPullRequestAsync(repo, CancellationToken.None);
-        if (read == _repoReads)
-            _vm.Repo.ShowPullRequest(pullRequest);
-    }
+    private Task RefreshRepoAsync(bool forcePullRequest = false)
+        => _vm.Repo.ReadAsync(WorkspaceRootOrNull(), forcePullRequest);
 
     /// <summary>Opens a pull request's page in the browser - only a github.com address, which is what the strip shows.</summary>
     private void OpenRepoPage(string? url)
     {
-        if (url is null || !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps
-            || !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+        // Qualified: RepoBar here is the strip's Border (x:Name), not the model.
+        if (global::Enactive.Application.Projections.RepoBar.GitHubPage(url) is not { } uri)
             return;
         _ = TopLevel.GetTopLevel(this)?.Launcher.LaunchUriAsync(uri);
     }
@@ -840,7 +814,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private async Task RunAsync(
         bool background, ResolvedTaskSpec? spec = null, Guid? taskId = null, RunCheckpoint? resume = null)
     {
-        if (_shuttingDown || (!background && _vm.IsBusy) || _pendingDecision is not null)
+        if (_shuttingDown || (!background && _vm.IsBusy) || _decisions.IsPending)
             return;
 
         // A resumed run's request comes from the checkpoint. The command bar is empty by then - the
@@ -853,23 +827,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (string.IsNullOrEmpty(workspacePath))
             return;
 
-        // The app used to create whatever path was in the box. That is how an empty workspace
-        // appeared beside the .exe on first start: a typo, or a default nobody chose, became a
-        // folder. A run happens in a folder that already exists, or it does not happen.
-        if (!Directory.Exists(workspacePath))
+        // A folder that is not there, or no model to run on - the checks every host makes (RunLauncher).
+        if (RunLauncher.Refusal(workspacePath, _engineProblem) is { } refused)
         {
             _vm.StatusPhase = "Error";
-            _vm.CurrentAction = $"No such folder: {workspacePath}. Pick another workspace, or create the folder yourself first.";
-            return;
-        }
-
-        // No model, no run - said here rather than discovered as a 404 from a provider. Before the
-        // model names came out of AppSettings this could not happen: an unconfigured machine was
-        // configured for whatever string was compiled in, and it ran.
-        if (_engineProblem is { Length: > 0 } notConfigured)
-        {
-            _vm.StatusPhase = "Error";
-            _vm.CurrentAction = notConfigured;
+            _vm.CurrentAction = refused;
             return;
         }
 
@@ -901,7 +863,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
             _vm.InputText = string.Empty;
             Live(() => _vm.TaskIntent = text);
-            SetLiveTitle(Summarise(text));
+            SetLiveTitle(RunLauncher.Title(text));
             _feed = new RunFeed(_liveTitle);
             Live(() => _vm.HasTask = true);
             Live(() => _vm.StatusPhase = "Running");
@@ -946,11 +908,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     CurrentEngine(),
                     new RunRequest(workspace, text, IntentSource.CommandBar, taskId, resume, spec, Stage: _vm.StageChanges)
                         { Defaults = DefaultsOnScreen() },
-                    this, runCancellation.Token);
+                    _decisions, runCancellation.Token);
 
                 _staging = composed.Artifacts as StagingArtifactStore;
                 _disk = composed.Artifacts as DiskArtifactStore;
                 _stagedShown = 0;
+                _files.Stages = _staging is not null;
 
                 var envLine = composed.Intent.Context.Environment?.OneLine();
                 await Dispatcher.UIThread.InvokeAsync(() => _vm.EnvironmentSummary = envLine ?? "(no environment data)");
@@ -1040,37 +1003,33 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 }
                 SyncFeed();
 
-                // What only the window shows: the routing panel, the agent pill, the line saying what is
-                // happening now, the counters, tokens and artifacts.
+                // The agent pill, the line saying what is happening now and the count of tool calls: folded by
+                // RunActivity, as any host shows them. Drawn here only where they changed - the pill in particular
+                // is redrawn on a change of hands, not on every token.
+                var changed = _activity.Apply(ev);
+                if (changed.HasFlag(RunActivity.Change.Agent))
+                {
+                    var (label, agent) = (_activity.AgentLabel, _activity.Agent);
+                    Live(() => _vm.SetAgent(label, agent));
+                }
+                if (changed.HasFlag(RunActivity.Change.ToolCalls))
+                {
+                    var calls = _activity.ToolCalls;
+                    Live(() => _vm.ToolCalls = calls);
+                }
+                if (changed.HasFlag(RunActivity.Change.Ended))
+                    Live(() => _vm.IsAgentVisible = false);
+                if (changed.HasFlag(RunActivity.Change.Action))
+                {
+                    var action = _activity.CurrentAction;
+                    Live(() => _vm.CurrentAction = action);
+                }
+
+                // What only the window shows: the routing panel, tokens and artifacts.
                 switch (ev.Kind)
                 {
                     case EventKind.Routed:
                         Live(() => _vm.Routing.Apply(ev.Summary, ev.PayloadJson));
-                        break;
-                    case EventKind.StepStarted:
-                        SetLiveAgent("Coder", AgentKind.Coder);
-                        Live(() => _vm.CurrentAction = ev.Summary);
-                        break;
-                    case EventKind.AssistantDelta:
-                        SetLiveAgent("Coder", AgentKind.Coder);
-                        break;
-                    case EventKind.ToolInvoked:
-                        SetLiveAgent("Coder", AgentKind.Coder);
-                        Live(() =>
-                        {
-                            _vm.ToolCalls++;
-                            _vm.CurrentAction = ev.Summary;
-                        });
-                        break;
-                    case EventKind.ReviewRequested:
-                    case EventKind.ReviewPassed:
-                    case EventKind.ReviewFailed:
-                        SetLiveAgent("Reasoner · review", AgentKind.Reasoner);
-                        Live(() => _vm.CurrentAction = ev.Summary);
-                        break;
-                    case EventKind.DecisionRequested:
-                    case EventKind.DecisionResolved:
-                        Live(() => _vm.CurrentAction = ev.Summary);
                         break;
                     case EventKind.UsageReported:
                         if (ev.Usage() is { } used)
@@ -1079,31 +1038,21 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                             Live(() => _vm.AddUsage(used.In, used.Out, usageProvider, ReachOf(usageProvider)));
                         }
                         break;
-                    case EventKind.ArtifactProduced:
-                        if (_staging is not null)
-                            AddStagedArtifact();
-                        else
-                            AddArtifact(ev);
-                        break;
-                    // The step's work was put back after the reviewer rejected it. Its cards must stop
-                    // offering to open or undo a file that is no longer the file they describe.
-                    case EventKind.ArtifactReverted:
-                        MarkRevertedArtifacts(ev.RevertedPaths() ?? []);
-                        break;
-                    case EventKind.TaskCompleted:
-                    case EventKind.TaskFailed:
-                        var outcome = ev.Outcome()
-                            ?? (ev.Kind == EventKind.TaskCompleted ? RunOutcomeKind.Completed : RunOutcomeKind.Failed);
-                        Live(() =>
+                    case EventKind.ArtifactProduced or EventKind.ArtifactReverted:
+                        switch (_files.Apply(ev))
                         {
-                            _vm.IsAgentVisible = false;
-                            // Why it stopped belongs on screen, not only in the log. A completed run has a
-                            // reason only when something must be added to "done" - a check the engine ran
-                            // on the workspace and saw fail (RunOutcomeDecision.Settle) - and that is shown too.
-                            _vm.CurrentAction = outcome == RunOutcomeKind.Completed
-                                ? ev.OutcomeReason() ?? string.Empty
-                                : ev.OutcomeReason() ?? ev.Summary;
-                        });
+                            case FileNews.Written written:
+                                AddArtifact(written.Path);
+                                break;
+                            case FileNews.Staged:
+                                AddStagedArtifact();
+                                break;
+                            // The step's work was put back after the reviewer rejected it. Its cards must stop
+                            // offering to open or undo a file that is no longer the file they describe.
+                            case FileNews.Reverted reverted:
+                                MarkRevertedArtifacts(reverted.Paths);
+                                break;
+                        }
                         break;
                 }
         }
@@ -1150,7 +1099,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         private void UpdateProgress()
         {
-            var progress = _feed.StepsTotal > 0 ? $"{_feed.StepsDone} / {_feed.StepsTotal} steps" : "—";
+            var progress = RunFigures.Steps(_feed.StepsDone, _feed.StepsTotal);
             Live(() => _vm.StatusProgress = progress);
 
             // The one place step counts change, so the one place the live row has to be told. The row
@@ -1164,36 +1113,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 });
         }
 
-        /// <summary>A one-line title from a request that may be a paragraph. Held until the planner
-        /// produces a real title, which it almost always does.</summary>
-        private static string Summarise(string text)
+        private static string FormatElapsed(TimeSpan span) => RunElapsed.Format(span);
+
+        /// <summary>A card for a file the run wrote - once per file: RunFiles tells a path only the first time.</summary>
+        private void AddArtifact(string relative)
         {
-            var line = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
-            return line.Length <= 70 ? line : line[..70] + "…";
-        }
-
-        private static string FormatElapsed(TimeSpan span)
-        {
-            if (span.TotalHours >= 1)
-                return $"{(int)span.TotalHours}h {span.Minutes}m {span.Seconds}s";
-            if (span.TotalMinutes >= 1)
-                return $"{span.Minutes}m {span.Seconds}s";
-            return $"{span.Seconds}s";
-        }
-
-        private void AddArtifact(WorkEvent ev)
-        {
-            // The path as a value. Splitting the summary on its first ": " is a guess about a sentence,
-            // and a path is not a sentence.
-            var relative = ev.ArtifactPath()
-                           ?? (ev.Summary.Contains(": ", StringComparison.Ordinal)
-                               ? ev.Summary[(ev.Summary.IndexOf(": ", StringComparison.Ordinal) + 2)..]
-                               : ev.Summary);
-
-            // One card per file: repeated writes to the same path say nothing new.
-            if (!_shownArtifacts.Add(relative))
-                return;
-
             var root = _currentWorkspaceRoot;
 
             // "Undo" used to be an unconditional File.Delete: if the agent EDITED an existing source
@@ -1233,7 +1157,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 if (!paths.Contains(item.RelativePath, StringComparer.OrdinalIgnoreCase))
                     continue;
 
-                item.Status = "put back — the reviewer rejected this step";
+                item.Status = RunFiles.PutBackStatus;
                 item.CanAct = false;
             }
         }
@@ -1359,47 +1283,29 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         /// </summary>
         private Guid BeginLive(string title, string workspace, bool headless)
         {
-            var row = Guid.NewGuid();
-            _live[row] = (new LiveRun(row, Guid.Empty, title, headless, 0, 0, DateTimeOffset.Now), workspace);
+            var row = _liveRuns.Begin(title, workspace, headless);
             RefreshLive();
             return row;
         }
 
-        /// <summary>Updates a live row, if it is still there. Silent when it is not: a run that has
-        /// ended while an event was in flight is not an error to report.</summary>
         private void UpdateLive(Guid row, Func<LiveRun, LiveRun> change)
         {
-            if (!_live.TryGetValue(row, out var held))
-                return;
-
-            _live[row] = (change(held.Run), held.Workspace);
-            RefreshLive();
+            if (_liveRuns.Update(row, change))
+                RefreshLive();
         }
 
         private void EndLive(Guid row)
         {
-            if (_live.Remove(row))
+            if (_liveRuns.End(row))
                 RefreshLive();
         }
 
         /// <summary>
-        /// Pushes the live rows for the CURRENT workspace into the column.
-        ///
-        /// <para>Filtered by workspace here rather than in RunColumn: which folder a run belongs to is
-        /// the window's business, and a background run started in one project keeps running after a
-        /// switch. Filtered against the history there, which is the rule that has a test.</para>
+        /// Pushes the live rows for the CURRENT workspace into the column: those of the folder on screen
+        /// (LiveRuns), filtered against the history (RunColumn), which are the two rules that have tests.
         /// </summary>
         private void RefreshLive()
-        {
-            var here = WorkspaceRegistry.Normalise(_vm.WorkspacePath);
-
-            _vm.Runs.ShowRunning(
-                RunColumn.Live(
-                    _live.Values
-                         .Where(e => string.Equals(e.Workspace, here, StringComparison.OrdinalIgnoreCase))
-                         .Select(e => e.Run),
-                    _vm.Runs.All));
-        }
+            => _vm.Runs.ShowRunning(RunColumn.Live(_liveRuns.In(_vm.WorkspacePath), _vm.Runs.All));
 
         /// <summary>
         /// Empties the middle column and the tiles beside it: the step feed, the artifacts, the tabs,
@@ -1417,7 +1323,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             // The run's own state, which the panels are only a view of. Cleared HERE and not in
             // ClearRunPanels, because detaching from a run to look at another workspace empties the
             // panels while the run carries on filling these.
-            _shownArtifacts.Clear();
+            _files = new RunFiles();
             _liveArtifacts.Clear();
             _feed = new RunFeed();
             _cardViews.Clear();
@@ -1425,7 +1331,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _shownProgress = default;
             _liveTitle = string.Empty;
             _liveJournal.Clear();
-            _liveAgent = null;
+            _activity = new RunActivity();
             _renderedRunId = Guid.Empty;
         }
 
@@ -1444,21 +1350,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _vm.ResetUsage();
             _vm.Routing.Clear();
             _vm.SelectedTab = 0;
-            if (_pendingDecision is null) _vm.IsDecisionVisible = false;
+            if (!_decisions.IsPending) _vm.IsDecisionVisible = false;
             _vm.IsAgentVisible = false;
 
             _vm.StatusPhase = "Idle";
             _vm.StatusProgress = "—";
             _vm.StatusElapsed = "—";
             _vm.CurrentAction = string.Empty;
-        }
-
-        private void SetLiveAgent(string name, AgentKind kind)
-        {
-            // Keep only badge transitions, including while another workspace is visible.
-            if (_liveAgent == name) return;
-            _liveAgent = name;
-            Live(() => _vm.SetAgent(name, kind));
         }
 
         /// <summary>
@@ -1618,11 +1516,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             if (entry is null)
                 return;
 
-            var name = await PromptWindow.AskAsync(
-                this,
-                "Name this workspace",
-                "What Enactive calls it. The folder is not touched.",
-                entry.Name);
+            var name = await PromptWindow.AskAsync(this, WorkspaceRows.RenameTitle, WorkspaceRows.RenamePrompt, entry.Name);
 
             if (name is null)
                 return;
@@ -1701,13 +1595,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             if (entry is null)
                 return;
 
-            var forget = await ConfirmWindow.AskAsync(
-                this,
-                $"Forget \u201c{entry.Name}\u201d?",
-                "The folder and everything in it, including its run history, are left exactly where they are. "
-                + "What goes is the name you gave it here and how runs are set up in it.",
-                "Forget",
-                "Keep");
+            var question = WorkspaceRows.Forget(entry.Name);
+            var forget = await ConfirmWindow.AskAsync(this, question.Headline, question.Body, question.Confirm, question.Cancel);
 
             if (!forget)
                 return;
@@ -1774,24 +1663,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         private async Task ShowEnvironmentAsync()
         {
-            var root = _vm.WorkspacePath;
-            if (string.IsNullOrWhiteSpace(root))
-            {
-                ShowViewer("Environment", "Set a workspace first.");
-                return;
-            }
-            try
-            {
-                // Looking at the environment is a read, so this only READS the workspace's id.
-                var ws = WorkspaceInfo.For(root);
-                var (info, snapshot) = await _envProbe.ProbeFullAsync(ws, CancellationToken.None);
-                _vm.EnvironmentSummary = info.OneLine();
-                ShowViewer("Environment", info.Summary() + "\n\n" + snapshot.Describe());
-            }
-            catch (Exception ex)
-            {
-                ShowViewer("Environment", "Probe failed: " + ex.Message);
-            }
+            // The report's words - with no workspace, and when the probe fails - are the service's page's too.
+            var report = await WorkspaceReports.EnvironmentAsync(_vm.WorkspacePath, _envProbe.ProbeFullAsync, CancellationToken.None);
+            if (report.OneLine is { } line)
+                _vm.EnvironmentSummary = line;
+            ShowViewer(WorkspaceReports.EnvironmentTitle, report.Text);
         }
 
         /// <summary>
@@ -1846,11 +1722,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 return;
             }
             var engine = CurrentEngine();
-            var inbox = InboxStoreFactory.Create(workspace);
             _registry.Touch(fullPath);
             RefreshWorkspaces();
 
-            var title = Summarise(text);
+            var title = RunLauncher.Title(text);
             // A background launch has its own row; it must not overwrite the foreground header.
             if (!_vm.IsBusy)
             {
@@ -1874,25 +1749,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             {
                 try
                 {
-                    // A question nobody is here for is kept, not refused: the run stops at it, the
-                    // inbox shows it where it can be answered, and answering carries the run on
-                    // (ContinueParkedAsync). It used to be answered "no" on the spot, and the only
-                    // way to get "yes" in was to start the whole task again, in the foreground.
-                    await using var composed = await RunComposer.ComposeAsync(
-                        engine, request, new ParkingDecisionHandler(), ct);
-                    await BackgroundRunner.RunAsync(composed.Events(ct), inbox, workspace, text, ct);
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    // Composition can be cancelled before the recorder ever receives a run id.
-                    var line = InboxLines.For("Cancelled", 0, 0, null);
-                    await inbox.AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, line.Kind, text,
-                        line.Summary, Guid.Empty, "unread", DateTimeOffset.UtcNow), CancellationToken.None);
-                }
-                catch (Exception ex)
-                {
-                    await inbox.AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, "error", text,
-                        "Failed to start: " + ex.Message, Guid.Empty, "unread", DateTimeOffset.UtcNow), CancellationToken.None);
+                    // To its end and into the Inbox, however it ends - as every host runs one (BackgroundRun).
+                    await BackgroundRun.RunAsync(engine, request, text, ct);
                 }
                 finally
                 {
@@ -1937,7 +1795,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             if (_engineProblem is { Length: > 0 })
                 return;
 
-            if (await Task.Run(() => DueSchedules.Default.TakeAsync(now, CancellationToken.None)) is not { } taken)
+            // The most overdue schedule anywhere, claimed with its folder - the same steps the console and the service take
+            // (DueSchedules). Busy or broken, it says so where it is reported: busy waits for a later tick, broken is in its Inbox.
+            var take = await Task.Run(() => DueSchedules.TakeFirstAsync(ScheduleStore.Default, RunMarkers.Default, now, CancellationToken.None));
+            if (take.Run is not { } taken)
                 return;
             await Dispatcher.UIThread.InvokeAsync(() => StartScheduled(taken));
         }
@@ -1956,7 +1817,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// run the console's --due-all starts. Its outcome goes to the Inbox under the schedule, which is where the
     /// schedules window lists it.
     /// </summary>
-    private void StartScheduled(TakenSchedule taken)
+    private void StartScheduled(DueRun taken)
     {
         var schedule = taken.Schedule;
         var workspace = taken.Workspace;
@@ -2032,9 +1893,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private async Task ContinueParkedAsync(ParkedDecision parked, InboxItem item, string workspaceRoot)
     {
         var fullPath = Path.GetFullPath(workspaceRoot);
-        RunCheckpoint? checkpoint = null;
-        try { checkpoint = await ParkedRuns.CheckpointForAsync(new JsonCheckpointStore(WorkspaceFrom(fullPath)), parked.TaskId, CancellationToken.None); }
-        catch (Exception ex) { _log.Warn(LogSource.System, "Could not read the checkpoints to carry a run on: " + ex.Message); }
+        var checkpoint = await BackgroundRun.ContinueFromAsync(parked, fullPath,
+            warning => _log.Warn(LogSource.System, warning), CancellationToken.None);
 
         await Dispatcher.UIThread.InvokeAsync(() =>
             StartBackground(checkpoint?.Request ?? item.Title, fullPath, parked.TaskId, checkpoint));
@@ -2106,26 +1966,19 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (string.IsNullOrEmpty(path))
             return;
 
-        RunRecord? record;
-        try
-        {
-            record = await RunStoreFactory.Create(WorkspaceFrom(path))
-                .LoadAsync(summary.RunId, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _vm.Runs.Fail(ex.Message);
-            return;
-        }
-
+        var (record, problem) = await _history.OpenAsync(path, summary, CancellationToken.None);
         if (record is null)
         {
-            _vm.Runs.Fail($"That run is no longer in the store: {RunTitle.For(summary)}");
+            _vm.Runs.Fail(problem ?? "That run could not be opened.");
             return;
         }
 
         _vm.ShowPastRun(BuildPastRun(record));
     }
+
+    /// <summary>A question of the history's, asked in a dialog of this window.</summary>
+    private Task<bool> AskAsync(Question question)
+        => ConfirmWindow.AskAsync(this, question.Headline, question.Body, question.Confirm, question.Cancel);
 
     /// <summary>
     /// Builds the read-only view of a stored run. Its artifacts get the same two actions the live
@@ -2166,20 +2019,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private void Retry(PastRunViewModel past)
     {
-        var taskId = past.Record.TaskId == Guid.Empty ? Guid.NewGuid() : past.Record.TaskId;
-
-        if (past.Spec is { } spec)
-        {
-            _vm.InputText = spec.Goal;
-            _ = RunAsync(background: false, spec, taskId);
+        if (RunHistoryService.Retry(past.Record) is not { } again)
             return;
-        }
-
-        if (past.Request is { Length: > 0 } request)
-        {
-            _vm.InputText = request;
-            _ = RunAsync(background: false, spec: null, taskId);
-        }
+        _vm.InputText = again.Goal;
+        _ = RunAsync(background: false, again.Spec, again.TaskId);
     }
 
     /// <summary>
@@ -2189,32 +2032,19 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private void RunAgain(PastRunViewModel past)
     {
-        if (past.Spec is not { } old)
-            return;
-
         var root = WorkspaceRegistry.Normalise(_vm.WorkspacePath);
-        if (new TemplateStore(root).Find(old.TemplateId) is not { } template)
-            return;
-
-        var workspace = WorkspaceInfo.For(root);
-        var resolved = TemplateResolution.Resolve(
-            template, workspace, PolicyFor(_vm.AutonomyTier), old.Parameters);
-
-        if (resolved.Spec is not { } spec)
+        var (again, problem) = RunHistoryService.RunAgain(root, past.Record, PolicyFor(_vm.AutonomyTier));
+        if (problem is not null)
         {
-            // The template has changed under it - a new required parameter, a value its type no
-            // longer accepts. Say which, rather than doing nothing when a button is pressed.
             _vm.StatusPhase = "Error";
-            _vm.CurrentAction =
-                $"'{template.Name}' has changed since this run: "
-                + string.Join("; ", resolved.Problems.Select(p => p.Message))
-                + " Open Templates and fill it in again.";
+            _vm.CurrentAction = problem;
             return;
         }
+        if (again is null)
+            return;
 
-        var taskId = past.Record.TaskId == Guid.Empty ? Guid.NewGuid() : past.Record.TaskId;
-        _vm.InputText = spec.Goal;
-        _ = RunAsync(background: false, spec, taskId);
+        _vm.InputText = again.Goal;
+        _ = RunAsync(background: false, again.Spec, again.TaskId);
     }
 
     /// <summary>Opens an artifact in the viewer. Reading is safe at any age.</summary>
@@ -2222,7 +2052,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         try
         {
-            var full = Path.Combine(root, item.RelativePath);
+            // Only a file under the workspace: a record naming one outside it is not this folder's to show.
+            var full = RunHistoryService.FileOf(root, item.RelativePath)
+                       ?? throw new InvalidOperationException("That path is not in this workspace.");
 
             // The PATH goes with the text, because it is what decides how the file is shown -
             // see ArtifactViewerCatalog. A run's deliverable is often one Markdown document, and
@@ -2282,38 +2114,19 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     private async Task DeletePastArtifactAsync(string root, ArtifactItemViewModel item)
     {
-        var full = Path.Combine(root, item.RelativePath);
-        if (!File.Exists(full))
+        if (RunHistoryService.DeleteFile(root, item.RelativePath) is not { } question)
         {
             item.Status = "already gone";
             item.CanAct = false;
             return;
         }
 
-        // The file's own date is the whole point of asking: a week of edits does not show up in a
-        // run record, and this deletes what is on disk NOW, not what the run wrote.
-        var changed = File.GetLastWriteTime(full).ToString("yyyy-MM-dd HH:mm");
-        var go = await ConfirmWindow.AskAsync(
-            this,
-            $"Delete \u201c{item.RelativePath}\u201d?",
-            $"This deletes the file as it is on disk now, last changed {changed} - not the version this run wrote. "
-            + "There is no undo.",
-            "Delete",
-            "Keep");
-
-        if (!go)
+        if (!await AskAsync(question))
             return;
 
-        try
-        {
-            File.Delete(full);
-            item.Status = "deleted";
-            item.CanAct = false;
-        }
-        catch (Exception ex)
-        {
-            item.Status = "error: " + ex.Message;
-        }
+        var (status, done) = RunHistoryService.DeleteFileNow(root, item.RelativePath);
+        item.Status = status;
+        if (done) item.CanAct = false;
     }
 
     /// <summary>
@@ -2339,41 +2152,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private async Task DeleteRunsAsync(IReadOnlyList<RunSummary> runs)
     {
-        if (runs.Count == 0)
-            return;
-
-        var artifacts = runs.Sum(r => r.Artifacts.Count);
-
-        if (!await ConfirmWindow.AskAsync(
-                this,
-                $"Delete {runs.Count} run{(runs.Count == 1 ? "" : "s")}?",
-                "Their history goes: what was asked, every step, and every event behind it. "
-                + "This cannot be undone."
-                + (artifacts > 0
-                    ? $" The {artifacts} file(s) they wrote stay in your workspace — only the record "
-                      + "of them goes."
-                    : ""),
-                $"Delete {runs.Count}", "Keep"))
+        if (runs.Count == 0 || !await AskAsync(RunHistoryService.DeleteMany(runs)))
             return;
 
         var path = _vm.WorkspacePath.Trim();
         if (string.IsNullOrEmpty(path))
             return;
 
-        var store = RunStoreFactory.Create(WorkspaceFrom(path));
-        var refused = 0;
-
-        foreach (var run in runs)
-        {
-            try
-            {
-                await store.DeleteAsync(run.RunId, CancellationToken.None);
-            }
-            catch (Exception)
-            {
-                refused++;
-            }
-        }
+        var refused = await _history.DeleteAsync(path, runs, CancellationToken.None);
 
         // Not something to come back to, in this workspace or any other.
         foreach (var run in runs)
@@ -2384,8 +2170,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         await LoadRunsAsync();
 
-        if (refused > 0)
-            _vm.Runs.Fail($"{refused} of {runs.Count} could not be deleted; the rest are gone.");
+        if (refused is not null)
+            _vm.Runs.Fail(refused);
     }
 
     /// <summary>
@@ -2397,47 +2183,30 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         var path = _vm.WorkspacePath.Trim();
         if (string.IsNullOrEmpty(path))
             return;
-        var workspace = WorkspaceFrom(path);
 
-        // What it changed, from the record the store kept on disk (DiskArtifactStore.ChangesOf). The files are put back
-        // only when the person says so, and the question names them. A run interrupted before the record existed, or
-        // whose record was pruned, has nothing to name, and is asked as before.
-        var changes = DiskArtifactStore.ChangesOf(workspace, checkpoint.RunId);
-        var headline = $"Delete the unfinished run “{RunTitle.OneLine(checkpoint.Title)}”?";
-        var cannotResume = $"It can no longer be resumed: the {checkpoint.Remaining} step(s) left will not be run. "
-                           + "Its history, if it has any, stays in the list.";
+        // What it changed is named in the question, and put back only when the person says so (RunHistoryService).
+        var question = RunHistoryService.ForgetUnfinished(path, checkpoint);
         var putBack = false;
-        if (changes.Count == 0)
+        if (question.Alternative is null)
         {
-            if (!await ConfirmWindow.AskAsync(this, headline,
-                    cannotResume + " No record of the files it changed is kept, so they stay as they are.", "Delete", "Keep"))
+            if (!await AskAsync(question))
                 return;
         }
         else
         {
-            var choice = await ConfirmWindow.ChooseAsync(this, headline, cannotResume + "\n\n" + UnfinishedChanges.Describe(changes),
-                "Delete and put the files back", "Delete, keep the files", "Keep");
+            var choice = await ConfirmWindow.ChooseAsync(this, question.Headline, question.Body,
+                question.Confirm, question.Alternative, question.Cancel);
             if (choice == ConfirmChoice.Cancel)
                 return;
             putBack = choice == ConfirmChoice.Confirm;
         }
 
-        if (putBack)
+        var (kept, problem) = await _history.ForgetUnfinishedAsync(path, checkpoint, putBack, CancellationToken.None);
+        if (kept is not null)
+            _vm.Runs.Fail(kept);
+        if (problem is not null)
         {
-            var report = await DiskArtifactStore.PutBackRunAsync(workspace, checkpoint.RunId, CancellationToken.None);
-            if (report.Kept.Count > 0)
-                _vm.Runs.Fail($"Put back {report.Reverted.Count} file(s); left {report.Kept.Count} as they are: "
-                              + string.Join("; ", report.Kept.Select(p => $"{p} ({report.Reasons?.GetValueOrDefault(p) ?? "kept"})")));
-        }
-
-        try
-        {
-            await new JsonCheckpointStore(workspace).DeleteAsync(checkpoint.RunId, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            // Said, and the row left: one that vanishes while its checkpoint is still on disk comes back on the next Refresh.
-            _vm.Runs.Fail("Could not delete that unfinished run: " + ex.Message);
+            _vm.Runs.Fail(problem);
             return;
         }
 
@@ -2446,35 +2215,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     private async Task DeleteRunAsync(RunSummary record)
     {
-        var artifacts = record.Artifacts.Count;
-        if (!await ConfirmWindow.AskAsync(
-                this,
-                $"Delete the run “{RunTitle.For(record)}”?",
-                // It used to name the event count. The list holds headers now, so that number is not
-                // known here - and reading the whole run to put a number in a warning about deleting
-                // it would be an odd thing to spend a transcript on.
-                "Its history goes: what was asked, every step, and every event behind it. "
-                + "This cannot be undone."
-                + (artifacts > 0
-                    ? $" The {artifacts} file(s) it wrote stay in your workspace — only the record of "
-                      + "them goes."
-                    : ""),
-                "Delete", "Keep"))
+        if (!await AskAsync(RunHistoryService.DeleteOne(record)))
             return;
 
         var path = _vm.WorkspacePath.Trim();
         if (string.IsNullOrEmpty(path))
             return;
 
-        try
+        if (await _history.DeleteAsync(path, record, CancellationToken.None) is { } problem)
         {
-            await RunStoreFactory.Create(WorkspaceFrom(path)).DeleteAsync(record.RunId, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            // Said out loud and the list left alone. A row that vanishes from the screen while the
-            // record is still in the store is a lie the next Refresh exposes.
-            _vm.Runs.Fail("Could not delete that run: " + ex.Message);
+            _vm.Runs.Fail(problem);
             return;
         }
 
@@ -2488,48 +2238,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     }
 
     /// <summary>
-    /// Applies the workspace's run-retention setting, and returns what is left.
-    ///
-    /// <para>Off by default, and a COUNT rather than an age. What makes this list unusable is how
-    /// many rows are in it, and a week of heavy use puts more in it than a month of light use - an
-    /// age-based rule would leave the busy workspace, the one with the problem, untouched.</para>
-    ///
-    /// <para>A failure here is swallowed on purpose. Housekeeping that cannot run is not a reason
-    /// to fail the thing the person actually asked for, which was to see their runs.</para>
-    /// </summary>
-    private async Task<IReadOnlyList<RunSummary>> TrimAsync(
-        IRunStore store, IReadOnlyList<RunSummary> records)
-    {
-        var keep = _settings.KeepRuns;
-        var doomed = RunHousekeeping.BeyondTheNewest(records, keep);
-
-        if (doomed.Count == 0)
-            return records;
-
-        foreach (var run in doomed)
-        {
-            try
-            {
-                await store.DeleteAsync(run.RunId, CancellationToken.None);
-            }
-            catch (Exception)
-            {
-                // Left in the list rather than hidden: a row that is still in the store belongs on
-                // screen, and the next load will try again.
-                return records;
-            }
-        }
-
-        return records.Except(doomed).ToArray();
-    }
-
-    /// <summary>
-    /// Loads the workspace's runs for the context column. The store type is the environment's
-    /// choice (SQLite, MySQL or files), which is why the list does not create one itself.
-    ///
-    /// <para>Summaries, not records. The column shows six fields per row; it used to fetch every
-    /// event of every run in the workspace to fill them, which is a cost that grows with how much
-    /// work has been done here and is paid on every Refresh.</para>
+    /// Loads the workspace's runs for the context column - retention applied, interrupted runs read on their own
+    /// (RunHistoryService). The store type is the environment's choice (SQLite, MySQL or files).
     /// </summary>
     private async Task LoadRunsAsync()
     {
@@ -2541,42 +2251,21 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
         }
 
-        var workspace = WorkspaceFrom(path);
-
-        // Interrupted runs first, and in their own try: a checkpoint folder that cannot be read must
-        // not cost the history list, which is the thing somebody opened this column for.
-        try
-        {
-            _vm.Runs.ShowResumable(
-                await new JsonCheckpointStore(workspace).LoadAllAsync(CancellationToken.None));
-        }
-        catch (Exception)
-        {
-            _vm.Runs.ShowResumable(Array.Empty<RunCheckpoint>());
-        }
-
-        try
-        {
-            var store = RunStoreFactory.Create(workspace);
-            var records = await store.LoadSummariesAsync(CancellationToken.None);
-
-            // Retention, applied where the list is read rather than on a timer: this is the moment
-            // the number of runs matters, and a background trimmer would be deleting somebody's
-            // history while they were not looking at it.
-            records = await TrimAsync(store, records);
-
-            _vm.Runs.Show(records);
-            // The history has just changed, and a live row whose run is now IN it must go. See
-            // RunColumn.Live: the window learns a run ended by two paths and they arrive in
-            // whatever order they arrive in.
-            RefreshLive();
-        }
-        catch (Exception ex)
+        var history = await _history.LoadAsync(path, CancellationToken.None);
+        _vm.Runs.ShowResumable(history.Resumable);
+        if (history.Problem is not null)
         {
             // A workspace whose store is unreachable is a fact to show, not a crash: the rest of
             // the window is still perfectly usable.
-            _vm.Runs.Fail(ex.Message);
+            _vm.Runs.Fail(history.Problem);
+            return;
         }
+
+        _vm.Runs.Show(history.Runs);
+        // The history has just changed, and a live row whose run is now IN it must go. See
+        // RunColumn.Live: the window learns a run ended by two paths and they arrive in
+        // whatever order they arrive in.
+        RefreshLive();
     }
 
     private async Task ShowTimelineAsync()
@@ -2585,117 +2274,53 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (string.IsNullOrEmpty(workspacePath))
             return;
 
-        var workspace = WorkspaceInfo.For(workspacePath);
-        var runStore = RunStoreFactory.Create(workspace);
-        var memory = MemoryStoreFactory.Create(workspace);
-        var runs = await runStore.LoadSummariesAsync(CancellationToken.None);
-        var entries = await memory.LoadAllAsync(CancellationToken.None);
-        ShowViewer("Project Memory", ProjectMemory.Render(runs, entries, workspace.RootPath));
+        // The service's Timeline page reads it the same way and says the same when it cannot (WorkspaceReports).
+        ShowViewer(WorkspaceReports.TimelineTitle, await WorkspaceReports.TimelineAsync(workspacePath, CancellationToken.None));
     }
 
-    // ── IDecisionHandler: inline approval card ───────────────────────────────
-    public Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
-        => _decisionQueue.RequestAsync(request, ct, ShowDecisionAsync);
+    // ── IDecisionPresenter: the inline approval card ─────────────────────────
+    // Which answers are offered, what each remembers, one question at a time and a cancelled question never answered
+    // are the DecisionRouter's (Enactive.Application), where they are tested. The card only draws them.
 
-    private async Task<DecisionOutcome> ShowDecisionAsync(DecisionRequest request, CancellationToken ct)
-    {
-        var root = request.Action?.WorkingDirectory;
-        // What was already approved for this session or this workspace never reaches this card: every run
-        // is composed behind RememberedApprovals, which answers it for watched and unwatched runs alike.
-
-        var tcs = new DecisionCompletion();
-
-        // Cancelling used to complete the task and stop there: the card stayed on screen and
-        // _pendingDecision stayed set, so the NEXT run returned immediately from RunAsync because
-        // "a decision is pending" — a decision belonging to a task that had already been stopped.
-        // The lifetime of the card is now tied to the lifetime of the request, in one place.
-        using var registration = ct.Register(() => tcs.Cancel(ct));
-        try
+    Task IDecisionPresenter.ShowAsync(DecisionRequest request, IReadOnlyList<DecisionChoice> choices, Func<DecisionChoice, bool> answer)
+        => Dispatcher.UIThread.InvokeAsync(() =>
         {
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            _shownDecision = request.Id;
+            var root = request.Action?.WorkingDirectory;
+            _vm.DecisionText = root is null ? request.Topic : $"{request.Topic} — {root} (run {request.Action!.RunId})";
+            // The full action, not the summary: this is what the click authorises.
+            _vm.DecisionDetail = request.FullText;
+            _vm.DecisionOptions.Clear();
+            foreach (var choice in choices)
             {
-                // Cancelled before the post ran: do not put a card on screen for a dead request.
-                if (tcs.Task.IsCompleted)
-                    return;
-
-                _pendingDecision = tcs;
-
-                // Each button belongs to this request, independently of the selected workspace.
-                var options = new List<DecisionOptionViewModel>();
-                foreach (var option in request.Options)
+                var chosen = choice;
+                // Taken down at the click, not when the run gets round to it.
+                _vm.DecisionOptions.Add(new DecisionOptionViewModel(chosen.Label, () =>
                 {
-                    var captured = option;
-                    options.Add(new DecisionOptionViewModel(captured.Label, () => ResolveDecision(tcs, captured.Id)));
-                }
-
-                // Remember-this-approval shortcuts, so the user is not clicking Allow for every command.
-                // Only for a request an approval can answer: one that names its tool and has an "allow" to give.
-                if (!request.RequiresExplicitAnswer && !string.IsNullOrEmpty(request.Subject) && root is not null
-                    && request.Options.Any(o => o.Id == RememberedApprovals.AllowOptionId))
-                {
-                    var subject = request.Subject;
-                    const string allowId = RememberedApprovals.AllowOptionId;
-                    options.Add(new DecisionOptionViewModel(
-                        "Allow (session)", () => ResolveDecision(tcs, allowId, () => _sessionApprovals.Remember(request))));
-
-                    // Not offered for a shell: that approval would outlive the process, and what it
-                    // grants is arbitrary command execution rather than one named action.
-                    // Two, because they grant two different things: the first holds while somebody is at the
-                    // screen, the second lets runs in the background and on a schedule use the tool too - said on
-                    // its button, so nobody gives it by clicking the first (ApprovalStore, rule 4).
-                    if (request.MayBeRemembered)
-                    {
-                        options.Add(new DecisionOptionViewModel(
-                            "Allow (workspace)", () => ResolveDecision(tcs, allowId, () => ApprovalStore.Default.Approve(root, subject))));
-                        options.Add(new DecisionOptionViewModel(
-                            "Allow (workspace, unwatched runs too)",
-                            () => ResolveDecision(tcs, allowId, () => ApprovalStore.Default.Approve(root, subject, unwatched: true))));
-                    }
-                }
-
-                {
-                    _vm.DecisionText = root is null ? request.Topic : $"{request.Topic} — {root} (run {request.Action!.RunId})";
-                    // The full action, not the summary: this is what the click authorises.
-                    _vm.DecisionDetail = request.FullText;
-                    _vm.DecisionOptions.Clear();
-                    foreach (var option in options)
-                        _vm.DecisionOptions.Add(option);
-                    _vm.IsDecisionVisible = true;
-                }
-
-            });
-
-            return await tcs.Task.ConfigureAwait(false);
+                    if (answer(chosen)) ClearDecisionCard(request.Id);
+                }));
             }
-            finally { await Dispatcher.UIThread.InvokeAsync(() => ClearDecision(tcs)); }
-        }
+            _vm.IsDecisionVisible = true;
+        }).GetTask();
 
-        private void ResolveDecision(DecisionCompletion tcs, string optionId, Action? remember = null)
-        {
-            if (!ReferenceEquals(_pendingDecision, tcs)) return;
-            tcs.Resolve(optionId, remember);
-            ClearDecision(tcs);
-        }
+    Task IDecisionPresenter.ClearAsync(DecisionRequest request)
+        => Dispatcher.UIThread.InvokeAsync(() => ClearDecisionCard(request.Id)).GetTask();
 
         /// <summary>
         /// Takes THIS request's card off screen. Checking which request it belongs to matters: by the
         /// time a cancellation is dispatched, a later run may already have put its own card up, and
         /// clearing that one would leave the new run waiting on something the user can no longer answer.
         /// </summary>
-        private void ClearDecision(DecisionCompletion? tcs)
+        private void ClearDecisionCard(Guid request)
         {
-            if (tcs is not null && !ReferenceEquals(_pendingDecision, tcs))
+            if (_shownDecision != request)
                 return;
 
-            _pendingDecision = null;
-
-
-            {
-                _vm.IsDecisionVisible = false;
-                _vm.DecisionOptions.Clear();
-                _vm.DecisionText = string.Empty;
-                _vm.DecisionDetail = string.Empty;
-            }
+            _shownDecision = null;
+            _vm.IsDecisionVisible = false;
+            _vm.DecisionOptions.Clear();
+            _vm.DecisionText = string.Empty;
+            _vm.DecisionDetail = string.Empty;
         }
 
         // Workspace-scoped approvals live OUTSIDE the workspace — see ApprovalStore in Core, which is
@@ -2704,30 +2329,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // whether a legacy in-workspace file counts are all answered in there.
         //
         // They used to be answered here, correctly, in a WinExe no test project references.
-        /// <summary>
-        /// Where a provider runs, by its id. The engine records WHICH provider produced each turn and
-        /// deliberately stops there — it has no idea of a provider's address. This is the only place
-        /// that does, because addresses are settings.
-        ///
-        /// A provider the settings no longer contain is Unknown, not Cloud: a deleted or renamed
-        /// provider is a gap in what we know, and filing it under "cloud" would put made-up numbers next
-        /// to real ones. Same rule as the token tile's em dash.
-        /// </summary>
-        private ModelReach ReachOf(string? providerId)
-        {
-            if (string.IsNullOrWhiteSpace(providerId))
-                return ModelReach.Unknown;
-
-            var provider = _settings.Providers.FirstOrDefault(
-                p => string.Equals(p.Id, providerId, StringComparison.OrdinalIgnoreCase));
-
-            if (provider is null)
-                return ModelReach.Unknown;
-
-            return Enactive.Settings.ProviderReach.Local(provider.BaseUrl)
-                ? ModelReach.Local
-                : ModelReach.Cloud;
-        }
+        /// <summary>Where a provider runs, by its id, against this window's settings (ModelReaches).</summary>
+        private ModelReach ReachOf(string? providerId) => ModelReaches.Of(_settings, providerId);
 
         /// <summary>
         /// Says once per workspace that an old in-folder approvals file is being ignored, so being asked

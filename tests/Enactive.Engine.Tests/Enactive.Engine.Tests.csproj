@@ -12,41 +12,33 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="coverlet.collector" Version="10.0.1">
+    <PackageReference Include="coverlet.collector" Version="10.1.0">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="MailKit" Version="4.18.0" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageReference Include="MailKit" Version="4.18.1" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Common" Version="10.0.13" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     <PackageReference Include="xunit" Version="2.9.3" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0">
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="../../src/Enactive.App.Ui/ViewModels/ModelPerformance.cs" Link="Ui/ModelPerformance.cs" />
     <Compile Include="../../src/Enactive.App.Ui/RunEventPump.cs" Link="Ui/RunEventPump.cs" />
     <Compile Include="../../src/Enactive.App.Ui/RemoteAccessService.cs" Link="Ui/RemoteAccessService.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ForegroundRunSlot.cs" Link="Ui/ForegroundRunSlot.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/BackgroundRunGroup.cs" Link="Ui/BackgroundRunGroup.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/DecisionCompletion.cs" Link="Ui/DecisionCompletion.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/BatchObservableCollection.cs" Link="Ui/BatchObservableCollection.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/LogFilter.cs" Link="Ui/LogFilter.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/InboxDecisions.cs" Link="Ui/InboxDecisions.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/Mvvm/ObservableObject.cs" Link="Ui/ObservableObject.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/Mvvm/RelayCommand.cs" Link="Ui/RelayCommand.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/AddDeviceViewModel.cs" Link="Ui/AddDeviceViewModel.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/RemoteDevicesViewModel.cs" Link="Ui/RemoteDevicesViewModel.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/IStartupEntry.cs" Link="Ui/IStartupEntry.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/SettingsSave.cs" Link="Ui/SettingsSave.cs" />
     <Compile Include="../../src/Enactive.App.Ui/OneAtATime.cs" Link="Ui/OneAtATime.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/SchedulePolicy.cs" Link="Ui/SchedulePolicy.cs" />
     <Compile Include="../../src/Enactive.App.Ui/TrayHint.cs" Link="Ui/TrayHint.cs" />
-    <Compile Include="../../src/Enactive.App.Ui/ViewModels/WorkerEditViewModel.cs" Link="Ui/WorkerEditViewModel.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/StepCardViewModel.cs" Link="Ui/StepCardViewModel.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/Looks.cs" Link="Ui/Looks.cs" />
+    <!-- Shared with the other test project: what lets go of a test's own SQLite files (tests/Shared). -->
+    <Compile Include="../Shared/SqlitePools.cs" Link="Shared/SqlitePools.cs" />
     <Using Include="Xunit" />
   </ItemGroup>
 
@@ -71,6 +63,9 @@
     <ProjectReference Include="..\..\src\Enactive.Settings\Enactive.Settings.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Remote.Contracts\Enactive.Remote.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Remote.Host\Enactive.Remote.Host.csproj" />
+    <!-- Referenced whole, unlike the window's files listed above, which are compiled in one by one because
+         App.Ui is a WinExe. What moves into the application layer leaves that list (ADR 0002 §2). -->
+    <ProjectReference Include="..\..\src\Enactive.Application\Enactive.Application.csproj" />
   </ItemGroup>
 
   <!--

@@ -1,0 +1,139 @@
+@using System.Globalization
+@using Enactive.Server.Accounts
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@implements IDisposable
+@inject AuthenticationStateProvider Auth
+@inject NavigationManager Navigation
+@inject ServerInbox Inbox
+@inject ServerStaging Staging
+
+@* The desktop's icon rail (MainWindow.axaml): 52 px of chrome on the darkest ink; only the section you are in takes ember. *@
+@if (_items.Count > 0)
+{
+    <nav class="rail" aria-label="Sections">
+        @foreach (var item in _items.Where(i => !i.AtBottom))
+        {
+            @Entry(item)
+        }
+        <span class="rail-gap"></span>
+        @{
+            var low = _items.Where(i => i.AtBottom).ToList();
+            var lowIsHere = low.Any(i => i.IsIn(CurrentPath));
+        }
+        @* On a narrow screen the rail is a bar along the bottom, and eleven icons of a touch's 40 px do not fit across a
+           390 px phone: the sections docked low on the rail (Environment, and an Admin's Settings, Accounts and Audit)
+           go behind one More, which opens them over the bar. A Viewer's More holds Environment alone - the same eight
+           icons as without it, and the bar the same for everybody. On a wide screen there is no More (theme.css): the
+           group stands at the rail's foot as before. *@
+        <div class="@("rail-more" + (_moreOpen ? " open" : ""))" @onkeydown="MoreKey">
+            @if (_moreOpen)
+            {
+                @* Tapping anywhere else closes it, as the workspace switcher's popup does. *@
+                <div class="rail-away" @onclick="CloseMore"></div>
+            }
+            @* A disclosure of links, not a menu: aria-haspopup announced a menu, whose keys and items it does not have. *@
+            <button type="button" class="@("rail-item rail-more-button" + (lowIsHere ? " on" : ""))" aria-label="More sections" title="More sections"
+                    aria-expanded="@(_moreOpen ? "true" : "false")" aria-controls="rail-more-items" @onclick="ToggleMore">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" /></svg>
+            </button>
+            <div class="rail-low" id="rail-more-items">
+                @foreach (var item in low)
+                {
+                    @Entry(item)
+                }
+            </div>
+        </div>
+    </nav>
+}
+
+@code {
+    private IReadOnlyList<RailItem> _items = [];
+    private int _unread;
+    private bool _proposed;
+    private bool _moreOpen;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Navigation.LocationChanged += OnLocationChanged;
+        Inbox.Changed += OnInboxChanged;
+        Staging.Changed += OnInboxChanged;
+        await LoadAsync();
+    }
+
+    // The counts are read again at each navigation: the layout outlives the page, and an inbox read or a proposal
+    // applied on a page would otherwise leave its icon saying what was true when the window opened.
+    // More closes too: a section chosen from it is a navigation, and the list left open covered the page it led to.
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        _moreOpen = false;
+        Reload();
+    }
+
+    private void ToggleMore() => _moreOpen = !_moreOpen;
+
+    private void CloseMore() => _moreOpen = false;
+
+    private void MoreKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            _moreOpen = false;
+    }
+
+    // And when the inbox is read, marked read or answered - on the Inbox page, which stays where it is, or by anybody
+    // else: Mark all read is no navigation, and the badge went on counting what was no longer unread. The same for the
+    // proposals' dot: a change applied on its page is no navigation either, and the dot went on saying "waiting".
+    private void OnInboxChanged() => Reload();
+
+    private void Reload() => _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
+
+    private async Task LoadAsync()
+    {
+        var user = (await Auth.GetAuthenticationStateAsync()).User;
+        _items = ServerAuth.RoleOf(user) is { } role ? RailItem.For(role) : [];
+        if (_items.Count == 0)
+            return;
+        _unread = (await Inbox.ListAsync(user, CancellationToken.None)).Count(e => Enactive.Application.Projections.InboxRows.IsUnread(e.Item));
+        _proposed = Staging.List(user).Count > 0;
+    }
+
+    private string CurrentPath => Navigation.ToBaseRelativePath(Navigation.Uri).Split('?', '#')[0].Trim('/');
+
+    private RenderFragment<RailItem> Entry => item =>
+        @<text>
+            @{
+                var on = item.IsIn(CurrentPath);
+                var inbox = item.Href == "/inbox" && _unread > 0;
+                var label = inbox ? Enactive.Application.Projections.InboxRows.Tooltip(_unread) : item.Label;
+            }
+            <a class="@("rail-item" + (on ? " on" : ""))" href="@item.Link" data-rail="@item.Href" aria-label="@label" title="@label"
+               aria-current="@(on ? "page" : null)">
+                @Icon(item)
+                @* Its name in words, shown only in More's list (theme.css): an icon alone, out of the bar's row, is a guess. *@
+                <span class="rail-text">@item.Label</span>
+                @if (inbox)
+                {
+                    <span class="badge">@_unread.ToString(CultureInfo.InvariantCulture)</span>
+                }
+                @if (item.Href == "/proposals" && _proposed)
+                {
+                    <span class="dot"></span>
+                }
+            </a>
+        </text>;
+
+    private static RenderFragment Icon(RailItem item) =>
+        @<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            @foreach (var stroke in item.Strokes)
+            {
+                <path d="@stroke" />
+            }
+        </svg>;
+
+    public void Dispose()
+    {
+        Navigation.LocationChanged -= OnLocationChanged;
+        Inbox.Changed -= OnInboxChanged;
+        Staging.Changed -= OnInboxChanged;
+    }
+}

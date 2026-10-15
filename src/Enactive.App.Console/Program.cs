@@ -1,4 +1,5 @@
 using Enactive.Agents;
+using Enactive.Application;
 using Enactive.Core.Context;
 using Enactive.Core.Diagnostics;
 using Enactive.Core.Events;
@@ -8,6 +9,7 @@ using Enactive.Core.Intents;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
 using Enactive.Core.Schedules;
+using Enactive.Core.Storage;
 using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
@@ -159,14 +161,10 @@ if (dueAll)
     Heartbeat.Stamp(DateTimeOffset.Now);
 
     var roots = ScheduleStore.Default.Workspaces();
-    var across = roots
-        .SelectMany(root => ScheduleTick.Decide(
-            ScheduleStore.Default.For(root), DateTimeOffset.Now, RunMarkers.Default.IsRunning,
-            // Per workspace, because a template store is per workspace. A schedule whose template
-            // cannot do its job under the tier it was given is reported here instead of becoming a
-            // run that spends a model's time discovering the same thing.
-            new TemplateStore(root).Find))
-        .ToArray();
+    // Decided as the window and the service decide it (DueSchedules), each workspace with its own template store: a
+    // schedule whose template cannot do its job under the tier it was given is reported here instead of becoming a run
+    // that spends a model's time discovering the same thing.
+    var across = DueSchedules.DecideAcross(ScheduleStore.Default, RunMarkers.Default, DateTimeOffset.Now);
 
     Console.WriteLine($"SCHEDULES — {roots.Count} workspace(s)");
     foreach (var decision in across.Where(d => d.WorthReporting || d.ShouldRun))
@@ -174,7 +172,7 @@ if (dueAll)
 
     if (ScheduleTick.FirstDue(across) is not { } winner)
     {
-        Console.WriteLine(across.Length == 0 ? "  (no schedules anywhere)" : "  nothing due");
+        Console.WriteLine(across.Count == 0 ? "  (no schedules anywhere)" : "  nothing due");
         return 0;
     }
 
@@ -327,67 +325,41 @@ if (dueAll || args.Contains("--due", StringComparer.OrdinalIgnoreCase))
     // reported as a dead one.
     Heartbeat.Stamp(DateTimeOffset.Now);
 
-    var schedules = ScheduleStore.Default.For(workspace.RootPath);
-    // The same needs check --due-all makes, so the two entry points agree about what can run. A
-    // scheduler wired to --due rather than --due-all must not get a different answer.
-    var decisions = ScheduleTick.Decide(
-        schedules, DateTimeOffset.Now, RunMarkers.Default.IsRunning,
-        new TemplateStore(workspace.RootPath).Find);
+    // Decided, claimed with its workspace, turned into a task and its occurrence spent - in that order, as the service's
+    // scheduler does it (DueSchedules). What is left here is what this host says about it, and its exit codes.
+    var take = await DueSchedules.TakeAsync(ScheduleStore.Default, RunMarkers.Default, workspaceRoot, DateTimeOffset.Now, CancellationToken.None);
 
     Console.WriteLine($"SCHEDULES — {workspace.RootPath}");
-    foreach (var decision in decisions.Where(d => d.WorthReporting || d.ShouldRun))
+    foreach (var decision in take.Decisions.Where(d => d.WorthReporting || d.ShouldRun))
         Console.WriteLine($"  [{decision.Verdict}] {decision.Schedule.Name}: {decision.Why}");
 
-    // The most overdue first, by the same rule --due-all used to pick this workspace.
-    var due = decisions.Where(d => d.ShouldRun).OrderBy(d => d.Occurrence).ToList();
-    if (due.Count == 0)
+    if (take.Busy is { } busy)
     {
-        Console.WriteLine(decisions.Count == 0 ? "  (no schedules)" : "  nothing due");
+        var claimed = take.Decisions.Where(d => d.ShouldRun).OrderBy(d => d.Occurrence).First();
+        Console.WriteLine($"  [Busy] {claimed.Schedule.Name}: {busy}");
         return 0;
     }
 
-    if (due.Count > 1)
-        Console.WriteLine($"  {due.Count - 1} more due; they run on the next tick.");
-
-    var chosen = due[0];
-
-    // Claimed BEFORE anything else, so a second tick that overlaps this one sees it as busy. Null
-    // means somebody claimed it between the decision and here, which is not an error - it is the
-    // overlap rule working.
-    scheduleClaim = RunMarkers.Default.Claim(chosen.Schedule.Id);
-    if (scheduleClaim is null)
+    if (take.Failed is { } failed)
     {
-        Console.WriteLine($"  [Busy] {chosen.Schedule.Name}: claimed by another run just now");
-        return 0;
-    }
-
-    var resolved = ScheduledSpec.For(
-        chosen.Schedule, workspace, id => new TemplateStore(workspaceRoot).Find(id));
-
-    if (resolved.Spec is null)
-    {
-        // Reported and NOT retried in a loop: the occurrence is marked as fired below, so a
+        // Reported - into the Inbox too, by DueSchedules - and NOT retried in a loop: the occurrence is spent, so a
         // template that cannot resolve produces one report a day rather than one every tick.
-        Console.Error.WriteLine($"  [Failed] {chosen.Schedule.Name}: {resolved.Why}");
-        ScheduleStore.Default.Save(chosen.Schedule with { LastFiredAt = chosen.Occurrence });
-
-        // Into the Inbox as well as onto stderr. Exit code 70 goes to a scheduler's log, and a
-        // schedule that has quietly stopped working is precisely the thing whose owner should be
-        // told rather than left to notice the work is not being done.
-        await InboxStoreFactory.Create(workspace).AppendAsync(
-            ScheduledOutcome.CouldNotStart(
-                workspace.Id, chosen.Schedule.Id, chosen.Schedule.Name, resolved.Why, DateTimeOffset.UtcNow),
-            CancellationToken.None);
-
+        var broken = take.Decisions.Where(d => d.ShouldRun).OrderBy(d => d.Occurrence).First();
+        Console.Error.WriteLine($"  [Failed] {broken.Schedule.Name}: {failed}");
         return 70;   // EX_SOFTWARE: the invocation was fine, the task could not be built
     }
 
-    // Marked as fired NOW rather than when the run ends. An occurrence is considered exactly once,
-    // and a machine that loses power mid-run must not repeat the same occurrence on the way back
-    // up - the run is in the history either way, which is where a person looks.
-    ScheduleStore.Default.Save(chosen.Schedule with { LastFiredAt = chosen.Occurrence });
+    if (take.Run is not { } chosen)
+    {
+        Console.WriteLine(take.Decisions.Count == 0 ? "  (no schedules)" : "  nothing due");
+        return 0;
+    }
 
-    spec = resolved.Spec;
+    if (take.MoreDue > 0)
+        Console.WriteLine($"  {take.MoreDue} more due; they run on the next tick.");
+
+    scheduleClaim = chosen.Hold;
+    spec = chosen.Spec;
     command = spec.Goal;
     scheduleName = chosen.Schedule.Name;
     scheduleId = chosen.Schedule.Id;
@@ -624,6 +596,14 @@ catch (HttpRequestException ex)
 
     await FileScheduledOutcome();
     return 1;
+}
+catch (WorkspaceInUseException ex)
+{
+    // Not a failure of the task, and not the generic backstop's "check the provider settings": another
+    // Enactive is working in this folder. EX_TEMPFAIL, so a script can tell "try later" from "broken".
+    Console.Error.WriteLine($"x {ex.Message}");
+    await FileScheduledOutcome();
+    return 75;
 }
 catch (OperationCanceledException)
 {

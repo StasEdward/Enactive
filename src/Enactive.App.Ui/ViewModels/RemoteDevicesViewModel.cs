@@ -2,7 +2,7 @@ namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using System.Globalization;
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
 using Enactive.Remote.Host;
 
 /// <summary>

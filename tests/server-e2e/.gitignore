@@ -1,0 +1,5 @@
+node_modules/
+# What a run leaves behind: the HTML report, traces and the processes' logs. CI keeps them as an artifact when a
+# run fails; nothing here is worth committing.
+playwright-report/
+test-results/

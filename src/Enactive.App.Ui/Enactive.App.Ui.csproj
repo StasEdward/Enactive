@@ -33,15 +33,17 @@
   <ItemGroup>
     <!-- All three MUST be the same version, or you get a TypeLoadException at startup.
          Pinned to match the Avalonia.Base that resolved on this machine. -->
-    <PackageReference Include="Avalonia" Version="12.1.2" />
-    <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.2" />
-    <PackageReference Include="MailKit" Version="4.18.0" />
+    <PackageReference Include="Avalonia" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <PackageReference Include="MailKit" Version="4.18.1" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Common" Version="10.0.13" />
     <!-- The QR code of an invitation link (Add a device). MIT and with no dependencies of its own; it
          hands over the code as path data, which is drawn as a vector Path rather than a bitmap. -->
     <PackageReference Include="Net.Codecrete.QrCodeGenerator" Version="3.2.1" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.13" />
   </ItemGroup>
 
   <ItemGroup>
@@ -54,6 +56,8 @@
     <!-- What the person configured. Out of this project on purpose: while it lived here, no other
          host could read it, and the console grew a second configuration of its own. -->
     <ProjectReference Include="..\Enactive.Settings\Enactive.Settings.csproj" />
+    <!-- What the window does around a run that is not drawing it (ADR 0002 §2). Shared with the service. -->
+    <ProjectReference Include="..\Enactive.Application\Enactive.Application.csproj" />
     <!-- Remote access. Contracts comes in transitively through the Host; naming it here as well
          would say the window talks the protocol directly, which it does not - it hands the Host a
          way to prepare a run and reads back what the Host says is connected. -->

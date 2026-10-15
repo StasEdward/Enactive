@@ -1,0 +1,12 @@
+@* The window's panelHeader: a small bold capital line over a block of the column - and a heading, so a screen reader
+   can move between the blocks as an eye does. What sits on its right (RUNS' Refresh) is the ChildContent. *@
+
+<div class="panel-row">
+    <h2 class="panel-header">@Text</h2>
+    @ChildContent
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Text { get; set; } = "";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

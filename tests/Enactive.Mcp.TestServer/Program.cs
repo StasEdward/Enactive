@@ -27,19 +27,13 @@ while (await Console.In.ReadLineAsync() is { } line)
     {
         // "slow" is the call whose answer never arrives in time. It RECORDS each call the moment it is
         // received - the side effect a real operation would have - when given a file to record in,
-        // and answers in the background, so a second call sent while the first is still pending is
-        // read and recorded too. It used to sleep in this loop, and a retry would have gone unread
-        // until long after any test had stopped looking (PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW #5).
+        // then reads the next request without replying, so a retry is read and recorded too. A delayed
+        // reply raced the client's timeout (both ten seconds after the client began copying its settings),
+        // and the timeout test sometimes got success. No timer can answer this request before its timeout.
         if (root.GetProperty("params").TryGetProperty("arguments", out var arguments)
             && arguments.TryGetProperty("value", out var record) && record.GetString() is { Length: > 0 } path)
             File.AppendAllText(path, "tools/call slow\n");
 
-        var pending = root.Clone();
-        _ = Task.Run(async () =>
-        {
-            await Task.Delay(10000);
-            await Send(Enactive.Mcp.TestServer.Responses.For(pending));
-        });
         continue;
     }
 

@@ -1,7 +1,8 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
-using Enactive.App.Ui.Mvvm;
+using Enactive.Application.Mvvm;
+using Enactive.Application.Projections;
 using Enactive.Core.History;
 
 /// <summary>
@@ -160,14 +161,7 @@ internal sealed class StepCardViewModel : ObservableObject
 
     private static StepEntry Row(FeedEntry entry)
     {
-        var row = new StepEntry(entry.Kind, entry.Kind switch
-        {
-            FeedEntryKind.Command => "⌘",
-            FeedEntryKind.File => "📄",
-            FeedEntryKind.Note => "🔔",
-            FeedEntryKind.Refusal => "🛇",
-            _ => "🛠"
-        }, entry.Label);
+        var row = new StepEntry(entry.Kind, StepEntries.Icon(entry.Kind), entry.Label);
         row.Detail = entry.Detail;
         return row;
     }

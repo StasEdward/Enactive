@@ -1,6 +1,7 @@
 namespace Enactive.Agents;
 
 using System.Text;
+using Enactive.Core;
 
 /// <summary>
 /// Watches the TEXT of a reply while it streams, and says when it has run away: the same passage
@@ -81,8 +82,8 @@ internal sealed class RunawayReply
 
         if (text.Length >= MaxTextChars)
             return new Stop(
-                $"it had written {text.Length:N0} characters of text without a tool call, and a turn is "
-                + $"allowed {MaxTextChars:N0}", text.Length, Looped: false);
+                $"it had written {Invariant.N0(text.Length)} characters of text without a tool call, and a turn is "
+                + $"allowed {Invariant.N0(MaxTextChars)}", text.Length, Looped: false);
 
         return null;
     }
@@ -118,7 +119,7 @@ internal sealed class RunawayReply
 
             var times = (text.Length - start) / period;
             return new Stop(
-                $"the same passage of {period:N0} characters came {times} times in a row",
+                $"the same passage of {Invariant.N0(period)} characters came {times} times in a row",
                 KeepChars: keep, Looped: true);
         }
 

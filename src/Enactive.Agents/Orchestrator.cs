@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
+using Enactive.Core;
 // The pure parsing/formatting members moved to ToolCallParsing. Imported
 // statically so every call site here reads exactly as it did before the move: a refactor cannot be
 // verified differentially, so the less of it is visible at the call sites, the better.
@@ -4007,8 +4008,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 messages.Add(new ChatMessage(ChatRole.Assistant, kept, null));
 
                 yield return Ev(EventKind.ErrorObserved, stopped.InReasoning
-                    ? $"The model's reasoning was stopped at {reasoningBuilder.Length:N0} characters: {stopped.Reason}."
-                    : $"The model's reply was stopped at {written:N0} characters: {stopped.Reason}.");
+                    ? $"The model's reasoning was stopped at {Invariant.N0(reasoningBuilder.Length)} characters: {stopped.Reason}."
+                    : $"The model's reply was stopped at {Invariant.N0(written)} characters: {stopped.Reason}.");
 
                 if (runawayStops > 1)
                 {
@@ -4020,14 +4021,14 @@ public sealed partial class Orchestrator : IOrchestrator
                 if (stopped.InReasoning)
                 {
                     messages.Add(ChatMessage.User(
-                        $"Your reasoning was stopped after {reasoningBuilder.Length:N0} characters: {stopped.Reason}. Going over "
+                        $"Your reasoning was stopped after {Invariant.N0(reasoningBuilder.Length)} characters: {stopped.Reason}. Going over "
                         + "the same ground again will not settle it. Decide from what you have and act: call a tool - run the "
                         + "code or the tests to find out what you were working out - or finish the step with what you found."));
                     continue;
                 }
 
                 messages.Add(ChatMessage.User(
-                    $"Your reply above was stopped after {written:N0} characters: {stopped.Reason}."
+                    $"Your reply above was stopped after {Invariant.N0(written)} characters: {stopped.Reason}."
                     + (stopped.Looped ? " Only its first pass is kept above." : "")
                     + " Text in a reply is not an action: a check is made by calling a tool, and a fact is "
                     + "established only by what a tool returned in this conversation. Go on with the step "

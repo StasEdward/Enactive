@@ -177,17 +177,7 @@ public sealed class SendEmailTool(MailAccount account) : ITool
 
         try
         {
-            using var client = new SmtpClient { Timeout = TimeoutSeconds * 1000 };
-
-            await client.ConnectAsync(account.Host, account.Port, SocketOptions(account), ct);
-
-            // A server that wants no credentials is a real configuration - a relay on a LAN, a
-            // local submission agent - and offering it an empty password is how that fails.
-            if (!string.IsNullOrWhiteSpace(account.User))
-                await client.AuthenticateAsync(account.User, account.Password, ct);
-
-            await client.SendAsync(message, ct);
-            await client.DisconnectAsync(true, ct);
+            await MailSending.SendAsync(account, message, ct);
         }
         catch (OperationCanceledException)
         {

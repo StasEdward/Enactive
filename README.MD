@@ -47,16 +47,7 @@ A successful build is useful evidence. It does not, by itself, prove every requi
 
 ## How it works
 
-```mermaid
-flowchart LR
-    Request[Your request] --> Plan[Quick action or plan]
-    Plan --> Worker[Worker + chosen model]
-    Worker --> Permissions[Role and permission checks]
-    Permissions --> Tools[Tools in your workspace]
-    Tools --> Results[Files, artifacts and evidence]
-    Results --> Review[Configured review and checks]
-    Review --> Outcome[Recorded outcome]
-```
+![Enactive task execution architecture](plans/enactive-architecture.png)
 
 The planner breaks work into steps and dependencies. The orchestrator selects models, runs permitted tools and records their results. Configured reviewers assess the work; code checks evidence references, and deterministic checks can run the commands that define success. History preserves the request, decisions, artifacts and outcome.
 
@@ -134,6 +125,7 @@ Include a focused regression test when fixing behavior, and update the relevant 
 | [`src/Enactive.Providers`](src/Enactive.Providers) | Model adapters |
 | [`src/Enactive.Tools`](src/Enactive.Tools) | Built-in tools and tool registry |
 | [`src/Enactive.Workspace`](src/Enactive.Workspace) | Workspace state, artifacts and persistence |
+| [`src/Enactive.Application`](src/Enactive.Application) | What hosts share around a run: background runs, decisions, schedules, settings save |
 | [`src/Enactive.App.Ui`](src/Enactive.App.Ui) / [`src/Enactive.App.Console`](src/Enactive.App.Console) | Desktop and console hosts |
 | [`src/Enactive.Remote.Gateway`](src/Enactive.Remote.Gateway) / [`src/Enactive.Remote.Host`](src/Enactive.Remote.Host) | Browser gateway and desktop connection |
 | [`tests`](tests) · [`Docs`](Docs) · [`brand`](brand) | Tests, documentation and visual identity |

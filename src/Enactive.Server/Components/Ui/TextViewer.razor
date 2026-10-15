@@ -1,0 +1,131 @@
+@using Microsoft.JSInterop
+@inject IJSRuntime JS
+
+@* The window's viewer (ViewerWindow), in a dialog on the screen: a file, a report, an analysis - its own text, read-only,
+   monospaced and never wrapped, because those are reports whose columns mean something. Copy all hands over the text
+   itself, never what a rendering made of it. Source shows only where there is something to switch between: a caller's
+   rendering of the text, which must never be the only way to read it - whatever it did not understand is readable as
+   the source.
+
+   Or in the page itself (Inline), for a screen that IS the document - the Timeline, the Environment: the window opens
+   them in a viewer window of their own, and on the web the page is that window, so there is nothing under it to close
+   back to. The log's analysis adds the LogAnalysisWindow's two lines: what was read, above the answer (Lead), and what it
+   cost, beside the buttons (Note). *@
+
+@if (Inline)
+{
+    <section class="viewer-inline" aria-label="@Title">
+        <h1 class="viewer-title">@Title</h1>
+        @Body
+        <div class="viewer-actions">@Buttons</div>
+    </section>
+}
+else
+{
+    <Dialog Title="@Title" OnClose="OnClose">
+        <ChildContent>@Body</ChildContent>
+        <Actions>@Buttons</Actions>
+    </Dialog>
+}
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+    /// <summary>The text, as it is: what is shown as source and what Copy all hands over.</summary>
+    [Parameter] public string Text { get; set; } = "";
+
+    /// <summary>Why there is no text to show - the file gone, too big, not text - or null.</summary>
+    [Parameter] public string? Problem { get; set; }
+
+    /// <summary>The caller's rendering of the text, when it has one; with it, Source switches to the text itself.</summary>
+    [Parameter] public RenderFragment? Rendered { get; set; }
+
+    /// <summary>
+    /// Above the text, before it rather than after: what it is a reading of. An analysis of two thirds of a log is a
+    /// different thing from an analysis of a log, and that has to be the first thing seen (LogAnalysisWindow).
+    /// </summary>
+    [Parameter] public string? Lead { get; set; }
+
+    /// <summary>A line beside the buttons - what an analysis cost.</summary>
+    [Parameter] public string? Note { get; set; }
+
+    /// <summary>The copy button's words: the viewer's "Copy all", the analysis' "Copy".</summary>
+    [Parameter] public string CopyLabel { get; set; } = "Copy all";
+
+    /// <summary>What the copy button says it hands over, as its tooltip; none, nothing.</summary>
+    [Parameter] public string? CopyTip { get; set; }
+
+    /// <summary>Close drawn as the dialog's primary button - the analysis window's way of closing (LogAnalysisWindow).</summary>
+    [Parameter] public bool CloseIsPrimary { get; set; }
+
+    /// <summary>What Source says it shows: a file as it is on disk, an answer as the model wrote it.</summary>
+    [Parameter] public string SourceTip { get; set; } = "Show the file exactly as it is on disk.";
+
+    /// <summary>Drawn in the page rather than in a dialog over it (see above).</summary>
+    [Parameter] public bool Inline { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private bool _source;
+    private bool _copied;
+
+    private RenderFragment Body => __builder =>
+    {
+        if (Lead is { Length: > 0 } lead)
+        {
+            <p class="hint viewer-lead">@lead</p>
+        }
+        if (Problem is { Length: > 0 })
+        {
+            <p class="said">@Problem</p>
+        }
+        else if (Rendered is not null && !_source)
+        {
+            <div class="viewer-rendered">@Rendered</div>
+        }
+        else
+        {
+            <pre class="viewer-text">@Text</pre>
+        }
+    };
+
+    private RenderFragment Buttons => __builder =>
+    {
+        // Both, when there are both: "Copied." in place of what the analysis cost took the cost off the screen for good.
+        if (_copied || Note is { Length: > 0 })
+        {
+            <span class="hint viewer-status">@(string.Join(" · ", new[] { _copied ? "Copied." : null, Note }.Where(s => !string.IsNullOrEmpty(s))))</span>
+        }
+        if (Rendered is not null && Problem is null)
+        {
+            <button type="button" class="@(_source ? "btn on" : "btn")" aria-pressed="@(_source ? "true" : "false")"
+                    title="@SourceTip" @onclick="() => _source = !_source">Source</button>
+        }
+        if (Problem is null)
+        {
+            <button type="button" class="btn" title="@CopyTip" @onclick="CopyAsync">@CopyLabel</button>
+        }
+        if (!Inline || OnClose.HasDelegate)
+        {
+            <button type="button" class="@(CloseIsPrimary ? "btn primary" : "btn")" @onclick="OnClose">Close</button>
+        }
+    };
+
+    private async Task CopyAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", Text);
+            _copied = true;
+        }
+        catch (JSException)
+        {
+            // The browser refused the clipboard (not a secure page, permission denied): the text is still there to select.
+            _copied = false;
+        }
+        catch (JSDisconnectedException)
+        {
+            // The page went away as Copy all was pressed: nobody is left to tell.
+        }
+    }
+}

@@ -1,0 +1,340 @@
+@using System.Globalization
+@using Enactive.Application
+@using Enactive.Application.Projections
+@using Enactive.Server.Accounts
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@implements IAsyncDisposable
+@inject IRunControl Runs
+@inject ServerLogs Logs
+@inject LiveRunClock Clock
+
+@* The live run, as the window shows it under its command bar (MainWindow.axaml 546-920, 1244-1300): the task - its
+   title, the request as it was typed (the bar clears when a run starts, and without this what was asked survived only
+   in the log), who started it and when, who else has it open, the phase pill; three views of the same run - Execution,
+   Artifacts, Log; Current action below them; the status column on the right, whichever view is showing; the repository
+   strip at the foot. The run is the service's: the page follows it (RunFollower) and is never what it waits for. *@
+
+@if (_run is not { } run)
+{
+    @if (_looked)
+    {
+        <p class="hint run-gone">There is no such run on the service. Runs started before it last restarted are in the history.</p>
+    }
+    return;
+}
+@{
+    var view = _shownView.View;
+    var title = view.Title.Length > 0 ? view.Title : run.Prompt;
+    var others = run.Session.Watchers.Where(w => w != _me).ToList();
+    var question = run.Questions.Pending;
+}
+
+<PageTitle>@title - Enactive</PageTitle>
+
+<section class="live-run" aria-label="Run">
+    <header class="task-header">
+        <div class="task-text">
+            <h1 class="task-title" title="@title">@title</h1>
+            @* The request, readable and takeable: three lines, fixed, so the run underneath does not move when it is long,
+               and selectable - a hover is not reading. *@
+            <textarea class="task-intent" readonly aria-label="Request" rows="3">@run.Prompt</textarea>
+            <p class="task-meta">started by @run.Owner at @run.StartedAt.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture)</p>
+            @if (others.Count > 0)
+            {
+                @* The service's own: the window has one person at it, a run here can have several. *@
+                <p class="also-watching">also watching: @string.Join(", ", others)</p>
+            }
+        </div>
+        <Pill Class="@Looks.Phase(RunState.Standing(run, view.Phase))">@RunState.Phase(run, view.Phase)</Pill>
+    </header>
+
+    <Tabs Label="Views of the run" Names="@TabNames(view)" Selected="_tab" SelectedChanged="tab => _tab = tab" />
+
+    <div class="run-body">
+        <div class="run-views">
+            <div class="run-view" role="tabpanel">
+                @switch (_tab)
+                {
+                    case 0:
+                        @if (view.Steps.Count == 0)
+                        {
+                            <p class="hint">No steps yet.</p>
+                        }
+                        <ol class="steps">
+                            @for (var i = 0; i < view.Steps.Count; i++)
+                            {
+                                <StepCard @key="i" Step="view.Steps[i]" />
+                            }
+                        </ol>
+                        break;
+                    case 1:
+                        <RunArtifacts Root="@run.Workspace" Files="view.Artifacts" RunId="run.Id" Ended="run.Ended.IsCompleted" />
+                        break;
+                    default:
+                        IReadOnlyList<Enactive.Core.Diagnostics.LogEntry> lines = run.Session.RunId is { } runId ? Logs.OfRun(_user!, runId) : [];
+                        <p class="hint">@RunFigures.LogHeader(run.Session.RunId)</p>
+                        <div class="run-log">
+                            @foreach (var entry in lines)
+                            {
+                                <div class="@("log-line " + Looks.Log(entry.Level))">@LogText.Line(entry)</div>
+                            }
+                        </div>
+                        break;
+                }
+            </div>
+
+            <section class="current-action" aria-label="Current action">
+                <h2 class="panel-header">Current action</h2>
+                <p class="current-text">@(RunState.Why(run) ?? view.CurrentAction)</p>
+            </section>
+        </div>
+
+        <StatusColumn View="view" Elapsed="@Elapsed(run)">
+            <Decision>
+                @if (question is not null)
+                {
+                    <DecisionCard Topic="@question.Request.Topic" FullText="@question.Request.FullText" Answers="@AnswersFor(run, question)"
+                                  Recommended="@Recommended(question)" Wait="@WaitOf(question)"
+                                  Said="@(_saidFor == question.Request.Id ? _said : null)" Busy="_answering"
+                                  OnAnswer="choice => AnswerAsync(question.Request.Id, choice)" />
+                }
+                else if (AnsweredElsewhere(run) is { } answered)
+                {
+                    @* The question this page showed was answered from another page - another person's, or this person's
+                       other tab. Two people who press at once each expect their answer to count; the second press is
+                       often dropped unseen (its card was gone by the time it was dispatched), and the card just
+                       vanished under their pointer with nothing to say why. *@
+                    <p class="answered-by" role="status">Answered by @answered.By: @(answered.Answer).</p>
+                }
+                else if (_said is { Length: > 0 } late)
+                {
+                    @* This page's answer was refused and the card went with the question: said under the card only, the
+                       refusal went with it. *@
+                    <p class="said" role="alert">@late</p>
+                }
+            </Decision>
+        </StatusColumn>
+    </div>
+</section>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The run on the service (ServerRun.Id).</summary>
+    [Parameter] public Guid RunId { get; set; }
+
+    /// <summary>
+    /// Said when the run may have changed its folder's files - a step ended, the run is over, half a minute went by - for
+    /// the Runs screen's repository strip, which is the screen's and not the run's, to read the repository again then.
+    /// </summary>
+    [Parameter] public EventCallback FilesMayHaveChanged { get; set; }
+
+    /// <summary>The repository is read again this often while the run goes, as the window's strip: a step changes files.</summary>
+    private const int RepoEveryTicks = 30;
+
+    private ServerRun? _run;
+    private Guid? _shown;
+    private bool _looked;
+    private System.Security.Claims.ClaimsPrincipal? _user;
+    private string? _me;
+    private RunFollower? _follower;
+    private Shown _shownView = new();
+    private CancellationTokenSource? _ticking;
+
+    /// <summary>The page's clock, until the run ends or the page leaves it; for a test to wait on.</summary>
+    internal Task Ticking { get; private set; } = Task.CompletedTask;
+    private int _tab;
+    private string? _said;
+
+    /// <summary>The question <see cref="_said"/> answers: a refusal said under one question is not said under the next.</summary>
+    private Guid? _saidFor;
+
+    /// <summary>The question this page last drew a card for, and the one whose answer was taken from this page.</summary>
+    private Guid? _lastShown, _answeredHere;
+    private bool _answering;
+    private (int Steps, bool Ended) _repoSeen;
+
+    // Read per address, not once (Pages/_Imports.razor): the screen keeps this page when it moves to another run.
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_shown == RunId)
+            return;
+        Leave();
+        _shown = RunId;
+        _user = (await Auth).User;
+        _me = _user.Identity?.Name;
+        (_tab, _said, _lastShown, _answeredHere) = (0, null, null, null);
+        // A view, and a reader, of this run's own: the last follower's read can still be under way when the screen moves
+        // to another run, and it wrote the old run's view over the new one's - through a reader shared by two sessions'
+        // locks. What it reads now lands in a view nobody draws.
+        var shown = _shownView = new Shown();
+        var reader = new LiveRunReader();
+        _run = Runs.Find(_user, RunId);
+        _looked = true;
+        if (_run is not { } run)
+            return;
+
+        // A question up or down, the run's turn, its end - and somebody opening or leaving it: none of them is an event of
+        // the run's own, and a run waiting on a question has no events to redraw for.
+        run.Changed += OnChanged;
+        run.Session.WatchersChanged += OnChanged;
+        // Reads where the run stands, follows it from there, and redraws as it goes - at most ten times a second, and
+        // never holding the run up (RunFollower). Named, so the others with the run open see who else is watching.
+        _follower = new RunFollower(run.Session, () => (shown.View = ReadOf(run, reader)).Seq,
+            () => InvokeAsync(Redraw), _me);
+        _lastShown = run.Questions.Pending?.Request.Id;
+        _follower.Start();
+        _repoSeen = (shown.View.StepsDone, run.Ended.IsCompleted);
+        if (Clock.Every is { } every)
+        {
+            _ticking = new CancellationTokenSource();
+            Ticking = TickAsync(run, every, _ticking.Token);
+        }
+    }
+
+    /// <summary>The run's fold, read under its session's lock (RunSession.Read). Virtual for a test to count the reads.</summary>
+    internal virtual LiveRunView ReadOf(ServerRun run, LiveRunReader reader) => run.Session.Read(reader.Read);
+
+    /// <summary>The view drawn, one per run shown: written by that run's follower only.</summary>
+    private sealed class Shown
+    {
+        private volatile LiveRunView _view = LiveRunView.Empty;
+
+        public LiveRunView View
+        {
+            get => _view;
+            set => _view = value;
+        }
+    }
+
+    private void OnChanged() => _ = InvokeAsync(Redraw);
+
+    /// <summary>
+    /// Draws the run as last read. A step that ended, or the run's end, has changed files: the repository strip is read
+    /// again then, not in half a minute - what a step changes is what a person watches for.
+    /// </summary>
+    private void Redraw()
+    {
+        if (_run is { } run && (_shownView.View.StepsDone, run.Ended.IsCompleted) is var seen && seen != _repoSeen)
+        {
+            _repoSeen = seen;
+            _ = FilesMayHaveChanged.InvokeAsync();
+        }
+        // A refusal is about its own question: once another is up, it is forgotten - kept, it came back as that one's card
+        // went, and said a question was answered that had nothing to do with it.
+        if (_run?.Questions.Pending is { } up)
+        {
+            if (up.Request.Id != _saidFor)
+                _said = null;
+            _lastShown = up.Request.Id;
+        }
+        StateHasChanged();
+    }
+
+    /// <summary>The clock: ELAPSED, and how long a question still waits, move while nothing else does.</summary>
+    private async Task TickAsync(ServerRun run, TimeSpan every, CancellationToken stop)
+    {
+        using var timer = new PeriodicTimer(every);
+        var ticks = 0;
+        try
+        {
+            while (await timer.WaitForNextTickAsync(stop))
+            {
+                var readRepo = ++ticks % RepoEveryTicks == 0;
+                await InvokeAsync(() =>
+                {
+                    if (readRepo)
+                        _ = FilesMayHaveChanged.InvokeAsync();
+                    Redraw();
+                });
+                // Over: the figures stand still, and one last drawing (the follower's) shows where it ended.
+                if (run.Ended.IsCompleted)
+                    return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // The page left, or moved to another run.
+        }
+    }
+
+    private static IReadOnlyList<string> TabNames(LiveRunView view) => ["Execution", RunFigures.ArtifactsTab(view.Artifacts.Count), "Log"];
+
+    /// <summary>From its turn to its end (or now), as the window's stopwatch runs from Run; an em dash while it waits in the line.</summary>
+    private static string Elapsed(ServerRun run)
+        => run.RunningSince is { } since ? RunElapsed.Format((run.EndedAt ?? DateTimeOffset.UtcNow) - since) : "—";
+
+    /// <summary>
+    /// The answers this person is offered: none for a Viewer, and the ones that remember an approval only for the run's
+    /// owner - RunControl.Answer refuses them to anybody else, so offering them would be a button that is always refused.
+    /// </summary>
+    private IReadOnlyList<string> AnswersFor(ServerRun run, WebQuestion question)
+    {
+        if (ServerAuth.RoleOf(_user!) < Role.Operator)
+            return [];
+        var owner = _me == run.Owner;
+        return question.Choices.Where(c => owner || c.Remember == RememberAs.Nothing).Select(c => c.Label).ToList();
+    }
+
+    /// <summary>The answer another page gave the question this page showed last, or null.</summary>
+    private AnsweredQuestion? AnsweredElsewhere(ServerRun run)
+        => run.Questions.LastAnswered is { } answered && answered.Question == _lastShown && answered.Question != _answeredHere ? answered : null;
+
+    private static string? Recommended(WebQuestion question)
+        => question.Choices.FirstOrDefault(c => c.Remember == RememberAs.Nothing && c.OptionId == question.Request.RecommendedOptionId)?.Label;
+
+    /// <summary>
+    /// "waits 12 min more, then goes to the Inbox": a closed tab must not hold a run's slot and folder, so a question waits
+    /// for so long (IRunControl.QuestionWait) and the run then stops at it - said, so nobody is surprised to find it gone.
+    /// </summary>
+    private string? WaitOf(WebQuestion question)
+    {
+        if (Runs.QuestionWait is not { } wait)
+            return null;
+        var left = question.AskedAt + wait - DateTimeOffset.UtcNow;
+        var minutes = Math.Max(0, (int)Math.Ceiling(left.TotalMinutes));
+        return $"waits {minutes.ToString(CultureInfo.InvariantCulture)} min more, then goes to the Inbox";
+    }
+
+    private async Task AnswerAsync(Guid question, string choice)
+    {
+        if (_answering || _run is not { } run)
+            return;
+        _answering = true;
+        // Marked before the service is asked: taking the answer takes the question down, and the page drawn in between
+        // told its own person that they had answered from somewhere else.
+        var before = _answeredHere;
+        _answeredHere = question;
+        try
+        {
+            (_said, _saidFor) = (Runs.Answer((await Auth).User, run.Id, question, choice), question);
+            if (_said is not null)
+                _answeredHere = before;
+        }
+        finally { _answering = false; }
+    }
+
+    /// <summary>Stops following the run shown - the page left it, or moved to another.</summary>
+    private void Leave()
+    {
+        if (_run is { } run)
+        {
+            run.Changed -= OnChanged;
+            run.Session.WatchersChanged -= OnChanged;
+        }
+        _follower?.Dispose();
+        _follower = null;
+        _ticking?.Cancel();
+        _ticking?.Dispose();
+        _ticking = null;
+        _run = null;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        Leave();
+        return ValueTask.CompletedTask;
+    }
+}

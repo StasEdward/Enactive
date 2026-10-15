@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.VisualTree;
 using Enactive.App.Ui.ViewModels;
+using Enactive.Application;
 using Enactive.Remote.Contracts.Crypto;
 using Enactive.Settings;
 
@@ -36,16 +37,19 @@ internal sealed partial class SettingsWindow : Window
         Func<ConnectionCode, Func<string, Task<bool>>, Task<(bool Connected, string Detail)>>? remoteConnect = null,
         RemoteDevices? remoteDevices = null)
     {
-        var viewModel = new SettingsViewModel(settings, onSaved, workspaceRoot, toolNames)
-        {
-            RemoteCheck = remoteCheck,
-            RemoteConnect = remoteConnect
-        };
+        // Remote access is this window's own pane, over the copy the shared settings edit (IHostSettingsPane).
+        RemoteSettingsViewModel remote = null!;
+        var viewModel = new SettingsViewModel(settings, onSaved, StartupEntry.System, editsFilesHere: true, workspaceRoot, toolNames,
+            hostPane: working => remote = new RemoteSettingsViewModel(working)
+            {
+                RemoteCheck = remoteCheck,
+                RemoteConnect = remoteConnect
+            });
         if (remoteDevices is not null)
         {
             // The connection comes and goes while this window is open; Add a device follows it. Let go of
             // on close, or every settings window ever opened would be kept alive by the main window's bridge.
-            var pane = viewModel.RemoteDeviceList;
+            var pane = remote.RemoteDeviceList;
             pane.CanInvite = () => remoteDevices.CanInvite;
             pane.Trusted = remoteDevices.TrustedAsync;
             Action changed = pane.RefreshConnection;
@@ -64,7 +68,7 @@ internal sealed partial class SettingsWindow : Window
             new WorkerEditWindow(config, catalog, viewModel.ToolNames, saved).Show(this);
         viewModel.ConfirmRequested += (headline, detail) =>
             ConfirmWindow.AskAsync(this, headline, detail, "Remove", "Keep");
-        viewModel.RemoteQuestionRequested += question =>
+        remote.RemoteQuestionRequested += question =>
             ConfirmWindow.AskAsync(this, question,
                 "Nothing changes if you cancel. Only continue with a code you made yourself, in your own browser.",
                 "Continue", "Cancel");
@@ -74,6 +78,7 @@ internal sealed partial class SettingsWindow : Window
             new TemplateEditWindow(draft, idEditable, scopes, viewModel.ToolNames, saved).ShowDialog(this);
         DataContext = viewModel;
         InitializeComponent();
+        RemotePane.DataContext = remote;
 
         // Double-click opens the row, the way a list of things has opened them since Windows 3.
         ProviderList.DoubleTapped += (_, e) => OpenTapped<ProviderRow>(e, row => row.EditCommand);
@@ -87,7 +92,7 @@ internal sealed partial class SettingsWindow : Window
     /// ignored: a quick second click on the pencil is one person pressing it twice, not a request
     /// to open the same editor again.
     /// </summary>
-    private static void OpenTapped<T>(TappedEventArgs e, Func<T, Mvvm.RelayCommand> command)
+    private static void OpenTapped<T>(TappedEventArgs e, Func<T, Enactive.Application.Mvvm.RelayCommand> command)
         where T : class
     {
         if (e.Source is not Visual source || source.FindAncestorOfType<Button>(true) is not null)

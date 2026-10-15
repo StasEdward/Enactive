@@ -218,7 +218,7 @@ public sealed class EvidenceBudgetTests
 
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(evidence, "Wiki page 37: 111 links"));
         Assert.Contains($"[3] -> read_file", evidence, StringComparison.Ordinal);
-        Assert.Contains($"(the same {report.Length:N0} characters as in the result of [2] - shown there, not repeated here)", evidence, StringComparison.Ordinal);
+        Assert.Contains($"(the same {Enactive.Core.Invariant.N0(report.Length)} characters as in the result of [2] - shown there, not repeated here)", evidence, StringComparison.Ordinal);
         Assert.DoesNotContain("characters not shown here", evidence, StringComparison.Ordinal);     // one copy fits whole
     }
 

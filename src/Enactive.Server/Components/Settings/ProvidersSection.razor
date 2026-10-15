@@ -1,0 +1,60 @@
+@using System.ComponentModel
+@using Enactive.Application
+@using Enactive.Core.History
+@implements IDisposable
+
+@* The window's AI · Providers (SettingsWindow.axaml): one card per provider, its edge green on this machine and blue over
+   the network (Looks.Local), its light what the last check learned and when, grey until one was made; Edit and Remove
+   on the card. Opening the section asks each provider once (SettingsViewModel), as the service, with the key it keeps
+   (ServerSettings). *@
+
+<p class="hint">Green runs on this machine; blue is reached over the network — the one thing about a provider worth seeing without reading it.</p>
+
+<ul class="cards settings-cards" aria-label="Providers">
+    @foreach (var row in Vm.Providers)
+    {
+        <li class="@($"card settings-card {Looks.Local(row.IsLocal)}")">
+            <span class="@($"health-dot {Looks.Health(row.Health.Health)}")" role="img" aria-label="@row.HealthTip" title="@row.HealthTip"></span>
+            <span class="settings-card-text">
+                <span class="card-title">@row.Name</span>
+                <span class="card-meta">@row.Meta</span>
+            </span>
+            <span class="card-meta settings-reach">@row.Reach</span>
+            <RowIcons Edit="() => row.EditCommand.Execute(null)" Remove="() => row.RemoveCommand.Execute(null)" Of="@row.Name" />
+        </li>
+    }
+</ul>
+<div class="settings-section-actions">
+    <button type="button" class="btn" @onclick="() => Vm.AddProviderCommand.Execute(null)">Add</button>
+</div>
+
+@code {
+    // Handed down as a cascading value rather than a parameter: the view model is internal to the application layer,
+    // and a component's parameters are public.
+    [CascadingParameter] private SettingsViewModel Vm { get; set; } = default!;
+
+    // A row says its light changed on itself, not on the view model: the answer of each provider arrives on its own.
+    private readonly HashSet<ProviderRow> _watched = [];
+
+    protected override void OnParametersSet()
+    {
+        // Let go of the rows no longer listed - removed, or of a view model Save or Cancel replaced - or each kept the
+        // section, and the old copy of the settings, alive for as long as the page.
+        foreach (var gone in _watched.Except(Vm.Providers).ToList())
+        {
+            gone.PropertyChanged -= RowChanged;
+            _watched.Remove(gone);
+        }
+        foreach (var row in Vm.Providers.Where(_watched.Add))
+            row.PropertyChanged += RowChanged;
+    }
+
+    private void RowChanged(object? sender, PropertyChangedEventArgs e) => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        foreach (var row in _watched)
+            row.PropertyChanged -= RowChanged;
+        _watched.Clear();
+    }
+}

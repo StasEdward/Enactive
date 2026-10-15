@@ -1,0 +1,129 @@
+@using Enactive.Workspace
+@using Model = Enactive.Application.Projections.RepoBar
+@implements IDisposable
+@inject RepoReads Reading
+
+@* The window's repository strip, at the foot of the run (MainWindow.axaml 1262-1310): the branch's pull request with its
+   checks when GitHub can be asked, then the repository, the branch, how far from its upstream, and what is not committed
+   - added green, removed red, as git and GitHub show them; "No git repository" for a folder that is none. The number and the checks
+   open their pages; anywhere else on the strip reads it again. What it says is RepoBar's, the window's own. *@
+
+@if (_bar.IsVisible)
+{
+    <div class="repo-bar" title="The workspace's repository - click to read it again" @onclick="() => ReadAsync(forcePullRequest: true)">
+        @if (_bar.HasPullRequest && Model.GitHubPage(_bar.PullRequestUrl) is { } pullRequestPage)
+        {
+            <a class="repo-pr" href="@pullRequestPage" target="_blank" rel="noopener noreferrer" title="Open the pull request"
+               @onclick:stopPropagation="true">@_bar.PullRequest</a>
+        }
+        <span class="repo-name">@_bar.Name</span>
+        <span class="repo-muted">@_bar.Branch</span>
+        @if (_bar.Sync.Length > 0)
+        {
+            <span class="repo-muted">@_bar.Sync</span>
+        }
+        <span class="repo-changes" title="Changed since the last commit, staged or not, and files git does not track">
+            <span class="tone-done repo-tone">@_bar.Added</span>
+            <span class="tone-failed repo-tone">@_bar.Removed</span>
+            <span class="repo-muted">@_bar.NewFiles</span>
+            <span class="repo-muted">@_bar.NoChanges</span>
+        </span>
+        @if (_bar.HasPullRequest)
+        {
+            <span class="repo-changes" title="The pull request's lines added and removed">
+                <span class="tone-done repo-tone">@_bar.PullRequestAdded</span>
+                <span class="tone-failed repo-tone">@_bar.PullRequestRemoved</span>
+            </span>
+        }
+        @if (_bar.HasCi && Model.GitHubPage(_bar.PullRequestUrl + "/checks") is { } checks)
+        {
+            <a class="repo-ci" href="@checks" target="_blank" rel="noopener noreferrer" title="Open the pull request's checks"
+               @onclick:stopPropagation="true"><span class="@("repo-light " + Looks.Ci(_bar.Ci))" aria-hidden="true"></span>@_bar.CiText</a>
+        }
+        <button type="button" class="row-icon repo-again" aria-label="Read the repository again" title="Read the repository again"
+                @onclick="() => ReadAsync(forcePullRequest: true)" @onclick:stopPropagation="true">⟳</button>
+    </div>
+}
+else
+{
+    @* Always there, the foot of the screen whatever the folder: gone for a folder with no repository, the screen's foot
+       moved with the workspace chosen, and nothing said whether git had been asked at all. Read again on a click, as
+       for a repository - a folder made one since is shown then. *@
+    <div class="repo-bar repo-none" title="Read the folder again" @onclick="() => ReadAsync(forcePullRequest: true)">
+        <span class="repo-muted">@Absent</span>
+        <button type="button" class="row-icon repo-again" aria-label="Read the repository again" title="Read the repository again"
+                @onclick="() => ReadAsync(forcePullRequest: true)" @onclick:stopPropagation="true">⟳</button>
+    </div>
+}
+
+@code {
+    /// <summary>The workspace's folder; none, no strip.</summary>
+    [Parameter] public string? Root { get; set; }
+
+    /// <summary>
+    /// Bumped by the caller when the files may have changed - a step ended, the run is over - so the strip is read again
+    /// then and not only on a click: what a step changes is what a person watches for.
+    /// </summary>
+    [Parameter] public int Reads { get; set; }
+
+    /// <summary>
+    /// A click asks GitHub again, but not more often than this. Each ask is a <c>gh pr view</c> started as the service's
+    /// account against its GitHub sign-in, and anybody signed in - a Viewer too - can click: unthrottled, a few quick
+    /// clicks were as many processes on the server and as many calls against the service's rate limit. The strip's own
+    /// floor; the service's, which a reload or another tab does not reset, is RepoReads'.
+    /// </summary>
+    internal static readonly TimeSpan ClickedEvery = RepoReads.AskedEvery;
+
+    // The reading is the window's (RepoBar.ReadAsync), with the service's floor under a click - and every ask of GitHub
+    // through the one place all pages share (RepoReads), as this strip's clock goes with the page.
+    private Model _bar = null!;
+    private string? _root;
+
+    /// <summary>The folder git has answered about; until it has, the strip says nothing rather than "no repository".</summary>
+    private string? _answeredFor;
+
+    private string Absent => _root is null ? "No workspace" : _answeredFor == _root ? "No git repository" : "";
+    private int _reads = -1;
+    private readonly CancellationTokenSource _gone = new();
+
+    protected override void OnInitialized()
+        => _bar = new Model(ClickedEvery, Reading.ReadAsync, Reading.PullRequestAsync, Reading.Clock);
+
+    protected override Task OnParametersSetAsync()
+    {
+        if (Root == _root && Reads == _reads)
+            return Task.CompletedTask;
+        var moved = Root != _root;
+        (_root, _reads) = (Root, Reads);
+        // Another folder's pull request is asked about at once: when this one's was last asked says nothing about it.
+        if (moved)
+            _bar.Moved();
+        return ReadAsync(forcePullRequest: false);
+    }
+
+    private async Task ReadAsync(bool forcePullRequest)
+    {
+        // Taken once: read from the source after the page left, it threw - the source is disposed with the page.
+        var gone = _gone.Token;
+        try
+        {
+            var reading = _root;
+            await _bar.ReadAsync(reading, forcePullRequest, StateHasChanged, gone);
+            if (!gone.IsCancellationRequested && reading == _root)
+            {
+                _answeredFor = reading;
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException) when (gone.IsCancellationRequested)
+        {
+            // The page went away while git was asked.
+        }
+    }
+
+    public void Dispose()
+    {
+        _gone.Cancel();
+        _gone.Dispose();
+    }
+}

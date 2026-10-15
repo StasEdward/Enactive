@@ -1,7 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:Enactive.App.Ui"
-        xmlns:vm="using:Enactive.App.Ui.ViewModels"
+        xmlns:vm="using:Enactive.Application"
         x:Class="Enactive.App.Ui.SchedulesWindow"
         x:DataType="vm:SchedulesViewModel"
         Title="Enactive — Schedules"
