@@ -121,8 +121,24 @@ public sealed class WorkspaceLeaseTests : IDisposable
             await holder.WaitForExitAsync();
         }
 
-        using var taken = WorkspaceLease.TryTake(workspace, out _);
-        Assert.NotNull(taken);
+        // The Windows runner can still refuse the first file open after WaitForExitAsync: process exit and the file
+        // becoming reopenable are not the same observation. Wait for the lease, not an arbitrary delay; a genuinely
+        // abandoned lock still fails within this bound instead of being silently accepted.
+        ProcessLease? taken = null;
+        using var released = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            while ((taken = WorkspaceLease.TryTake(workspace, out _)) is null)
+                await Task.Delay(TimeSpan.FromMilliseconds(20), released.Token);
+        }
+        catch (OperationCanceledException) when (released.IsCancellationRequested)
+        {
+            Assert.Fail($"The workspace lease stayed unavailable after process {holder.Id} exited.");
+        }
+        finally
+        {
+            taken?.Dispose();
+        }
     }
 
     /// <summary>No handle means no ownership: an unwritable lease must never permit an unprotected run.</summary>
