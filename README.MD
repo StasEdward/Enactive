@@ -47,16 +47,7 @@ A successful build is useful evidence. It does not, by itself, prove every requi
 
 ## How it works
 
-```mermaid
-flowchart LR
-    Request[Your request] --> Plan[Quick action or plan]
-    Plan --> Worker[Worker + chosen model]
-    Worker --> Permissions[Role and permission checks]
-    Permissions --> Tools[Tools in your workspace]
-    Tools --> Results[Files, artifacts and evidence]
-    Results --> Review[Configured review and checks]
-    Review --> Outcome[Recorded outcome]
-```
+![Enactive task execution architecture](plans/enactive-architecture.png)
 
 The planner breaks work into steps and dependencies. The orchestrator selects models, runs permitted tools and records their results. Configured reviewers assess the work; code checks evidence references, and deterministic checks can run the commands that define success. History preserves the request, decisions, artifacts and outcome.
 
