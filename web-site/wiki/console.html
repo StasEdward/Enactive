@@ -281,8 +281,13 @@ $env:ENACTIVE_LOG_LEVEL = &#39;Debug&#39;</code></pre></div>
 </div><p>Configuration/startup exceptions outside the handled run path may terminate before a structured report is produced. The table is the host&#39;s explicit outcome mapping, not a guarantee for every process-level failure.</p>
 <p>A failure to write <code>--report</code> is printed to stderr but does not change the task outcome exit code. A scheduler that requires the report file should verify its presence separately.</p>
 <h2 id="scheduling-a-suitable-task">Scheduling a suitable task<a class="heading-anchor" href="#scheduling-a-suitable-task" aria-label="Link to Scheduling a suitable task">#</a></h2>
-<p>Use Windows Task Scheduler, cron, or a CI runner to invoke the console. There is no built-in durable scheduling service in the desktop app.</p>
-<p>For a file-only documentation workflow, a PowerShell wrapper can preserve the process outcome:</p>
+<p>The schedules made in the app&#39;s Schedules window are run by the desktop app itself while it is open - in the
+tray too: it checks them every minute and runs what is due in the background, with nobody to answer, and the
+outcome lands in the Inbox under the schedule. For a machine where the app is not running, wake the console with
+<code>--due-all</code> every few minutes from Windows Task Scheduler, cron, or a CI runner. Both take the same claim on a
+schedule, so the two on one machine do not start the same occurrence twice.</p>
+<p>To run one template on a timetable of the scheduler&#39;s own instead, invoke the console with <code>--template</code>. For a
+file-only documentation workflow, a PowerShell wrapper can preserve the process outcome:</p>
 <div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">$env:ENACTIVE_MODEL = &#39;qwen2.5-coder&#39;
 $env:ENACTIVE_OLLAMA_URL = &#39;http://localhost:11434/v1&#39;
 Set-Location &#39;C:\source\Enactive&#39;

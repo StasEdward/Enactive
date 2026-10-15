@@ -15,9 +15,10 @@
     Windows service.
   -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.7" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.13" />
     <!-- server.db: the accounts and the audit log. The version the workspace stores already use. -->
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.13" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     <ProjectReference Include="..\Enactive.Application\Enactive.Application.csproj" />
     <ProjectReference Include="..\Enactive.Secrets\Enactive.Secrets.csproj" />
   </ItemGroup>
@@ -33,8 +34,7 @@
          ContentRoot says where the files are: without it the SDK records a linked file as under THIS wwwroot, and a
          service run from the build (dotnet run, Visual Studio) answered /brand/brand.css with 200 and nothing in it -
          every page unstyled. A publish copies the files and never showed it (StaticAssetsTests). -->
-    <Content Include="..\Enactive.Remote.Gateway\wwwroot\brand\**" LinkBase="wwwroot\brand"
-             ContentRoot="$(MSBuildProjectDirectory)\..\Enactive.Remote.Gateway\wwwroot\" />
+    <Content Include="..\Enactive.Remote.Gateway\wwwroot\brand\**" LinkBase="wwwroot\brand" ContentRoot="$(MSBuildProjectDirectory)\..\Enactive.Remote.Gateway\wwwroot\" />
   </ItemGroup>
 
 </Project>

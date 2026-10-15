@@ -7,7 +7,7 @@
   </ItemGroup>
   <ItemGroup>
     <!-- Lightweight ADO.NET SQLite provider (no EF). Bump to 10.x to match .NET 10 if you prefer. -->
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.13" />
     <!-- Override the transitive 2.1.10 (NU1903 advisory GHSA-2m69-gcr7-jv3q) with a patched native bundle. -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <!-- Modern async MySQL driver. Only used when ENACTIVE_STORE=mysql. -->

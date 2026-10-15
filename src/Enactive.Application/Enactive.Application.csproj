@@ -48,4 +48,8 @@
     <InternalsVisibleTo Include="Enactive.Server" />
     <InternalsVisibleTo Include="Enactive.Server.Tests" />
   </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
+  </ItemGroup>
 </Project>

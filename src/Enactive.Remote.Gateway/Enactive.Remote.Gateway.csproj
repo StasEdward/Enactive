@@ -18,7 +18,7 @@
       token's signature, issuer, audience, expiry and nonce, which is exactly the code not to write
       by hand. GitHub is plain OAuth and needs nothing beyond the framework.
     -->
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.12" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.13" />
     <PackageReference Include="MySqlConnector" Version="2.6.2" />
     <ProjectReference Include="..\Enactive.Remote.Contracts\Enactive.Remote.Contracts.csproj" />
   </ItemGroup>

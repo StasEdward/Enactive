@@ -5,8 +5,10 @@
     <AssemblyName>enactive</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="MailKit" Version="4.18.0" />
+    <PackageReference Include="MailKit" Version="4.18.1" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Common" Version="10.0.13" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
