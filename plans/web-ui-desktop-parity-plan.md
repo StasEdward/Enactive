@@ -1,7 +1,19 @@
 # The service's web UI as the desktop window - implementation plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
-> superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status (2026-10-15): implemented and accepted on `feature/application-layer`, PR #57 to `master`.**
+All 22 delivery tasks are complete. Checkboxes record delivered outcomes; the original red/green commands and
+suggested commit messages below are the implementation recipe, not a claim that each was executed verbatim.
+No mandatory WEB UI feature remains in this plan.
+
+Validation: Server 505/505, Engine 4566/4566, Desktop UI 22/22 and Playwright Chromium 36/36 passed locally.
+The user confirmed that the installed Windows service works, closing the manual service acceptance item.
+Release integration (clean-checkout build and CI) is tracked separately from feature completion.
+
+Implemented differences from the initial recipe:
+- A past run has no MODEL PERFORMANCE panel: call timings are session data, not saved in its record, as on the desktop.
+- Source is offered only beside rendered text; Timeline and Environment already show their source text.
+- Template and settings editors open in dialogs; workspace actions say Add workspace.
+- Deleting filtered history takes the IDs shown when confirmed, so newer runs are never deleted unseen.
 
 **Goal:** Replace the service's form pages with a live web UI that is the desktop window: its shell, its Runs
 screen, and a page for each of its other windows.
@@ -60,13 +72,13 @@ redirect to a page that does not exist yet would be a dead link.
   registers them (over a scripted `IRunExecutor`), and `void SignIn(string name)` that cascades
   `ServerAuth.PrincipalOf(account)` as the `AuthenticationState`.
 
-- [ ] Step 1: test `A_component_sees_the_signed_in_account_and_role` - a two-line test component rendering
+- [x] Step 1: test `A_component_sees_the_signed_in_account_and_role` - a two-line test component rendering
   `@context.User.Identity.Name` and the role claim inside `<AuthorizeView>` shows `alice` / `Operator` after `SignIn("alice")`.
-- [ ] Step 2: run `dotnet test tests/Enactive.Server.Tests --filter ComponentHostTests` - fails (no `ComponentHost`).
-- [ ] Step 3: add the package and `ComponentHost`; services come from one shared registration method
+- [x] Step 2: run `dotnet test tests/Enactive.Server.Tests --filter ComponentHostTests` - fails (no `ComponentHost`).
+- [x] Step 3: add the package and `ComponentHost`; services come from one shared registration method
   `ServerApp.AddServices(IServiceCollection, ServerOptions, string dataFolder)` extracted from `Build` (no behaviour change).
-- [ ] Step 4: the test passes; the whole server suite passes.
-- [ ] Step 5: commit "Server tests: bUnit, and a signed-in component host".
+- [x] Step 4: the test passes; the whole server suite passes.
+- [x] Step 5: commit "Server tests: bUnit, and a signed-in component host".
 
 ### Task 2: the theme and `Looks`
 
@@ -89,14 +101,14 @@ redirect to a page that does not exist yet would be a dead link.
   `tone-local`, `tone-cloud`, `tone-faint`, `tier-0`…`tier-3`) mirroring `Palette.cs` value for value, and throws
   `ArgumentOutOfRangeException` on a value it does not name.
 
-- [ ] Step 1: `Every_value_of_every_state_has_a_look` - for each enum above, `Enum.GetValues` mapped without throwing;
+- [x] Step 1: `Every_value_of_every_state_has_a_look` - for each enum above, `Enum.GetValues` mapped without throwing;
   `Card(FeedCardStatus.Running) == "tone-running"`, `Run(RunStandingKind.Failed) == "tone-failed"`,
   `Autonomy(3) == "tier-3"`; `The_looks_are_the_window_s` - the colour behind each class in `theme.css` equals the
   `Brand` colour `Palette.cs` uses for the same value (parse `theme.css`, compare hex).
-- [ ] Step 2: run - fails.
-- [ ] Step 3: write `Looks.cs` and `theme.css`; link `theme.css` in `App.razor` instead of `app.css`.
-- [ ] Step 4: passes; `dotnet build` clean.
-- [ ] Step 5: commit "Server: the desktop's palette as a theme, and Looks".
+- [x] Step 2: run - fails.
+- [x] Step 3: write `Looks.cs` and `theme.css`; link `theme.css` in `App.razor` instead of `app.css`.
+- [x] Step 4: passes; `dotnet build` clean.
+- [x] Step 5: commit "Server: the desktop's palette as a theme, and Looks".
 
 ### Task 3: the shell - top bar and icon rail
 
@@ -115,15 +127,15 @@ redirect to a page that does not exist yet would be a dead link.
   "Global log", "Environment", "Settings"). Inbox shows the unread count (`ServerInbox.ListAsync`), Proposals a dot
   while `ServerStaging.List` has any.
 
-- [ ] Step 1: `A_viewer_is_shown_no_admin_section`, `An_admin_is_shown_every_section` (by `RailItem.For` and by the
+- [x] Step 1: `A_viewer_is_shown_no_admin_section`, `An_admin_is_shown_every_section` (by `RailItem.For` and by the
   rendered `nav` button names), `The_inbox_icon_counts_what_is_unread`, `The_top_bar_names_who_is_signed_in_and_their_role`
   (`alice`, `Operator`, Sign out form posting to `/signout` with an antiforgery token).
-- [ ] Step 2: run - fails.
-- [ ] Step 3: implement; icon paths are the desktop rail's `Path Data` (MainWindow.axaml lines 33-152) as inline SVG,
+- [x] Step 2: run - fails.
+- [x] Step 3: implement; icon paths are the desktop rail's `Path Data` (MainWindow.axaml lines 33-152) as inline SVG,
   `aria-label` = tooltip; active item by `NavigationManager` path prefix.
-- [ ] Step 4: passes; the 15 e2e scenarios still pass (`cd tests/server-e2e && npx playwright test`) - only the
+- [x] Step 4: passes; the 15 e2e scenarios still pass (`cd tests/server-e2e && npx playwright test`) - only the
   header changed; fix selectors that named the old nav links.
-- [ ] Step 5: commit "Server: the desktop's shell - top bar and icon rail".
+- [x] Step 5: commit "Server: the desktop's shell - top bar and icon rail".
 
 ### Task 4: everything live, sign-in static, the connection said
 
@@ -139,14 +151,14 @@ redirect to a page that does not exist yet would be a dead link.
 **Interfaces:**
 - Produces: every routed page interactive; `/signin` static.
 
-- [ ] Step 1: e2e `a lost connection disables actions until it is back` - open a run page, `page.context().setOffline(true)`,
+- [x] Step 1: e2e `a lost connection disables actions until it is back` - open a run page, `page.context().setOffline(true)`,
   expect the top bar text "Reconnecting…" and the page's buttons not clickable (`trial: true` click times out); back
   online, "Connected" and they work. bUnit `Sign_in_is_not_an_interactive_page` asserts the attribute on `SignIn`.
-- [ ] Step 2: run - fails.
-- [ ] Step 3: implement.
-- [ ] Step 4: all e2e pass (the ones that relied on static form posts still work: those forms still post until their
+- [x] Step 2: run - fails.
+- [x] Step 3: implement.
+- [x] Step 4: all e2e pass (the ones that relied on static form posts still work: those forms still post until their
   pages are replaced).
-- [ ] Step 5: commit "Server: every page live, sign-in static, a lost connection said and blocking".
+- [x] Step 5: commit "Server: every page live, sign-in static, a lost connection said and blocking".
 
 ### Task 5: workspace ids in addresses
 
@@ -159,9 +171,9 @@ redirect to a page that does not exist yet would be a dead link.
   `WorkspaceEntry? Find(Guid id)` (a known workspace whose `WorkspaceInfo.For(entry.RootPath).Id == id`, else null);
   registered as a singleton.
 
-- [ ] Step 1: `A_known_workspace_is_found_by_its_id`, `An_unknown_id_finds_nothing`, `A_folder_not_known_is_not_found_by_its_id`.
-- [ ] Step 2: fails. - [ ] Step 3: implement. - [ ] Step 4: passes.
-- [ ] Step 5: commit "Server: a workspace named by its id in an address".
+- [x] Step 1: `A_known_workspace_is_found_by_its_id`, `An_unknown_id_finds_nothing`, `A_folder_not_known_is_not_found_by_its_id`.
+- [x] Step 2: fails. - [x] Step 3: implement. - [x] Step 4: passes.
+- [x] Step 5: commit "Server: a workspace named by its id in an address".
 
 ## Stage 2 - the Runs screen and what it needs from the server
 
@@ -179,10 +191,10 @@ redirect to a page that does not exist yet would be a dead link.
   something) and `void Add(ModelCallMetrics m)` → `Performance.Add(m)`. The window's own switch stays as it is: the
   rules are already in `RunRouting` / `ModelWorkSplit` / `ModelPerformance`; this is the dispatch, for the service.
 
-- [ ] Step 1: tests `A_routed_event_names_the_phase_s_model`, `Usage_counts_tokens_and_where_they_ran`,
+- [x] Step 1: tests `A_routed_event_names_the_phase_s_model`, `Usage_counts_tokens_and_where_they_ran`,
   `Each_artifact_produced_counts_once`, `Other_events_change_nothing` (Apply returns false).
-- [ ] Step 2: fails. - [ ] Step 3: implement. - [ ] Step 4: passes; ApplicationLayerTests pass.
-- [ ] Step 5: commit "Application: a run's panel figures, folded for any host".
+- [x] Step 2: fails. - [x] Step 3: implement. - [x] Step 4: passes; ApplicationLayerTests pass.
+- [x] Step 5: commit "Application: a run's panel figures, folded for any host".
 
 ### Task 7: the session folds the panel, knows who watches, and gets its run's model figures
 
@@ -205,11 +217,11 @@ redirect to a page that does not exist yet would be a dead link.
   `EngineExecutor.ExecuteAsync` sets it to `run.Session` first; `ServerEngine.Reload` passes
   `metrics: m => ServerRunScope.Current?.AddMetrics(m)` to `EngineComposition.Build`.
 
-- [ ] Step 1: tests `The_panel_is_folded_with_the_feed`, `Watchers_are_named_once_and_leave_when_they_unsubscribe`,
+- [x] Step 1: tests `The_panel_is_folded_with_the_feed`, `Watchers_are_named_once_and_leave_when_they_unsubscribe`,
   `Model_figures_reach_the_run_whose_flow_reported_them` (two concurrent `Task.Run` flows each with its own
   `ServerRunScope.Current`; a callback in each lands in its own session only).
-- [ ] Step 2: fails. - [ ] Step 3: implement. - [ ] Step 4: server suite passes.
-- [ ] Step 5: commit "Server: a run's panel, its watchers and its model figures in its session".
+- [x] Step 2: fails. - [x] Step 3: implement. - [x] Step 4: server suite passes.
+- [x] Step 5: commit "Server: a run's panel, its watchers and its model figures in its session".
 
 ### Task 8: a workspace's run settings from the browser
 
@@ -224,12 +236,12 @@ redirect to a page that does not exist yet would be a dead link.
   a folder the service does not know, an autonomy outside `0..AutonomyTiers.Highest`, a worker id the settings do not
   have. `IReadOnlyList<(string Id, string Name)> Workers()` - the settings' workers, for the role picker.
 
-- [ ] Step 1: tests `An_operator_saves_a_workspace_s_level_worker_and_staging_and_it_is_audited`,
+- [x] Step 1: tests `An_operator_saves_a_workspace_s_level_worker_and_staging_and_it_is_audited`,
   `A_viewer_cannot_change_a_workspace_s_settings`, `A_level_out_of_range_is_refused`,
   `Settings_of_a_folder_the_service_does_not_know_are_refused`, and that the next `EngineExecutor` request reads them
   (`saved.Defaults.Level == 3`, `saved.StageChanges`).
-- [ ] Step 2: fails. - [ ] Step 3: implement. - [ ] Step 4: passes.
-- [ ] Step 5: commit "Server: a workspace's level, worker and staging set from the browser".
+- [x] Step 2: fails. - [x] Step 3: implement. - [x] Step 4: passes.
+- [x] Step 5: commit "Server: a workspace's level, worker and staging set from the browser".
 
 ### Task 9: run in background, and deleting the runs a filter shows
 
@@ -246,12 +258,12 @@ redirect to a page that does not exist yet would be a dead link.
   : Task<(string Said, int Deleted)>` - the rows `RunHousekeeping` selects for that filter, deleted with
   `RunHistoryService.DeleteAsync(root, runs, ct)`, each audited "run deleted"; Operator only.
 
-- [ ] Step 1: tests `A_background_run_asks_nobody_and_parks_its_question` (the scripted executor records the handler
+- [x] Step 1: tests `A_background_run_asks_nobody_and_parks_its_question` (the scripted executor records the handler
   is a `ParkingDecisionHandler`), `A_background_run_ends_in_one_inbox_item`, `A_viewer_cannot_start_in_the_background`,
   `Delete_these_forgets_exactly_the_runs_the_filter_shows` (three runs, one older than a week; filter
   `OlderThanAWeek` deletes one), `A_viewer_cannot_delete_runs`.
-- [ ] Step 2: fails. - [ ] Step 3: implement. - [ ] Step 4: passes.
-- [ ] Step 5: commit "Server: runs in the background, and the runs a filter shows deleted at once".
+- [x] Step 2: fails. - [x] Step 3: implement. - [x] Step 4: passes.
+- [x] Step 5: commit "Server: runs in the background, and the runs a filter shows deleted at once".
 
 ### Task 10: the workspace and runs column
 
@@ -271,14 +283,14 @@ redirect to a page that does not exist yet would be a dead link.
 - Produces: `WorkspaceColumnState` - `Selected` (WorkspaceEntry?), `Filter` (RunFilter), `Rows` (the history rows
   shown), `DeleteLabel` = `"Delete these {n}"`, `Running` (`IRunControl.List` not ended), `Unfinished` (checkpoints).
 
-- [ ] Step 1: bUnit tests `The_switcher_lists_every_known_workspace_with_its_edge` (current `edge-current`, missing
+- [x] Step 1: bUnit tests `The_switcher_lists_every_known_workspace_with_its_edge` (current `edge-current`, missing
   `edge-missing`), `A_viewer_is_offered_no_add_folder_delete_or_carry_on`, `The_delete_button_says_how_many_it_takes`,
   `Choosing_a_history_row_opens_it_without_stopping_the_live_run`, `A_missing_workspace_is_red_and_its_run_is_refused`.
-- [ ] Step 2: fails. - [ ] Step 3: implement as `MainWindow.axaml` lines 153-457 (WORKSPACE card and popup, RUNS +
+- [x] Step 2: fails. - [x] Step 3: implement as `MainWindow.axaml` lines 153-457 (WORKSPACE card and popup, RUNS +
   Refresh, RUNNING with Open, filter + Delete, UNFINISHED with carry on / forget icons, history rows with status edge
   and the "×N" attempts pill).
-- [ ] Step 4: passes; e2e "a folder under the roots is added as a workspace by browsing…" rewritten for the dialog.
-- [ ] Step 5: commit "Server: the Runs screen's workspace and runs column".
+- [x] Step 4: passes; e2e "a folder under the roots is added as a workspace by browsing…" rewritten for the dialog.
+- [x] Step 5: commit "Server: the Runs screen's workspace and runs column".
 
 ### Task 11: the command bar
 
@@ -296,16 +308,16 @@ redirect to a page that does not exist yet would be a dead link.
   `ServerHistory.SaveSettings`, the refusal shown under the bar. `commandbar.js` `attach(textarea, dotNetRef)`:
   Enter without Ctrl/Shift calls `Run`, Ctrl+Enter inserts a newline.
 
-- [ ] Step 1: `Prefix_puts_the_verb_at_the_front` (`""`→`"Fix "`, `"the build"`→`"Fix the build"`); bUnit
+- [x] Step 1: `Prefix_puts_the_verb_at_the_front` (`""`→`"Fix "`, `"the build"`→`"Fix the build"`); bUnit
   `A_viewer_sees_the_settings_read_only_and_no_run_buttons`, `Moving_the_slider_saves_the_workspace_s_level`,
   `Run_in_background_starts_and_stays`, `A_refusal_is_said_under_the_bar`, the label colour class `tier-{n}`,
   `An_account_disabled_while_the_page_is_open_is_told_its_session_ended` (disable `alice` in the `UserStore`, press
   Run: "Your session has ended. Sign in again." under the bar, no run started).
-- [ ] Step 2: fails. - [ ] Step 3: implement as `MainWindow.axaml` lines 459-545 (chips, hint "Ctrl+K to focus ·
+- [x] Step 2: fails. - [x] Step 3: implement as `MainWindow.axaml` lines 459-545 (chips, hint "Ctrl+K to focus ·
   Enter to run · Ctrl+Enter = newline", input 88 px, Run 86 / Stop 64 / Run in background, divider, worker 118 +
   Stage changes, label on the slider).
-- [ ] Step 4: passes; the window's suites pass.
-- [ ] Step 5: commit "Server: the command bar, its verbs shared with the window".
+- [x] Step 4: passes; the window's suites pass.
+- [x] Step 5: commit "Server: the command bar, its verbs shared with the window".
 
 ### Task 12: the live run - header, tabs, feed, status column
 
@@ -328,15 +340,15 @@ redirect to a page that does not exist yet would be a dead link.
   folded to "{model} · {tok/s}", USER DECISION REQUIRED with `Request.FullText`, buttons per choice (Operator), the
   remember choices only for the owner, "waits {m} min more, then goes to the Inbox".
 
-- [ ] Step 1: bUnit `The_feed_shows_each_step_with_its_tone`, `A_viewer_sees_the_question_and_no_answer_buttons`,
+- [x] Step 1: bUnit `The_feed_shows_each_step_with_its_tone`, `A_viewer_sees_the_question_and_no_answer_buttons`,
   `Only_the_owner_is_offered_to_allow_for_longer`, `A_question_answered_elsewhere_leaves_the_card`,
   `The_tiles_follow_the_panel`, `Other_watchers_are_named`, `A_slow_redraw_does_not_hold_up_the_run` (redraw blocked,
   2,000 events emitted, the session ends; the follower re-reads once released).
-- [ ] Step 2: fails. - [ ] Step 3: implement as `MainWindow.axaml` 546-920 and 1244-1300; artifacts: written files
+- [x] Step 2: fails. - [x] Step 3: implement as `MainWindow.axaml` 546-920 and 1244-1300; artifacts: written files
   (Review → `/file` viewer dialog) and, once ended, the run's kept proposals (Diff / Apply / Reject through
   `ServerStaging.ActAsync`).
-- [ ] Step 4: passes; e2e run scenarios 1-6 rewritten for the new markup and passing.
-- [ ] Step 5: commit "Server: the live run as the window shows it".
+- [x] Step 4: passes; e2e run scenarios 1-6 rewritten for the new markup and passing.
+- [x] Step 5: commit "Server: the live run as the window shows it".
 
 ### Task 13: a past run on the Runs screen
 
@@ -353,11 +365,11 @@ redirect to a page that does not exist yet would be a dead link.
   (DECISIONS above TIMELINE) / Artifacts (Review, Delete after the question); THIS RUN tiles, ROUTING, WHERE IT RAN,
   RAN AS, MODEL PERFORMANCE.
 
-- [ ] Step 1: bUnit `Retry_starts_the_same_run_and_opens_it`, `Deleting_a_file_asks_first_in_the_window_s_words`,
+- [x] Step 1: bUnit `Retry_starts_the_same_run_and_opens_it`, `Deleting_a_file_asks_first_in_the_window_s_words`,
   `A_viewer_is_offered_neither_retry_nor_delete`, `An_old_past_run_address_lands_on_the_new_one` (server test).
-- [ ] Step 2: fails. - [ ] Step 3: implement as `MainWindow.axaml` 923-1243.
-- [ ] Step 4: passes; e2e "a past run is tried again…" rewritten and passing.
-- [ ] Step 5: commit "Server: a past run on the Runs screen".
+- [x] Step 2: fails. - [x] Step 3: implement as `MainWindow.axaml` 923-1243.
+- [x] Step 4: passes; e2e "a past run is tried again…" rewritten and passing.
+- [x] Step 5: commit "Server: a past run on the Runs screen".
 
 ## Stage 3 - the other windows
 
@@ -370,10 +382,10 @@ redirect to a page that does not exist yet would be a dead link.
 (a new `ServerInbox.MarkAllReadAsync(user, ct)`, Operator); layout as `InboxWindow.axaml` (list 360 with Unread only,
 Mark all read, Refresh; WAITING FOR YOUR DECISION, RUN, ARTIFACTS, DECISIONS).
 
-- [ ] Step 1: `An_operator_answers_and_the_run_carries_on`, `A_viewer_reads_and_cannot_answer`, `Unread_only_hides_read_items`,
+- [x] Step 1: `An_operator_answers_and_the_run_carries_on`, `A_viewer_reads_and_cannot_answer`, `Unread_only_hides_read_items`,
   `Mark_all_read_marks_every_workspace_s_items` (server test for the new method).
-- [ ] Steps 2-4: fails / implement / passes, e2e inbox scenario passes.
-- [ ] Step 5: commit "Server: the Inbox as the window's".
+- [x] Steps 2-4: fails / implement / passes, e2e inbox scenario passes.
+- [x] Step 5: commit "Server: the Inbox as the window's".
 
 ### Task 15: Proposals
 
@@ -382,10 +394,10 @@ Mark all read, Refresh; WAITING FOR YOUR DECISION, RUN, ARTIFACTS, DECISIONS).
 
 **Interfaces:** consumes `ServerStaging.List / Open / ActAsync`, `DiffView`, `WorkspaceIds`.
 
-- [ ] Step 1: `An_operator_applies_one_proposal_and_it_is_written`, `A_set_still_being_written_offers_nothing_to_do`,
+- [x] Step 1: `An_operator_applies_one_proposal_and_it_is_written`, `A_set_still_being_written_offers_nothing_to_do`,
   `A_viewer_reads_the_diff_and_is_offered_nothing`.
-- [ ] Steps 2-4, e2e "a viewer reads a staged run's proposal, and an operator applies it" passes.
-- [ ] Step 5: commit "Server: proposed changes in the shell".
+- [x] Steps 2-4, e2e "a viewer reads a staged run's proposal, and an operator applies it" passes.
+- [x] Step 5: commit "Server: proposed changes in the shell".
 
 ### Task 16: Templates and the template editor
 
@@ -401,9 +413,9 @@ Mark all read, Refresh; WAITING FOR YOUR DECISION, RUN, ARTIFACTS, DECISIONS).
 `TemplateEditWindow.axaml`; the library as `TemplatesWindow.axaml` (list 300, "What it will be asked to do", Run →
 `IRunControl.Again` with the template resolved, as the window runs one).
 
-- [ ] Step 1: `The_form_saves_what_the_json_tab_shows`, `A_template_that_does_not_validate_is_not_saved_and_says_why`,
+- [x] Step 1: `The_form_saves_what_the_json_tab_shows`, `A_template_that_does_not_validate_is_not_saved_and_says_why`,
   `A_viewer_reads_templates_and_is_offered_no_edit_or_run`, the window's TemplateEdit tests pass from their new place.
-- [ ] Steps 2-4. - [ ] Step 5: commit "Server: templates and their editor, the window's form shared".
+- [x] Steps 2-4. - [x] Step 5: commit "Server: templates and their editor, the window's form shared".
 
 ### Task 17: Schedules
 
@@ -415,9 +427,9 @@ RepeatableAsync`; layout as `SchedulesWindow.axaml` (list 320 with New / Edit / 
 Time, Day, Date, Time zone, What it may do; "What this will do" from the form resolved by `ScheduleDrafts`; "What came
 of it" = the schedule's Inbox items by `ScheduleId`).
 
-- [ ] Step 1: `A_new_schedule_says_when_it_runs_next_before_it_is_saved`, `What_came_of_it_lists_the_schedule_s_outcomes`,
+- [x] Step 1: `A_new_schedule_says_when_it_runs_next_before_it_is_saved`, `What_came_of_it_lists_the_schedule_s_outcomes`,
   `A_viewer_is_offered_no_new_edit_or_delete`.
-- [ ] Steps 2-4, e2e "an operator writes a template and schedules it…" passes. - [ ] Step 5: commit.
+- [x] Steps 2-4, e2e "an operator writes a template and schedules it…" passes. - [x] Step 5: commit.
 
 ### Task 18: Log, analysis, Timeline, Environment
 
@@ -431,8 +443,8 @@ audited). Test `Components/LogTests.cs`, `ServerLogsTests` (capture).
 the selected workspace; Environment: the probe the window uses (`ShowEnvironmentAsync`: `info.Summary()` +
 `snapshot.Describe()`) for the selected workspace.
 
-- [ ] Step 1: `Capture_raw_wire_is_an_admin_s`, `Clear_empties_this_view_only`, `The_timeline_is_the_workspace_s_project_memory`.
-- [ ] Steps 2-4, e2e log scenario passes. - [ ] Step 5: commit.
+- [x] Step 1: `Capture_raw_wire_is_an_admin_s`, `Clear_empties_this_view_only`, `The_timeline_is_the_workspace_s_project_memory`.
+- [x] Steps 2-4, e2e log scenario passes. - [x] Step 5: commit.
 
 ### Task 19: Settings
 
@@ -443,9 +455,9 @@ the selected workspace; Environment: the probe the window uses (`ShowEnvironment
 `SettingsWindow.axaml`: General, Writable folders (the service's `WorkspaceRoots`, read-only), SMTP, Web, About; AI -
 General, Providers, Team, Phases, MCP, Templates. No Account, no Remote access. Save / Cancel at the bottom.
 
-- [ ] Step 1: `Only_an_admin_opens_settings`, `Writable_folders_are_the_service_s_roots_read_only`,
+- [x] Step 1: `Only_an_admin_opens_settings`, `Writable_folders_are_the_service_s_roots_read_only`,
   `There_is_no_account_or_remote_access_section`, `A_key_is_never_sent_back_to_the_page`.
-- [ ] Steps 2-4, e2e settings + MCP scenarios pass. - [ ] Step 5: commit.
+- [x] Steps 2-4, e2e settings + MCP scenarios pass. - [x] Step 5: commit.
 
 ### Task 20: Accounts, Audit, Sign in
 
@@ -453,9 +465,9 @@ General, Providers, Team, Phases, MCP, Templates. No Account, no Remote access. 
 `SignIn.razor`; delete `UsersPage.razor`, `AuditPage.razor`, `/admin/users/act`; old `/admin/users`, `/admin/audit`,
 `/admin/settings` redirect. Test `Components/AccountsTests.cs`.
 
-- [ ] Step 1: `An_admin_adds_an_account_and_it_signs_in`, `The_last_admin_cannot_be_disabled_from_the_page`,
+- [x] Step 1: `An_admin_adds_an_account_and_it_signs_in`, `The_last_admin_cannot_be_disabled_from_the_page`,
   `An_operator_is_refused_the_accounts_page`.
-- [ ] Steps 2-4, e2e account scenarios pass. - [ ] Step 5: commit.
+- [x] Steps 2-4, e2e account scenarios pass. - [x] Step 5: commit.
 
 ## Stage 4 - narrow screens and the whole browser set
 
@@ -464,16 +476,16 @@ General, Providers, Team, Phases, MCP, Templates. No Account, no Remote access. 
 **Files:** `theme.css` (below 900 px: the rail a bottom bar, the workspace column a drawer opened from the top bar,
 the status column under the feed); `Shell/TopBar.razor` (drawer button). Test: e2e at 390×844.
 
-- [ ] Step 1: e2e `on a phone the runs screen stacks and a run can be started and answered`.
-- [ ] Steps 2-4. - [ ] Step 5: commit.
+- [x] Step 1: e2e `on a phone the runs screen stacks and a run can be started and answered`.
+- [x] Steps 2-4. - [x] Step 5: commit.
 
 ### Task 22: the browser set complete, the old pages gone
 
 **Files:** `tests/server-e2e/server.spec.mjs`; delete any page and endpoint the earlier tasks left behind; `ServerApp.cs`
 (only `/signin`, `/signout`, `/health` and the redirects remain as endpoints); `Docs/README.md` server row.
 
-- [ ] Step 1: e2e adds `two people answer one question at once and the second is told it was answered`,
+- [x] Step 1: e2e adds `two people answer one question at once and the second is told it was answered`,
   `a background run reaches the inbox and is carried on from there`, `the workspace switcher adds a folder and
   switches to it`; the 15 earlier scenarios all present.
-- [ ] Step 2: `npx playwright test` - all pass; `dotnet test` for Engine, Server, App.Ui - all pass.
-- [ ] Step 3: commit "Server: the web UI as the desktop window - the browser set complete".
+- [x] Step 2: `npx playwright test` - all pass; `dotnet test` for Engine, Server, App.Ui - all pass.
+- [x] Step 3: commit "Server: the web UI as the desktop window - the browser set complete".

@@ -2,9 +2,16 @@
 
 Date: 2026-10-11 (revised the same day after review)
 
-Status: phases 0-3 done in code (2026-10-12, branch `feature/application-layer`, not merged to master - it goes in
-when the product is ready, decided 2026-10-12); phase 4 is optional and not planned. The ADR amendments below are
-made. Implements [ADR 0002](../Docs/adr/0002-server-with-web-ui.md). The review's findings are folded in below.
+Status (2026-10-15): phases 0-3 implemented, with the desktop-parity follow-up complete on
+`feature/application-layer` (PR #57 to `master`). The user confirmed that the installed service works;
+manual service acceptance is complete. Phase 4 is optional and not planned. No mandatory WEB UI feature remains.
+The ADR amendments below are made. Implements [ADR 0002](../Docs/adr/0002-server-with-web-ui.md).
+Historical status entries below describe what was known on their stated dates.
+
+Latest local validation: Server 505/505, Engine 4566/4566, Desktop UI 22/22, Playwright Chromium 36/36.
+The browser suite uses the real Kestrel pipeline with a scripted engine; installed-service acceptance is the
+user's manual confirmation, not an automated live-model/process test. Those process tests have not been added.
+Clean-checkout build and PR CI are release integration checks, separate from feature acceptance.
 
 ## Objective
 

@@ -1,7 +1,11 @@
 # The service's web UI, as the desktop window - design
 
-Date: 2026-10-12. Status: **draft for review**. Branch: `feature/application-layer` (not merged to master until
-the product is ready).
+Date: 2026-10-12. Status (2026-10-15): **implemented and accepted** on `feature/application-layer`, PR #57 to
+`master`. All 22 implementation tasks and 36 Chromium browser scenarios are complete; the user confirmed the
+installed service works. Remaining release work is clean-checkout/CI verification and merging the PR.
+
+The implementation plan records the small departures from this initial design: dialog editors, no historical
+MODEL PERFORMANCE without recorded timings, and Source only when there is rendered text to switch from.
 
 Builds on [ADR 0002](../Docs/adr/0002-server-with-web-ui.md) and the
 [server plan](server-web-ui-implementation-plan.md), whose phases 0-3 are done. The pages those phases built work

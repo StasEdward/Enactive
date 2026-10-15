@@ -5,6 +5,10 @@ not yet in master. Proposed 2026-10-11 and amended the same day after review (tr
 staging, several people at once, security at the action, plan). The implementation plan is
 [plans/server-web-ui-implementation-plan.md](../../plans/server-web-ui-implementation-plan.md).
 
+Acceptance update (2026-10-15): phases 0-3 and the desktop-parity WEB UI are implemented (PR #57).
+The user confirmed that the installed service works. Local checks passed: Server 505, Engine 4566,
+Desktop UI 22 and Playwright Chromium 36 tests. Desktop-as-client remains optional phase 4.
+
 Enactive is used from one machine: the desktop window is the only host with the whole interface. Using it
 from another machine on the same network - with no access from the internet - is the ask. Today that leaves
 two partial answers, neither of which fits:
