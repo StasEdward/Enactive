@@ -1739,6 +1739,12 @@ public sealed partial class Orchestrator : IOrchestrator
                 // Only a step of the plan as planned: an item's step has no position of its own in the planner's list.
                 Criteria = step.ExpandedFrom is null
                     ? CriteriaFor(plan).Where(c => c.Step == stepNumber - 1 || c.Typed?.PathFromStep == stepNumber - 1).ToArray()
+                    : [],
+                // The lists it consumes, counted at its gate (Plan Phase 1.3). Not for a step done for each item, nor
+                // for the join its forEach step becomes: their coverage is the item steps', decided at the run's end
+                // for now (the join's own gate is Task 6b).
+                Coverage = step.ExpandedFrom is null && step.ForEach is null
+                    ? StepCoverageGate.For(CriteriaFor(plan), stepNumber - 1)
                     : []
             };
 
@@ -4943,6 +4949,19 @@ public sealed partial class Orchestrator : IOrchestrator
             + "above needs something you have not looked at yet. A worker-message target means correct your reply, not a file. The original request and its O-ID map are in this conversation, not in the first lines of source files. Files you wrote are still there as you left "
             + "them: change the passages the points are about with edit_file, rather than writing a whole "
             + "file again."));
+
+    /// <summary>
+    /// What a step is told when the ENGINE's coverage check sent it back (StepCoverageGate), not a reviewer: said as the
+    /// count it is, so the step does not argue with a judgement nobody made or redo work the count did not question.
+    /// Files stay as they are between attempts, as after a review.
+    /// </summary>
+    private static void RetryAfterCoverageCheck(List<ChatMessage> convo, string advice, string what)
+        => convo.Add(ChatMessage.User(
+            $"The engine's coverage check did not pass the previous attempt of {what}. It is a count of what was done for each "
+            + "item of the list this step consumes - recorded reads, writes and calls, and a result handed on per item - and "
+            + "not a reviewer's judgement.\n" + advice + "\n"
+            + "What you already read, ran and wrote above still stands, and files you wrote are still there as you left them: "
+            + "do what the items above still need, and keep the rest."));
 
     /// <summary>
     /// Puts back what the rejected work produced, and takes it out of the run's artifact list so the

@@ -185,38 +185,75 @@ public static class EvidenceCoverage
         CriterionResult Result(CriterionOutcome outcome, string? detail)
             => new(criterion.Name, criterion.Command, criterion.Required, outcome, null, detail, criterion.Origin, criterion.AlreadyPassing);
 
+        if (Account(typed, outputs) is not { } items)
+            return Result(CriterionOutcome.Failed, $"step {typed.SourceStep + 1} handed on no list '{typed.SourceField}', so there is nothing to show covered.");
+        if (items.Count == 0)
+            return Result(CriterionOutcome.Passed, $"step {typed.SourceStep + 1} named no items.");
+
+        var uncovered = items.Where(i => !i.Covered).Select(i => $"{i.Item} ({i.Why})").ToList();
+        var covered = items.Count - uncovered.Count;
+        return uncovered.Count == 0
+            ? Result(CriterionOutcome.Passed, $"covered {covered} of {items.Count}: {AccountedFor(typed.Evidence ?? EvidenceKind.Call)}.")
+            : Result(CriterionOutcome.Failed, $"covered {covered} of {items.Count}; not covered: "
+                + string.Join("; ", uncovered.Take(12)) + (uncovered.Count > 12 ? $"; and {uncovered.Count - 12} more" : "") + ".");
+    }
+
+    /// <summary>
+    /// What a pass says, by the kind of evidence it stood on. Only a read says the files were read: "covered 12 of 12"
+    /// alone read as if every page had been read, when under "mentioned" it says only that each was named in a call
+    /// (Plan Phase 1.2: the report distinguishes every item accounted for from every file read).
+    /// </summary>
+    private static string AccountedFor(EvidenceKind kind) => kind switch
+    {
+        EvidenceKind.FileRead => "every file read whole",
+        EvidenceKind.FileWrite => "every item accounted for, each file changed by the step",
+        EvidenceKind.Command => "every item accounted for, each named by a command that ran",
+        _ => "every item accounted for, each mentioned - named in a call that succeeded, which shows neither a read nor the work"
+    };
+
+    /// <summary>One item of a consumed list: whether a result was handed on for it, and what backed it.</summary>
+    /// <param name="Required">The evidence the criterion asks for.</param>
+    /// <param name="Found">The complete evidence the step had for it when the result was handed on.</param>
+    /// <param name="Result">What the step handed on for it, as text - null when nothing was.</param>
+    internal sealed record ItemAccount(string Item, EvidenceKind Required, bool HasResult, IReadOnlyList<EvidenceKind> Found,
+        string? Gap, string? Result)
+    {
+        public bool Covered => HasResult && Found.Contains(Required);
+
+        /// <summary>Why it is not covered, as the criterion's detail says it.</summary>
+        public string Why => !HasResult ? "no result"
+            : Required == EvidenceKind.FileRead && Gap is { } gap ? gap
+            : $"no {NameOf(Required)} evidence";
+    }
+
+    /// <summary>
+    /// Item by item, what a covers_all criterion found in the outputs: the one account <see cref="Evaluate"/> and the
+    /// step's gate both decide from, so they cannot disagree. Null when the source handed on no list.
+    /// </summary>
+    internal static IReadOnlyList<ItemAccount>? Account(TypedCriterion typed, IEnumerable<StepOutput> outputs)
+    {
         var all = outputs.ToArray();
         var source = all.FirstOrDefault(o => o.StepNo == typed.SourceStep + 1);
         if (source?.Value(typed.SourceField!) is not { ValueKind: JsonValueKind.Array } list)
-            return Result(CriterionOutcome.Failed, $"step {typed.SourceStep + 1} handed on no list '{typed.SourceField}', so there is nothing to show covered.");
+            return null;
         var items = list.EnumerateArray().Where(i => i.ValueKind == JsonValueKind.String).Select(i => i.GetString()!)
             .DistinctBy(Normal, StringComparer.OrdinalIgnoreCase).ToArray();
-        if (items.Length == 0)
-            return Result(CriterionOutcome.Passed, $"step {typed.SourceStep + 1} named no items.");
 
         var kind = typed.Evidence ?? EvidenceKind.Call;
         var holder = all.FirstOrDefault(o => o.StepNo == typed.ResultsStep + 1);
         var evidence = holder?.Items?.Where(i => i.Field == typed.ResultsField || i.Field == OwnItems).ToArray() ?? [];
         // A results object names its items; a step done for each item has handed on for exactly the items
         // whose steps recorded evidence at the hand-over - the join carries only the steps that finished.
-        var results = holder?.Value(typed.ResultsField!) is { ValueKind: JsonValueKind.Object } map
-            ? map.EnumerateObject().Select(p => p.Name).ToArray()
-            : evidence.Where(e => e.Field == OwnItems).Select(e => e.Item).ToArray();
+        var map = holder?.Value(typed.ResultsField!) is { ValueKind: JsonValueKind.Object } m ? m : (JsonElement?)null;
+        var results = map is { } named
+            ? named.EnumerateObject().Select(p => (p.Name, Text: (string?)(p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() : p.Value.GetRawText()))).ToArray()
+            : evidence.Where(e => e.Field == OwnItems).Select(e => (Name: e.Item, Text: (string?)null)).ToArray();
 
-        var uncovered = new List<string>();
-        foreach (var item in items)
+        return items.Select(item =>
         {
-            if (!results.Any(r => Same(r, item))) { uncovered.Add($"{item} (no result)"); continue; }
+            var result = results.FirstOrDefault(r => Same(r.Name, item));
             var backed = evidence.FirstOrDefault(e => Same(e.Item, item));
-            if (backed is null || !backed.Complete.Contains(kind))
-                uncovered.Add(kind == EvidenceKind.FileRead && backed?.Gap is { } gap
-                    ? $"{item} ({gap})" : $"{item} (no {NameOf(kind)} evidence)");
-        }
-
-        var covered = items.Length - uncovered.Count;
-        return uncovered.Count == 0
-            ? Result(CriterionOutcome.Passed, $"covered {covered} of {items.Length}.")
-            : Result(CriterionOutcome.Failed, $"covered {covered} of {items.Length}; not covered: "
-                + string.Join("; ", uncovered.Take(12)) + (uncovered.Count > 12 ? $"; and {uncovered.Count - 12} more" : "") + ".");
+            return new ItemAccount(item, kind, result.Name is not null, backed?.Complete ?? [], backed?.Gap, result.Text);
+        }).ToArray();
     }
 }

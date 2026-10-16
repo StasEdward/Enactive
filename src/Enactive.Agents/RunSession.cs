@@ -117,4 +117,10 @@ internal sealed record StepAttemptState(
 
     /// <summary>The criteria the plan attached to this step, checked when it ends (file criteria only).</summary>
     public IReadOnlyList<Enactive.Core.Templates.SuccessCriterionDefinition> Criteria { get; init; } = [];
+
+    /// <summary>
+    /// The coverage of the lists this step consumes, decided at its gate before any review (StepCoverageGate). Empty for
+    /// a step that consumes none, and for a step done for each item or its join, whose coverage stays at the run's end.
+    /// </summary>
+    public IReadOnlyList<Enactive.Core.Templates.SuccessCriterionDefinition> Coverage { get; init; } = [];
 }

@@ -37,7 +37,9 @@ public sealed partial class Orchestrator
     /// <summary>The engine's record, for the review, of a step's own report that it cannot go on.</summary>
     internal const string SaidBlockedTool = "engine_step_said_blocked";
 
-    private sealed record AttemptReview(ReviewResult Review);
+    /// <param name="ByGate">The verdict is the engine's coverage check's (StepCoverageGate), not a reviewer's: it is
+    /// retried on the gate's own budget.</param>
+    private sealed record AttemptReview(ReviewResult Review, bool ByGate = false);
 
     /// <summary>
     /// Shared review/proof phase of an attempt. Callers own retries, rollback, checkpoints and

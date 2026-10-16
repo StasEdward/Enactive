@@ -53,6 +53,15 @@ public sealed record EngineOptions
     public int ReviewRetries { get; init; } = 1;
 
     /// <summary>
+    /// How many times a step whose coverage the engine found short at its gate (StepCoverageGate) may be redone before it
+    /// is rejected. Null: as many as <see cref="ReviewRetries"/> when the step is reviewed, and 1 when it is not - the gate
+    /// runs with review off too, and a step told which items it left uncovered deserves one go at them either way. Counted
+    /// apart from the review's: a gate failure does not use up a review attempt, nor a review failure a gate attempt.
+    /// Clamped to 0..5 by the orchestrator.
+    /// </summary>
+    public int? GateRetries { get; init; }
+
+    /// <summary>
     /// How many tools of its catalog one step may load. The tools of connected MCP servers are not sent with every
     /// request: they are named in a catalog and loaded by name when the work needs them, and each one loaded is a
     /// definition sent with every later turn of that step. Clamped to 1..32 by the orchestrator.

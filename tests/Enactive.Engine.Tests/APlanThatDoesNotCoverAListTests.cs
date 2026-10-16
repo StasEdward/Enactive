@@ -251,8 +251,10 @@ public sealed class APlanThatDoesNotCoverAListTests
 
         var events = await fx.RunAsync(fx.Build(worker), "summarise the wiki");
 
-        Assert.Contains(events, e => e.IsCheck() && e.Summary.StartsWith("FAIL", StringComparison.Ordinal)
-                                     && e.Summary.Contains("covered 2 of 12", StringComparison.Ordinal));
+        // Decided at the consuming step's own gate (Plan Phase 1.3): the step is rejected with the count.
+        var step = events.Last(e => e.Kind == EventKind.StepCompleted);
+        Assert.Equal(StepOutcomeKind.ReviewRejected, step.StepOutcome());
+        Assert.StartsWith("covered 2 of 12", step.OutcomeReason(), StringComparison.Ordinal);
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
     }
 

@@ -92,6 +92,43 @@ public sealed class EvidenceCoversAllTests
         Assert.Equal(CriterionOutcome.Passed, result.Outcome);
     }
 
+    /// <summary>
+    /// A pass says what it stood on: "every file read whole" only for reads; under "mentioned", that every item is
+    /// accounted for - and that a mention shows neither a read nor the work (Plan Phase 1.2).
+    /// </summary>
+    [Fact]
+    public void A_pass_says_every_file_read_only_when_reads_back_it()
+    {
+        var pages = Pages(2);
+        Assert.Equal("covered 2 of 2: every file read whole.", Decide(pages, pages, Read).Detail);
+
+        var mentioned = EvidenceCoverage.Evaluate(Criterion() with { Typed = Coverage with { Evidence = EvidenceKind.Call } },
+        [
+            Output(1, new { pages }),
+            Output(2, new { notes = pages.ToDictionary(p => p, _ => "ok") }, pages.Select(p => new ItemEvidence("notes", p, [EvidenceKind.Call], null)).ToArray())
+        ]);
+        Assert.Equal(CriterionOutcome.Passed, mentioned.Outcome);
+        Assert.StartsWith("covered 2 of 2: every item accounted for", mentioned.Detail, StringComparison.Ordinal);
+        Assert.Contains("mentioned", mentioned.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("read whole", mentioned.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>A mention is not a read and not a write: an item only named in a call covers neither.</summary>
+    [Theory]
+    [InlineData(EvidenceKind.FileRead, "no file_read evidence")]
+    [InlineData(EvidenceKind.FileWrite, "no file_write evidence")]
+    public void A_mention_satisfies_neither_a_read_nor_a_write(EvidenceKind required, string why)
+    {
+        var pages = Pages(1);
+        var result = EvidenceCoverage.Evaluate(Criterion() with { Typed = Coverage with { Evidence = required } },
+        [
+            Output(1, new { pages }),
+            Output(2, new { notes = pages.ToDictionary(p => p, _ => "ok") }, [new ItemEvidence("notes", pages[0], [EvidenceKind.Call], null)])
+        ]);
+        Assert.Equal(CriterionOutcome.Failed, result.Outcome);
+        Assert.Contains($"{pages[0]} ({why})", result.Detail, StringComparison.Ordinal);
+    }
+
     /// <summary>What backed each item is kept with the output, so a resumed run decides coverage the same way.</summary>
     [Fact]
     public void What_backed_each_item_survives_a_checkpoint()
@@ -285,9 +322,10 @@ public sealed class EvidenceCoversAllTests
         var events = await fx.RunAsync(fx.Build(worker), "review every wiki page");
 
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
-        Assert.Contains(events, e => e.IsCheck() && e.Summary.StartsWith("FAIL", StringComparison.Ordinal)
-                                     && e.Summary.Contains("covered 1 of 2", StringComparison.Ordinal)
-                                     && e.Summary.Contains("wiki/b.md (never read)", StringComparison.Ordinal));
+        // Decided at the step's own gate (Plan Phase 1.3), and not first at the run's end: the step is rejected on it.
+        var step = events.Last(e => e.Kind == EventKind.StepCompleted);
+        Assert.Equal(StepOutcomeKind.ReviewRejected, step.StepOutcome());
+        Assert.Equal("covered 1 of 2; not covered: wiki/b.md (never read).", step.OutcomeReason());
         Assert.Contains(events, e => e.Kind == EventKind.ToolResult
                                      && e.Summary.Contains("not counted as covered: wiki/b.md (never read)", StringComparison.Ordinal));
     }

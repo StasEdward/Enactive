@@ -26,6 +26,26 @@ public sealed partial class Orchestrator
             step.RestartFrom, changes, before, attemptOrigin, step.Output, step.OutputSlot, step.Boundary, step.WithholdUnchecked,
             step.Criteria, step.SubmitTool, models.ReviewOn, step.LoadedTools, session.ChangeLimits, title))
             await publish(ev);
+
+        // The lists this step consumes, counted by the engine before any review - and with review off, before the step is
+        // taken as done (Plan Phase 1.3). Short, it goes back to the step on the gate's own budget and the reviewer is not
+        // asked: a reviewer shown two good notes passes them, and the ten pages with nothing behind them are a count the
+        // engine can make itself. Only a step that ended as done is counted; any other end is already not done.
+        if (result.Succeeded && stepNumber is { } gatedNo && step.Coverage.Count > 0
+            && StepCoverageGate.Check(step.Coverage, session.Outputs.Values, step.OutputSlot.Build(gatedNo, title, step.Output), gatedNo) is { } coverage)
+        {
+            if (!coverage.Passed)
+            {
+                // The reviewer's emission (ReviewAttemptAsync) is bypassed, so the gate says its own verdict - as the
+                // engine's, so nobody reads a reviewer's judgement into a count.
+                await publish(scope.Ev(EventKind.ReviewFailed,
+                    $"[{gatedNo}] FAIL (the engine's coverage check - no reviewer was asked): {coverage.Notes}", gatedNo));
+                return new(new ReviewResult(new ReviewVerdict.Fail(coverage.Notes, coverage.RepairAdvice, [])), ByGate: true);
+            }
+            await publish(scope.Ev(EventKind.ContextAssembled, $"[{gatedNo}] The engine's coverage check passed: "
+                + string.Join("; ", coverage.Checks.Select(c => $"{c.Typed.SourceField} of step {c.Typed.SourceStep + 1}, {c.Line()}")), gatedNo));
+        }
+
         // The step's own word that it cannot go on, with nothing the engine found behind it, is reviewed as a finished step
         // is (SaidBlockedOnly): whether its own part is done is the review's to say, not the report's.
         if (!models.ReviewOn || !(result.Succeeded || SaidBlockedOnly(result))) return null;
@@ -73,9 +93,17 @@ public sealed partial class Orchestrator
     {
         var scope = session.Scope;
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
-        var attempts = models.ReviewOn ? _reviewRetries + 1 : 1;
+        // Two budgets, counted apart: the review's, and the coverage gate's (StepCoverageGate). A gate failure does not
+        // use up a review attempt, nor a review failure a gate attempt - shared, a step sent back once for an item it
+        // had not covered reached its review with no retry left, and the reviewer's first point ended it. Every
+        // attempt fails one of them or ends the step, so the loop ends: at most reviews + gates - 1 attempts, plus the
+        // one-shot fallback, and the run's own budget stops a tool loop before either is spent.
+        var reviews = models.ReviewOn ? _reviewRetries + 1 : 1;
+        var gates = (_options.GateRetries is { } gateRetries ? Math.Clamp(gateRetries, 0, 5) : models.ReviewOn ? _reviewRetries : 1) + 1;
+        var reviewFailures = 0;
+        var gateFailures = 0;
         var usedFallback = false;
-        for (var attempt = 1; attempt <= attempts; attempt++)
+        for (var attempt = 1; ; attempt++)
         {
             // Quick does not dispatch DAG steps. Retain its existing pre-attempt budget boundary.
             if (stepNumber is null && scope.Budget.Exhausted is { } spent)
@@ -109,6 +137,20 @@ public sealed partial class Orchestrator
 
             if (assessed is null) return;
             var verdict = assessed.Review.Verdict;
+            // Short of the coverage it owes: tried again with the items and what each needs, on the gate's budget, and
+            // rejected with the count once that is spent. Nothing is kept back from the revert - no reviewer found any
+            // file right.
+            if (assessed.ByGate && verdict is ReviewVerdict.Fail shortOf)
+            {
+                if (++gateFailures < gates)
+                {
+                    RetryAfterCoverageCheck(step.Messages, shortOf.RepairAdvice, stepNumber is null ? "the work" : "this step");
+                    continue;
+                }
+                result.Set(StepOutcomeKind.ReviewRejected, shortOf.Notes);
+                result.Keep = [];
+                return;
+            }
             // What is left cannot be reached within the request: said, and not tried again - a retry could only go beyond
             // the request (ReviewVerdict.Unreachable). The step's work stays as it is.
             if (verdict is ReviewVerdict.Unreachable unreachable)
@@ -135,7 +177,7 @@ public sealed partial class Orchestrator
                     return;
                 await publish(scope.Ev(EventKind.ErrorObserved, prefix + "The step said it cannot go on, but nothing stops it and "
                     + "the review found its part not done: it is an attempt like any other - " + notDone.Notes, stepNumber));
-                if (attempt < attempts)
+                if (++reviewFailures < reviews)
                 {
                     RetryAfterReview(step.Messages, notDone.RepairAdvice + " " + NotABlock, stepNumber is null ? "the work" : "this step");
                     continue;
@@ -153,13 +195,14 @@ public sealed partial class Orchestrator
                 return;
             }
             if (verdict is not ReviewVerdict.Fail fail) return;   // a pass: the step stands
-            if (attempt < attempts)
+            if (++reviewFailures < reviews)
             {
                 RetryAfterReview(step.Messages, fail.RepairAdvice, stepNumber is null ? "the work" : "this step");
                 continue;
             }
             result.Set(StepOutcomeKind.ReviewRejected, "review not passed: " + fail.Notes);
             result.Keep = fail.Keep;
+            return;
         }
     }
 
