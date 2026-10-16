@@ -123,6 +123,11 @@ public enum ToolCallOrigin
 /// One tool call, as it actually happened.
 /// </summary>
 /// <param name="Arguments">Compacted for reading — this is evidence, not a replay log.</param>
+/// <param name="Named">
+/// The short strings the call's FULL arguments named, taken before they were compacted - what coverage reads a mention
+/// from. <see cref="Arguments"/> is cut at 120 characters, which leaves JSON that does not parse: a write_file call named
+/// nothing, and a call listing twelve paths named none of them. Null for a call recorded without it (older records).
+/// </param>
 public sealed record ExecutedAction(
     DateTimeOffset At,
     int? Step,
@@ -134,7 +139,8 @@ public sealed record ExecutedAction(
     IReadOnlyList<string>? ChangedPaths = null,
     int? ExitCode = null,
     bool FileDeletion = false,
-    ToolCallOrigin Origin = ToolCallOrigin.Native);
+    ToolCallOrigin Origin = ToolCallOrigin.Native,
+    IReadOnlyList<string>? Named = null);
 
 /// <summary>
 /// What a step actually did, written down when it did it.
@@ -209,12 +215,12 @@ public sealed class ExecutionJournal
     public void Record(int? step, string tool, string arguments, ActionOutcome outcome, string? output,
         WorkspaceEffect workspaceEffect = WorkspaceEffect.Unknown, IReadOnlyList<string>? changedPaths = null,
         int? exitCode = null, bool fileDeletion = false,
-        ToolCallOrigin origin = ToolCallOrigin.Native)
+        ToolCallOrigin origin = ToolCallOrigin.Native, IReadOnlyList<string>? named = null)
     {
         lock (_gate)
             _actions.Add(new ExecutedAction(DateTimeOffset.UtcNow, step, tool, arguments, outcome, output,
                 workspaceEffect, changedPaths is null ? null : Array.AsReadOnly(changedPaths.ToArray()), exitCode, fileDeletion,
-                origin));
+                origin, named is null ? null : Array.AsReadOnly(named.ToArray())));
     }
 
     /// <summary>

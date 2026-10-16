@@ -223,16 +223,50 @@ public sealed class CoverageAtTheStepGateTests
 
     private static (EngineFixture Fx, FakeChatProvider Worker) OneCallNamingAll(int pages)
     {
-        // Short names: the journal keeps a call's arguments compacted to 120 characters (ToolCallParsing.Compact), and
-        // a mention is read from the recorded arguments.
-        var fx = new EngineFixture { StepOutputs = true, TypedCriteria = true };
-        var all = Enumerable.Range(1, pages).Select(i => $"{i}.md").ToArray();
-        foreach (var page in all)
-            fx.Write(page, "# a page\n");
+        var fx = Wiki(pages);
+        var all = Pages(pages);
         fx.ToolsOverride = [.. EngineFixture.ShippedTools(), new Tagging()];
         var worker = new FakeChatProvider([Turn.Says(PlanFor()), .. Found(all),
             Turn.Calls1("tag_pages", JsonSerializer.Serialize(new { paths = all }), "t1"), Notes(all), Turn.Says("Reviewed all twelve.")]);
         return (fx, worker);
+    }
+
+    /// <summary>
+    /// The journal keeps a call's arguments compacted - cut at 120 characters, no longer JSON - and a mention used to be
+    /// read from that: a call listing twelve paths named none of them. It is read from the call's full arguments now.
+    /// </summary>
+    [Fact]
+    public async Task One_call_naming_twelve_paths_in_more_than_120_characters_mentions_all_twelve()
+    {
+        Assert.True(JsonSerializer.Serialize(new { paths = Pages(12) }).Length > 120);
+        var (fx, worker) = OneCallNamingAll(12);
+        using var _ = fx;
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.WorkerWith("tag_pages", "read_file")), "review every wiki page");
+
+        Assert.Empty(GateFailures(events, 2));
+        var recorded = events.Last(e => e.Kind == EventKind.StepOutputRecorded && e.StepNo() == 2);
+        Assert.Equal(12, System.Text.RegularExpressions.Regex.Matches(recorded.PayloadJson!, "\"complete\":\\[\"Call\"\\]").Count);
+    }
+
+    /// <summary>
+    /// A step that writes each item's file has named each one - its write_file arguments run far past 120 characters -
+    /// and under the default "mentioned" it passes the gate, backed by more than a mention.
+    /// </summary>
+    [Fact]
+    public async Task A_step_that_writes_each_items_file_covers_it_under_mentioned()
+    {
+        var pages = Pages(3);
+        using var fx = Wiki(3);
+        Turn Write(string page) => Turn.Calls1("write_file",
+            JsonSerializer.Serialize(new { path = page, content = $"# {page}\n" + new string('x', 200) + "\n" }), "w-" + page);
+        var worker = new FakeChatProvider([Turn.Says(PlanFor()), .. Found(pages), .. pages.Select(Write), Notes(pages), Turn.Says("Rewrote all three.")]);
+
+        var events = await fx.RunAsync(fx.Build(worker), "rewrite every wiki page");
+
+        Assert.Empty(GateFailures(events, 2));
+        Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(events, 2).StepOutcome());
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
     }
 
     /// <summary>

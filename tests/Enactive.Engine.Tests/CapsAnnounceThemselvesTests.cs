@@ -133,7 +133,10 @@ public sealed class CapsAnnounceThemselvesTests
         // Literals until they were named, which is when this census saw them.
         ["FeedCard.NoteChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked),
         ["FeedCard.DetailChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked),
-        ["FeedCard.CommandChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked)
+        ["FeedCard.CommandChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked),
+        // Not a cut of anything shown: a string longer than this - a file's content - is not kept as what a call named.
+        // An item it would have named is reported as having no mention behind it, by name, at the step's gate.
+        ["EvidenceCoverage.MaxNamedChars"] = nameof(EvidenceCoversAllTests.A_mention_is_read_from_the_full_arguments_not_the_cut_record)
     };
 
     /// <summary>

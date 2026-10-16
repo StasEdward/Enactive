@@ -65,7 +65,7 @@ public static class EvidenceCoverage
     {
         var commands = tools.Where(t => t.Kind == ToolKind.Command).Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var succeeded = actions.Where(a => a.Outcome == ActionOutcome.Succeeded && a.Tool != StepOutputContract.ToolName)
-            .Select(a => (a.Tool, Named: StringsIn(a.Arguments))).ToArray();
+            .Select(a => (a.Tool, Named: a.Named ?? StringsIn(a.Arguments))).ToArray();
         // What THIS step changed, by path, from its own recorded calls: a write, an edit, a deletion, a rename from or to
         // the path (ChangeAuthorship reads the same record to say who changed a file). Only a call that succeeded and
         // said which paths it changed; a command's writes are not recorded by file, so a command is never write
@@ -91,8 +91,12 @@ public static class EvidenceCoverage
                 if (whole) complete.Add(EvidenceKind.FileRead);
                 var naming = succeeded.Where(a => a.Named.Any(s => Same(s, item))).ToArray();
                 if (naming.Any(a => commands.Contains(a.Tool))) complete.Add(EvidenceKind.Command);
-                if (naming.Length > 0 || whole) complete.Add(EvidenceKind.Call);
-                if (written.Any(p => Same(p, item))) complete.Add(EvidenceKind.FileWrite);
+                // A recorded change to the item's path names it as surely as its arguments do: every kind recorded for an
+                // item implies "mentioned", a write as much as a read or a command (UpstreamCoverage.NotAlreadyChecked
+                // relies on it).
+                var wrote = written.Any(p => Same(p, item));
+                if (naming.Length > 0 || whole || wrote) complete.Add(EvidenceKind.Call);
+                if (wrote) complete.Add(EvidenceKind.FileWrite);
                 items.Add(new ItemEvidence(field.Name, item, complete, gap));
             }
         }
@@ -111,6 +115,20 @@ public static class EvidenceCoverage
     }
 
     /// <summary>Every string value in a call's arguments, however deep. Arguments that are not JSON name nothing.</summary>
+    /// <summary>The longest string a call's arguments may name an item with, as far as the journal keeps it.</summary>
+    internal const int MaxNamedChars = 512;
+
+    /// <summary>How many of a call's strings the journal keeps as what it named.</summary>
+    internal const int MaxNamed = 256;
+
+    /// <summary>
+    /// What a call's FULL arguments name, as the journal keeps it (ExecutedAction.Named): its short string values. Not
+    /// the long ones - a file's content, a script - which name no item and would double what the journal holds; an item
+    /// is a path or a short string. Bounded in number for the same reason.
+    /// </summary>
+    internal static IReadOnlyList<string> NamesIn(string arguments)
+        => StringsIn(arguments).Where(s => s.Length is > 0 and <= MaxNamedChars).Distinct(StringComparer.Ordinal).Take(MaxNamed).ToArray();
+
     internal static IReadOnlyList<string> StringsIn(string arguments)
     {
         var found = new List<string>();

@@ -55,7 +55,7 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
                 // exists to give - would have read the run-wide journal and seen only native calls.
                 result.Record(action.Step, action.Tool, action.Arguments, action.Outcome, action.Output,
                     action.WorkspaceEffect, action.ChangedPaths, action.ExitCode, action.FileDeletion,
-                    action.Origin);
+                    action.Origin, action.Named);
             if (_resumed) result.NotePriorTranscript();
         }
         return result;

@@ -145,7 +145,7 @@ internal static class StepCoverageGate
             + "whether the work on each item is what was asked is yours to judge.\n");
         var calls = actions.Where(a => a.Outcome == Enactive.Core.Execution.ActionOutcome.Succeeded
                                        && a.Origin != Enactive.Core.Execution.ToolCallOrigin.Engine && a.Tool != StepOutputContract.ToolName)
-            .Select(a => (Action: a, Named: EvidenceCoverage.StringsIn(a.Arguments))).ToArray();
+            .Select(a => (Action: a, Named: a.Named ?? EvidenceCoverage.StringsIn(a.Arguments))).ToArray();
 
         foreach (var c in outcome.Checks)
         {

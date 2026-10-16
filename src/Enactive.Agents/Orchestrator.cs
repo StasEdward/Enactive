@@ -3675,7 +3675,7 @@ public sealed partial class Orchestrator : IOrchestrator
             messages.AddRange(parkedAt.Messages);
             foreach (var done in parkedAt.Actions)
                 journal.Record(done.Step, done.Tool, done.Arguments, done.Outcome, done.Output, done.WorkspaceEffect,
-                    done.ChangedPaths, done.ExitCode, done.FileDeletion, done.Origin);
+                    done.ChangedPaths, done.ExitCode, done.FileDeletion, done.Origin, done.Named);
             foreach (var waiting in parkedAt.Pending)
                 messages.Add(ChatMessage.Tool(waiting.Id,
                     "NOT CARRIED OUT: the run stopped here to wait for a decision, and it has now been answered. "

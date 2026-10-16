@@ -204,6 +204,38 @@ public sealed class EvidenceCoversAllTests
         ], [], step: 2);
 
         Assert.All(items, i => Assert.Contains(EvidenceKind.FileWrite, Found(gathered, i)));
+        // A write names the item as surely as its arguments: it is a mention too.
+        Assert.All(items, i => Assert.Contains(EvidenceKind.Call, Found(gathered, i)));
+    }
+
+    /// <summary>A recorded write is a mention even where nothing readable is left of its arguments (an older record).</summary>
+    [Fact]
+    public void A_write_is_a_mention_even_when_its_recorded_arguments_name_nothing()
+    {
+        var values = System.Text.Json.Nodes.JsonNode.Parse("""{"notes":{"wiki/a.md":"fixed"}}""")!.AsObject();
+        var gathered = EvidenceCoverage.Gather(NotesSchema, values, new ReadLedger(),
+            [Did("write_file", """{"path":"wiki/a.md","content":"# a very long fi…""", ["wiki/a.md"])], [], step: 2);
+
+        Assert.Equal([EvidenceKind.Call, EvidenceKind.FileWrite], Found(gathered, "wiki/a.md"));
+    }
+
+    /// <summary>
+    /// A mention is read from what the call's FULL arguments named, kept with the record - not from the arguments as
+    /// recorded for reading, which are cut at 120 characters and no longer parse.
+    /// </summary>
+    [Fact]
+    public void A_mention_is_read_from_the_full_arguments_not_the_cut_record()
+    {
+        var pages = Pages(12);
+        var full = JsonSerializer.Serialize(new { paths = pages });
+        var values = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(new { notes = pages.ToDictionary(i => i, _ => "seen") }))!.AsObject();
+        var cut = Did("list_dir", full[..120] + "…") with { Named = EvidenceCoverage.NamesIn(full) };
+
+        var gathered = EvidenceCoverage.Gather(NotesSchema, values, new ReadLedger(), [cut], [], step: 2);
+
+        Assert.All(pages, p => Assert.Equal([EvidenceKind.Call], Found(gathered, p)));
+        // What is kept is short: a file's content names no item.
+        Assert.Empty(EvidenceCoverage.NamesIn(JsonSerializer.Serialize(new { content = new string('x', 2000) })));
     }
 
     /// <summary>A mention, a whole read, a refused or failed write, or another step's write is no write by this step.</summary>

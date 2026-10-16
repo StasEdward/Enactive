@@ -51,7 +51,10 @@ internal sealed class ToolResultAccounting(StepFrame frame, IToolRegistry tools,
             exitCode: !result.DidNotRun && tools.DefinitionOf(call.Name)?.Kind == ToolKind.Command
                 && result.Metadata.TryGetValue("exitCode", out var code) && code is int exit ? exit : null,
             fileDeletion: !result.DidNotRun && result.Success && RecordedOperations.DeletesFiles(call, tools.DefinitionOf(call.Name)),
-            origin: origin);
+            origin: origin,
+            // What the call named, from its FULL arguments: the recorded ones are compacted for reading and cut at 120
+            // characters, and coverage read its mentions from those - a write_file call named nothing (EvidenceCoverage.NamesIn).
+            named: EvidenceCoverage.NamesIn(call.ArgumentsJson));
 
         // What the step may change, told of a change made within it - a result, so here and not in the loop.
         if (result.Success) frame.Boundary?.Succeeded(call);
