@@ -38,14 +38,24 @@ internal static class RunRows
     public static string Tooltip(RunSummary record)
         => $"{RunTitle.For(record)}\n{Times.Minute(record.StartedAt)} · {record.Status} · {RunDigest.Duration(record.FinishedAt - record.StartedAt)}";
 
-    /// <summary>An unfinished run's second line: when it stopped, and how far it got.</summary>
+    /// <summary>
+    /// An unfinished run's second line: when it stopped, and how far it got. A run somebody paused (Plan Phase 4.2) says
+    /// "paused": listed as "stopped" among the runs a crash left, it read as one that had gone wrong.
+    /// </summary>
     public static string Meta(RunCheckpoint checkpoint)
-        => $"stopped {Times.Day(checkpoint.At)}, {Times.Clock(checkpoint.At)} · {checkpoint.Finished} of {checkpoint.Steps.Count} steps done";
+        => $"{(checkpoint.Paused ? "paused" : "stopped")} {Times.Day(checkpoint.At)}, {Times.Clock(checkpoint.At)} · "
+           + $"{checkpoint.Finished} of {checkpoint.Steps.Count} steps done";
 
+    /// <summary>
+    /// What Resume does. A paused run ended between steps, so nothing it finished is done again - the warning a stopped
+    /// run carries would warn a person off a resume that redoes nothing (RunRecovery says the same before a resume).
+    /// </summary>
     public static string Tooltip(RunCheckpoint checkpoint)
         => $"{checkpoint.Request}\n\nResume runs the {checkpoint.Remaining} step(s) that are left, "
-           + "under the permissions this run started with. A step that was in progress when it "
-           + "stopped is done again from its beginning.";
+           + "under the permissions this run started with. "
+           + (checkpoint.Paused
+               ? "It was paused between steps, so no step it finished is done again."
+               : "A step that was in progress when it stopped is done again from its beginning.");
 
     /// <summary>The resume button is an icon beside the delete one, as on every other row - so what it does is said on it.</summary>
     public static string ResumeTip(RunCheckpoint checkpoint) => $"Resume: run the {checkpoint.Remaining} step(s) that are left";

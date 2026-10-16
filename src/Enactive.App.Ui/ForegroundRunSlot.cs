@@ -1,18 +1,33 @@
 namespace Enactive.App.Ui;
 
-/// <summary>The foreground run owns Stop until its cleanup has completed.</summary>
+using Enactive.Core.Execution;
+
+/// <summary>The foreground run owns Stop - and its pause - until its cleanup has completed.</summary>
 internal sealed class ForegroundRunSlot
 {
     private readonly object _gate = new();
     private CancellationTokenSource? _current;
+    private RunPause? _pause;
     private TaskCompletionSource? _finished;
     private bool _closing;
+
+    /// <summary>
+    /// The running foreground run's pause (Plan Phase 4.2), made with it beside the cancellation Stop uses; null when no
+    /// run holds the slot. One per run: a pause already asked for, kept for the next run - a resume - would pause it
+    /// before its first step.
+    /// </summary>
+    public RunPause? Pause
+    {
+        get { lock (_gate) return _pause; }
+    }
+
     public CancellationTokenSource? TryStart()
     {
         lock (_gate)
         {
             if (_closing || _current is not null) return null;
             _finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pause = new RunPause();
             return _current = new CancellationTokenSource();
         }
     }
@@ -52,6 +67,7 @@ internal sealed class ForegroundRunSlot
         {
             if (!ReferenceEquals(_current, owner)) return false;
             _current = null;
+            _pause = null;
             _finished?.TrySetResult();
             return true;
         }

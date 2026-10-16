@@ -204,6 +204,11 @@ internal sealed class MainWindowViewModel : ObservableObject
         RunCommand = new RelayCommand(() => RunRequested?.Invoke(), () => !IsBusy);
         RunBackgroundCommand = new RelayCommand(() => BackgroundRunRequested?.Invoke(), () => !IsBusy);
         StopCommand = new RelayCommand(() => StopRequested?.Invoke(), () => IsBusy);
+        PauseCommand = new RelayCommand(() =>
+        {
+            _pause?.Request();
+            PauseChanged();
+        }, () => _pause?.Standing == PauseStanding.Offered);
         TimelineCommand = new RelayCommand(() => TimelineRequested?.Invoke());
         LogCommand = new RelayCommand(() => LogRequested?.Invoke());
         EnvironmentCommand = new RelayCommand(() => EnvironmentRequested?.Invoke());
@@ -278,6 +283,46 @@ internal sealed class MainWindowViewModel : ObservableObject
     public RelayCommand RunBackgroundCommand { get; }
 
     public RelayCommand StopCommand { get; }
+
+    /// <summary>
+    /// "Pause after this step" in the run header (Plan Phase 4.2): the steps running now finish, nothing new starts, and
+    /// the run ends Paused for UNFINISHED to resume. Offered by the run's own <see cref="Pause"/> (PauseOffer), which says
+    /// when - a planned run that does not stage its changes. Pressed, it says it is pending and greys; Stop stays.
+    /// </summary>
+    public RelayCommand PauseCommand { get; }
+
+    private PauseOffer? _pause;
+
+    /// <summary>The foreground run's pause control, handed over as the run starts; null when no run is going.</summary>
+    public PauseOffer? Pause
+    {
+        get => _pause;
+        set
+        {
+            _pause = value;
+            PauseChanged();
+        }
+    }
+
+    public bool IsPauseShown => (_pause?.Standing ?? PauseStanding.Hidden) != PauseStanding.Hidden;
+    public string PauseLabel => _pause?.Text ?? PauseOffer.Label;
+    public string PauseTip => _pause?.Why ?? string.Empty;
+
+    /// <summary>An event of the foreground run, as it is drawn: the plan, a quick action, the end move the control.</summary>
+    public void ApplyToPause(Enactive.Core.Events.WorkEvent ev)
+    {
+        if (_pause?.Apply(ev) == true)
+            PauseChanged();
+    }
+
+    /// <summary>The control's standing may have changed - the run turned out to stage its changes, or it was pressed.</summary>
+    public void PauseChanged()
+    {
+        OnPropertyChanged(nameof(IsPauseShown));
+        OnPropertyChanged(nameof(PauseLabel));
+        OnPropertyChanged(nameof(PauseTip));
+        PauseCommand.RaiseCanExecuteChanged();
+    }
 
     // ── Left panel ────────────────────────────────────────────────────────────
     /// <summary>

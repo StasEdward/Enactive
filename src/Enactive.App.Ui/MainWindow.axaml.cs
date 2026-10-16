@@ -853,6 +853,10 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         {
             _vm.IsBusy = true;
             ClearRunView();
+            // "Pause after this step" in the header is this run's: its own pause, made beside the cancellation Stop uses
+            // (ForegroundRunSlot), offered once the run turns out to be planned and not staged (PauseOffer).
+            var pause = _foreground.Pause;
+            _vm.Pause = new PauseOffer(pause);
 
             // The command bar clears, so the request moves into the header - otherwise what you asked
             // for survives only in the log.
@@ -907,7 +911,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 await using var composed = await RunComposer.ComposeAsync(
                     CurrentEngine(),
                     new RunRequest(workspace, text, IntentSource.CommandBar, taskId, resume, spec, Stage: _vm.StageChanges)
-                        { Defaults = DefaultsOnScreen() },
+                        { Defaults = DefaultsOnScreen(), Pause = pause },
                     _decisions, runCancellation.Token);
 
                 _staging = composed.Artifacts as StagingArtifactStore;
@@ -916,7 +920,17 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 _files.Stages = _staging is not null;
 
                 var envLine = composed.Intent.Context.Environment?.OneLine();
-                await Dispatcher.UIThread.InvokeAsync(() => _vm.EnvironmentSummary = envLine ?? "(no environment data)");
+                var staged = _staging is not null;
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    _vm.EnvironmentSummary = envLine ?? "(no environment data)";
+                    // A run that stages its changes ignores a pause (it cannot be resumed), so it is not offered one.
+                    if (staged)
+                    {
+                        _vm.Pause?.Staging();
+                        _vm.PauseChanged();
+                    }
+                });
 
                 await RunEventPump.RunAsync(
                     composed.Events(runCancellation.Token),
@@ -953,6 +967,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 {
                     if (_liveAttached)
                         _vm.StatusElapsed = finalElapsed;
+                    // Over, however it ended: nothing left to pause.
+                    _vm.Pause = null;
                     // The row goes BEFORE the history is re-read, so the moment it stops running is the
                     // moment it stops being listed as running. RunColumn.Live is the belt to this
                     // brace: if the two ever cross, the run is not shown twice.
@@ -983,6 +999,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 _vm.RunLog?.SetRun(ev.RunId);
                 // The panel of model figures is this run's, and starts again with the next (ModelPerformance).
                 _vm.Performance.ShowRun(ev.RunId);
+                // The header's "Pause after this step": offered once the plan is here, gone with a quick action or the end.
+                _vm.ApplyToPause(ev);
                 // A step that ended has changed what it changes: the repository strip is read again then, not only when
                 // the run is over (2026-10-09).
                 if (ev.Kind == EventKind.StepCompleted)

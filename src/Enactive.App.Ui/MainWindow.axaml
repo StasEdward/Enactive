@@ -573,10 +573,23 @@
                              the run underneath does not move when the request is long. -->
                         <TextBox Classes="taskIntent" Text="{Binding TaskIntent}" />
                     </StackPanel>
-                    <Border Grid.Column="1" Classes="pill" HorizontalAlignment="Right" Background="{Binding StatusPhase, Converter={x:Static local:Palette.PhaseFill}}">
-                        <TextBlock Text="{Binding StatusPhase}"
-                                   Foreground="{Binding StatusPhase, Converter={x:Static local:Palette.PhaseText}}" />
-                    </Border>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right"
+                                VerticalAlignment="Center">
+                        <!-- Pause after this step: the steps running now finish and the run ends Paused, to be
+                             resumed from UNFINISHED - unlike Stop, which cancels them. Here, beside the phase it
+                             changes, and only for a run that can pause: a planned one that does not stage. Not
+                             destructive and not the action you came for, so the plain button. -->
+                        <Button x:Name="PauseAfterThisStep" FontSize="11" VerticalAlignment="Center"
+                                Content="{Binding PauseLabel}"
+                                Command="{Binding PauseCommand}"
+                                ToolTip.Tip="{Binding PauseTip}"
+                                ToolTip.ShowOnDisabled="True"
+                                IsVisible="{Binding IsPauseShown}" />
+                        <Border Classes="pill" Background="{Binding StatusPhase, Converter={x:Static local:Palette.PhaseFill}}">
+                            <TextBlock Text="{Binding StatusPhase}"
+                                       Foreground="{Binding StatusPhase, Converter={x:Static local:Palette.PhaseText}}" />
+                        </Border>
+                    </StackPanel>
                 </Grid>
             </Border>
 

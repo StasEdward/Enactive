@@ -59,6 +59,41 @@ public sealed class RunRowsTests
         Assert.Equal(@"Folder not found · D:\work\notes", WorkspaceRows.Detail(entry, exists: false));
     }
 
+    private static RunCheckpoint Unfinished(bool paused)
+    {
+        var first = Guid.NewGuid();
+        return new RunCheckpoint(Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.Now.AddMinutes(-10), DateTimeOffset.Now,
+            "Write the report", "Report", "developer", Spec: null,
+            Steps:
+            [
+                new CheckpointStep(first, "gather", [], "Normal", "Done", "Succeeded"),
+                new CheckpointStep(Guid.NewGuid(), "write", [first], "Normal", "Pending"),
+                new CheckpointStep(Guid.NewGuid(), "send", [first], "Normal", paused ? "Pending" : "Running")
+            ],
+            Digest: [], Transcript: [], Artifacts: [], StepsRun: 1, TokensSpent: 0) { Paused = paused };
+    }
+
+    /// <summary>
+    /// An UNFINISHED row says how it came to be there, in the window's column and the service's alike: a run somebody paused
+    /// is "paused", one the process left is "stopped" - and only the stopped one warns that a step is done again, which a
+    /// pause, ending between steps, never does.
+    /// </summary>
+    [Fact]
+    public void An_unfinished_run_says_whether_it_was_paused_or_stopped()
+    {
+        var paused = Unfinished(paused: true);
+        var stopped = Unfinished(paused: false);
+
+        Assert.StartsWith("paused ", RunRows.Meta(paused));
+        Assert.EndsWith(" · 1 of 3 steps done", RunRows.Meta(paused));
+        Assert.StartsWith("stopped ", RunRows.Meta(stopped));
+        Assert.Contains("paused between steps", RunRows.Tooltip(paused));
+        Assert.DoesNotContain("done again from its beginning", RunRows.Tooltip(paused));
+        Assert.Contains("done again from its beginning", RunRows.Tooltip(stopped));
+        // The resume stays what it was.
+        Assert.Equal(RunRows.ResumeTip(stopped), RunRows.ResumeTip(paused));
+    }
+
     /// <summary>
     /// Forgetting a workspace asks first, in words that say what is lost and what is not - the window's, which the service's
     /// switcher asks too.
