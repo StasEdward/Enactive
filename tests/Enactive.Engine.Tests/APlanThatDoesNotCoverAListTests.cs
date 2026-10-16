@@ -327,6 +327,53 @@ public sealed class APlanThatDoesNotCoverAListTests
     }
 
     /// <summary>
+    /// Plan Phase 4.2 with Phase 1: a run paused at a step boundary keeps its obligation in the paused checkpoint, and the
+    /// run that carries it on finishes its steps and is still held to it - not Completed - without asking again. A pause is
+    /// a promise that the run carries on from exactly there, and a resume that forgot what the run owes would keep it
+    /// only in part.
+    /// </summary>
+    [Fact]
+    public async Task A_paused_run_keeps_its_obligation_and_the_run_that_carries_it_on_does_not_complete()
+    {
+        using var fx = Wiki();
+        fx.Decisions.Answer = "go_on";
+        var pause = new Enactive.Core.Execution.RunPause();
+        fx.Pause = pause;
+        var store = new Recording();
+        var worker = new FakeChatProvider([Turn.Says(Unclassified), Turn.Says(Unclassified), .. Find(), Turn.Says("Summarised.")])
+        {
+            // Asked for while the first step runs: it finishes, and the second does not start.
+            Answering = request =>
+            {
+                if (request.Messages.Any(m => m.Content?.Contains("Proceed with this step of the plan: find pages", StringComparison.Ordinal) == true))
+                    pause.Request();
+                return null;
+            }
+        };
+
+        var paused = await fx.RunAsync(fx.Build(worker, checkpoints: store), "summarise the wiki");
+
+        Assert.Equal(RunOutcomeKind.Paused, paused.Last().Outcome());
+        Assert.Single(paused, e => e.Kind == EventKind.StepCompleted);
+        var checkpoint = store.Saved.Last(c => c.Paused);
+        var obligation = Assert.Single(checkpoint.CoverageObligations!);
+        Assert.Contains("step 2 depends on step 1", obligation, StringComparison.Ordinal);
+
+        fx.Pause = null;
+        fx.Decisions.Requests.Clear();
+        var back = JsonSerializer.Deserialize<RunCheckpoint>(JsonSerializer.Serialize(checkpoint))!;
+        var resumed = await fx.ResumeAsync(fx.Build(new FakeChatProvider([Turn.Says("Summarised.")]), checkpoints: store), back);
+
+        Assert.Empty(CoverageQuestions(fx.Decisions));
+        Assert.Contains("summarise pages", Assert.Single(resumed, e => e.Kind == EventKind.StepStarted).Summary, StringComparison.Ordinal);
+        var finished = resumed.Last(e => e.Kind == EventKind.StepCompleted);
+        Assert.Contains("summarise pages", finished.Summary, StringComparison.Ordinal);
+        Assert.Equal(StepOutcomeKind.Succeeded, finished.StepOutcome());
+        Assert.Equal(RunOutcomeKind.Incomplete, resumed.Last().Outcome());
+        Assert.Contains("the plan does not cover a list: " + obligation, Reason(resumed), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A checkpoint from before the contract never declared what its steps consume: the resumed run says list coverage
     /// is not guaranteed - and invents no obligation for it.
     /// </summary>
