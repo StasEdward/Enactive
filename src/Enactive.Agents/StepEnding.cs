@@ -25,9 +25,10 @@ using Enactive.Core.Tools;
 /// criteria, its result, its open calls - were once each, by a flag apiece, so a reminder that worked in part was
 /// followed by the end of the step. They now ask one <see cref="ObligationLoop"/>, which tells again while what the
 /// engine sees of the step changes, within <paramref name="nudges"/>; its default is once per kind, as before. When
-/// the loop lets an obligation go, its rule ends the step as it always did. Nothing is told, whatever the limits, to a
-/// step waiting for a person's answer, a step the engine sees is blocked, in a run with no turn left, or with a prompt
-/// too near the model's window for another turn. The loop lives as long as this object - one attempt at the step.</para>
+/// the loop lets an obligation go, its rule ends the step as it always did. The first reminder of each kind is given as
+/// before; nothing beyond it is told to a step waiting for a person's answer, a step the engine sees is blocked, or with
+/// a prompt too near the model's window for another turn (see Ask). The loop lives as long as this object - one attempt
+/// at the step.</para>
 ///
 /// <para><b>What it records.</b> What a step is told - the reminders, the request to re-send a call - is added to its
 /// conversation here, and every event about the ending is emitted here, as it happens. The loop learns only what
@@ -42,7 +43,7 @@ using Enactive.Core.Tools;
 /// <param name="reviewed">Whether a reviewer judges this step when it ends.</param>
 /// <param name="nudges">How often the step may be told what it owes - the run's attended or unattended pair
 /// (EngineOptions.ObligationNudges). Null: the shipped default, once per kind.</param>
-/// <param name="waitingForAnswer">Whether the run is waiting for a person's answer to a question it stopped at.</param>
+/// <param name="waitingForAnswer">Whether this step is waiting for a person's answer to a question it stopped at.</param>
 internal sealed class StepEnding(
     StepFrame frame,
     Func<string, CancellationToken, Task<string?>> readFile,
@@ -58,7 +59,6 @@ internal sealed class StepEnding(
     /// <param name="ActionsTaken">Calls this step has carried out so far.</param>
     /// <param name="ReasoningLength">Characters of reasoning the turn produced.</param>
     /// <param name="ContextWindow">The model's context window, when somebody has said - asked only when it is needed.</param>
-    /// <param name="TurnsSpent">The run's turn budget is spent: the loop ends the step before another turn.</param>
     internal sealed record Turn(
         string? ReplyText,
         IReadOnlyList<ToolCall>? Calls,
@@ -68,8 +68,7 @@ internal sealed class StepEnding(
         int ReasoningLength,
         int? CompletionTokens,
         int? PromptTokens,
-        Func<int?> ContextWindow,
-        bool TurnsSpent = false);
+        Func<int?> ContextWindow);
 
     internal enum Next
     {
@@ -106,7 +105,10 @@ internal sealed class StepEnding(
     // How many times this attempt has been told what it owes, of each kind and in all, and from where (ObligationLoop).
     // One per attempt: a step tried again after a review is told afresh, and a handover inside the attempt - which
     // keeps this object - does not buy it the reminders it has had. The output reminder's flag used to sit on the step's
-    // output slot and outlive the attempt while the other three did not; a test found nothing that relied on it.
+    // output slot and outlive the attempt while the other three did not; a test found nothing that relied on it. That is
+    // the one intended difference from the engine before the loop at the default limits: a step retried after a review
+    // that has still handed nothing on is reminded again - one more turn per retry - where it used to end unfinished
+    // untold.
     // Without a cap per kind a model that keeps explaining a call instead of making it would burn every iteration on
     // the same re-ask; the loop's per-kind limit is that cap.
     private readonly ObligationLoop _loop = new(nudges ?? ObligationNudges.Default.Attended);
@@ -132,9 +134,9 @@ internal sealed class StepEnding(
         var calls = turn.Calls;
         // The step's own criteria, decided once per turn and read by every rule below that needs them - a rule that
         // tells the step, the position the loop compares, and the last look as the step ends.
-        CriterionResult[]? failingNow = null;
-        CriterionResult[] Failing() => failingNow ??= FailingCriteria();
-        ObligationSignature Position() => Signature(turn, Failing());
+        (CriterionResult[] Results, string[] Ids)? failingNow = null;
+        CriterionResult[] Failing() => (failingNow ??= FailingCriteria()).Results;
+        ObligationSignature Position() => Signature(turn, (failingNow ??= FailingCriteria()).Ids);
 
         // A step that has said it is done and repeats a call it has already made, with nothing changed since, is
         // done - not stuck. Run fba4d6, 2026-09-29: "S3 done - all 133 tests passed", and the same test run
@@ -308,12 +310,13 @@ internal sealed class StepEnding(
                 _openCallsForReview = unresolved;
                 frame.Journal.Record(frame.StepNo, "engine_open_calls", "{}", ActionOutcome.Succeeded,
                     "Checked by the engine as this step ended: calls that did not go through and that nothing made good, "
-                    + $"after the step was told of them {Times(Obligation.OpenCalls)}:\n" + unresolved
+                    + (_loop.TimesTold(Obligation.OpenCalls) == 0 ? "without the step being told of them"
+                        : $"after the step was told of them {Times(Obligation.OpenCalls)}") + ":\n" + unresolved
                     + "\nJudge whether the step's result stands without them. A result that depends on one of them is not "
                     + "shown to be done; one that does not - a mistyped command made good by a different one - may stand.",
                     WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
-                yield return Ev(EventKind.ErrorObserved, $"Finished with {Open.Count} call(s) not made good, after being "
-                    + $"told {Times(Obligation.OpenCalls)}: " + unresolved + " - the review decides whether the result stands without them.");
+                yield return Ev(EventKind.ErrorObserved, $"Finished with {Open.Count} call(s) not made good, "
+                    + $"{AfterBeingTold(Obligation.OpenCalls)}: " + unresolved + " - the review decides whether the result stands without them.");
             }
             else
             {
@@ -356,14 +359,15 @@ internal sealed class StepEnding(
             if (reviewed)
             {
                 // No journal entry here: the review records the same check as the engine's own finding.
-                yield return Ev(EventKind.ErrorObserved, $"The plan's criteria for this step still fail after the step was told "
-                    + $"{Times(Obligation.Criteria)}: " + named + " - the review decides, with them shown as the engine's own finding.");
+                yield return Ev(EventKind.ErrorObserved, "The plan's criteria for this step still fail "
+                    + (_loop.TimesTold(Obligation.Criteria) == 0 ? "without the step being told" : $"after the step was told {Times(Obligation.Criteria)}")
+                    + ": " + named + " - the review decides, with them shown as the engine's own finding.");
             }
             else
             {
                 var reason = "the plan's criteria for this step still fail: " + named;
-                yield return Ev(EventKind.ErrorObserved, "Finished with the plan's criteria for this step still failing, after "
-                    + $"being told {Times(Obligation.Criteria)}: " + named);
+                yield return Ev(EventKind.ErrorObserved, "Finished with the plan's criteria for this step still failing, "
+                    + $"{AfterBeingTold(Obligation.Criteria)}: " + named);
                 verdict.Ends(StepOutcomeKind.Incomplete, reason);
                 yield break;
             }
@@ -373,25 +377,35 @@ internal sealed class StepEnding(
     }
 
     /// <summary>
-    /// Whether to tell the step of <paramref name="kind"/> now. First what keeps any step from being told, whatever the
-    /// loop would say - the same carve-outs as AI-DLC's Stop hook has for a person's wait - then the loop.
+    /// Whether to tell the step of <paramref name="kind"/> now. The first reminder of each kind is the loop's alone, as it
+    /// always was; a further one is first held back by what keeps any step from being told again - the carve-outs AI-DLC's
+    /// Stop hook has for a person's wait, and the context guard - and then left to the loop.
+    ///
+    /// <para><b>Why only beyond the first.</b> The first reminder is what the engine has always given, and what it bought
+    /// is measured: a step with a declared output and one refused call - a block, as the engine reads it - was reminded,
+    /// handed on, had the refusal forgiven by the hand-over and ended done (run dd7ca94b); a step that only looked for a
+    /// file it was to write, and found nothing - a block too - was told of the plan's criterion and wrote it (run 68f92f).
+    /// Held back from them, both ended blocked at once. And the first reminder on a full window is the turn the trim and
+    /// the handover exist for. What the carve-outs and the guard stop is the turns the loop adds.</para>
+    ///
+    /// <para>No carve-out for a spent turn budget: the tool loop ends the step on the budget before its next model call,
+    /// and a reminder given now costs nothing but a line in a conversation that is about to end. Letting go here instead
+    /// ended a step on what it owed - a described call fell through to done - where the budget was the reason.</para>
     /// </summary>
     private ObligationDecision Ask(Obligation kind, Turn turn, Func<ObligationSignature> position)
     {
-        // A question the run stopped at is answered by a person, not by the step: a reminder is a turn spent where
-        // nothing the step can do changes what it waits for.
-        if (waitingForAnswer?.Invoke() == true)
-            return _loop.Release(kind, "the run is waiting for a person's answer, which no reminder changes");
-        // Blocked (Phase 7.1): a permission refused, or nothing the step looked for there - for a person to put right.
-        // Told of its criteria first, a blocked step spent a turn on work the block keeps it from, and then ended blocked.
-        if (Open.Block is { } block)
-            return _loop.Release(kind, "the step is blocked (" + block.Reason + "), which is for a person to put right");
-        // A reminder is a turn, and the run has none left: the loop above would end the step on the budget at its next
-        // turn with nothing said of what the step owed; let go here, the step ends on what it owes.
-        if (turn.TurnsSpent)
-            return _loop.Release(kind, "the run's turn budget is spent, and a reminder is a turn");
-        if (Crowded(turn) is { } full)
-            return _loop.Release(kind, full);
+        if (_loop.TimesTold(kind) >= 1)
+        {
+            // A question this step stopped at is answered by a person, not by the step: a reminder is a turn spent where
+            // nothing the step can do changes what it waits for.
+            if (waitingForAnswer?.Invoke() == true)
+                return _loop.Release(kind, "the step is waiting for a person's answer, which no reminder changes");
+            // Blocked (Phase 7.1): a permission refused, or nothing the step looked for there - for a person to put right.
+            if (Open.Block is { } block)
+                return _loop.Release(kind, "the step is blocked (" + block.Reason + "), which is for a person to put right");
+            if (Crowded(turn) is { } full)
+                return _loop.Release(kind, full);
+        }
         return _loop.Nudge(kind, position());
     }
 
@@ -410,20 +424,28 @@ internal sealed class StepEnding(
             : null;
 
     /// <summary>Where the step stands on what it owes, from the engine's own state alone (ObligationSignature).</summary>
-    private ObligationSignature Signature(Turn turn, IReadOnlyList<CriterionResult> failing)
+    private ObligationSignature Signature(Turn turn, IReadOnlyList<string> failing)
         => new(frame.StepNo,
-            failing.Select(r => r.Name).ToArray(),
+            failing,
             OutputOwed: frame.OutputSchema is not null && frame.OutputSlot is { Values: null },
             MissingFields: frame.OutputSlot?.MissingFields ?? [],
             InvalidFields: frame.OutputSlot?.InvalidFields ?? [],
             OpenCalls: Open.Keys,
             Described: turn.Described is { } described ? described.Name + " " + TaskProgress.Canonical(described.ArgumentsJson) : null);
 
-    /// <summary>The criteria the plan attached to this step that fail now - none when it has none, or is no plan step.</summary>
-    private CriterionResult[] FailingCriteria()
-        => stepCriteria is { Count: > 0 } && frame.StepNo is { } planNo
-            ? TypedCriteria.OfStep(stepCriteria, planNo - 1, frame.WorkspaceRoot).Where(r => r.Outcome == CriterionOutcome.Failed).ToArray()
-            : [];
+    /// <summary>
+    /// The criteria the plan attached to this step that fail now - none when it has none, or is no plan step - each with
+    /// an id: its place among the step's own criteria, with its name. A name alone is not one: two criteria named alike
+    /// would be one position, and the step that made one of them good would not have moved.
+    /// </summary>
+    private (CriterionResult[] Results, string[] Ids) FailingCriteria()
+    {
+        if (stepCriteria is not { Count: > 0 } || frame.StepNo is not { } planNo) return ([], []);
+        var failing = TypedCriteria.OfStep(stepCriteria, planNo - 1, frame.WorkspaceRoot)
+            .Select((r, at) => (Result: r, Id: $"{at}:{r.Name}"))
+            .Where(c => c.Result.Outcome == CriterionOutcome.Failed).ToArray();
+        return (failing.Select(c => c.Result).ToArray(), failing.Select(c => c.Id).ToArray());
+    }
 
     /// <summary>What the last refused hand-over lacked, for the reminder - the refusal said it once, in a tool result further up.</summary>
     private static string Refused(StepOutputSlot slot)
@@ -443,6 +465,10 @@ internal sealed class StepEnding(
         2 => "twice",
         var n => $"{n} times"
     };
+
+    /// <summary>"after being told once", or "without being told" for a kind a limit of 0 let go untold.</summary>
+    private string AfterBeingTold(Obligation kind)
+        => _loop.TimesTold(kind) == 0 ? "without being told" : "after being told " + Times(kind);
 
     /// <summary>
     /// What to say when a turn brought back nothing at all - what was OBSERVED first, then the likely cause, and the

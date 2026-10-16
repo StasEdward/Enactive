@@ -207,9 +207,6 @@ internal sealed class LedgeredDecisions(IDecisionHandler inner, DecisionLedger l
         }
     }
 
-    /// <summary>Whether this task's run has stopped at a question nobody has answered yet - asked without taking it.</summary>
-    public bool Waiting(Guid taskId) => _parked.ContainsKey(taskId);
-
     /// <summary>The question this task's run stopped at, taken once - by the run that stopped.</summary>
     public ParkedDecision? TakeParked(Guid taskId) => _parked.TryRemove(taskId, out var parked) ? parked : null;
 }

@@ -54,7 +54,12 @@ public sealed record ObligationNudges
 /// <param name="MissingFields">Required fields its last refused submission left out (StepOutputSlot).</param>
 /// <param name="InvalidFields">Fields its last refused submission sent wrong (StepOutputSlot).</param>
 /// <param name="OpenCalls">The identities of the calls still open (OpenFailures.Keys) - not their error text.</param>
-/// <param name="Described">The call the turn described in text, by name and arguments, when it did.</param>
+/// <param name="FailingCriteria">The step's failing criteria, each by its place among the step's criteria and its name -
+/// not the name alone, which two criteria may share.</param>
+/// <param name="Described">The call the turn described in text, by name and arguments, when it did. Arguments included:
+/// a step that describes a different call - another path, another command - has moved, and may be asked to send that one
+/// properly too. Acceptable because the per-kind limit still caps it, and the same call described again, which is the
+/// shape that burned iterations before the cap existed, is a position seen before and is let go.</param>
 internal sealed record ObligationSignature(
     int? Step,
     IReadOnlyList<string> FailingCriteria,
@@ -152,7 +157,7 @@ internal sealed class ObligationLoop(ObligationNudgeLimits limits)
 
     /// <summary>
     /// Lets <paramref name="kind"/> go without telling: a nudge was refused, by the loop or by a rule of the step's (it
-    /// waits for a person, it is blocked, the run has no turn left, the window is full). Announced the first time for
+    /// waits for a person, it is blocked, the window is full). Announced the first time for
     /// this reason only, so a release that holds over several turns is said once.
     /// </summary>
     public ObligationDecision Release(Obligation kind, string why)

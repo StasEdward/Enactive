@@ -254,26 +254,39 @@ public sealed class ObligationLoopTests : IDisposable
         Assert.StartsWith("This step is not finished until it hands its result on", LastTold);
     }
 
-    // ── what is not told at all ─────────────────────────────────────────────
+    // ── what is not told again ──────────────────────────────────────────────
+    //
+    // The carve-outs and the context guard hold back only the reminders the loop adds: the first of each kind is given
+    // as it always was (ObligationDefaultsTests pins that at the shipped limits). Each case below moves the step after
+    // its first reminder, so only the carve-out can be what keeps the second one back.
+
+    private static readonly ObligationNudgeLimits TwoPerKind = new(PerKind: 2, Ceiling: 8);
+
+    private StepEnding TwoCriteria(Func<bool>? waitingForAnswer = null)
+        => Ending(TwoPerKind, [Exists("disk report", "disk-report.md"), Exists("summary", "summary.md")], waitingForAnswer: waitingForAnswer);
 
     /// <summary>
-    /// Context guard: every nudge is a turn with the whole prompt, and near the window there is no room for one. The
-    /// timeline says why the step was not told; with no window stated the loop does not guess one.
+    /// Context guard: every further nudge is a turn with the whole prompt, and near the window there is no room for one.
+    /// The first reminder is still given there - it is the turn the trim and the handover exist for. The timeline says
+    /// why the step was not told again; with no window stated the loop does not guess one.
     /// </summary>
     [Theory]
     [InlineData(950, 1000, false)]
     [InlineData(950, null, true)]
     [InlineData(500, 1000, true)]
-    public async Task Near_the_context_window_a_step_is_not_told_and_the_timeline_says_why(int prompt, int? window, bool told)
+    public async Task Near_the_context_window_a_step_is_told_once_and_not_again_and_the_timeline_says_why(int prompt, int? window, bool toldAgain)
     {
-        var ending = Ending(criteria: [DiskReport()]);
+        var ending = TwoCriteria();
 
-        var (verdict, events) = await End(ending, Says("Done.", prompt: prompt, window: window));
+        var (first, _) = await End(ending, Says("Done.", prompt: prompt, window: window));
+        _fx.Write("disk-report.md", "all disks healthy");
+        var (second, events) = await End(ending, Says("Wrote the report.", prompt: prompt, window: window));
 
-        Assert.Equal(told ? StepEnding.Next.Continue : StepEnding.Next.End, verdict.Next);
-        if (!told)
+        Assert.Equal(StepEnding.Next.Continue, first.Next);
+        Assert.Equal(toldAgain ? StepEnding.Next.Continue : StepEnding.Next.End, second.Next);
+        if (!toldAgain)
         {
-            Assert.Equal(StepOutcomeKind.Incomplete, verdict.Kind);
+            Assert.Equal(StepOutcomeKind.Incomplete, second.Kind);
             Assert.Contains(events, e => e.Summary.StartsWith("Not told again of the plan's criteria for this step", StringComparison.Ordinal)
                                          && e.Summary.Contains("950 of", StringComparison.Ordinal)
                                          && e.Summary.Contains("1000", StringComparison.Ordinal));
@@ -282,42 +295,64 @@ public sealed class ObligationLoopTests : IDisposable
 
     /// <summary>A step waiting on a person's answer is not told anything more - nobody is going to change what it waits on by a reminder.</summary>
     [Fact]
-    public async Task A_step_waiting_for_a_person_s_answer_is_not_told()
+    public async Task A_step_waiting_for_a_person_s_answer_is_not_told_again()
     {
+        var ending = TwoCriteria(waitingForAnswer: () => true);
+
+        var (first, _) = await End(ending, Says("Done."));
+        _fx.Write("disk-report.md", "all disks healthy");
         var before = _messages.Count;
+        var (second, events) = await End(ending, Says("Wrote the report."));
 
-        var (verdict, events) = await End(Ending(criteria: [DiskReport()], waitingForAnswer: () => true), Says("Done."));
-
-        Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Incomplete), (verdict.Next, verdict.Kind));
+        Assert.Equal(StepEnding.Next.Continue, first.Next);
+        Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Incomplete), (second.Next, second.Kind));
         Assert.Equal(before, _messages.Count);
         Assert.Contains(events, e => e.Summary.Contains("waiting for a person's answer", StringComparison.Ordinal));
     }
 
-    /// <summary>A step the engine sees is blocked ends blocked, untold of its criteria: what blocks it is for a person to put right.</summary>
+    /// <summary>
+    /// A step the engine sees is blocked is told of its criteria once, as always, and not again: what blocks it is for a
+    /// person to put right, and it ends blocked.
+    /// </summary>
     [Fact]
-    public async Task A_blocked_step_is_not_told_of_its_criteria()
+    public async Task A_blocked_step_is_told_of_its_criteria_once_and_not_again()
     {
-        var ending = Ending(criteria: [DiskReport()]);
+        var ending = TwoCriteria();
         ending.Open.Refused(Call("send_email", """{"to":"ops@example.com"}"""), "the user did not permit this action");
+
+        var (first, _) = await End(ending, Says("I could not send the report."));
+        _fx.Write("disk-report.md", "all disks healthy");
         var before = _messages.Count;
+        var (second, events) = await End(ending, Says("Wrote the report; still no mail."));
 
-        var (verdict, _) = await End(ending, Says("I could not send the report."));
-
-        Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Blocked), (verdict.Next, verdict.Kind));
+        Assert.Equal(StepEnding.Next.Continue, first.Next);
+        Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Blocked), (second.Next, second.Kind));
         Assert.Equal(before, _messages.Count);
+        Assert.Contains(events, e => e.Summary.Contains("the step is blocked", StringComparison.Ordinal));
     }
 
-    /// <summary>A run whose turns are spent has no turn for a nudge: the step is let go with the outcome of what it owes.</summary>
+    /// <summary>Two criteria with the same name are two positions: making one of them good is progress.</summary>
     [Fact]
-    public async Task A_step_in_a_run_with_no_turns_left_is_not_told()
+    public async Task Two_criteria_with_one_name_are_told_apart()
     {
-        var before = _messages.Count;
+        var ending = Ending(TwoPerKind, [Exists("a file", "disk-report.md"), Exists("a file", "summary.md")]);
 
-        var (verdict, events) = await End(Ending(criteria: [DiskReport()]), Says("Done.") with { TurnsSpent = true });
+        await End(ending, Says("Done."));
+        _fx.Write("disk-report.md", "all disks healthy");
+        var (second, _) = await End(ending, Says("Wrote one."));
+
+        Assert.Equal(StepEnding.Next.Continue, second.Next);
+    }
+
+    /// <summary>A kind a limit of 0 lets go untold is said to have ended without being told - not "after being told 0 times".</summary>
+    [Fact]
+    public async Task A_kind_let_go_untold_says_so()
+    {
+        var (verdict, events) = await End(Ending(new ObligationNudgeLimits(PerKind: 0, Ceiling: 0), [DiskReport()]), Says("Done."));
 
         Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Incomplete), (verdict.Next, verdict.Kind));
-        Assert.Equal(before, _messages.Count);
-        Assert.Contains(events, e => e.Summary.Contains("turn budget", StringComparison.Ordinal));
+        Assert.Contains(events, e => e.Summary.Contains("still failing, without being told:", StringComparison.Ordinal));
+        Assert.DoesNotContain(events, e => e.Summary.Contains("0 times", StringComparison.Ordinal));
     }
 
     // ── refusal state the engine can see ────────────────────────────────────
