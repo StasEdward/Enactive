@@ -178,6 +178,13 @@ public sealed record RunCheckpoint(
     /// before the contract, whose steps never declared what they consume - it must not be read as if they had.
     /// </summary>
     public int? PlanContractVersion { get; init; }
+
+    /// <summary>
+    /// What the plan leaves uncovered of the lists its steps depend on, after its one replan (Plan Phase 1.2): each a
+    /// reason that keeps the run from Completed. Kept so a resumed run is held to it - resume does not plan, so it
+    /// cannot find it again. Null: none, or a checkpoint from before the contract.
+    /// </summary>
+    public IReadOnlyList<string>? CoverageObligations { get; init; }
 }
 
 /// <summary>

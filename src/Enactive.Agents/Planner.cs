@@ -56,6 +56,13 @@ public sealed record PlanResult(
     public string? Unsettled { get; init; }
     public Enactive.Core.Tools.TaskActionPolicy? ActionPolicy { get; init; }
     public IReadOnlyList<Enactive.Core.Tools.TaskRestriction> Restrictions { get; init; } = [];
+
+    /// <summary>
+    /// What the plan still leaves uncovered of the lists its steps depend on after its one replan (Plan Phase 1.2): a
+    /// run obligation each, which keeps the run from Completed (RunOutcomeDecision.Settle). Not a stop: the plan can
+    /// run, and the partial result has value.
+    /// </summary>
+    public IReadOnlyList<string> CoverageObligations { get; init; } = [];
 }
 
 /// <summary>

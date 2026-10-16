@@ -632,6 +632,87 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield return scope.Ev(EventKind.ErrorObserved, why);
         }
 
+        // ── What the steps do with the lists they depend on (Plan Phase 1.1-1.2) ──
+        //
+        // With step outputs and typed criteria on, a dependency on a step that hands on a list must say whether it
+        // consumes the list - and is then held to covering every item - or only waits for that step. Unsaid, the plan
+        // goes back to the planner once, with the diagnosis. What it still leaves unsaid is not a stop: the plan can run,
+        // and the partial result has value; it is a run obligation that keeps the run from Completed. A plan that cannot
+        // run at all (a cycle, a missing step) is left to the structural check below, which stops it as it always has.
+        // Before fan-out expansion, which happens at run time: an item's step carries no forEach and would read as a
+        // consumer that never said so. Not on resume: the plan is the checkpoint's, and so are its obligations.
+        IReadOnlyList<UpstreamCoverage.Derived> derivedCoverage = [];
+        if (resume is null && _options.StepOutputs && _options.TypedCriteria && plan.Disposition != IntentDisposition.QuickAction
+            && plan.Plan is { Steps.Count: > 0 } contracted && PlanValidation.Error(contracted) is null)
+        {
+            var contract = CoverageContract(plan);
+            foreach (var note in contract.Notes)
+                yield return scope.Ev(EventKind.ContextAssembled, note);
+            if (contract.Defects.Count > 0)
+            {
+                var diagnostic = CoverageDiagnostic(contract.Defects);
+                yield return scope.Ev(EventKind.ContextAssembled, diagnostic + " Asking the planner once.");
+                var before = plan with { Plan = contract.Plan };
+                var replanned = plan;
+                string? unclear = budget.TurnExhausted;
+                if (unclear is null)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    // A provider's failure comes back in the result (Planner.ReplanAsync), not as an exception to catch.
+                    replanned = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
+                        intent.RawText, intent.Context, before, diagnostic, models.PlanProvider, models.Plan.Model, ct,
+                        _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
+                        _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
+                    unclear = replanned.IncompleteReason;
+                    if (replanned.Usage.Any)
+                        yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, replanned.Usage);
+                }
+                // The corrected plan is shaped as the first one was - a forEach only where the switch allows it, and
+                // checked - and taken only if it can run. One that cannot does not replace the plan that can: that one
+                // runs, with what it leaves uncovered.
+                IReadOnlyList<string> notTaken = [];
+                if (unclear is null && replanned.Readout != PlanReadout.Unreadable && replanned.Plan is { Steps.Count: > 0 } fresh
+                    && PlanValidation.Error(fresh) is null)
+                {
+                    var shaped = fresh;
+                    IReadOnlyList<string> runOnce = [];
+                    if (!_options.DynamicSteps)
+                        shaped = fresh with { Steps = fresh.Steps.Select(st => st.Joins ? st : st with { ForEach = null }).ToArray() };
+                    else if (fresh.Steps.Any(st => st.ForEach is not null))
+                        (shaped, runOnce) = FanOut.Validate(fresh);
+                    if (PlanValidation.Error(shaped) is null)
+                    {
+                        notTaken = runOnce;
+                        contract = CoverageContract(replanned with { Plan = shaped });
+                        plan = replanned with { Plan = contract.Plan };
+                        foreach (var note in contract.Notes)
+                            yield return scope.Ev(EventKind.ContextAssembled, note);
+                    }
+                    else plan = before;
+                }
+                else plan = before;
+                foreach (var why in notTaken)
+                    yield return scope.Ev(EventKind.ErrorObserved, why);
+                if (ReferenceEquals(plan, before))
+                    yield return scope.Ev(EventKind.ContextAssembled, "The corrected plan was not taken"
+                        + (unclear is null ? " (it could not be read, or could not run)" : $" ({unclear})")
+                        + ": the plan as it was runs, with the lists it leaves uncovered.");
+                else if (contract.Defects.Count == 0)
+                    yield return scope.Ev(EventKind.ContextAssembled, "The planner said what each step does with the lists it depends on.");
+            }
+            else
+                plan = plan with { Plan = contract.Plan };
+            derivedCoverage = contract.Derived;
+            plan = plan with { CoverageObligations = contract.Defects };
+        }
+
+        // A plan from before the contract never said what its steps consume; resumed under it, it must not be read as
+        // if it had. Said once; no obligation is made up for it - nothing about the plan is known to be uncovered.
+        if (resume is { PlanContractVersion: null } && _options.StepOutputs && _options.TypedCriteria)
+            yield return scope.Ev(EventKind.ContextAssembled,
+                "This run was planned before the coverage contract: what its steps consume was never declared, so list coverage "
+                + "is not guaranteed.");
+
         // Validate before baseline checks, worker dispatch, or checkpoint writes can have effects.
         // A completed prefix in a checkpoint does not make a structurally invalid graph valid.
         if (plan.Disposition != IntentDisposition.QuickAction && plan.Plan is { } graph
@@ -677,6 +758,55 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield return scope.Ev(EventKind.ContextAssembled, "Planner criteria accepted: "
                     + string.Join("; ", accepted.Select(c => c.Command)));
             }
+        }
+
+        // The coverage each consume owes, beside the criteria accepted above and checked with them when the run ends.
+        // One the planner already wrote is not added again (UpstreamCoverage.NotAlreadyChecked).
+        if (derivedCoverage.Count > 0 && UpstreamCoverage.NotAlreadyChecked(derivedCoverage, CriteriaFor(plan)) is { Count: > 0 } owed)
+        {
+            plan = plan with { Checks = [.. plan.Checks, .. owed] };
+            yield return scope.Ev(EventKind.ContextAssembled, "Coverage the plan owes for the lists its steps consume, checked when "
+                + "the run ends: " + string.Join("; ", owed.Select(c => c.Name)));
+        }
+
+        // A list the plan still does not cover: asked once, before any work, when somebody can answer (Plan Phase 1.2). In
+        // an attended run this is the last cheap moment to rephrase the request; it is not a stop by default, because
+        // the replan already failed and the partial result has value. Going on does not waive the obligation - the run
+        // still cannot end Completed. With nobody to ask (unattended, scheduled, --approve deny) the run goes on: this
+        // is about completeness, not safety, and stopping would throw the partial result away; its final reason, and
+        // so its Inbox line, names the obligation. A resumed run is not asked again: its plan and obligations are the
+        // checkpoint's, and the answer was given when the run began.
+        if (resume is null && plan.CoverageObligations is { Count: > 0 } obligations)
+        {
+            var summary = string.Join("; ", obligations);
+            if (_decisions.CanApprove)
+            {
+                // No Subject and no "allow": nothing a standing approval answers (RememberedApprovals), and every plan's
+                // gap is a different one, so an answer to this is never kept for the next.
+                var question = new DecisionRequest(taskId, "The plan does not cover a list", summary,
+                    [new("go_on", "Go on - the run cannot end as completed"), new("stop", "Stop - no work starts")],
+                    RecommendedOptionId: "go_on", SessionOnly: true,
+                    FullDetail: "The plan was sent back to the planner once, and it still does not say how these lists are covered:\n"
+                        + string.Join("\n", obligations.Select(o => "- " + o))
+                        + "\n\nGoing on runs the plan as it is. It does not waive this: the run cannot end as completed while a "
+                        + "list it depends on is not covered. Stopping starts no work.")
+                    { RequiresExplicitAnswer = true };
+                yield return scope.Ev(EventKind.DecisionRequested, $"{question.Topic}: {summary}");
+                var settled = await ToolAccess.AskAsync(_decisions, _decisionGate, question, ct);
+                yield return scope.Ev(EventKind.DecisionResolved, $"List coverage: {settled.OptionId}"
+                    + (settled.Because is { } because ? $" ({because})" : ""));
+                // As at the final-checks question: a person who answers "stop" has stopped the run. Any other answer -
+                // or one somebody else gave in advance - goes on, under the obligation.
+                if (settled.Because is null && string.Equals(settled.OptionId, "stop", StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return scope.Terminal(RunOutcomeKind.Cancelled,
+                        "Stopped at the question about list coverage; no work started.", _ => "");
+                    yield break;
+                }
+            }
+            else
+                yield return scope.Ev(EventKind.ContextAssembled, "Nobody to ask about the lists the plan does not cover: the "
+                    + $"run goes on, and cannot end as completed - {summary}");
         }
 
         if (_planner.ChecksAuditEnabled)
@@ -1362,7 +1492,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     Baseline = session.Builds.Count == 0 ? null : session.Builds.Select(b => b.ToSnapshot()).ToArray(),
                     Waves = waves?.ToCheckpoint(waveBeforeKept),
                     // A resumed checkpoint keeps the contract it was planned under: a plan from before it is not one after.
-                    PlanContractVersion = resume is null ? PlanContractVersions.Current : resume.PlanContractVersion };
+                    PlanContractVersion = resume is null ? PlanContractVersions.Current : resume.PlanContractVersion,
+                    CoverageObligations = plan.CoverageObligations.Count > 0 ? plan.CoverageObligations : null };
         });
 
         // Forgets the checkpoint: this run reached an end, and an ending is not resumable. Called
@@ -2312,7 +2443,7 @@ public sealed partial class Orchestrator : IOrchestrator
         foreach (var check in finalChecks)
             yield return scope.Criterion(check);
 
-        var (runOutcome, runReason) = RunOutcomeDecision.Settle(work, decision, verification, finalChecks);
+        var (runOutcome, runReason) = RunOutcomeDecision.Settle(work, decision, verification, finalChecks, plan.CoverageObligations);
 
         // This run reached an end, whatever kind of end. Nothing here is resumable any more, and a
         // checkpoint left behind would offer to redo work that is finished. Except a BLOCKED run (Phase 7): it
@@ -2356,6 +2487,37 @@ public sealed partial class Orchestrator : IOrchestrator
             review is null ? null : RunProvider(review.ProviderId, budget));
     }
 
+    /// <summary>What a plan's steps do with the lists they depend on, and what they owe for it - see <see cref="CoverageContract"/>.</summary>
+    private sealed record PlanCoverage(Plan Plan, IReadOnlyList<string> Notes, IReadOnlyList<string> Defects,
+        IReadOnlyList<UpstreamCoverage.Derived> Derived);
+
+    /// <summary>
+    /// A plan's coverage contract (Plan Phase 1.1-1.2): each covers_all the planner wrote and the engine accepts, read
+    /// as the consume it states; every list dependency classified (PlanConsumes); and the coverage each consume owes
+    /// (UpstreamCoverage). A defect is either one the classifier found or a consume no criterion can be derived for.
+    /// </summary>
+    private PlanCoverage CoverageContract(PlanResult plan)
+    {
+        var written = TypedCriteria.Validate(
+            plan.PlannedCriteria.Where(c => c.Kind.Trim().Equals("covers_all", StringComparison.OrdinalIgnoreCase)).ToArray(),
+            _workspace.RootPath, _ecosystems, plan.Plan).Accepted;
+        var classified = PlanConsumes.Classify(UpstreamCoverage.WithPlannedCoverage(plan.Plan!, written));
+        var derived = UpstreamCoverage.Derive(classified.Plan);
+        return new(classified.Plan, classified.Notes, [.. classified.Defects, .. derived.Defects], derived.Criteria);
+    }
+
+    /// <summary>What the planner is told when its plan does not say how it covers the lists it depends on.</summary>
+    // What a consume costs is said, not only that something is missing: told only "say consumes or after", the cheaper
+    // word wins, and "after" on a step that uses the data hands it nothing.
+    private static string CoverageDiagnostic(IReadOnlyList<string> defects)
+        => "The plan does not say how some steps account for the lists they depend on: " + string.Join("; ", defects) + ". "
+           + "A step that depends on a step handing on a list (path[], string[]) either consumes it or only waits for it. "
+           + "Consuming costs something: \"consumes\":[{\"step\":0,\"field\":\"pages\"}] holds the step to accounting for every "
+           + "item - it declares a results output (\"type\":\"results\", one entry per item) or is done for each item (\"forEach\") - "
+           + "and the run cannot end as completed until each item is shown covered. \"after\":[0] says the step only waits for "
+           + "that step: an order, not data, and it is handed none of that step's results. Steps are numbered from 1 in this "
+           + "message and from 0 in the plan.";
+
     /// <summary>The plan a checkpoint is carrying, rebuilt with the step ids it was written with.</summary>
     private static PlanResult PlanOf(RunCheckpoint checkpoint)
     {
@@ -2380,7 +2542,8 @@ public sealed partial class Orchestrator : IOrchestrator
         return new PlanResult(
             IntentDisposition.Task, checkpoint.Title, new Plan(Guid.NewGuid(), steps),
             Readout: PlanReadout.Understood)
-            { Checks = checkpoint.Checks ?? Array.Empty<SuccessCriterionDefinition>(), RestoredChecks = checkpoint.Checks is not null, Restrictions = checkpoint.Restrictions, ActionPolicy = checkpoint.ActionPolicy };
+            { Checks = checkpoint.Checks ?? Array.Empty<SuccessCriterionDefinition>(), RestoredChecks = checkpoint.Checks is not null, Restrictions = checkpoint.Restrictions, ActionPolicy = checkpoint.ActionPolicy,
+              CoverageObligations = checkpoint.CoverageObligations ?? [] };
     }
 
     /// <summary>What each step's status was when the checkpoint was written.</summary>
