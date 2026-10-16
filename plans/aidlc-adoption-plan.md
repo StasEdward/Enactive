@@ -294,8 +294,8 @@ The "4 of 6 fields" state does not exist today. A refused submission is not stor
   - `Signature` = step number + sorted ids of failing step criteria + the slot's structured refusal state (which
     required fields are missing or invalid) + `OpenFailures.Describe()` keys + a pending text-described call.
     Deterministic, built only from the engine's own state - never from the model's text.
-  - `Nudge(signature)` returns `Nudge` while the obligation's kind is under its limit, the step is under its total
-    ceiling and the signature has not been **seen before** in this step; otherwise `Release`. A new signature
+  - `Nudge(signature)` returns `Nudge` while the obligation's kind is under its limit, the step is under its
+    added-reminder ceiling (a kind's first reminder never counts against it) and the signature has not been **seen before** in this step; otherwise `Release`. A new signature
     counts as progress; a signature seen before does not, so A -> B -> A alternation cannot reset the count forever.
     An empty signature means nothing is owed.
 - `StepEnding`: the four flags become calls into one `ObligationLoop`. Their lifetimes differ today: the
@@ -303,20 +303,29 @@ The "4 of 6 fields" state does not exist today. A refused submission is not stor
   retries (`RunSession.cs:99-100`). The loop's state lives in one declared place - per attempt - and the test says so.
   The rule order of `EndAsync` stays as it is. `Release` keeps today's outcomes (`Incomplete`, handed to review,
   `Blocked`), apart from PR 0's fix.
-- Limits: `EngineOptions.ObligationNudges` = a limit **per kind of obligation** plus a total ceiling per step, with
-  an attended and an unattended pair. Unattended is a run property read from `RunScope`, not `CanApprove`: that
-  one means "an approval is possible at all" and is also false for console `--approve deny`
-  (`App.Console/Program.cs:721`); `StepEnding` has no access to decisions anyway.
-  **The compatible default is 1 per kind, total ceiling = number of kinds** - that, not "1/1", is today's behaviour,
-  because today each kind has its own once-flag. The bench decides new values, under a hard ceiling in code with
-  the reason in a comment (AI-DLC caps at 2 interactive / 8 autonomous for a different unit of work - do not copy).
-- Releases without a nudge, as AI-DLC's Stop hook has human-wait carve-outs: the step waits for a person's answer,
-  the step is `Blocked`, or the turn budget is exhausted.
+- Limits: `EngineOptions.ObligationNudges` = a limit **per kind of obligation** plus a ceiling on the reminders the
+  loop ADDS per step, with an attended and an unattended pair. Unattended is a property of where the run was started
+  (`RunEngineResources.Unattended`, set by `RunComposer` as `!Attended(request)`; a resumed run's intent is rebuilt,
+  so the run scope cannot tell), not `CanApprove`: that one means "an approval is possible at all" and is also false
+  for console `--approve deny` (`App.Console/Program.cs:721`); `StepEnding` has no access to decisions anyway.
+  **The first reminder of each kind is untouchable**: it is always given, whatever the limits, the ceiling, the
+  carve-outs or the context guard say - they only withhold reminders the loop adds. **The compatible default is 1 per
+  kind and an added-reminder ceiling of (per kind - 1) x number of kinds = 0** - that, not "1/1", is today's
+  behaviour, because today each kind has its own once-flag. The bench decides new values, under a hard per-kind cap in
+  code with the reason in a comment (AI-DLC caps at 2 interactive / 8 autonomous for a different unit of work - do
+  not copy).
+- Releases without a nudge (added reminders only), as AI-DLC's Stop hook has carve-outs: the step is `Blocked`, or the
+  context window is near full. Two carve-outs from the first draft are not taken: "the step waits for a person's
+  answer" (a question unwinds the step before it ends, so it could never fire) and "the turn budget is exhausted"
+  (the budget check already ends the step before the next model call; the carve-out let a described call fall
+  through to `Succeeded`). One intended difference at defaults: a review retry is reminded again to hand on a result
+  it still has not handed on (the slot's once-across-retries flag is gone).
 - Context guard: every nudge adds a turn; with a local model at 8k `num_ctx` that is real. Not `EvidenceBudget` -
   that is the characters of evidence shown to the reviewer (`EngineOptions.cs:145`). Use the window the engine
   already knows at step level (`Turn.ContextWindow`/`PromptTokens`, `Orchestrator.cs:3366-3367`, `:4134-4136`) and
   the existing trim/handover/"window full" handling (`Orchestrator.cs:3837-3935`). When the provider states no
-  window, the loop does not guess one; the ceiling applies.
+  window, the loop does not guess one; the ceiling applies. Like the carve-outs, the guard never withholds a kind's
+  first reminder.
 - The existing stall counter stays (`StepProgress.Stalled`, `StallLimit = 3` at `Orchestrator.cs:50`): it watches
   *calls*, this watches *obligations*. A step can trip either.
 
@@ -525,7 +534,11 @@ and a second "parked" would be ambiguous in code, events and UI.
 - This is not `NeedsUser`: that one parks mid-step on a question and stays as it is.
 - Use the existing completion path; 4.1 is not required. Retain full check/rule snapshots and any pending wave/apply
   checks in the checkpoint. Do not report a successful resumable pause unless checkpoint persistence succeeded;
-  expose a save failure explicitly instead of promising a resumable boundary that was not stored.
+  expose a save failure explicitly instead of promising a resumable boundary that was not stored. A failed save keeps
+  the step-boundary checkpoints already written and says which, if any, can be resumed as an interrupted run.
+- A staged run and a quick action ignore a pause (a staged run's proposals live only in memory and are never
+  checkpointed; a quick action has no step boundary); the engine says so in one line, and hosts do not offer the
+  control for them (`PauseOffer`). Phone/remote runs are not wired to a pause yet.
 
 ### 4.3 `Next` without claiming (AI-DLC `next`)
 
