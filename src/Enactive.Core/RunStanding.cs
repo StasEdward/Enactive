@@ -42,6 +42,9 @@ public static class RunStanding
         // was drawn as a run in progress, which is the one thing it is not: nothing moves until
         // somebody answers.
         "needsuser" => RunStandingKind.Open,
+        // Paused at a step boundary because somebody asked, and resumed from there (Plan Phase 4.2). Not still going:
+        // nothing moves until it is resumed.
+        "paused" => RunStandingKind.Open,
         // What older history calls a run that was cut off. It is over, and it too read as going.
         "interrupted" => RunStandingKind.Open,
         "cancelled" or "canceled" or "idle" or "" => RunStandingKind.Idle,
@@ -58,6 +61,7 @@ public static class RunStanding
         "cancelled" or "canceled" => "cancelled",
         "blocked" => "blocked",
         "needsuser" => "waiting for you",
+        "paused" => "paused",
         "incomplete" or "interrupted" => "not finished",
         _ => null
     };

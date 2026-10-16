@@ -12,6 +12,12 @@ internal static class RunRecovery
 {
     public static string Warning(RunCheckpoint checkpoint)
     {
+        // Paused (Plan Phase 4.2): it ended between steps, with nothing running, so nothing runs again - telling the
+        // person a step may be done twice would warn them off a resume that redoes nothing.
+        if (checkpoint.Paused)
+            return "It was paused between steps: nothing it did is done again. "
+                   + $"{checkpoint.Remaining} step(s) are left; the run continues under the level and worker it was started with.";
+
         var unfinished = checkpoint.Steps.Where(s => s.Status is not ("Done" or "Failed" or "Skipped")).ToList();
         var interrupted = unfinished.FirstOrDefault(s => s.Status == "Running") ?? unfinished.FirstOrDefault();
         var what = interrupted is null

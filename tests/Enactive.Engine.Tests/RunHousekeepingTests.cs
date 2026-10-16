@@ -62,7 +62,8 @@ public sealed class RunHousekeepingTests
         [RunOutcomeKind.Incomplete] = true,
         [RunOutcomeKind.Cancelled] = true,
         [RunOutcomeKind.NeedsUser] = true,
-        [RunOutcomeKind.Blocked] = true
+        [RunOutcomeKind.Blocked] = true,
+        [RunOutcomeKind.Paused] = true
     };
 
     [Fact]

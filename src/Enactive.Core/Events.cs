@@ -122,7 +122,15 @@ public enum RunOutcomeKind
     /// that says it cannot go on (Phase 7). Each blocked step is named with its cause; the checkpoint and the
     /// answers given so far are kept, and once the cause is removed the SAME run carries on from the blocked steps.
     /// </summary>
-    Blocked
+    Blocked,
+
+    /// <summary>
+    /// Stopped at a step boundary because somebody asked it to (Plan Phase 4.2, <c>RunPause</c>): the steps that were
+    /// running finished, nothing new started, and the checkpoint, the answers given and the baseline are kept. Resumed,
+    /// it runs exactly the steps that are left. Not an ending, and nothing about the work is known to be wrong. Last,
+    /// although outcomes are stored by name: the place does not matter, the consumers that must place it do.
+    /// </summary>
+    Paused
 }
 
 /// <summary>How one unit of work ended. Aggregated into a <see cref="RunOutcomeKind"/>.</summary>

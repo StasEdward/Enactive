@@ -856,6 +856,21 @@ public sealed class RunControlTests : IDisposable
         Assert.Contains("2 step(s) are left", warning);
     }
 
+    /// <summary>
+    /// A paused run stopped between steps (Plan Phase 4.2): nothing runs again, and the warning does not say it does -
+    /// it said a step "runs again from its start" and "may be done twice" of a run that redoes nothing.
+    /// </summary>
+    [Fact]
+    public void Resuming_a_paused_run_does_not_warn_that_anything_runs_again()
+    {
+        var warning = Enactive.Application.RunRecovery.Warning(Interrupted("Done", "Pending", "Pending") with { Paused = true });
+
+        Assert.DoesNotContain("runs again", warning);
+        Assert.DoesNotContain("may be done twice", warning);
+        Assert.Contains("paused between steps", warning);
+        Assert.Contains("2 step(s) are left", warning);
+    }
+
     // ── acting on the history (phase 2: everything the window does around a run) ─
 
     private ServerHistory HistoryOf() => HistoryOf(out _);

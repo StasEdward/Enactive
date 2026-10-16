@@ -185,6 +185,14 @@ public sealed record RunCheckpoint(
     /// cannot find it again. Null: none, or a checkpoint from before the contract.
     /// </summary>
     public IReadOnlyList<string>? CoverageObligations { get; init; }
+
+    /// <summary>
+    /// Written by a run that was PAUSED (Plan Phase 4.2), not left behind by one that stopped: no step was running, so a
+    /// resume redoes nothing and runs exactly the steps that are left. False for every other checkpoint - a step
+    /// boundary written on the way, which is what a process that died leaves - and for every checkpoint written before
+    /// pausing existed. Resumed through the same path as any other (<see cref="IsResumable"/>).
+    /// </summary>
+    public bool Paused { get; init; }
 }
 
 /// <summary>

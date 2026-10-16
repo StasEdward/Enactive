@@ -35,6 +35,9 @@ public static class RunReport
         // Its own too, for the same reason: something outside the run - a permission, a missing input - is
         // waiting for somebody to put it right, and then the same run is resumed.
         RunOutcomeKind.Blocked => 4,
+        // Its own as well (Plan Phase 4.2): nothing went wrong and nothing is finished - somebody paused it, and it is
+        // resumed with --resume. A pipeline that alerted on it would be alerting on a person's own decision.
+        RunOutcomeKind.Paused => 5,
         _ => 1
     };
 

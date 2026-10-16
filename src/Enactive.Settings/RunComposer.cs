@@ -71,6 +71,14 @@ public sealed record RunRequest(
     public string? KeepProposalsIn { get; init; }
 
     /// <summary>
+    /// The host's "Pause after this step" for this run (Plan Phase 4.2): the host makes one, keeps it, and calls
+    /// <see cref="RunPause.Request"/> when the person asks. The run then starts nothing new, lets the steps running
+    /// finish, and ends <see cref="RunOutcomeKind.Paused"/> with a checkpoint it is resumed from like any other
+    /// (<see cref="Resume"/>). One per run - a resumed run is given a new one. Null: the run cannot be paused, as before.
+    /// </summary>
+    public RunPause? Pause { get; init; }
+
+    /// <summary>
     /// A task from a phone, governed by what is saved against THE WORKSPACE IT NAMES - its level, its worker,
     /// its staging - and not by the desktop's slider, which is about whatever folder happens to be open
     /// there. Reading the slider for both once ran a remote task at whatever permission an unrelated project
@@ -272,7 +280,8 @@ public static class RunComposer
                 Settings = runSettings,
                 // Where the run was started, and so whether anybody watches it - not who answers its questions: a
                 // console run under "--approve deny" can approve nothing and is watched all the same.
-                Unattended = !Attended(request)
+                Unattended = !Attended(request),
+                Pause = request.Pause
             }, engine.EngineOptions);
 
             var context = await new ContextProvider(workspace, new EnvironmentProbe(), memory)

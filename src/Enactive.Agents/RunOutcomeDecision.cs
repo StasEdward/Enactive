@@ -159,6 +159,25 @@ internal static class RunOutcomeDecision
     }
 
     /// <summary>
+    /// What a run paused at a step boundary comes to (Plan Phase 4.2): Paused, and where - when its checkpoint was
+    /// saved. Not otherwise: a pause is a promise that the run can be carried on from here, and without the checkpoint
+    /// nothing can carry it on. Incomplete then, because that is what it is - the work stopped short and nothing is known
+    /// to be wrong - and the reason says the pause was asked for and what was lost, so nobody looks for a resume that is
+    /// not there.
+    /// </summary>
+    /// <param name="finished">Steps settled - done, failed or skipped - out of <paramref name="total"/>.</param>
+    /// <param name="notSaved">Why the paused checkpoint could not be saved; null when it was.</param>
+    public static (RunOutcomeKind Outcome, string Reason) Paused(int finished, int total, string? notSaved)
+    {
+        var at = $"Paused at step {finished} of {total}";
+        var left = total - finished;
+        return notSaved is null
+            ? (RunOutcomeKind.Paused, $"{at}: {finished} step(s) settled, {left} left - resume the run to carry on with them.")
+            : (RunOutcomeKind.Incomplete, $"{at}, but the checkpoint could not be saved: {notSaved}. The {left} step(s) left "
+                                          + "cannot be resumed; run the task again to do them.");
+    }
+
+    /// <summary>
     /// The run's outcome from its steps'. Anything that went wrong outranks anything that went right:
     /// a plan is not finished because most of it finished.
     /// </summary>

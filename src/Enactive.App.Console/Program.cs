@@ -687,6 +687,10 @@ if (outcome == RunOutcomeKind.Blocked)
     Console.WriteLine("The run is blocked. Put the cause right (see above), then run with --resume to carry on "
         + "from the blocked step(s); with --approve allow if what blocks it is a refused permission.");
 
+// Nor is a paused one (Plan Phase 4.2): it kept its checkpoint at a step boundary, and nothing is redone.
+if (outcome == RunOutcomeKind.Paused)
+    Console.WriteLine("The run is paused. Run with --resume to carry on with the step(s) that are left.");
+
 // One line, last, in a shape something other than a person can read.
 //
 // The report above is for reading; this is for a scenario runner deciding what happened. The exit

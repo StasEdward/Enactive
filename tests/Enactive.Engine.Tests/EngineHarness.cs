@@ -396,6 +396,9 @@ public sealed class EngineFixture : IDisposable
     public bool ReportBlocked { get; set; }
     public bool SemanticCriteria { get; set; }
 
+    /// <summary>The host's "pause after this step" for the runs built here (Plan Phase 4.2); none unless a test is about it.</summary>
+    public RunPause? Pause { get; set; }
+
     /// <summary>Where wave captures are kept: beside this fixture's folder, never in the machine's own store.</summary>
     public string WaveStore => Root + "-waves";
 
@@ -583,7 +586,8 @@ public sealed class EngineFixture : IDisposable
             SuccessCriteria = successCriteria ?? [],
             Limits = limits ?? ExecutionLimits.None,
             Checkpoints = checkpoints,
-            Settings = settings
+            Settings = settings,
+            Pause = Pause
         },
         EngineOptions.Default with
         {

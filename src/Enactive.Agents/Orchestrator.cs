@@ -212,6 +212,9 @@ public sealed partial class Orchestrator : IOrchestrator
     /// <summary>Nobody watches this run (RunEngineResources.Unattended): its steps are told what they owe under the unattended limits.</summary>
     private readonly bool _unattended;
 
+    /// <summary>The host's "pause after this step" (Plan Phase 4.2); null for a run nobody can pause.</summary>
+    private readonly RunPause? _pause;
+
     /// <summary>
     /// An orchestrator for one run: what the run is given, and the engine's switches - two values, both said.
     /// The switches used to default to EngineOptions.Default when left out, so a host could forget the
@@ -226,6 +229,7 @@ public sealed partial class Orchestrator : IOrchestrator
         _checkpoints = resources.Checkpoints;
         _settings = resources.Settings;
         _unattended = resources.Unattended;
+        _pause = resources.Pause;
         _successCriteria = resources.SuccessCriteria;
         _limits = resources.Limits;
         _workspaceChanges = resources.WorkspaceChanges;
@@ -338,8 +342,10 @@ public sealed partial class Orchestrator : IOrchestrator
             await events.DisposeAsync();
         }
         // A blocked run has not ended (Phase 7.3): the answers it was given, its baseline and its place are
-        // what it carries on with once the cause is put right.
-        if (ended == RunOutcomeKind.Blocked) yield break;
+        // what it carries on with once the cause is put right. Nor has a paused one (Plan Phase 4.2): its resume is
+        // the same run going on, and without these it would ask again what it was told and call the errors its first
+        // part made old.
+        if (ended is RunOutcomeKind.Blocked or RunOutcomeKind.Paused) yield break;
         _ledger.Forget(taskId);
         _baselines.Forget(taskId);
         _progress.Forget(taskId);
@@ -1465,7 +1471,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 return blockHistory.TryGetValue(id, out var list) ? list.ToArray() : null;
         }
 
-        Task CheckpointAsync() => checkpointWriter.SaveAsync(() =>
+        Task CheckpointAsync() => checkpointWriter.SaveAsync(CaptureCheckpoint);
+
+        // The run as a checkpoint describes it, now. One capture for every checkpoint the run writes - on the way, and
+        // the one a pause ends with (Plan Phase 4.2) - so a paused run keeps everything any other checkpoint keeps.
+        RunCheckpoint CaptureCheckpoint()
         {
             string[] doneLines;
             ArtifactRef[] produced;
@@ -1511,7 +1521,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     // The contract it was planned under, if any (planContractVersion): a plan from before it is not one after.
                     PlanContractVersion = planContractVersion,
                     CoverageObligations = plan.CoverageObligations.Count > 0 ? plan.CoverageObligations : null };
-        });
+        }
 
         // Forgets the checkpoint: this run reached an end, and an ending is not resumable. Called
         // for every ending, not only a good one - a run that FAILED ran to a conclusion, and the
@@ -2244,7 +2254,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 // have settled more steps than the checkpoint had, and the number a person reads
                 // should be the number of steps this run is not going to do.
                 $"Resumed: {stepOutcomes.Count} of {builtPlan.Steps.Count} step(s) were already settled when "
-                + $"the previous run stopped on {resume.At.ToLocalTime():yyyy-MM-dd HH:mm}."
+                + $"the previous run {(resume.Paused ? "was paused" : "stopped")} on {resume.At.ToLocalTime():yyyy-MM-dd HH:mm}."
                 + (resume.Steps.Any(s => s.Status == nameof(StepStatus.Running))
                     ? " One step was in progress and is being done again from its beginning — the "
                       + "files it had already written are still in the workspace."
@@ -2438,7 +2448,11 @@ public sealed partial class Orchestrator : IOrchestrator
                     // resume does not quietly do work a limit had already refused.
                     await CheckpointAsync();
                 }, () => events.Writer.TryComplete(), waves is null ? null : WaveBoundaryAsync,
-                waves is null ? null : () => waves.Waiting);
+                // Two reasons to start nothing new, one gate: a wave waiting to be validated, and a pause (Plan Phase
+                // 4.2). Held, the dispatcher lets what is running finish - a pause cancels nothing, unlike Stop - and a
+                // wave that ends meanwhile is still validated at its boundary, before the run ends. Null when neither
+                // can hold, so a run nobody can pause is dispatched exactly as before.
+                waves is null && _pause is null ? null : () => _pause?.IsRequested == true || waves?.Waiting == true);
         }, CancellationToken.None);
 
         try
@@ -2457,6 +2471,43 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
+        // Paused (Plan Phase 4.2): the dispatcher stopped because a pause held it, with steps it could have started.
+        // Every step that was running has finished and committed - its outcome, its card, its checkpoint - so this is
+        // a step boundary, and the run ends HERE: no AbandonPending and no skip cascade (the steps left are not
+        // skipped, they are still to do), no closing documents, criteria or final checks (they are about a finished
+        // run, and the run that finishes is the resume). What it does is save the checkpoint it will be carried on
+        // from, marked Paused, and keep its answers and baseline (StopsAtQuestions) as a blocked run does.
+        // Told from a cycle by HasReady: a pause with nothing left that could start is not a pause of anything.
+        if (_pause?.IsRequested == true && limitReason is null && scheduler.HasReady)
+        {
+            RunCheckpoint? pausedAt = null;
+            // A staged run is never checkpointed - the store skips it without a word (JsonCheckpointStore) - so a save
+            // that "succeeded" would promise a resume nothing can do.
+            var notSaved = _settings?.Staged == true
+                ? "a run that stages its changes keeps no checkpoint - they are held to be applied, not written"
+                : await checkpointWriter.SaveOrSayWhyNotAsync(() => pausedAt = CaptureCheckpoint() with { Paused = true });
+            var settledSteps = pausedAt?.Finished ?? scheduler.Snapshot().Values.Count(s => s is StepStatus.Done or StepStatus.Failed or StepStatus.Skipped);
+            var (pauseOutcome, pauseReason) = RunOutcomeDecision.Paused(settledSteps, scheduler.Total, notSaved);
+            if (notSaved is null)
+            {
+                // The checkpoint this resumed run began from is behind the one just saved; left, it would be offered
+                // as a second way to carry the same task on - redoing what this run did since.
+                if (resume is not null && resume.RunId != scope.RunId)
+                    await checkpointWriter.ForgetOnlyAsync(resume.RunId);
+            }
+            else
+            {
+                // Not resumable, so nothing may be left that offers to resume it: the boundary checkpoints written
+                // on the way would, and their steps would read as interrupted, not paused.
+                yield return scope.Ev(EventKind.ErrorObserved, "The paused run's checkpoint could not be saved: " + notSaved);
+                await ForgetCheckpointAsync();
+            }
+
+            RecordWhatThisRunWrote(scope, intent);
+            yield return scope.Terminal(pauseOutcome, pauseReason,
+                artifacts => SummarizeArtifacts(artifacts, null, _artifacts.PendingPaths, _workspace.RootPath));
+            yield break;
+        }
 
         // The documents, once more from the final records - so a resumed run, or one a limit stopped,
         // leaves the same document a finished one would have for what it did.

@@ -234,7 +234,7 @@ public sealed class LooksTests
         var arms = Regex.Matches(block, "\"(?<kind>\\w+)\"\\s*=>\\s*Brand\\.(?<member>\\w+)")
             .ToDictionary(m => m.Groups["kind"].Value, m => m.Groups["member"].Value);
         var other = Regex.Match(block, @"_\s*=>\s*Brand\.(?<member>\w+)");
-        Assert.Equal(["decision", "error", "result"], arms.Keys.Order());
+        Assert.Equal(["decision", "error", "paused", "result"], arms.Keys.Order());
         Assert.True(other.Success, "Palette.InboxKind has no `_ => Brand.X` arm in the shape this test reads.");
 
         var rows = arms.Select(a => (Kind: a.Key, Class: Looks.Inbox(a.Key), Window: BrandHex(a.Value)))

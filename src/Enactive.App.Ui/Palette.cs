@@ -204,12 +204,14 @@ internal static class Palette
 
     // ── what came back while nobody was watching ────────────────────────────
 
-    /// <summary>An Inbox item's kind - a result, a question nobody was there to answer, an error - in the Inbox and in a schedule's past.</summary>
+    /// <summary>An Inbox item's kind - a result, a question nobody was there to answer, an error, a paused run - in the Inbox and in a schedule's past.</summary>
     public static readonly IValueConverter InboxKind = Map<string>(kind => kind.ToLowerInvariant() switch
     {
         "result" => Brand.Success,
         "decision" => Brand.Amber,
         "error" => Brand.Danger,
+        // Paused by somebody, resumed from where it stopped (Plan Phase 4.2): neither done nor wrong - open, as its run is.
+        "paused" => Brand.Amber,
         _ => Brand.TextMuted
     });
 

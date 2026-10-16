@@ -208,6 +208,7 @@ public sealed class RunFeed
     private const string QuickActionMarker = "Quick action: ";
     private const string StepsMarker = " steps: ";
     private const string NeverFinished = "Never finished — the run ended here";
+    private const string PausedBefore = "Not started — the run was paused before it; resume the run to do it";
 
     // Numbering order: a plan's step N is _cards[_planOffset + N - 1]; cards made before the plan come first.
     private readonly List<FeedCard> _cards = new();
@@ -433,12 +434,18 @@ public sealed class RunFeed
             RunOutcomeKind.Completed => StepOutcomeKind.Succeeded,
             RunOutcomeKind.Incomplete or RunOutcomeKind.NeedsUser => StepOutcomeKind.Incomplete,
             RunOutcomeKind.Blocked => StepOutcomeKind.Blocked,
+            // Stopped at a boundary on purpose (Plan Phase 4.2): what ran finished, the rest is still to do.
+            RunOutcomeKind.Paused => StepOutcomeKind.Incomplete,
             _ => StepOutcomeKind.Failed
         };
 
         foreach (var card in _cards.Where(c => !c.Ended).ToArray())
         {
-            if (!IsPlanStep(card))
+            // A paused run's step that never started did not end wrongly: it is still to come, on the resume. Every
+            // step that was running when the pause came finished before the run ended, so none is cut off here.
+            if (outcome == RunOutcomeKind.Paused && IsPlanStep(card) && card.Status == FeedCardStatus.Pending)
+                card.SetActivity(PausedBefore);
+            else if (!IsPlanStep(card))
                 // A completed run's reason is what must be added to "done" - the checks that overruled the steps,
                 // or one of the engine's own that failed (RunOutcomeDecision.Settle) - and the card says it.
                 Finish(card, step, reason);

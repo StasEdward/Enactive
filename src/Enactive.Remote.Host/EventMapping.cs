@@ -132,6 +132,8 @@ public static class EventMapping
             RunOutcomeKind.NeedsUser => (RemoteEventKind.Incomplete, detail),
             // Nor for "blocked, resume once put right" (Phase 7); the detail says what blocks it.
             RunOutcomeKind.Blocked => (RemoteEventKind.Incomplete, detail),
+            // Nor for "paused, resume to carry on" (Plan Phase 4.2); the detail says where it was paused.
+            RunOutcomeKind.Paused => (RemoteEventKind.Incomplete, detail),
 
             // The engine ended the run and did not say how. Reported as unfinished rather than as
             // either success or failure: both would be inventions, and this way the run stops

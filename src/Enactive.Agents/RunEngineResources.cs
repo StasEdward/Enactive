@@ -3,6 +3,7 @@ namespace Enactive.Agents;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Builds;
 using Enactive.Core.Context;
+using Enactive.Core.Execution;
 using Enactive.Core.History;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
@@ -94,6 +95,12 @@ public sealed record RunEngineResources
     /// caller that does not say, which is what a test driving the engine is.
     /// </summary>
     public bool Unattended { get; init; }
+
+    /// <summary>
+    /// The host's "pause after this step" for this run (Plan Phase 4.2) - see <see cref="RunPause"/>. Null: the run
+    /// cannot be paused, which is how every run behaved before pausing existed.
+    /// </summary>
+    public RunPause? Pause { get; init; }
 
     // ── this machine's places ───────────────────────────────────────────────
 

@@ -66,6 +66,8 @@ public static class RunHousekeeping
         nameof(RunOutcomeKind.Cancelled),
         nameof(RunOutcomeKind.NeedsUser),
         nameof(RunOutcomeKind.Blocked),
+        // Stopped at a step boundary because somebody asked (Plan Phase 4.2): the steps left are still to do.
+        nameof(RunOutcomeKind.Paused),
         "Interrupted"
     };
 
