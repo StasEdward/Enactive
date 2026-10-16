@@ -107,6 +107,46 @@ public sealed class CoverageAtTheJoinTests
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
     }
 
+    private const string FilteringEach = """
+        {"disposition":"task","title":"review the wiki",
+         "steps":[{"title":"find pages","dependsOn":[],"output":{"pages":{"type":"path[]","description":"the pages"}}},
+                  {"title":"review page","dependsOn":[0],"forEach":{"step":0,"field":"pages"},
+                   "consumes":[{"step":0,"field":"pages","subset":true}],
+                   "output":{"notes":{"type":"results","description":"a note per page"},
+                             "excluded":{"type":"results","description":"why a page is left out"}}},
+                  {"title":"write the report","dependsOn":[1]}]}
+        """;
+
+    /// <summary>
+    /// A step done for each item that filters: an item's step may leave its page out with a reason. The partition holds
+    /// at the join - but a join has no reviewer, and its item steps are not asked about what they left out, so nothing
+    /// approves the omission: the join is done, not confirmed, the exclusion named, and the run cannot be Completed.
+    /// </summary>
+    [Fact]
+    public async Task Items_left_out_by_a_step_for_each_item_leave_the_join_unconfirmed()
+    {
+        var pages = Pages(3);
+        using var fx = Wiki(3);
+        var worker = new FakeChatProvider([Turn.Says(FilteringEach), .. Found(pages),
+            .. Review(pages[0]),
+            Turn.Calls1(StepOutputContract.ToolName, JsonSerializer.Serialize(new { excluded = new Dictionary<string, string> { [pages[1]] = "a stub" } }), "x-p02"),
+            Turn.Says("Left the stub out."),
+            .. Review(pages[2]),
+            Turn.Says("Report written.")]);
+
+        var events = await fx.RunAsync(fx.Build(worker), "review the wiki pages worth reviewing and write a report");
+
+        var join = StepEnd(events, 2);
+        Assert.Equal(StepOutcomeKind.DoneUnverified, join.StepOutcome());
+        Assert.Contains($"{pages[1]} (a stub)", join.OutcomeReason(), StringComparison.Ordinal);
+        Assert.Contains("no review approved it", join.OutcomeReason(), StringComparison.Ordinal);
+        Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(events, 3).StepOutcome());
+        // The partition itself holds: the run-end check passes, and still the run is not Completed.
+        Assert.Contains(events, e => e.IsCheck() && e.Summary.StartsWith("PASS", StringComparison.Ordinal)
+                                     && e.Summary.Contains("Every pages item of step 1", StringComparison.Ordinal));
+        Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
     /// <summary>Regression guard: every item covered, the join stands as done as it always did, and the run completes.</summary>
     [Fact]
     public async Task A_fan_out_with_full_coverage_joins_as_done()

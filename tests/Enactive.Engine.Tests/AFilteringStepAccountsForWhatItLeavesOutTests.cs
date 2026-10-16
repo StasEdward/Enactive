@@ -180,21 +180,62 @@ public sealed class AFilteringStepAccountsForWhatItLeavesOutTests
         Assert.True(Assert.Single(back.SuccessCriteria).Typed!.Subset);
     }
 
-    /// <summary>A criterion stored before there was a subset reads as what it was: every item needs a result.</summary>
-    [Fact]
-    public void An_old_criterion_without_the_field_loads_as_not_a_subset()
+    /// <summary>A covers_all as a build before the subset stored it: the same criterion, without the property.</summary>
+    private static SuccessCriterionDefinition EveryItem()
+        => SubsetCriterion(EvidenceKind.FileRead) with { Typed = SubsetCriterion(EvidenceKind.FileRead).Typed! with { Subset = false } };
+
+    /// <summary>Takes the property out of stored JSON, as a build from before it would have written it.</summary>
+    private static string WithoutSubset(string json)
     {
-        const string old = """
-            {"Name":"Every pages item is covered","Command":"covers_all","ExpectedExitCode":0,"Required":true,"Origin":"Declared",
-             "Typed":{"Kind":"EvidenceCoversAll","Path":null,"NonEmpty":true,"Text":null,"Target":null,"SourceStep":0,"SourceField":"pages",
-                      "ResultsStep":1,"ResultsField":"notes","Evidence":"FileRead","PathFromStep":null,"PathFromField":null,"Kinds":null}}
-            """;
-        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } };
+        var without = System.Text.RegularExpressions.Regex.Replace(json, @",\s*""Subset""\s*:\s*false", "");
+        Assert.DoesNotContain("Subset", without, StringComparison.Ordinal);
+        return without;
+    }
 
-        var back = JsonSerializer.Deserialize<SuccessCriterionDefinition>(old, options)!;
+    /// <summary>
+    /// A checkpoint written before there was a subset - its criterion has no such property - is read back by the store
+    /// as what it was: every item needs a result.
+    /// </summary>
+    [Fact]
+    public async Task An_old_checkpoint_criterion_without_the_field_loads_as_not_a_subset()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var store = new JsonCheckpointStore(WorkspaceInfo.For(root));
+            var written = new RunCheckpoint(Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.Now, DateTimeOffset.Now, "review the wiki", "a plan",
+                "developer", null,
+                [new CheckpointStep(Guid.NewGuid(), "find pages", [], nameof(StepComplexity.Normal), nameof(StepStatus.Pending))],
+                [], [], [], 0, 0) { Checks = [EveryItem()] };
+            await store.SaveAsync(written, CancellationToken.None);
+            var file = Path.Combine(root, ".enactive", "checkpoints", $"{written.RunId:N}.json");
+            await File.WriteAllTextAsync(file, WithoutSubset(await File.ReadAllTextAsync(file)));
 
-        Assert.Equal(EvidenceKind.FileRead, back.Typed!.Evidence);
-        Assert.False(back.Typed.Subset);
+            var back = await new JsonCheckpointStore(WorkspaceInfo.For(root)).LoadAsync(written.RunId, CancellationToken.None);
+
+            var typed = Assert.Single(back!.Checks!).Typed!;
+            Assert.Equal(EvidenceKind.FileRead, typed.Evidence);
+            Assert.False(typed.Subset);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* a temp folder */ }
+        }
+    }
+
+    /// <summary>The same for a run record's specification, read back as the history reads it.</summary>
+    [Fact]
+    public void An_old_run_record_criterion_without_the_field_loads_as_not_a_subset()
+    {
+        var spec = new ResolvedTaskSpec("t", 1, "T", Guid.NewGuid(), "project", Path.GetTempPath(), "review the wiki",
+            new Dictionary<string, string>(), new PermissionPolicy(PermissionLevel.Observe, [], []), [EveryItem()], ExecutionLimits.None, null, false);
+
+        var back = ResolvedTaskSpec.Parse(WithoutSubset(spec.Snapshot()))!;
+
+        var typed = Assert.Single(back.SuccessCriteria).Typed!;
+        Assert.Equal(EvidenceKind.FileRead, typed.Evidence);
+        Assert.False(typed.Subset);
     }
 
     // ── the partition, decided by the engine ───────────────────────────────────────────
@@ -296,6 +337,57 @@ public sealed class AFilteringStepAccountsForWhatItLeavesOutTests
         Assert.Equal(gate.Notes, result.Detail);
     }
 
+    /// <summary>
+    /// A reason is text. A value that is not - false, 0, an object - says nothing about why the item was left out, and is
+    /// no reason (the output contract refuses one at submission; an output that did not come through it is held to the
+    /// same).
+    /// </summary>
+    [Fact]
+    public void A_reason_that_is_not_text_is_no_reason()
+    {
+        var p = Pages(4);
+        var candidate = Output(2, new { notes = Notes(p[0]), excluded = new Dictionary<string, object> { [p[1]] = false, [p[2]] = 0, [p[3]] = new { } } },
+            [new ItemEvidence("notes", p[0], [EvidenceKind.FileRead, EvidenceKind.Call], null)]);
+
+        var gate = Gate(candidate);
+
+        Assert.False(gate.Passed);
+        Assert.Equal($"covered 1 of 4; excluded without a reason: {p[1]}, {p[2]}, {p[3]}.", gate.Notes);
+    }
+
+    /// <summary>
+    /// What the steps after are told names what is wrong even when every item of the list is accounted for: an item
+    /// that is not on the list at all - not an empty "not covered:".
+    /// </summary>
+    [Fact]
+    public void The_hand_off_names_items_not_on_the_list()
+    {
+        var p = Pages(4);
+        var gate = Gate(Partition(Notes(p[0], p[1]), new() { [p[2]] = "a stub", [p[3]] = "a redirect", ["wiki/elsewhere.md"] = "not mine" }));
+
+        var said = gate.HandOff("'review pages'");
+
+        Assert.Contains("'review pages' hands on items that are not on step 1's list 'pages', which cover nothing: wiki/elsewhere.md.", said,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("leaves items not covered", said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Only what the partition needs is optional - the processed results field and 'excluded' - so a filtering step can
+    /// leave nothing out, or everything; any other results field it declared is as required as it was.
+    /// </summary>
+    [Fact]
+    public void Only_the_processed_results_and_the_excluded_field_of_a_filtering_step_are_optional()
+    {
+        var output = Out(("summary", StepOutputFieldType.Text), ("notes", StepOutputFieldType.Results),
+            ("excluded", StepOutputFieldType.Results), ("links", StepOutputFieldType.Results));
+
+        var partitioned = Planner.Partitioned(output, [new ConsumeSpec(0, "pages") { Subset = true }])!;
+
+        Assert.Equal(["summary", "links"], partitioned.Fields.Where(f => f.Required).Select(f => f.Name));
+        Assert.Same(output, Planner.Partitioned(output, [new ConsumeSpec(0, "pages")]));
+    }
+
     // ── through a run ────────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -352,6 +444,70 @@ public sealed class AFilteringStepAccountsForWhatItLeavesOutTests
         var end = StepEnd(events, 2);
         Assert.Equal(StepOutcomeKind.DoneUnverified, end.StepOutcome());
         Assert.Contains($"{pages[2]} (a stub with nothing to review)", end.OutcomeReason(), StringComparison.Ordinal);
+        Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
+    /// <summary>
+    /// A budget too small for the item account leaves it out of the review (CoverageAtTheStepGate): the reviewer is
+    /// never asked about the exclusions, so its pass does not approve them - done, not confirmed, the exclusions named.
+    /// </summary>
+    [Fact]
+    public async Task A_pass_from_a_review_never_shown_the_exclusions_does_not_approve_them()
+    {
+        var pages = Pages(3);
+        using var fx = Wiki(3);
+        var worker = new FakeChatProvider([Turn.Says(Filtering), .. Found(pages), .. ReviewTwoLeaveOne(pages)]);
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+
+        var events = await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer, evidenceBudget: 1500),
+            "review the wiki pages worth reviewing");
+
+        var asked = string.Join("\n", Assert.Single(ReviewsOf(reviewer, 2)).Messages.Select(m => m.Content));
+        Assert.DoesNotContain(StepCoverageGate.ExclusionsHeading, asked, StringComparison.Ordinal);
+        Assert.Contains(events, e => e.Kind == EventKind.ReviewPassed && e.StepNo() == 2);
+        var end = StepEnd(events, 2);
+        Assert.Equal(StepOutcomeKind.DoneUnverified, end.StepOutcome());
+        Assert.Contains($"{pages[2]} (a stub with nothing to review)", end.OutcomeReason(), StringComparison.Ordinal);
+        Assert.Contains("the review that passed it was not shown them", end.OutcomeReason(), StringComparison.Ordinal);
+        Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
+    private const string FilteringJudged = """
+        {"disposition":"task","title":"review the wiki",
+         "steps":[{"title":"find pages","dependsOn":[],"output":{"pages":{"type":"path[]","description":"the pages"}}},
+                  {"title":"review pages","dependsOn":[0],"consumes":[{"step":0,"field":"pages","subset":true}],
+                   "output":{"notes":{"type":"results","description":"a note per page"},
+                             "excluded":{"type":"results","description":"why a page is left out"}},
+                   "criteria":[{"kind":"semantic","text":"Each note says what its page is about","evidence":["file_read"]}]}]}
+        """;
+
+    /// <summary>
+    /// A step with semantic criteria is judged on those and nothing else - per criterion, no question about what it
+    /// left out - so its pass does not approve the exclusions either.
+    /// </summary>
+    [Fact]
+    public async Task A_pass_on_semantic_criteria_alone_does_not_approve_the_exclusions()
+    {
+        var pages = Pages(3);
+        using var fx = Wiki(3);
+        fx.SemanticCriteria = true;
+        var worker = new FakeChatProvider([Turn.Says(FilteringJudged), .. Found(pages), .. ReviewTwoLeaveOne(pages)]);
+        // The criterion, passed on the first whole read the review was shown.
+        var judged = Turn.Says("") with
+        {
+            Adapt = r => System.Text.RegularExpressions.Regex.Match(string.Join("\n", r.Messages.Select(m => m.Content)), @"\[(\d+)\][^\n]*?-> read_file") is { Success: true } m
+                ? $$"""{"criteria":[{"id":"C1","verdict":"pass","reason":"each note matches its page","calls":[{{m.Groups[1].Value}}],"files":[]}]}"""
+                : null
+        };
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), judged);
+
+        var events = await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "review the wiki pages worth reviewing");
+
+        Assert.Contains(events, e => e.Summary.Contains("PASS (Criteria review)", StringComparison.Ordinal));
+        var end = StepEnd(events, 2);
+        Assert.Equal(StepOutcomeKind.DoneUnverified, end.StepOutcome());
+        Assert.Contains($"{pages[2]} (a stub with nothing to review)", end.OutcomeReason(), StringComparison.Ordinal);
+        Assert.Contains("judged on its semantic criteria alone", end.OutcomeReason(), StringComparison.Ordinal);
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
     }
 

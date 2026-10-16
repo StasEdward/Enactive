@@ -74,12 +74,21 @@ internal static class StepCoverageGate
         /// count, which a finished item without its evidence is too.
         /// </summary>
         public string HandOff(string what)
-            => string.Join(" ", Checks.Where(c => !c.Passed).Select(c =>
+            => string.Join(" ", Checks.Where(c => !c.Passed).SelectMany(c =>
                {
-                   var missing = c.Items.Where(i => !i.Covered).ToArray();
-                   return $"{what} leaves items not covered, as the coverage the plan requires counts them (covered {c.Covered} of {c.Items.Count}): "
-                          + string.Join(", ", missing.Take(NamedInAdvice).Select(i => $"{i.Item} ({i.Why})"))
-                          + (missing.Length > NamedInAdvice ? $", and {missing.Length - NamedInAdvice} more" : "") + ".";
+                   string Named(IReadOnlyList<string> items)
+                       => string.Join(", ", items.Take(NamedInAdvice)) + (items.Count > NamedInAdvice ? $", and {items.Count - NamedInAdvice} more" : "") + ".";
+                   var said = new List<string>();
+                   var missing = c.Items.Where(i => !i.Covered).Select(i => $"{i.Item} ({i.Why})").ToArray();
+                   if (missing.Length > 0)
+                       said.Add($"{what} leaves items not covered, as the coverage the plan requires counts them (covered {c.Covered} of {c.Items.Count}): "
+                                + Named(missing));
+                   // A partition can fail on these alone, with every item of the list accounted for: said, or the line
+                   // would read "not covered:" and name nothing.
+                   if (c.Foreign.Count > 0)
+                       said.Add($"{what} hands on items that are not on step {c.Typed.SourceStep + 1}'s list '{c.Typed.SourceField}', which cover "
+                                + "nothing: " + Named(c.Foreign));
+                   return said;
                }))
                + " Say which items are not covered, and why, in what this step writes - do not present the work as complete.";
 
@@ -191,6 +200,15 @@ internal static class StepCoverageGate
     /// </summary>
     internal const string ExclusionsHeading = "Left out by this step, each with its reason - does the request permit leaving out EACH of these? "
         + "A reason is the step's word, not a permission: fail the step for any the request does not permit.";
+
+    /// <summary>
+    /// Whether the account put to the reviewer asks about every exclusion, each in full with its reason (ReviewerBlock):
+    /// only then can its pass stand as approving them. An account left out for room, or one whose exclusions were cut
+    /// to a list of names, did not ask.
+    /// </summary>
+    internal static bool AsksAboutEvery(IReadOnlyList<(string Item, string Reason)> exclusions, string? account)
+        => account is not null && account.Contains(ExclusionsHeading, StringComparison.Ordinal)
+           && exclusions.All(x => account.Contains($"- {x.Item}: excluded - ", StringComparison.Ordinal));
 
     /// <summary>
     /// The heading of the engine's per-item account in the reviewer's input. A section of its own, not a journal entry

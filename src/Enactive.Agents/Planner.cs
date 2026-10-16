@@ -367,7 +367,7 @@ public sealed class Planner
                             {
                                 ObligationIds = obligationIds,
                                 Output = Partitioned(el.TryGetProperty("output", out var output) ? ParseOutput(output, specs.Count + 1) : null,
-                                    ParseConsumes(el)),
+                                    ParseConsumes(el), ParseForEach(el)),
                                 ForEach = ParseForEach(el),
                                 Consumes = ParseConsumes(el),
                                 After = ParseAfter(el),
@@ -518,15 +518,29 @@ public sealed class Planner
     }
 
     /// <summary>
-    /// A filtering step's output (a subset consume), with its results fields optional - its processed results and its
-    /// 'excluded' reasons. A step that leaves nothing out has nothing to put in 'excluded', and one that leaves everything
-    /// out nothing to process; an empty results field is refused (StepOutputContract), so a required one could not be
-    /// handed on at all and the step would be sent back for a field it has no entry for. Whether every item is in one of
-    /// the two is the coverage check's to decide (EvidenceCoverage.PartitionProblems), not the output contract's.
+    /// A filtering step's output (a subset consume), with the two fields of its partition optional - its processed results
+    /// (the first results field that is not 'excluded', as UpstreamCoverage.Derive picks it) and its 'excluded' reasons. A
+    /// step that leaves nothing out has nothing to put in 'excluded', and one that leaves everything out nothing to
+    /// process; an empty results field is refused (StepOutputContract), so a required one could not be handed on at all
+    /// and the step would be sent back for a field it has no entry for. Whether every item is in one of the two is the
+    /// coverage check's to decide (EvidenceCoverage.PartitionProblems), not the output contract's. Any other field the
+    /// step declared is as required as the plan said.
     /// </summary>
-    internal static StepOutputSchema? Partitioned(StepOutputSchema? output, IReadOnlyList<ConsumeSpec>? consumes)
-        => output is null || consumes?.Any(c => c.Subset) != true ? output
-            : output with { Fields = output.Fields.Select(f => f.Type == StepOutputFieldType.Results ? f with { Required = false } : f).ToArray() };
+    /// <param name="forEach">The step's forEach: done for each item of the list it filters, its processed result is its
+    /// first field of any type when it has no results field (the perItem case, as Derive reads it).</param>
+    internal static StepOutputSchema? Partitioned(StepOutputSchema? output, IReadOnlyList<ConsumeSpec>? consumes, ForEachSource? forEach = null)
+    {
+        if (output is null || consumes?.Any(c => c.Subset) != true) return output;
+        var excluded = EvidenceCoverage.ExcludedField;
+        var perItem = forEach is { } each && consumes.Any(c => c.Subset && c.Step == each.Step && c.Field == each.Field);
+        var processed = output.Fields.FirstOrDefault(f => f.Type == StepOutputFieldType.Results && f.Name != excluded)?.Name
+                        ?? (perItem ? output.Fields.FirstOrDefault(f => f.Name != excluded)?.Name : null);
+        return output with
+        {
+            Fields = output.Fields.Select(f => (f.Type == StepOutputFieldType.Results && f.Name == excluded) || f.Name == processed
+                ? f with { Required = false } : f).ToArray()
+        };
+    }
 
     /// <summary>A step's "forEach", read leniently; whether it can be honoured is the engine's to check (FanOut.Validate).</summary>
     internal static ForEachSource? ParseForEach(JsonElement step)

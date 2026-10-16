@@ -2130,22 +2130,28 @@ public sealed partial class Orchestrator : IOrchestrator
             // the run from Completed; this only says so where the items are.
             var coverage = join.NotExpanded is null ? JoinCoverage(joinNo, joined) : null;
             var uncovered = coverage is { Passed: false } ? coverage.Notes : null;
+            // Items its item steps left out with a reason (a forEach that filters). The partition holds, but nothing can
+            // approve the omissions: a join has no reviewer, and an item's step is not asked about its list (it has no
+            // gate of its own). A reason alone never authorises leaving an item out, so the join is done, not confirmed -
+            // which keeps the run from Completed (RunOutcomeDecision), as for a step with exclusions no review approved.
+            var unapproved = coverage is { Passed: true } ? coverage.Unapproved() : null;
 
             var (outcome, reason) = join.NotExpanded is { } notExpanded
                 ? (StepOutcomeKind.Incomplete, notExpanded)
                 : unfinished.Length > 0
                     ? (StepOutcomeKind.DoneUnverified, (uncovered is null ? "" : uncovered + " ")
                         + $"{unfinished.Length} of {items.Length} item step(s) did not finish: " + string.Join("; ", unfinished.Select(u => u.Title)))
-                    : uncovered is not null
-                        ? (StepOutcomeKind.DoneUnverified, uncovered)
-                        : finished.Any(f => ended[f.Id] == StepOutcomeKind.DoneUnverified)
-                            ? (StepOutcomeKind.DoneUnverified, "some item steps were done but not verified")
-                            : (StepOutcomeKind.Succeeded, (string?)null);
+                : uncovered is not null ? (StepOutcomeKind.DoneUnverified, uncovered)
+                : unapproved is not null ? (StepOutcomeKind.DoneUnverified, unapproved)
+                : finished.Any(f => ended[f.Id] == StepOutcomeKind.DoneUnverified)
+                    ? (StepOutcomeKind.DoneUnverified, "some item steps were done but not verified")
+                    : (StepOutcomeKind.Succeeded, (string?)null);
 
             Note(join.Id, outcome,
                 join.NotExpanded is not null ? OutcomeCause.NotExpanded
                     : unfinished.Length > 0 ? OutcomeCause.ItemsUnfinished
                     : uncovered is not null ? OutcomeCause.ItemsNotCovered
+                    : unapproved is not null ? OutcomeCause.CoverageExclusionsUnapproved
                     : outcome == StepOutcomeKind.DoneUnverified ? OutcomeCause.ReviewUnprocessable : OutcomeCause.None,
                 reason, null);
 

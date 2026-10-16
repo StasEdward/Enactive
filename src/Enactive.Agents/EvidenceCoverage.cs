@@ -364,14 +364,11 @@ public static class EvidenceCoverage
             : evidence.Where(e => e.Field == OwnItems).Select(e => (Name: e.Item, Text: (string?)null)).ToArray();
 
         // A step that filters names what it left out, and why, in a field of its own: an item there needs a reason and no
-        // evidence. A reason that is not text is read as written; an empty one, or none, is no reason.
+        // evidence. A reason is text: false, 0 or {} says nothing about why, and an empty text, or none, is no reason
+        // either. The output contract already refuses such values at submission (StepOutputContract.Results: text, not
+        // empty), but an output can reach here without it - joined from item steps, or restored - so it is said here too.
         var excluded = typed.Subset && holder?.Value(ExcludedField) is { ValueKind: JsonValueKind.Object } left
-            ? left.EnumerateObject().Select(p => (p.Name, Reason: p.Value.ValueKind switch
-            {
-                JsonValueKind.String => p.Value.GetString() ?? "",
-                JsonValueKind.Null => "",
-                _ => p.Value.GetRawText()
-            })).ToArray()
+            ? left.EnumerateObject().Select(p => (p.Name, Reason: p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() ?? "" : "")).ToArray()
             : [];
 
         return items.Select(item =>

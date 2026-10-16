@@ -41,7 +41,10 @@ public sealed partial class Orchestrator
     /// retried on the gate's own budget.</param>
     /// <param name="Coverage">What the gate found for the attempt the review judged, when it passed - its exclusions are
     /// named if no verdict comes back to permit them.</param>
-    private sealed record AttemptReview(ReviewResult Review, bool ByGate = false, StepCoverageGate.Outcome? Coverage = null);
+    /// <param name="NotAskedAboutExclusions">Why the review could not judge the items the step left out - null when it
+    /// was asked about every one, or there were none. A pass from such a review does not approve them.</param>
+    private sealed record AttemptReview(ReviewResult Review, bool ByGate = false, StepCoverageGate.Outcome? Coverage = null,
+        string? NotAskedAboutExclusions = null);
 
     /// <summary>
     /// Shared review/proof phase of an attempt. Callers own retries, rollback, checkpoints and
@@ -197,7 +200,14 @@ public sealed partial class Orchestrator
                 await Emit(EventKind.ReviewFailed, $"NOT REACHABLE within the request ({mode} review): {unreachable.Notes}");
                 break;
         }
-        return new(review);
+        // Whether the review could judge what a filtering step left out: only the step review, and only when the account
+        // put every exclusion to it in full under its question. A criteria review judges its criteria and nothing else,
+        // and an account left out for room (or cut short) asked nothing - a pass from either does not approve an omission.
+        string? notAsked = coverage?.Exclusions is not { Count: > 0 } left ? null
+            : mode == ReviewMode.Criteria ? "the step was judged on its semantic criteria alone, which do not ask about them"
+            : !StepCoverageGate.AsksAboutEvery(left, itemAccount) ? "the review that passed it was not shown them - the evidence budget left no room for them"
+            : null;
+        return new(review) { NotAskedAboutExclusions = notAsked };
     }
 
     /// <summary>

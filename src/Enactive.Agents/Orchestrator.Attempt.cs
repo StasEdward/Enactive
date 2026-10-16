@@ -225,6 +225,15 @@ public sealed partial class Orchestrator
                 await publish(scope.Ev(EventKind.ErrorObserved, prefix + verdict.Notes, stepNumber));
                 return;
             }
+            // A pass from a review that could not judge what the step left out - not shown it for room, or a criteria
+            // review, which judges its criteria and nothing else - approves the work, not the omissions: done, not
+            // confirmed, the exclusions named and why the review did not decide them.
+            if (verdict is ReviewVerdict.Pass && assessed.NotAskedAboutExclusions is { } notAsked && assessed.Coverage?.Unapproved() is { } leftOut)
+            {
+                result.Set(StepOutcomeKind.DoneUnverified, $"{leftOut} ({notAsked}.)", OutcomeCause.CoverageExclusionsUnapproved);
+                await publish(scope.Ev(EventKind.ErrorObserved, prefix + leftOut, stepNumber));
+                return;
+            }
             if (verdict is not ReviewVerdict.Fail fail) return;   // a pass: the step stands
             if (++reviewFailures < reviews)
             {
