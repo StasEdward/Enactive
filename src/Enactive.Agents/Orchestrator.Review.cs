@@ -203,6 +203,8 @@ public sealed partial class Orchestrator
         // Whether the review could judge what a filtering step left out: only the step review, and only when the account
         // put every exclusion to it in full under its question. A criteria review judges its criteria and nothing else,
         // and an account left out for room (or cut short) asked nothing - a pass from either does not approve an omission.
+        // It does approve items with only a mention behind them: those the engine counted from calls the review read, and
+        // an omission is the step's word, which needs a review asked about it (StepCoverageGate.Approval says it in full).
         string? notAsked = coverage?.Exclusions is not { Count: > 0 } left ? null
             : mode == ReviewMode.Criteria ? "the step was judged on its semantic criteria alone, which do not ask about them"
             : !StepCoverageGate.AsksAboutEvery(left, itemAccount) ? "the review that passed it was not shown them - the evidence budget left no room for them"

@@ -141,10 +141,99 @@ public sealed class CoverageAtTheJoinTests
         Assert.Contains($"{pages[1]} (a stub)", join.OutcomeReason(), StringComparison.Ordinal);
         Assert.Contains("no review approved it", join.OutcomeReason(), StringComparison.Ordinal);
         Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(events, 3).StepOutcome());
+        // The report step is told what was left out, and that nothing approved it - or it could present the stub as done.
+        var prompt = ReportPrompt(worker);
+        Assert.Contains("'review page' is not confirmed: 1 item(s) were left out, each with a reason: wiki/p02.md (a stub)", prompt, StringComparison.Ordinal);
+        Assert.Contains("do not present them as done", prompt, StringComparison.Ordinal);
         // The partition itself holds: the run-end check passes, and still the run is not Completed.
         Assert.Contains(events, e => e.IsCheck() && e.Summary.StartsWith("PASS", StringComparison.Ordinal)
                                      && e.Summary.Contains("Every pages item of step 1", StringComparison.Ordinal));
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
+    /// <summary>A tool that names pages and does nothing with them: a call naming an item is all "mentioned" asks for.</summary>
+    private sealed class Tagging : Enactive.Core.Tools.ITool
+    {
+        public Enactive.Core.Tools.ToolDefinition Definition => new("tag_pages", "tags pages", "{\"type\":\"object\"}", Kind: Enactive.Core.Tools.ToolKind.Read);
+        public Enactive.Core.Permissions.PermissionLevel RequiredLevel => Enactive.Core.Permissions.PermissionLevel.Observe;
+        public Task<Enactive.Core.Tools.ToolResult> InvokeAsync(string argumentsJson, Enactive.Core.Tools.ToolContext ctx, CancellationToken ct)
+            => Task.FromResult(new Enactive.Core.Tools.ToolResult(true, "tagged", null, [], new Dictionary<string, object?>()));
+    }
+
+    /// <summary>One item's step that only names its page in a call that succeeds, and hands its note on.</summary>
+    private static Turn[] Mention(string page)
+        => [Turn.Calls1("tag_pages", JsonSerializer.Serialize(new { paths = new[] { page } }), "t-" + page),
+            Turn.Calls1(StepOutputContract.ToolName, JsonSerializer.Serialize(new { notes = new Dictionary<string, string> { [page] = "fine" } }), "s-" + page),
+            Turn.Says("Reviewed " + page)];
+
+    private static EngineFixture Tagged(int pages)
+    {
+        var fx = Wiki(pages);
+        fx.ToolsOverride = [.. EngineFixture.ShippedTools(), new Tagging()];
+        return fx;
+    }
+
+    private sealed class Recording : Enactive.Core.History.IRunCheckpointStore
+    {
+        public List<Enactive.Core.History.RunCheckpoint> Saved { get; } = [];
+        public Task SaveAsync(Enactive.Core.History.RunCheckpoint checkpoint, CancellationToken ct) { lock (Saved) Saved.Add(checkpoint); return Task.CompletedTask; }
+        public Task<IReadOnlyList<Enactive.Core.History.RunCheckpoint>> LoadAllAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<Enactive.Core.History.RunCheckpoint>>(Saved.ToArray());
+        public Task<Enactive.Core.History.RunCheckpoint?> LoadAsync(Guid runId, CancellationToken ct) => Task.FromResult(Saved.LastOrDefault(c => c.RunId == runId));
+        public Task DeleteAsync(Guid runId, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// THE REVIEW'S PROBE: a step for each of three pages under the default "mentioned", review off, each item step naming
+    /// its page in one call that succeeds and handing a note on. The coverage holds - every page named - and shows nothing
+    /// done with any of them; an item step has no gate of its own, and the join has no reviewer, so nothing confirms it.
+    /// It used to join as Succeeded and the run ended Completed. The join is done, not confirmed, as a step is; the report
+    /// step is told which items rest on a mention alone; and the run is not Completed.
+    /// </summary>
+    [Fact]
+    public async Task Items_only_mentioned_with_review_off_leave_the_join_unconfirmed()
+    {
+        var pages = Pages(3);
+        using var fx = Tagged(3);
+        var store = new Recording();
+        var worker = new FakeChatProvider([Turn.Says(PlanFor("mentioned")), .. Found(pages), .. pages.SelectMany(Mention),
+            Turn.Says("Report written.")]);
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.WorkerWith("tag_pages", "read_file"), checkpoints: store),
+            "review every wiki page and write a report");
+
+        var join = StepEnd(events, 2);
+        Assert.Equal(StepOutcomeKind.DoneUnverified, join.StepOutcome());
+        Assert.Contains("3 item(s) were only mentioned", join.OutcomeReason(), StringComparison.Ordinal);
+        Assert.Contains("no review confirmed it", join.OutcomeReason(), StringComparison.Ordinal);
+        var record = store.Saved.Last().Steps.Single(s => s.Title == "review page").Record!;
+        Assert.Equal(OutcomeCause.CoverageMentionedOnly, record.Cause);
+        // What the items handed on still goes on, and the report is told what rests on a mention alone.
+        Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(events, 3).StepOutcome());
+        var prompt = ReportPrompt(worker);
+        Assert.Contains("'review page' is not confirmed: 3 item(s) were only mentioned", prompt, StringComparison.Ordinal);
+        Assert.Contains("do not present them as done", prompt, StringComparison.Ordinal);
+        Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
+    /// <summary>
+    /// The same items, each item step passed by a review: an approving verdict stands behind each mention, as it does for
+    /// a step's own (a step is confirmed by its review, mentions and all) - the join stands as done, and the run completes.
+    /// </summary>
+    [Fact]
+    public async Task Items_only_mentioned_stand_at_the_join_when_a_review_passed_each_item_step()
+    {
+        var pages = Pages(3);
+        using var fx = Tagged(3);
+        var worker = new FakeChatProvider([Turn.Says(PlanFor("mentioned")), .. Found(pages), .. pages.SelectMany(Mention),
+            Turn.Says("Report written.")]);
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass(), Verdicts.Pass(), Verdicts.Pass(), Verdicts.Pass());
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.WorkerWith("tag_pages", "read_file"),
+            router: Routers.WithReviewer(), reviewProvider: reviewer), "review every wiki page and write a report");
+
+        Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(events, 2).StepOutcome());
+        Assert.DoesNotContain("is not confirmed", ReportPrompt(worker), StringComparison.Ordinal);
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
     }
 
     /// <summary>Regression guard: every item covered, the join stands as done as it always did, and the run completes.</summary>

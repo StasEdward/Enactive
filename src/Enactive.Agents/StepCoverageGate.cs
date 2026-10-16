@@ -53,6 +53,28 @@ internal static class StepCoverageGate
         }
     }
 
+    /// <summary>
+    /// What an approving review stood behind, for <see cref="Outcome.Unconfirmed"/>: the items a step left out, and the
+    /// items that rest on a mention (by item, so a join can tell the item steps a review passed from the rest).
+    ///
+    /// <para>The two are approved on different terms, on purpose. A mention is evidence the ENGINE counted - a call that
+    /// succeeded and named the item - and a pass from any review that judged the work stands behind it: one that judged
+    /// the step's semantic criteria only, or one not shown the item account for room, still read the calls that named it.
+    /// An exclusion is the step's own word that an item may be left out, and only a review that was asked about that very
+    /// omission can approve it (StepCoverageGate.AsksAboutEvery); a pass on anything else says nothing about it.</para>
+    /// </summary>
+    internal sealed record Approval(bool Exclusions, Func<string, bool> Mentioned)
+    {
+        /// <summary>No approving review: nothing is approved.</summary>
+        public static readonly Approval None = new(false, _ => false);
+
+        /// <summary>A pass from a review that was asked about every exclusion: everything is approved.</summary>
+        public static readonly Approval All = new(true, _ => true);
+
+        /// <summary>A pass from a review that was not asked about the exclusions: the work, mentions included, and not the omissions.</summary>
+        public static readonly Approval WorkOnly = new(false, _ => true);
+    }
+
     /// <summary>What the gate decided for one attempt of a step.</summary>
     internal sealed record Outcome(IReadOnlyList<Checked> Checks)
     {
@@ -118,6 +140,33 @@ internal static class StepCoverageGate
             // An item left out is not processed at all - it has no evidence to be only a mention (Exclusions holds it).
             .SelectMany(c => c.Items.Where(i => i.Covered && !i.Excluding && i.Found.All(k => k == EvidenceKind.Call)).Select(i => i.Item))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+        /// <summary>What a step or a join is told, and its end says, when items rest on a mention and no review confirmed them.</summary>
+        public static string MentionedOnly(IReadOnlyList<string> mentioned)
+            => $"{mentioned.Count} item(s) were only mentioned - named in a call that succeeded, and not read, written or run: "
+               + string.Join(", ", mentioned.Take(NamedInLine)) + (mentioned.Count > NamedInLine ? $" and {mentioned.Count - NamedInLine} more" : "")
+               + ". That shows neither a read nor the work on them, and no review confirmed it.";
+
+        /// <summary>
+        /// Coverage that passed and still cannot stand as confirmed, for a step or a join alike, given what an approving
+        /// review stood behind (<paramref name="approved"/>): items left out with a reason (Exclusions) that no review was
+        /// asked about and approved, and items with nothing but a mention behind them (OnlyMentioned) that no approving
+        /// verdict stands behind. Null when nothing is left unconfirmed. Exclusions come first in the reason and decide
+        /// the cause when both are there: an omission is the graver of the two.
+        ///
+        /// <para>One decision for the three places that make it - the review-off end of an attempt, the attempt loop's
+        /// verdicts, and the join (Orchestrator) - because they were written apart and drifted: the join checked the
+        /// exclusions and not the mentions, and a fan-out whose items were each only named ended Completed.</para>
+        /// </summary>
+        public (string Reason, OutcomeCause Cause)? Unconfirmed(Approval approved)
+        {
+            var leftOut = approved.Exclusions ? null : Unapproved();
+            var mentioned = OnlyMentioned.Where(i => !approved.Mentioned(i)).ToArray();
+            var onlyMentioned = mentioned.Length > 0 ? MentionedOnly(mentioned) : null;
+            if (leftOut is null && onlyMentioned is null) return null;
+            return (string.Join(" ", new[] { leftOut, onlyMentioned }.OfType<string>()),
+                leftOut is not null ? OutcomeCause.CoverageExclusionsUnapproved : OutcomeCause.CoverageMentionedOnly);
+        }
 
         /// <summary>The reason a person reads, and the step is rejected with: the failed criteria, one line each.</summary>
         public string Notes

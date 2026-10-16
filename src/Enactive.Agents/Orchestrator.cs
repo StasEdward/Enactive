@@ -2089,9 +2089,18 @@ public sealed partial class Orchestrator : IOrchestrator
                 // The items the coverage the plan requires does not count, by name - a finished item without its evidence
                 // among them, which its status above does not show - so the report can say what is missing. Counted again
                 // from what the join handed on, as the join counted it, so a resumed run says the same.
+                // Covered, and not confirmed (the join's own decision, JoinApproval): what was left out and what rests on a
+                // mention alone, by name. The items' statuses read "done" for both, so a report told nothing more presented
+                // an omitted page as reviewed.
                 if (join.NotExpanded is null && stepNumbers.TryGetValue(join.Id, out var joinNo)
-                    && JoinCoverage(joinNo, session.Outputs.TryGetValue(join.Id, out var joined) ? joined : null) is { Passed: false } shortOf)
-                    lines.Add(shortOf.HandOff($"'{join.Title}'"));
+                    && JoinCoverage(joinNo, session.Outputs.TryGetValue(join.Id, out var joined) ? joined : null) is { } counted)
+                {
+                    if (!counted.Passed)
+                        lines.Add(counted.HandOff($"'{join.Title}'"));
+                    else if (counted.Unconfirmed(JoinApproval(join)) is { } unconfirmed)
+                        lines.Add($"'{join.Title}' is not confirmed: {unconfirmed.Reason} Say which items these are, and why, in what this "
+                                  + "step writes - do not present them as done.");
+                }
             }
             return ChatMessage.User("What the steps for each item came to (engine record) - report on EVERY item, "
                 + "the ones not done included, and say why they were not:\n" + string.Join("\n", lines));
@@ -2106,6 +2115,18 @@ public sealed partial class Orchestrator : IOrchestrator
             => StepCoverageGate.For(CriteriaFor(plan), joinNo - 1) is { Count: > 0 } owed
                 ? StepCoverageGate.Check(owed, session.Outputs.Values, joinedOutput, joinNo)
                 : null;
+
+        // What an approving review stands behind at a join: no exclusion - a join has no reviewer, and an item's step is
+        // not asked about its list (it has no gate of its own) - and the mentions of the items whose own step a review
+        // passed (ResultStanding.Confirmed), as a step's pass stands behind its own. Read from the recorded outcomes, so a
+        // resumed run decides the same.
+        StepCoverageGate.Approval JoinApproval(PlanStep join)
+        {
+            var confirmed = scheduler.Steps
+                .Where(s => s.ExpandedFrom == join.Id && session.Records.GetValueOrDefault(s.Id)?.Standing == ResultStanding.Confirmed)
+                .SelectMany(s => s.Items ?? []).ToArray();
+            return StepCoverageGate.Approval.None with { Mentioned = item => confirmed.Any(c => EvidenceCoverage.Same(c, item)) };
+        }
 
         // The join: what its items' steps handed on, as one, once every one of them has ended. An item
         // that did not finish is named, and the others are handed on all the same (amendment D).
@@ -2130,11 +2151,12 @@ public sealed partial class Orchestrator : IOrchestrator
             // the run from Completed; this only says so where the items are.
             var coverage = join.NotExpanded is null ? JoinCoverage(joinNo, joined) : null;
             var uncovered = coverage is { Passed: false } ? coverage.Notes : null;
-            // Items its item steps left out with a reason (a forEach that filters). The partition holds, but nothing can
-            // approve the omissions: a join has no reviewer, and an item's step is not asked about its list (it has no
-            // gate of its own). A reason alone never authorises leaving an item out, so the join is done, not confirmed -
-            // which keeps the run from Completed (RunOutcomeDecision), as for a step with exclusions no review approved.
-            var unapproved = coverage is { Passed: true } ? coverage.Unapproved() : null;
+            // Coverage that holds and that nothing confirms (JoinApproval): items its item steps left out with a reason (a
+            // forEach that filters), or items with nothing but a mention behind them whose step no review passed. A reason
+            // alone never authorises leaving an item out, and one call naming a page shows nothing done with it; so the
+            // join is done, not confirmed - which keeps the run from Completed (RunOutcomeDecision), as for a step whose
+            // own gate found the same (StepCoverageGate.Outcome.Unconfirmed decides both).
+            var unconfirmed = coverage is { Passed: true } ? coverage.Unconfirmed(JoinApproval(join)) : null;
 
             var (outcome, reason) = join.NotExpanded is { } notExpanded
                 ? (StepOutcomeKind.Incomplete, notExpanded)
@@ -2142,7 +2164,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     ? (StepOutcomeKind.DoneUnverified, (uncovered is null ? "" : uncovered + " ")
                         + $"{unfinished.Length} of {items.Length} item step(s) did not finish: " + string.Join("; ", unfinished.Select(u => u.Title)))
                 : uncovered is not null ? (StepOutcomeKind.DoneUnverified, uncovered)
-                : unapproved is not null ? (StepOutcomeKind.DoneUnverified, unapproved)
+                : unconfirmed is { } notConfirmed ? (StepOutcomeKind.DoneUnverified, notConfirmed.Reason)
                 : finished.Any(f => ended[f.Id] == StepOutcomeKind.DoneUnverified)
                     ? (StepOutcomeKind.DoneUnverified, "some item steps were done but not verified")
                     : (StepOutcomeKind.Succeeded, (string?)null);
@@ -2151,7 +2173,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 join.NotExpanded is not null ? OutcomeCause.NotExpanded
                     : unfinished.Length > 0 ? OutcomeCause.ItemsUnfinished
                     : uncovered is not null ? OutcomeCause.ItemsNotCovered
-                    : unapproved is not null ? OutcomeCause.CoverageExclusionsUnapproved
+                    : unconfirmed is { } cause ? cause.Cause
                     : outcome == StepOutcomeKind.DoneUnverified ? OutcomeCause.ReviewUnprocessable : OutcomeCause.None,
                 reason, null);
 
