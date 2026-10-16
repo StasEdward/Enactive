@@ -475,6 +475,10 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
                 }
                 finally
                 {
+                    // Over, whether it ran or not. A run cancelled in the line, or refused as it was composed, never drained -
+                    // and the drain is where the session says its pause is over: its page kept a greyed "Pause after this
+                    // step" for a run that was gone.
+                    run.Session.PauseOffer.Ended();
                     run.End();
                 }
             }

@@ -936,6 +936,32 @@ public sealed class RunControlTests : IDisposable
     }
 
     /// <summary>
+    /// A run that never ran - cancelled while it waited in the line, or refused as it was composed - never drained, and the
+    /// drain was the only place its pause was said to be over: its page kept a greyed pause for a run that was gone.
+    /// </summary>
+    [Fact]
+    public async Task A_run_that_never_ran_is_not_offered_a_pause()
+    {
+        var going = await PlannedAsync();
+        var waiting = _control.Start(As("alice"), _workspace, "mail the digest").Run!;
+        Assert.NotNull(waiting.Waiting);
+        Assert.Null(_control.Cancel(As("alice"), waiting.Id));
+        await waiting.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var elsewhere = Path.Combine(_root, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+        _engine.Refuse = "The workspace is in use by another process.";
+        var refused = _control.Start(As("alice"), elsewhere, "write the index").Run!;
+        await refused.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(Enactive.Application.Projections.PauseStanding.Hidden, waiting.Session.PauseOffer.Standing);
+        Assert.Equal(Enactive.Application.Projections.PauseStanding.Hidden, refused.Session.PauseOffer.Standing);
+        Assert.Equal("The run has already ended.", _control.Pause(As("alice"), waiting.Id));
+        _engine.ReleaseAll();
+        await going.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>
     /// Each run is composed with a pause of its own, the one its page asks (EngineExecutor.RequestFor) - and a resumed run,
     /// a run of its own, with a fresh one: the pause the paused run was given has been asked for, and handed to the resume
     /// it would pause it before its first step.
@@ -960,6 +986,18 @@ public sealed class RunControlTests : IDisposable
         var workspace = Enactive.Core.Context.WorkspaceInfo.For(_workspace);
         Assert.Same(resumed.Pause, EngineExecutor.RequestFor(resumed, workspace, saved, null).Pause);
         Assert.Same(background.Pause, EngineExecutor.RequestFor(background, workspace, saved, null).Pause);
+        // A schedule's run too: an Operator may stop it from its page, and so may pause it.
+        var policy = new PermissionPolicy(PermissionLevel.Autonomous, ["*"], []);
+        var spec = new Enactive.Core.Templates.ResolvedTaskSpec("digest", 1, "Digest", Guid.NewGuid(), "project", _workspace,
+            "digest the inbox", new Dictionary<string, string>(), policy, [], Enactive.Core.Templates.ExecutionLimits.None, null, false);
+        var schedule = new Enactive.Core.Schedules.Schedule(Guid.NewGuid(), _workspace, "morning digest",
+            Enactive.Core.Schedules.ScheduledWork.FromPastRun(spec.Snapshot()),
+            Enactive.Core.Schedules.ScheduleTiming.Once(DateTimeOffset.Now.AddMinutes(-1)), policy, DateTimeOffset.Now.AddHours(-1));
+        var scheduled = new ServerRun("schedule: morning digest", _workspace, spec.Goal, new RunQueue(1).Enqueue(_workspace), spec: spec)
+        {
+            Scheduled = new DueRun(schedule, workspace, spec, new Held(), "due")
+        };
+        Assert.Same(scheduled.Pause, EngineExecutor.RequestFor(scheduled, workspace, saved, null).Pause);
         await _engine.ReleaseNextAsync();
         await _engine.ReleaseNextAsync();
     }

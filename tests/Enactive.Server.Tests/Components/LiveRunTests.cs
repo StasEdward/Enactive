@@ -429,6 +429,43 @@ public sealed class LiveRunTests : ComponentHost
         Assert.Contains(Users.AuditTrail(), e => e is { Account: "alice", Action: "run pause asked" });
     }
 
+    /// <summary>
+    /// Another page with the run open - another Operator's, or another tab - says the pause is pending too: a press makes no
+    /// event of the run's, so without being told that page kept offering a pause that was already asked for.
+    /// </summary>
+    [Fact]
+    public async Task Every_page_with_the_run_open_says_the_pause_is_pending()
+    {
+        var run = await StartedAsync();
+        _script.Emit(Plan());
+        await WaitUntil(() => run.Session.Seq == 1);
+        var pressing = Open("alice", run);
+        var watching = Render<LiveRun>(p => p.Add(l => l.RunId, run.Id));
+        watching.WaitForAssertion(() => Assert.Equal("Pause after this step", PauseButton(watching)?.TextContent.Trim()));
+
+        pressing.WaitForAssertion(() => Assert.NotNull(PauseButton(pressing)));
+        PauseButton(pressing)!.Click();
+
+        watching.WaitForAssertion(() => Assert.Equal("Pausing after the steps running now…", PauseButton(watching)?.TextContent.Trim()));
+        Assert.True(PauseButton(watching)!.HasAttribute("disabled"));
+    }
+
+    /// <summary>A run cancelled while it waited in the line never ran: its page offers no pause, greyed or not.</summary>
+    [Fact]
+    public async Task A_run_cancelled_in_the_line_offers_no_pause()
+    {
+        await StartedAsync();
+        var waiting = Runs.Start(As("alice"), Known("project"), "write the report").Run!;
+        Assert.NotNull(waiting.Waiting);
+        Assert.Null(Runs.Cancel(As("alice"), waiting.Id));
+        await waiting.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var page = Open("alice", waiting);
+
+        page.WaitForAssertion(() => Assert.Equal("Not started", page.Find(".task-header .pill").TextContent.Trim()));
+        Assert.Null(PauseButton(page));
+    }
+
     /// <summary>A Viewer may not stop a run, so is not offered its pause either; the service refuses one anyway.</summary>
     [Fact]
     public async Task A_viewer_is_not_offered_the_pause()

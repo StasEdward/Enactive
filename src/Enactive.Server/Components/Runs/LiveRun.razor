@@ -48,7 +48,7 @@
                 <p class="also-watching">also watching: @string.Join(", ", others)</p>
             }
         </div>
-        @if (MayStop && pause.Standing != PauseStanding.Hidden)
+        @if (MayStop && !run.Ended.IsCompleted && pause.Standing != PauseStanding.Hidden)
         {
             @* Pause after this step (Plan Phase 4.2), as the window's run header has it beside the phase: the steps running
                now finish and the run ends Paused, to be resumed from UNFINISHED - unlike Stop, which cancels them. Offered to
