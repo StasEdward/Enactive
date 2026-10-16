@@ -55,10 +55,32 @@ public sealed class EveryOutcomeIsPlacedTests
     [Fact]
     public void A_paused_run_is_filed_in_the_inbox_as_paused_with_where_it_stopped()
     {
-        var line = InboxLines.For(nameof(RunOutcomeKind.Paused), 2, 0, "Paused at step 2 of 4: 2 step(s) left.");
+        var (_, reason) = RunOutcomeDecision.Paused(2, 4, 0, null);
+        var line = InboxLines.For(nameof(RunOutcomeKind.Paused), 2, 0, reason);
 
         Assert.Equal("paused", line.Kind);
-        Assert.Contains("Paused at step 2 of 4", line.Summary, StringComparison.Ordinal);
+        // Said once: it read "Paused · Paused at step 2 of 4".
+        Assert.Equal("Paused at step 2 of 4: 2 step(s) settled, 2 left - resume the run to carry on with them. · 2 artifact(s) so far",
+            line.Summary);
+        Assert.Equal("Paused", InboxLines.For(nameof(RunOutcomeKind.Paused), 0, 0, null).Summary);
+        Assert.Equal("Paused · somebody asked", InboxLines.For(nameof(RunOutcomeKind.Paused), 0, 0, "somebody asked").Summary);
+    }
+
+    /// <summary>Where a pause stopped, in words: before the first step is not "step 0", and blocked steps left are named.</summary>
+    [Fact]
+    public void A_pause_says_where_it_stopped_in_words_a_person_reads()
+    {
+        Assert.Equal("Paused before the first of 4 step(s): 4 left - resume the run to carry on with them.",
+            RunOutcomeDecision.Paused(0, 4, 0, null).Reason);
+        Assert.Equal("Paused at step 1 of 3: 1 step(s) settled, 2 left, 1 of them blocked - tried again when the run is resumed - "
+                     + "resume the run to carry on with them.", RunOutcomeDecision.Paused(1, 3, 1, null).Reason);
+        Assert.Equal(RunOutcomeKind.Paused, RunOutcomeDecision.Paused(1, 3, 1, null).Outcome);
+        Assert.All(new[]
+        {
+            RunOutcomeDecision.Paused(1, 3, 0, "full", keepsCheckpoints: false),
+            RunOutcomeDecision.Paused(1, 3, 0, "full", boundaryKept: true),
+            RunOutcomeDecision.Paused(1, 3, 0, "full", boundaryKept: false)
+        }, p => Assert.Equal(RunOutcomeKind.Incomplete, p.Outcome));
     }
 
     /// <summary>A schedule's run that was paused is not finished: not a result in the schedule's past, and Unfinished in the runs list.</summary>

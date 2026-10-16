@@ -871,6 +871,16 @@ public sealed class RunControlTests : IDisposable
         Assert.Contains("2 step(s) are left", warning);
     }
 
+    /// <summary>A paused run can carry a BLOCKED step, and a resume does that one again: the usual warning is the true one.</summary>
+    [Fact]
+    public void Resuming_a_paused_run_with_a_blocked_step_warns_that_it_runs_again()
+    {
+        var warning = Enactive.Application.RunRecovery.Warning(Interrupted("Done", "Blocked", "Pending") with { Paused = true });
+
+        Assert.Contains("Step 2, “step 2”, runs again from its start", warning);
+        Assert.DoesNotContain("nothing it did is done again", warning);
+    }
+
     // ── acting on the history (phase 2: everything the window does around a run) ─
 
     private ServerHistory HistoryOf() => HistoryOf(out _);

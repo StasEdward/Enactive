@@ -159,22 +159,40 @@ internal static class RunOutcomeDecision
     }
 
     /// <summary>
-    /// What a run paused at a step boundary comes to (Plan Phase 4.2): Paused, and where - when its checkpoint was
-    /// saved. Not otherwise: a pause is a promise that the run can be carried on from here, and without the checkpoint
-    /// nothing can carry it on. Incomplete then, because that is what it is - the work stopped short and nothing is known
-    /// to be wrong - and the reason says the pause was asked for and what was lost, so nobody looks for a resume that is
-    /// not there.
+    /// What a run paused at a step boundary comes to (Plan Phase 4.2): Paused, and where - when its paused checkpoint was
+    /// saved. Not otherwise: a pause is a promise that the run is carried on from exactly here, and without that
+    /// checkpoint nothing makes it. Incomplete then - the work stopped short and nothing is known to be wrong - and the
+    /// reason says what there IS to carry on from: the last step boundary that was saved, offered like any interrupted
+    /// run's, or nothing at all. Saying "cannot be resumed" while a boundary was kept sent people to start again what a
+    /// resume would have finished; saying "resume" with nothing kept sends them looking for a button that is not there.
     /// </summary>
     /// <param name="finished">Steps settled - done, failed or skipped - out of <paramref name="total"/>.</param>
+    /// <param name="blocked">Steps left that are blocked: a resume tries them again, so they are not simply "left".</param>
     /// <param name="notSaved">Why the paused checkpoint could not be saved; null when it was.</param>
-    public static (RunOutcomeKind Outcome, string Reason) Paused(int finished, int total, string? notSaved)
+    /// <param name="keepsCheckpoints">Whether the run has a store to keep checkpoints in at all.</param>
+    /// <param name="boundaryKept">Whether a step boundary of this task, saved on the way, is there to resume from.</param>
+    public static (RunOutcomeKind Outcome, string Reason) Paused(int finished, int total, int blocked, string? notSaved,
+        bool keepsCheckpoints = true, bool boundaryKept = false)
     {
-        var at = $"Paused at step {finished} of {total}";
+        // "At step 0 of 4" reads as a step numbered nought: before the first one is where it is.
+        var at = finished == 0 ? $"Paused before the first of {total} step(s)" : $"Paused at step {finished} of {total}";
         var left = total - finished;
-        return notSaved is null
-            ? (RunOutcomeKind.Paused, $"{at}: {finished} step(s) settled, {left} left - resume the run to carry on with them.")
-            : (RunOutcomeKind.Incomplete, $"{at}, but the checkpoint could not be saved: {notSaved}. The {left} step(s) left "
-                                          + "cannot be resumed; run the task again to do them.");
+        var leftWords = blocked > 0
+            ? $"{left} left, {blocked} of them blocked - tried again when the run is resumed"
+            : $"{left} left";
+        if (notSaved is null)
+            return (RunOutcomeKind.Paused, finished == 0
+                ? $"{at}: {leftWords} - resume the run to carry on with them."
+                : $"{at}: {finished} step(s) settled, {leftWords} - resume the run to carry on with them.");
+
+        if (!keepsCheckpoints)
+            return (RunOutcomeKind.Incomplete, $"{at}, but this run keeps no checkpoints, so nothing can be resumed: "
+                                               + $"run the task again to do the {left} step(s) left.");
+        return (RunOutcomeKind.Incomplete, boundaryKept
+            ? $"{at}, but the pause could not be saved: {notSaved}. The last step boundary that was saved is kept and "
+              + $"offered as an interrupted run - resume it to carry on with the {left} step(s) left."
+            : $"{at}, but the pause could not be saved: {notSaved}, and no step boundary of this run was saved either, "
+              + $"so nothing can be resumed: run the task again to do the {left} step(s) left.");
     }
 
     /// <summary>

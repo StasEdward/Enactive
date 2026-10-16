@@ -1523,6 +1523,19 @@ public sealed partial class Orchestrator : IOrchestrator
                     CoverageObligations = plan.CoverageObligations.Count > 0 ? plan.CoverageObligations : null };
         }
 
+        // Whether a step boundary of this task is in the store to carry on from - this run's own, or on a resume the one
+        // it began from - read back rather than assumed: what a run says can be resumed must be there (Plan Phase 4.2).
+        async Task<bool> BoundaryKeptAsync()
+        {
+            if (_checkpoints is null) return false;
+            try
+            {
+                if (await _checkpoints.LoadAsync(scope.RunId, CancellationToken.None) is { IsResumable: true }) return true;
+                return resume is not null && await _checkpoints.LoadAsync(resume.RunId, CancellationToken.None) is { IsResumable: true };
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { return false; }
+        }
+
         // Forgets the checkpoint: this run reached an end, and an ending is not resumable. Called
         // for every ending, not only a good one - a run that FAILED ran to a conclusion, and the
         // conclusion was failure. What makes a run resumable is that nobody knows how it ended.
@@ -2419,6 +2432,13 @@ public sealed partial class Orchestrator : IOrchestrator
             return stop;
         }
 
+        // A staged run takes no pause (Plan Phase 4.2), as a quick action takes none: a pause is only worth taking if the
+        // run can be resumed from it, and a staged run cannot - its proposals live in this process's memory, and the
+        // checkpoint store refuses to keep its checkpoints (RunCheckpoint.Staged). Held, it would stop with its steps
+        // undone and nothing to carry them on; not held, it runs on to its end and says the pause was not taken.
+        var stagedRun = _settings?.Staged == true;
+        var pause = stagedRun ? null : _pause;
+
         // Dispatcher: keep up to maxParallel steps in flight, topping up as each one finishes.
         var pump = Task.Run(async () =>
         {
@@ -2452,7 +2472,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 // 4.2). Held, the dispatcher lets what is running finish - a pause cancels nothing, unlike Stop - and a
                 // wave that ends meanwhile is still validated at its boundary, before the run ends. Null when neither
                 // can hold, so a run nobody can pause is dispatched exactly as before.
-                waves is null && _pause is null ? null : () => _pause?.IsRequested == true || waves?.Waiting == true);
+                waves is null && pause is null ? null : () => pause?.IsRequested == true || waves?.Waiting == true);
         }, CancellationToken.None);
 
         try
@@ -2478,16 +2498,15 @@ public sealed partial class Orchestrator : IOrchestrator
         // run, and the run that finishes is the resume). What it does is save the checkpoint it will be carried on
         // from, marked Paused, and keep its answers and baseline (StopsAtQuestions) as a blocked run does.
         // Told from a cycle by HasReady: a pause with nothing left that could start is not a pause of anything.
-        if (_pause?.IsRequested == true && limitReason is null && scheduler.HasReady)
+        if (pause?.IsRequested == true && limitReason is null && scheduler.HasReady)
         {
             RunCheckpoint? pausedAt = null;
-            // A staged run is never checkpointed - the store skips it without a word (JsonCheckpointStore) - so a save
-            // that "succeeded" would promise a resume nothing can do.
-            var notSaved = _settings?.Staged == true
-                ? "a run that stages its changes keeps no checkpoint - they are held to be applied, not written"
-                : await checkpointWriter.SaveOrSayWhyNotAsync(() => pausedAt = CaptureCheckpoint() with { Paused = true });
-            var settledSteps = pausedAt?.Finished ?? scheduler.Snapshot().Values.Count(s => s is StepStatus.Done or StepStatus.Failed or StepStatus.Skipped);
-            var (pauseOutcome, pauseReason) = RunOutcomeDecision.Paused(settledSteps, scheduler.Total, notSaved);
+            var notSaved = await checkpointWriter.SaveOrSayWhyNotAsync(() => pausedAt = CaptureCheckpoint() with { Paused = true });
+            var statuses = scheduler.Snapshot();
+            var settledSteps = pausedAt?.Finished ?? statuses.Values.Count(s => s is StepStatus.Done or StepStatus.Failed or StepStatus.Skipped);
+            // Blocked steps are not simply left: a resume tries them again, and the reason says so.
+            var blockedSteps = statuses.Values.Count(s => s == StepStatus.Blocked);
+            var boundaryKept = false;
             if (notSaved is null)
             {
                 // The checkpoint this resumed run began from is behind the one just saved; left, it would be offered
@@ -2497,17 +2516,25 @@ public sealed partial class Orchestrator : IOrchestrator
             }
             else
             {
-                // Not resumable, so nothing may be left that offers to resume it: the boundary checkpoints written
-                // on the way would, and their steps would read as interrupted, not paused.
-                yield return scope.Ev(EventKind.ErrorObserved, "The paused run's checkpoint could not be saved: " + notSaved);
-                await ForgetCheckpointAsync();
+                // Only the marker is lost. The boundary checkpoints written on the way - this run's last one is this
+                // same state without the flag; on a resume, the paused one it began from - and the wave captures are
+                // still good places to carry on from, and are KEPT: deleting them turned one failed write into "run
+                // the task again", worse than Stop. What is said is what is there, read back from the store.
+                yield return scope.Ev(EventKind.ErrorObserved, "The pause could not be saved: " + notSaved);
+                boundaryKept = await BoundaryKeptAsync();
             }
+            var (pauseOutcome, pauseReason) = RunOutcomeDecision.Paused(settledSteps, scheduler.Total, blockedSteps, notSaved,
+                keepsCheckpoints: _checkpoints is not null, boundaryKept);
 
             RecordWhatThisRunWrote(scope, intent);
             yield return scope.Terminal(pauseOutcome, pauseReason,
                 artifacts => SummarizeArtifacts(artifacts, null, _artifacts.PendingPaths, _workspace.RootPath));
             yield break;
         }
+        if (stagedRun && _pause?.IsRequested == true)
+            yield return scope.Ev(EventKind.ContextAssembled, "A pause was asked for and not taken: a run that stages its "
+                + "changes cannot be resumed - its proposals are held in memory and its checkpoints are never kept - so it "
+                + "ran on to its end.");
 
         // The documents, once more from the final records - so a resumed run, or one a limit stopped,
         // leaves the same document a finished one would have for what it did.

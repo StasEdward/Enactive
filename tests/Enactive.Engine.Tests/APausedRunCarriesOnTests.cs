@@ -172,9 +172,13 @@ public sealed class APausedRunCarriesOnTests
         Assert.Empty(store.Kept);                                                     // ended: both checkpoints forgotten
     }
 
-    /// <summary>A pause whose checkpoint could not be written does not claim a resumable pause: it says what was lost.</summary>
+    /// <summary>
+    /// Only the pause marker is lost when its write fails: the step boundary saved on the way - the same state without
+    /// the flag - is kept, the run says it is offered as an interrupted run, and resumed it finishes the steps left.
+    /// It used to delete that boundary too, and one failed write meant running the whole task again.
+    /// </summary>
     [Fact]
-    public async Task A_pause_whose_checkpoint_cannot_be_saved_does_not_claim_to_be_resumable()
+    public async Task A_pause_whose_marker_cannot_be_saved_keeps_the_last_boundary_and_says_so()
     {
         using var fx = new EngineFixture { Pause = new RunPause() };
         var store = new Store { Refuse = c => c.Paused };
@@ -183,16 +187,66 @@ public sealed class APausedRunCarriesOnTests
 
         var events = await fx.RunAsync(fx.Build(worker, maxParallelSteps: 2, checkpoints: store), "count the books and summarise them");
 
-        Assert.NotEqual(RunOutcomeKind.Paused, events.Last().Outcome());
         Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
         var reason = events.Last().OutcomeReason()!;
-        Assert.Contains("the checkpoint could not be saved: the disk is full", reason, StringComparison.Ordinal);
+        Assert.Contains("the pause could not be saved: the disk is full", reason, StringComparison.Ordinal);
+        Assert.Contains("offered as an interrupted run - resume it to carry on with the 2 step(s) left", reason, StringComparison.Ordinal);
         Assert.DoesNotContain(store.Saved, c => c.Paused);
-        Assert.Empty(store.Kept);                                                     // nothing left that offers a resume
-        Assert.Empty(worker.RequestsFor(Summary));
+        var kept = Assert.Single(store.Kept);                                         // kept, not deleted
+        Assert.False(kept.Paused);
+        Assert.Equal(["Done", "Done", "Pending", "Pending"], kept.Steps.Select(s => s.Status));
+        Assert.Empty(store.Deleted);
+
+        fx.Pause = null;
+        var second = new ByStepChatProvider(Plan) { Resumed = true };
+        var resumed = await fx.ResumeAsync(fx.Build(second, maxParallelSteps: 2, checkpoints: new Store()), kept);
+        Assert.Equal(RunOutcomeKind.Completed, resumed.Last().Outcome());
+        Assert.Empty(second.RequestsFor(Invoices));
     }
 
-    /// <summary>A run that keeps no checkpoint at all is not paused either: nothing could carry it on.</summary>
+    /// <summary>On a resume, the paused checkpoint it began from is a place to carry on from as well: a failed marker keeps it.</summary>
+    [Fact]
+    public async Task A_resumed_run_whose_pause_cannot_be_saved_keeps_the_pause_it_began_from()
+    {
+        using var fx = new EngineFixture { Pause = new RunPause() };
+        var store = new Store();
+        var first = Books();
+        PauseWhileRunning(first, fx.Pause, Invoices, Receipts);
+        await fx.RunAsync(fx.Build(first, maxParallelSteps: 2, checkpoints: store), "count the books and summarise them");
+        var once = Assert.Single(store.Kept);
+
+        fx.Pause = new RunPause();
+        store.Refuse = c => c.Paused;
+        var second = new ByStepChatProvider(Plan) { Resumed = true };
+        PauseWhileRunning(second, fx.Pause, Summary);
+        var again = await fx.ResumeAsync(fx.Build(second, maxParallelSteps: 2, checkpoints: store), once);
+
+        Assert.Equal(RunOutcomeKind.Incomplete, again.Last().Outcome());
+        Assert.Contains("offered as an interrupted run", again.Last().OutcomeReason(), StringComparison.Ordinal);
+        Assert.Contains(store.Kept, c => c.RunId == once.RunId && c.Paused);
+        Assert.Contains(store.Kept, c => c.RunId == again.Last().RunId && !c.Paused && c.Remaining == 1);
+    }
+
+    /// <summary>Nothing saved at all - not the pause, not a boundary - and the run says nothing can be resumed.</summary>
+    [Fact]
+    public async Task A_pause_with_nothing_saved_says_nothing_can_be_resumed()
+    {
+        using var fx = new EngineFixture { Pause = new RunPause() };
+        var store = new Store { Refuse = _ => true };
+        var worker = Books();
+        PauseWhileRunning(worker, fx.Pause, Invoices, Receipts);
+
+        var events = await fx.RunAsync(fx.Build(worker, maxParallelSteps: 2, checkpoints: store), "count the books and summarise them");
+
+        Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
+        var reason = events.Last().OutcomeReason()!;
+        Assert.Contains("the pause could not be saved: the disk is full, and no step boundary of this run was saved either", reason, StringComparison.Ordinal);
+        Assert.Contains("nothing can be resumed", reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("offered", reason, StringComparison.Ordinal);
+        Assert.Empty(store.Kept);
+    }
+
+    /// <summary>A run that keeps no checkpoint at all is not paused either: nothing could carry it on, and it says so.</summary>
     [Fact]
     public async Task A_pause_with_nowhere_to_keep_a_checkpoint_does_not_claim_to_be_resumable()
     {
@@ -202,26 +256,74 @@ public sealed class APausedRunCarriesOnTests
         var events = await fx.RunAsync(fx.Build(Books(), maxParallelSteps: 2), "count the books and summarise them");
 
         Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
-        Assert.Contains("the checkpoint could not be saved", events.Last().OutcomeReason(), StringComparison.Ordinal);
+        Assert.Contains("this run keeps no checkpoints, so nothing can be resumed", events.Last().OutcomeReason(), StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// A staged run is never checkpointed - the file store skips it without a word - so its pause would promise a resume
-    /// nothing can do. It says so instead.
+    /// A staged run takes no pause, as a quick action takes none: it cannot be resumed - its proposals are in memory and
+    /// its checkpoints are never kept - so held it would stop with its steps undone. It runs on, and says the pause was
+    /// not taken.
     /// </summary>
     [Fact]
-    public async Task A_staged_run_is_not_paused_into_a_resume_that_cannot_happen()
+    public async Task A_staged_run_does_not_take_a_pause_and_runs_on_to_its_end()
     {
         using var fx = new EngineFixture { Pause = new RunPause() };
         fx.Pause.Request();
         var store = new Store();
+        var worker = Books();
 
-        var events = await fx.RunAsync(fx.Build(Books(), checkpoints: store,
+        var events = await fx.RunAsync(fx.Build(worker, checkpoints: store,
             settings: new RunSettings(2, "Execute", "developer", Staged: true)), "count the books and summarise them");
 
-        Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
-        Assert.Contains("stages its changes", events.Last().OutcomeReason(), StringComparison.Ordinal);
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+        Assert.Equal(4, Completed(events).Count());
+        Assert.NotEmpty(worker.RequestsFor(Ready));
+        Assert.Single(events, e => e.Kind == EventKind.ContextAssembled
+                                   && e.Summary.StartsWith("A pause was asked for and not taken", StringComparison.Ordinal));
         Assert.DoesNotContain(store.Saved, c => c.Paused);
+    }
+
+    /// <summary>A paused run that carries a blocked step says so: a resume tries it again, it is not simply left.</summary>
+    [Fact]
+    public async Task A_paused_run_with_a_blocked_step_says_it_is_tried_again_on_resume()
+    {
+        const string File = "File the receipts";
+        using var fx = new EngineFixture { Pause = new RunPause() };
+        var store = new Store();
+        var worker = new ByStepChatProvider("""
+            {"disposition":"task","title":"books",
+             "steps":[{"title":"Count the invoices","dependsOn":[]},
+                      {"title":"Count the receipts","dependsOn":[]},
+                      {"title":"File the receipts","dependsOn":[1]}]}
+            """)
+            .Step(Invoices, Turn.Calls1("read_file", """{"path":"invoices/march.txt"}""", "r1"), Turn.Says("There is no March invoice."))
+            .Step(Receipts, Turn.Says("There are 5 receipts."));
+        PauseWhileRunning(worker, fx.Pause, Invoices, Receipts);
+
+        var events = await fx.RunAsync(fx.Build(worker, maxParallelSteps: 2, checkpoints: store), "count the books and summarise them");
+
+        Assert.Equal(StepOutcomeKind.Blocked, Assert.Single(Completed(events), e => e.Summary.Contains(Invoices)).StepOutcome());
+        Assert.Equal(RunOutcomeKind.Paused, events.Last().Outcome());
+        Assert.Equal("Paused at step 1 of 3: 1 step(s) settled, 2 left, 1 of them blocked - tried again when the run is "
+                     + "resumed - resume the run to carry on with them.", events.Last().OutcomeReason());
+        Assert.Empty(worker.RequestsFor(File));
+        Assert.Contains(Assert.Single(store.Kept).Steps, s => s.Status == "Blocked");
+    }
+
+    /// <summary>A pause with nothing left that could start - all that is left waits on a blocked step - is no pause: the run is Blocked.</summary>
+    [Fact]
+    public async Task A_pause_with_only_blocked_work_left_ends_blocked_not_paused()
+    {
+        using var fx = new EngineFixture { Pause = new RunPause() };
+        var store = new Store();
+        var worker = Books()
+            .Step(Invoices, Turn.Calls1("read_file", """{"path":"invoices/march.txt"}""", "r1"), Turn.Says("There is no March invoice."));
+        PauseWhileRunning(worker, fx.Pause, Invoices, Receipts);
+
+        var events = await fx.RunAsync(fx.Build(worker, maxParallelSteps: 2, checkpoints: store), "count the books and summarise them");
+
+        Assert.Equal(RunOutcomeKind.Blocked, events.Last().Outcome());
+        Assert.DoesNotContain(store.Kept, c => c.Paused);
     }
 
     /// <summary>Asked for while nothing is running - here, before the first step - the run ends Paused at once.</summary>
@@ -236,7 +338,7 @@ public sealed class APausedRunCarriesOnTests
         var events = await fx.RunAsync(fx.Build(worker, checkpoints: store), "count the books and summarise them");
 
         Assert.Equal(RunOutcomeKind.Paused, events.Last().Outcome());
-        Assert.StartsWith("Paused at step 0 of 4", events.Last().OutcomeReason(), StringComparison.Ordinal);
+        Assert.Equal("Paused before the first of 4 step(s): 4 left - resume the run to carry on with them.", events.Last().OutcomeReason());
         Assert.DoesNotContain(events, e => e.Kind is EventKind.StepStarted or EventKind.StepCompleted);
         Assert.Empty(worker.RequestsFor(Invoices));
         var kept = Assert.Single(store.Kept);

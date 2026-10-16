@@ -27,11 +27,12 @@ public static class InboxLines
         // Not an error and not a result either (Plan Phase 4.2): somebody paused it at a step boundary, and it is
         // resumed from there. A kind of its own, so it is neither drawn as something that went wrong nor filed as work
         // that was done; the reason says where it stopped ("paused at step N of M").
+        // The engine's reason leads, and already says "Paused ..." - "Paused · Paused at step 2 of 4" said it twice.
         if (status == "Paused")
-            return new InboxLine("paused", "Paused"
+            return new InboxLine("paused",
+                (reason is { Length: > 0 } ? reason.StartsWith("Paused", StringComparison.OrdinalIgnoreCase) ? reason : "Paused · " + reason : "Paused")
                 + (artifacts > 0 ? $" · {artifacts} artifact(s) so far" : "")
-                + (decisions > 0 ? $" · {decisions} decision(s) needed your approval" : "")
-                + (reason is { Length: > 0 } ? " · " + reason : ""));
+                + (decisions > 0 ? $" · {decisions} decision(s) needed your approval" : ""));
 
         // Anything that is not a completed run is flagged as such. CANCELLED is in this list and
         // used to be missing from it, so a run that was stopped part-way filed itself as a "result"

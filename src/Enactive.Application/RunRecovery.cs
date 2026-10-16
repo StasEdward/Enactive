@@ -13,8 +13,9 @@ internal static class RunRecovery
     public static string Warning(RunCheckpoint checkpoint)
     {
         // Paused (Plan Phase 4.2): it ended between steps, with nothing running, so nothing runs again - telling the
-        // person a step may be done twice would warn them off a resume that redoes nothing.
-        if (checkpoint.Paused)
+        // person a step may be done twice would warn them off a resume that redoes nothing. Only when every step left is
+        // plain Pending: a paused run can carry BLOCKED steps, and a resume does those again, so the usual warning holds.
+        if (checkpoint.Paused && checkpoint.Steps.All(s => s.Status is "Done" or "Failed" or "Skipped" or "Pending"))
             return "It was paused between steps: nothing it did is done again. "
                    + $"{checkpoint.Remaining} step(s) are left; the run continues under the level and worker it was started with.";
 
