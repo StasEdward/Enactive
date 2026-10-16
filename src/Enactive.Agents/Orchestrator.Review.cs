@@ -194,6 +194,9 @@ public sealed partial class Orchestrator
             || (action.Outcome == ActionOutcome.Succeeded
                 && _tools.DefinitionOf(action.Tool)?.FileCoverage == FileCoverageBehavior.Read
                 && PathsIn(action.Arguments).Any(p => reads?.SeenWhole(p).Whole == true)),
+        // A call that succeeded and recorded which paths it changed: a write, an edit, a deletion, a rename. A command
+        // does not record its writes by file, so it is command evidence, never write evidence.
+        EvidenceKind.FileWrite => action.Outcome == ActionOutcome.Succeeded && action.ChangedPaths is { Count: > 0 },
         _ => false
     };
 

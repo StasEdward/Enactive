@@ -55,10 +55,9 @@ public static class UpstreamCoverage
                     continue;
                 }
 
-                // Built with the evidence the plan declared, file_write included. Planner criteria still refuse it, since
-                // nothing records write evidence yet (TypedCriteria.CriterionKindNamed); a derived one is not routed
-                // through that refusal: asking for less than was declared would be the quiet weakening this exists to
-                // stop. Until writes are recorded (Task 6) it cannot pass - and the flags it needs are off by default.
+                // Built with the evidence the plan declared, file_write included: asking for less than was declared would
+                // be the quiet weakening this exists to stop. A write is the step's own recorded change to the item's
+                // path (EvidenceCoverage.Gather).
                 var typed = new TypedCriterion(TypedCriterionKind.EvidenceCoversAll,
                     SourceStep: c.Step, SourceField: c.Field, ResultsStep: s, ResultsField: field, Evidence: c.Evidence);
                 if (EvidenceCoverage.Invalid(typed, plan) is { } why)

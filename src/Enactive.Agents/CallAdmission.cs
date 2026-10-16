@@ -729,7 +729,7 @@ internal sealed class CallAdmission(
             // What the step had shown for each item it hands a result on for, recorded now
             // and by the engine (Phase 5.1): later, only this counts as coverage.
             frame.OutputSlot.Items = EvidenceCoverage.Gather(frame.OutputSchema, checkedOutput.Values!, frame.Reads, frame.Journal.Actions, tools.Definitions,
-                frame.Boundary is { ForItem: true } ? frame.Boundary.Items : null);
+                frame.Boundary is { ForItem: true } ? frame.Boundary.Items : null, frame.StepNo);
             var unbacked = EvidenceCoverage.Unbacked(frame.OutputSlot.Items);
             handed = $"Accepted as this step's output (revision {frame.OutputSlot.Revision}); the steps after it receive "
                 + "these values." + (checkedOutput.Notes.Count > 0 ? " " + string.Join(" ", checkedOutput.Notes) : "")

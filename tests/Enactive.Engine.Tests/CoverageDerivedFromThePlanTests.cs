@@ -95,8 +95,8 @@ public sealed class CoverageDerivedFromThePlanTests
     }
 
     /// <summary>
-    /// Nothing records write evidence yet (Task 6 does), and planner criteria still refuse file_write; a DERIVED criterion
-    /// keeps what the plan declared rather than asking for something weaker - it cannot pass until writes are recorded.
+    /// A DERIVED criterion keeps what the plan declared rather than asking for something weaker: a write is met only by
+    /// the step's recorded change to the item's path.
     /// </summary>
     [Fact]
     public void A_consume_that_asks_for_write_evidence_derives_a_criterion_asking_for_it()

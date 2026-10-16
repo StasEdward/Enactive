@@ -86,6 +86,19 @@ public sealed class AStepIsJudgedOnItsSemanticCriteriaTests
         Assert.Equal(StepOutcomeKind.DoneUnverified, Assert.Single(events, e => e.Kind == EventKind.StepCompleted).StepOutcome());
     }
 
+    /// <summary>A criterion that asks for a write is met by the step's recorded write, cited by its call (Task 6a).</summary>
+    [Fact]
+    public async Task A_recorded_write_is_evidence_for_a_criterion_that_asks_for_one()
+    {
+        var (events, _, reviewer) = await Run(
+            [Turn.Says("""{"criteria":[{"id":"C1","verdict":"pass","reason":"the report it wrote says 42","calls":[2],"files":[]}]}""")],
+            plan: Plan("\"file_write\""));
+
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+        Assert.Single(reviewer.Requests);
+        Assert.Equal(StepOutcomeKind.Succeeded, Assert.Single(events, e => e.Kind == EventKind.StepCompleted).StepOutcome());
+    }
+
     [Fact]
     public async Task A_read_of_part_of_a_file_is_not_a_read_of_the_file()
     {

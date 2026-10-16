@@ -46,13 +46,13 @@ public sealed class AStepSaysWhatItConsumesTests
     }
 
     /// <summary>
-    /// A criterion is decided from evidence the engine records, and it records no write evidence yet: a criterion
-    /// asking for file_write could never pass, so it is refused as before, not accepted because the word is now known.
+    /// A criterion is decided from evidence the engine records, and it now records a step's writes (Task 6a): a
+    /// criterion asking for file_write can pass, so a planner may ask for it.
     /// </summary>
     [Theory]
     [InlineData("""{"criteria":[{"kind":"covers_all","source":{"step":0,"field":"pages"},"results":{"step":1,"field":"notes"},"evidence":"file_write"}]}""")]
     [InlineData("""{"steps":[{"title":"find"},{"title":"review","criteria":[{"kind":"semantic","text":"The notes say what each page is about","evidence":["file_write"]}]}]}""")]
-    public void A_criterion_asking_for_write_evidence_is_still_refused(string stated)
+    public void A_criterion_asking_for_write_evidence_is_accepted(string stated)
     {
         using var first = JsonDocument.Parse("""{"pages":{"type":"path[]"}}""");
         using var second = JsonDocument.Parse("""{"notes":{"type":"results"}}""");
@@ -65,8 +65,9 @@ public sealed class AStepSaysWhatItConsumesTests
 
         var (accepted, dropped) = TypedCriteria.Validate(TypedCriteria.Read(doc.RootElement), Path.GetTempPath(), [], plan, semantic: true);
 
-        Assert.Empty(accepted);
-        Assert.Contains("'file_write' is not an evidence kind", Assert.Single(dropped));
+        Assert.Empty(dropped);
+        var typed = Assert.Single(accepted).Typed!;
+        Assert.Contains(EvidenceKind.FileWrite, typed.Kinds is { Count: > 0 } kinds ? kinds : [typed.Evidence!.Value]);
     }
 
     // ── the planner ──────────────────────────────────────────────────────────────────────

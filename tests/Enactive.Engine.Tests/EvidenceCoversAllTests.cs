@@ -136,6 +136,60 @@ public sealed class EvidenceCoversAllTests
         Assert.Equal((false, "never read"), reads.SeenWhole("b.md"));
     }
 
+    // ── write evidence ───────────────────────────────────────────────────────────────────
+
+    private static readonly StepOutputSchema NotesSchema = new("s", 1, [new StepOutputField("notes", StepOutputFieldType.Results, "notes")]);
+
+    private static Enactive.Core.Execution.ExecutedAction Did(string tool, string arguments, string[]? changed = null, int? step = 2,
+        Enactive.Core.Execution.ActionOutcome outcome = Enactive.Core.Execution.ActionOutcome.Succeeded)
+        => new(DateTimeOffset.UtcNow, step, tool, arguments, outcome, "ok",
+            changed is null ? Enactive.Core.Tools.WorkspaceEffect.None : Enactive.Core.Tools.WorkspaceEffect.Changed, changed);
+
+    private static IReadOnlyList<EvidenceKind> Found(IReadOnlyList<ItemEvidence> items, string item)
+        => items.Single(i => i.Item == item).Complete;
+
+    /// <summary>
+    /// A write, an edit, a deletion and a rename - from it or to it - are this step's recorded changes to the item's path,
+    /// and each is write evidence. A path written the other way round is the same item.
+    /// </summary>
+    [Fact]
+    public void A_recorded_change_to_the_items_path_by_this_step_is_write_evidence()
+    {
+        string[] items = ["wiki/a.md", "wiki/b.md", "wiki/c.md", "wiki/d.md", "wiki/e.md"];
+        var values = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(new { notes = items.ToDictionary(i => i, _ => "fixed") }))!.AsObject();
+        var gathered = EvidenceCoverage.Gather(NotesSchema, values, new ReadLedger(),
+        [
+            Did("write_file", """{"path":"wiki/a.md","content":"x"}""", ["wiki/a.md"]),
+            Did("edit_file", """{"path":"wiki\\b.md"}""", ["wiki\\b.md"]),
+            Did("delete_file", """{"path":"./wiki/c.md"}""", ["./wiki/c.md"]),
+            Did("move_file", """{"from":"wiki/d.md","to":"old/d.md"}""", ["wiki/d.md", "old/d.md"]),
+            Did("move_file", """{"from":"draft/e.md","to":"wiki/e.md"}""", ["draft/e.md", "wiki/e.md"])
+        ], [], step: 2);
+
+        Assert.All(items, i => Assert.Contains(EvidenceKind.FileWrite, Found(gathered, i)));
+    }
+
+    /// <summary>A mention, a whole read, a refused or failed write, or another step's write is no write by this step.</summary>
+    [Fact]
+    public void A_mention_a_read_a_write_that_did_not_succeed_or_another_steps_write_is_not_write_evidence()
+    {
+        string[] items = ["wiki/named.md", "wiki/read.md", "wiki/refused.md", "wiki/failed.md", "wiki/earlier.md"];
+        var values = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(new { notes = items.ToDictionary(i => i, _ => "fixed") }))!.AsObject();
+        var reads = new ReadLedger();
+        reads.Saw(Call("wiki/read.md"), ReadResult("wiki/read.md", 1, 3, 3), Reader);
+        var gathered = EvidenceCoverage.Gather(NotesSchema, values, reads,
+        [
+            Did("list_dir", """{"paths":["wiki/named.md"]}"""),
+            Did("read_file", """{"path":"wiki/read.md"}"""),
+            Did("write_file", """{"path":"wiki/refused.md"}""", ["wiki/refused.md"], outcome: Enactive.Core.Execution.ActionOutcome.Refused),
+            Did("write_file", """{"path":"wiki/failed.md"}""", ["wiki/failed.md"], outcome: Enactive.Core.Execution.ActionOutcome.Failed),
+            Did("write_file", """{"path":"wiki/earlier.md"}""", ["wiki/earlier.md"], step: 1)
+        ], [], step: 2);
+
+        Assert.All(items, i => Assert.DoesNotContain(EvidenceKind.FileWrite, Found(gathered, i)));
+        Assert.Equal([EvidenceKind.Call], Found(gathered, "wiki/named.md"));
+    }
+
     // ── what the planner may state ───────────────────────────────────────────────────────
 
     private static Plan TwoStepPlan(bool dependent = true, string listType = "path[]")

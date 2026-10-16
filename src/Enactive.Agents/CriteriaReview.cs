@@ -32,7 +32,7 @@ internal static class CriteriaReview
         For each criterion: pass - the evidence shows it holds; fail - the evidence shows it does not; unknown - it shows
         neither. A pass or a fail cites what shows it: calls [n] of a kind the criterion allows, or paths shown whole under
         FILES (they count as file_read). Kinds: file_read - a read of a file that covered it whole; command - a command that
-        ran; call - any call that succeeded.
+        ran; call - any call that succeeded; file_write - a call that succeeded and recorded a change to a file.
         Return ONLY one JSON object:
         {"criteria":[{"id":"C1","verdict":"pass|fail|unknown","reason":"...","calls":[n],"files":["path"]}]}
         One entry for every criterion, by id. A fail says what is wrong, concretely enough to be put right.

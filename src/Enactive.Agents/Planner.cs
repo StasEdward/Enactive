@@ -607,14 +607,15 @@ public sealed class Planner
     internal const string SemanticCriterionPrompt =
         " What only judgement can decide about a step's result - a report says what the work found, an explanation is right - "
         + "that step's criteria state as {\"kind\":\"semantic\",\"text\":\"<one checkable statement about the result>\","
-        + "\"evidence\":[\"file_read\"|\"command\"|\"call\"]}: the reviewer judges the step on these alone, citing evidence of "
+        + "\"evidence\":[\"file_read\"|\"file_write\"|\"command\"|\"call\"]}: the reviewer judges the step on these alone, citing evidence of "
         + "those kinds. What a check can decide (a file exists, tests pass) is not semantic.";
 
     internal const string CoverageCriterionPrompt =
         " When a step names items (path[] or string[]) and a later step must handle EACH of them, that later step declares "
         + "an output of TYPE results - \"output\":{\"notes\":{\"type\":\"results\"}} (one entry per item; not \"text\") - and the criteria add "
         + "{\"kind\":\"covers_all\",\"source\":{\"step\":0,\"field\":\"pages\"},\"results\":{\"step\":1,\"field\":\"notes\"},"
-        + "\"evidence\":\"file_read\"}; evidence: file_read (each file read whole), command, or call.";
+        + "\"evidence\":\"file_read\"}; evidence: file_read (each file read whole), file_write (each file changed by the step), "
+        + "command, or mentioned (named in a call that succeeded - which shows neither a read nor the work).";
 
     /// <summary>
     /// Steps done for each item (Phase 5.3); sent only with step outputs AND dynamic steps on, since the

@@ -22,8 +22,8 @@ using Enactive.Core.Tools;
 /// of 12 is "covered 9, not covered these 3, and why", never nothing.</para>
 ///
 /// <para><b>Evidence by kind, not by tool (5.2).</b> A file read is anything a tool reports through
-/// the read-coverage protocol; a command or a call is any successful call naming the item. Nothing
-/// here knows a tool's name.</para>
+/// the read-coverage protocol; a command or a call is any successful call naming the item; a write is
+/// a successful call of the step that recorded a change to the item's path. Nothing here knows a tool's name.</para>
 /// </summary>
 public static class EvidenceCoverage
 {
@@ -52,19 +52,28 @@ public static class EvidenceCoverage
 
     internal static bool Same(string a, string b) => string.Equals(Normal(a), Normal(b), StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// For every item of every results field in a submission, what the step had shown for it: recorded
-    /// when the result is handed on, from the step's own reads and calls.
-    /// </summary>
     /// <summary>The field name evidence is recorded under when it is for the step's own items, not a results field.</summary>
     internal const string OwnItems = "*";
 
+    /// <summary>
+    /// For every item of every results field in a submission, what the step had shown for it: recorded
+    /// when the result is handed on, from the step's own reads, calls and recorded changes.
+    /// </summary>
+    /// <param name="step">The step handing on, whose own changes alone are write evidence; null for a run of one step.</param>
     internal static IReadOnlyList<ItemEvidence> Gather(StepOutputSchema schema, JsonObject values, ReadLedger reads,
-        IReadOnlyList<ExecutedAction> actions, IEnumerable<ToolDefinition> tools, IReadOnlyList<string>? stepItems = null)
+        IReadOnlyList<ExecutedAction> actions, IEnumerable<ToolDefinition> tools, IReadOnlyList<string>? stepItems = null, int? step = null)
     {
         var commands = tools.Where(t => t.Kind == ToolKind.Command).Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var succeeded = actions.Where(a => a.Outcome == ActionOutcome.Succeeded && a.Tool != StepOutputContract.ToolName)
             .Select(a => (a.Tool, Named: StringsIn(a.Arguments))).ToArray();
+        // What THIS step changed, by path, from its own recorded calls: a write, an edit, a deletion, a rename from or to
+        // the path (ChangeAuthorship reads the same record to say who changed a file). Only a call that succeeded and
+        // said which paths it changed; a command's writes are not recorded by file, so a command is never write
+        // evidence, and neither is naming a path or reading it. Another step's write - in a journal the whole run
+        // shares - is not this step's work on the item.
+        var written = actions.Where(a => a.Outcome == ActionOutcome.Succeeded && a.ChangedPaths is { Count: > 0 }
+                                         && (step is null || a.Step == step))
+            .SelectMany(a => a.ChangedPaths!).ToArray();
 
         var items = new List<ItemEvidence>();
         // A step for some items: what it hands on is their result, and the evidence is recorded for them.
@@ -83,6 +92,7 @@ public static class EvidenceCoverage
                 var naming = succeeded.Where(a => a.Named.Any(s => Same(s, item))).ToArray();
                 if (naming.Any(a => commands.Contains(a.Tool))) complete.Add(EvidenceKind.Command);
                 if (naming.Length > 0 || whole) complete.Add(EvidenceKind.Call);
+                if (written.Any(p => Same(p, item))) complete.Add(EvidenceKind.FileWrite);
                 items.Add(new ItemEvidence(field.Name, item, complete, gap));
             }
         }
@@ -135,7 +145,7 @@ public static class EvidenceCoverage
         if (typed.ResultsStep is not { } results || results < 0 || results >= plan.Steps.Count)
             return "its results are not a step of this plan";
         if (source == results) return "the source and the results are the same step";
-        if (typed.Evidence is null) return "it names no evidence kind (file_read, command, call)";
+        if (typed.Evidence is null) return "it names no evidence kind (file_read, file_write, command, mentioned)";
 
         var list = plan.Steps[source].Output?.Fields.FirstOrDefault(f => f.Name == typed.SourceField);
         if (list is null || list.Type is not (StepOutputFieldType.PathList or StepOutputFieldType.StringList))
