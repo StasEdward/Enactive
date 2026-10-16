@@ -236,6 +236,70 @@ public sealed class CoverageAtTheJoinTests
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
     }
 
+    // A report placed after the join that consumes the list of the step BEFORE the forEach, and accounts for each page.
+    private const string ReportConsumingTheList = """
+        {"disposition":"task","title":"review the wiki",
+         "steps":[{"title":"find pages","dependsOn":[],"output":{"pages":{"type":"path[]","description":"the pages"}}},
+                  {"title":"review page","dependsOn":[0],"forEach":{"step":0,"field":"pages"},
+                   "consumes":[{"step":0,"field":"pages","evidence":"file_read"}],
+                   "output":{"notes":{"type":"results","description":"a note per page"}}},
+                  {"title":"write the report","dependsOn":[0,1],"consumes":[{"step":0,"field":"pages","evidence":"file_read"}],
+                   "output":{"sections":{"type":"results","description":"a section per page"}}}]}
+        """;
+
+    private static Turn[] Report(string[] pages)
+        => [.. pages.Select(p => Turn.Calls1("read_file", JsonSerializer.Serialize(new { path = p }), "rr-" + p)),
+            Turn.Calls1(StepOutputContract.ToolName, JsonSerializer.Serialize(new { sections = pages.ToDictionary(p => p, p => "section on " + p) }), "s-report"),
+            Turn.Says("Report written.")];
+
+    /// <summary>
+    /// Characterization (Plan Phase 1, "expansion preserves source/result numbering", across expansion and resume). Step
+    /// numbers are plan positions + 1, and the item steps an expansion makes are numbered AFTER the planned ones (4, 5, 6
+    /// here); outputs are found by that number - the hand-off by the consume's step (StepOutputContract.ForDependents),
+    /// the gate by the step's own (StepCoverageGate.Check), the join by its own (JoinCoverage). A report after the join
+    /// that consumes the list from before the forEach, carried through a checkpoint resume taken between two items: each
+    /// picks the right output - the report is handed the pages and the joined notes, its gate and the join count the right
+    /// lists, both run-end checks pass, and the run completes. An item output numbered into a planned step's place would
+    /// be taken for that step's result (EvidenceCoverage finds an output by number), and this fails (item steps inserted
+    /// after the forEach instead of appended: Failed; the join counting at joinNo instead of joinNo - 1: Incomplete). The
+    /// arithmetic of each lookup alone is pinned where it lives: the hand-off's in TheHandOffFollowsTheDeclarationTests,
+    /// the gate's own-output exclusion in CoverageAtTheStepGateTests (The_candidate_stands_for_the_step...).
+    /// </summary>
+    [Fact]
+    public async Task Numbering_holds_for_a_consumer_after_the_join_through_expansion_and_resume()
+    {
+        var pages = Pages(3);
+        using var fx = Wiki(3);
+        var store = new Recording();
+        var first = await fx.RunAsync(fx.Build(new FakeChatProvider([Turn.Says(ReportConsumingTheList), .. Found(pages),
+            .. pages.SelectMany(p => Review(p)), .. Report(pages)]), checkpoints: store), "review every wiki page and write a report");
+        Assert.Equal(RunOutcomeKind.Completed, first.Last().Outcome());
+        Assert.Equal([4, 5, 6], first.Where(e => e.Kind == EventKind.StepStarted && e.Summary.Contains("review page: wiki/p0", StringComparison.Ordinal))
+            .Select(e => e.StepNo() ?? 0));
+
+        // Written after the first page's step finished and before the second's did.
+        var afterFirst = JsonSerializer.Deserialize<Enactive.Core.History.RunCheckpoint>(JsonSerializer.Serialize(
+            store.Saved.First(c => c.Steps.Any(s => s.Items is ["wiki/p01.md"] && s.Status == "Done"))))!;
+        Assert.Equal(6, afterFirst.Steps.Count);
+        Assert.Equal(["find pages", "review page", "write the report"], afterFirst.Steps.Take(3).Select(s => s.Title));
+
+        var resumed = new FakeChatProvider([.. Review(pages[1]), .. Review(pages[2]), .. Report(pages)]);
+        var events = await fx.ResumeAsync(fx.Build(resumed, checkpoints: store), afterFirst);
+
+        Assert.Equal(5, events.Single(e => e.Kind == EventKind.StepStarted && e.Summary.Contains("review page: wiki/p02.md", StringComparison.Ordinal)).StepNo());
+        Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(events, 2).StepOutcome());
+        Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(events, 3).StepOutcome());
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.ReviewFailed && e.StepNo() == 3);
+        var prompt = ReportPrompt(resumed);
+        Assert.Contains("""{"pages":["wiki/p01.md","wiki/p02.md","wiki/p03.md"]}""", prompt, StringComparison.Ordinal);
+        Assert.Contains("""{"notes":{"wiki/p01.md":"fine","wiki/p02.md":"fine","wiki/p03.md":"fine"}}""", prompt, StringComparison.Ordinal);
+        Assert.Contains(events, e => e.IsCheck() && e.Summary.StartsWith("PASS", StringComparison.Ordinal)
+                                     && e.Summary.Contains("Every pages item of step 1 is covered by step 2", StringComparison.Ordinal));
+        Assert.Contains(events, e => e.IsCheck() && e.Summary.StartsWith("PASS", StringComparison.Ordinal)
+                                     && e.Summary.Contains("Every pages item of step 1 is covered by step 3", StringComparison.Ordinal));
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
     /// <summary>Regression guard: every item covered, the join stands as done as it always did, and the run completes.</summary>
     [Fact]
     public async Task A_fan_out_with_full_coverage_joins_as_done()
