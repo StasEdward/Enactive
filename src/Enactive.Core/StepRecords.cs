@@ -58,7 +58,14 @@ public enum OutcomeCause
     /// The reviewer found the step had done what can be done within the request, and the rest of its purpose not reachable
     /// here without going beyond it. Not tried again: a retry can only go beyond the request. Last, so no stored value moves.
     /// </summary>
-    ReviewUnreachable
+    ReviewUnreachable,
+
+    /// <summary>
+    /// The items of a list the step consumes were covered only by being mentioned - named in a call that succeeded - and no
+    /// review approved the work: done, not confirmed. One call naming every path covers every item. Last, so no stored
+    /// value moves.
+    /// </summary>
+    CoverageMentionedOnly
 }
 
 /// <summary>

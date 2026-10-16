@@ -19,6 +19,7 @@ internal static class ItemReport
         OutcomeCause.ReviewRejected => "Rejected by review",
         OutcomeCause.ReviewUnprocessable => "Unconfirmed: the review could not be processed",
         OutcomeCause.ReviewUndecided => "Unconfirmed: the reviewer could not decide",
+        OutcomeCause.CoverageMentionedOnly => "Unconfirmed: its items were only mentioned",
         OutcomeCause.NotReached => "Not reached",
         OutcomeCause.NotExpanded => "Not given steps",
         OutcomeCause.StepFailed => "Failed",

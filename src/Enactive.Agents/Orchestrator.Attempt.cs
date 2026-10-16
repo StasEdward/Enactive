@@ -31,19 +31,36 @@ public sealed partial class Orchestrator
         // taken as done (Plan Phase 1.3). Short, it goes back to the step on the gate's own budget and the reviewer is not
         // asked: a reviewer shown two good notes passes them, and the ten pages with nothing behind them are a count the
         // engine can make itself. Only a step that ended as done is counted; any other end is already not done.
-        if (result.Succeeded && stepNumber is { } gatedNo && step.Coverage.Count > 0
-            && StepCoverageGate.Check(step.Coverage, session.Outputs.Values, step.OutputSlot.Build(gatedNo, title, step.Output), gatedNo) is { } coverage)
+        var coverage = result.Succeeded && stepNumber is { } gatedNo && step.Coverage.Count > 0
+            ? StepCoverageGate.Check(step.Coverage, session.Outputs.Values, step.OutputSlot.Build(gatedNo, title, step.Output), gatedNo)
+            : null;
+        if (coverage is not null && stepNumber is { } checkedNo)
         {
             if (!coverage.Passed)
             {
                 // The reviewer's emission (ReviewAttemptAsync) is bypassed, so the gate says its own verdict - as the
                 // engine's, so nobody reads a reviewer's judgement into a count.
                 await publish(scope.Ev(EventKind.ReviewFailed,
-                    $"[{gatedNo}] FAIL (the engine's coverage check - no reviewer was asked): {coverage.Notes}", gatedNo));
+                    $"[{checkedNo}] FAIL (the engine's coverage check - no reviewer was asked): {coverage.Notes}", checkedNo));
                 return new(new ReviewResult(new ReviewVerdict.Fail(coverage.Notes, coverage.RepairAdvice, [])), ByGate: true);
             }
-            await publish(scope.Ev(EventKind.ContextAssembled, $"[{gatedNo}] The engine's coverage check passed: "
-                + string.Join("; ", coverage.Checks.Select(c => $"{c.Typed.SourceField} of step {c.Typed.SourceStep + 1}, {c.Line()}")), gatedNo));
+            await publish(scope.Ev(EventKind.ContextAssembled, $"[{checkedNo}] The engine's coverage check passed: "
+                + string.Join("; ", coverage.Checks.Select(c => $"{c.Typed.SourceField} of step {c.Typed.SourceStep + 1}, {c.Line()}")), checkedNo));
+
+            // Covered, but some items only mentioned (StepCoverageGate.Outcome.OnlyMentioned): one call naming every path
+            // covers every item, so the count says nothing was done with them. With no review there is no verdict to
+            // approve them, and the step is done but not confirmed - never Succeeded on a count a single call can make.
+            // With review on the verdict decides as for any step: a pass stands, a fail is a fail, and a missing verdict
+            // is already DoneUnverified (ReviewVerdict.Missing).
+            if (!models.ReviewOn && coverage.OnlyMentioned is { Count: > 0 } mentioned)
+            {
+                result.Set(StepOutcomeKind.DoneUnverified,
+                    $"{mentioned.Count} item(s) were only mentioned - named in a call that succeeded, and not read, written or run: "
+                    + string.Join(", ", mentioned.Take(5)) + (mentioned.Count > 5 ? $" and {mentioned.Count - 5} more" : "")
+                    + ". That shows neither a read nor the work on them, and no review confirmed it.",
+                    OutcomeCause.CoverageMentionedOnly);
+                return null;
+            }
         }
 
         // The step's own word that it cannot go on, with nothing the engine found behind it, is reviewed as a finished step

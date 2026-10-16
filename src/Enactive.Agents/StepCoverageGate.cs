@@ -47,6 +47,18 @@ internal static class StepCoverageGate
     {
         public bool Passed => Checks.All(c => c.Passed);
 
+        /// <summary>
+        /// The covered items of a criterion that asked only for "mentioned" with nothing but a mention behind them: named
+        /// in a call that succeeded, and neither read, written nor run. One call naming every path covers every item
+        /// (EvidenceCoverage.Gather counts any successful call whose arguments name it), so coverage that rests on this
+        /// alone shows the items were in hand, not that anything was done with them - the step may stand as done only on
+        /// a reviewer's approving verdict.
+        /// </summary>
+        public IReadOnlyList<string> OnlyMentioned => Checks
+            .Where(c => c.Typed.Evidence is null or EvidenceKind.Call)
+            .SelectMany(c => c.Items.Where(i => i.Covered && i.Found.All(k => k == EvidenceKind.Call)).Select(i => i.Item))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
         /// <summary>The reason a person reads, and the step is rejected with: the failed criteria, one line each.</summary>
         public string Notes
         {

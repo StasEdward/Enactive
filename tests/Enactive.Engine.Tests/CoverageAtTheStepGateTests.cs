@@ -210,6 +210,97 @@ public sealed class CoverageAtTheStepGateTests
         Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(events, 2).StepOutcome());
     }
 
+    // ── "mentioned" is not confirmation ──────────────────────────────────────────────────
+
+    /// <summary>A call that names every page, and does nothing else with them: what "mentioned" accepts.</summary>
+    private sealed class Tagging : Enactive.Core.Tools.ITool
+    {
+        public Enactive.Core.Tools.ToolDefinition Definition => new("tag_pages", "tags pages", "{\"type\":\"object\"}", Kind: Enactive.Core.Tools.ToolKind.Read);
+        public Enactive.Core.Permissions.PermissionLevel RequiredLevel => Enactive.Core.Permissions.PermissionLevel.Observe;
+        public Task<Enactive.Core.Tools.ToolResult> InvokeAsync(string argumentsJson, Enactive.Core.Tools.ToolContext ctx, CancellationToken ct)
+            => Task.FromResult(new Enactive.Core.Tools.ToolResult(true, "tagged", null, [], new Dictionary<string, object?>()));
+    }
+
+    private static (EngineFixture Fx, FakeChatProvider Worker) OneCallNamingAll(int pages)
+    {
+        // Short names: the journal keeps a call's arguments compacted to 120 characters (ToolCallParsing.Compact), and
+        // a mention is read from the recorded arguments.
+        var fx = new EngineFixture { StepOutputs = true, TypedCriteria = true };
+        var all = Enumerable.Range(1, pages).Select(i => $"{i}.md").ToArray();
+        foreach (var page in all)
+            fx.Write(page, "# a page\n");
+        fx.ToolsOverride = [.. EngineFixture.ShippedTools(), new Tagging()];
+        var worker = new FakeChatProvider([Turn.Says(PlanFor()), .. Found(all),
+            Turn.Calls1("tag_pages", JsonSerializer.Serialize(new { paths = all }), "t1"), Notes(all), Turn.Says("Reviewed all twelve.")]);
+        return (fx, worker);
+    }
+
+    /// <summary>
+    /// One call naming all twelve paths covers all twelve under "mentioned" - and shows nothing done to any of them.
+    /// With no review to approve it, the step is done but not confirmed, and the passing final checks do not make the
+    /// run Completed.
+    /// </summary>
+    [Fact]
+    public async Task One_call_naming_every_item_with_review_off_is_done_but_not_confirmed()
+    {
+        var (fx, worker) = OneCallNamingAll(12);
+        using var _ = fx;
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.WorkerWith("tag_pages", "read_file")), "review every wiki page");
+
+        Assert.True(GateFailures(events, 2).Length == 0, events.Text());
+        var end = StepEnd(events, 2);
+        Assert.Equal(StepOutcomeKind.DoneUnverified, end.StepOutcome());
+        Assert.Contains("only mentioned", end.OutcomeReason(), StringComparison.Ordinal);
+        Assert.Contains(events, e => e.IsCheck() && e.Summary.StartsWith("PASS", StringComparison.Ordinal)
+                                     && e.Summary.Contains("Every pages item of step 1 is covered by step 2", StringComparison.Ordinal));
+        Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
+    /// <summary>With review on, an approving verdict is what lets it stand as done.</summary>
+    [Fact]
+    public async Task One_call_naming_every_item_stands_as_done_on_an_approving_review()
+    {
+        var (fx, worker) = OneCallNamingAll(12);
+        using var _ = fx;
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.WorkerWith("tag_pages", "read_file"), router: Routers.WithReviewer(), reviewProvider: reviewer),
+            "review every wiki page");
+
+        Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(events, 2).StepOutcome());
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
+    /// <summary>A review with no usable verdict approves nothing: done, not confirmed - as any step without one.</summary>
+    [Fact]
+    public async Task One_call_naming_every_item_without_a_usable_verdict_is_done_but_not_confirmed()
+    {
+        var (fx, worker) = OneCallNamingAll(12);
+        using var _ = fx;
+        var reviewer = new FakeChatProvider(Verdicts.Pass()) { WhenExhausted = Turn.Says("no idea") };
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.WorkerWith("tag_pages", "read_file"), router: Routers.WithReviewer(), reviewProvider: reviewer),
+            "review every wiki page");
+
+        Assert.Equal(StepOutcomeKind.DoneUnverified, StepEnd(events, 2).StepOutcome());
+        Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
+    /// <summary>Read, the same pages are more than mentioned: with review off the step stands as done.</summary>
+    [Fact]
+    public async Task Items_read_and_not_only_mentioned_stand_as_done_with_review_off()
+    {
+        var pages = Pages(2);
+        using var fx = Wiki(2);
+        var worker = new FakeChatProvider([Turn.Says(PlanFor()), .. Found(pages), Read(pages[0]), Read(pages[1]), Notes(pages), Turn.Says("Reviewed both.")]);
+
+        var events = await fx.RunAsync(fx.Build(worker), "review every wiki page");
+
+        Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(events, 2).StepOutcome());
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
     /// <summary>A step with nothing to cover is tried and reviewed exactly as before: no gate, the review's budget alone.</summary>
     [Fact]
     public async Task A_step_with_no_coverage_to_check_is_tried_and_reviewed_as_before()
