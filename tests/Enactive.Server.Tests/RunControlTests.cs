@@ -948,8 +948,8 @@ public sealed class RunControlTests : IDisposable
         _engine.ReleaseAll();
         await paused.Ended.WaitAsync(TimeSpan.FromSeconds(10));
         var checkpoint = Interrupted("Done", "Pending") with { Paused = true };
-        new Enactive.Workspace.JsonCheckpointStore(Enactive.Core.Context.WorkspaceInfo.For(_workspace))
-            .SaveAsync(checkpoint, CancellationToken.None).GetAwaiter().GetResult();
+        await new Enactive.Workspace.JsonCheckpointStore(Enactive.Core.Context.WorkspaceInfo.For(_workspace))
+            .SaveAsync(checkpoint, CancellationToken.None);
 
         var resumed = (await _control.ResumeAsync(As("alice"), _workspace, checkpoint.RunId)).Run!;
         var background = _control.StartBackground(As("alice"), _workspace, "mail the digest").Run!;
