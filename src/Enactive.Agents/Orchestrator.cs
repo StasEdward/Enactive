@@ -1591,8 +1591,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 unverifiedSteps = stepOutcomes.Where(p => p.Value == StepOutcomeKind.DoneUnverified).Select(p => p.Key).ToArray();
             }
             // What the steps it depends on handed on, as values (Phase 2) - not a retelling of them.
-            var handedOn = step.DependsOn.Select(d => session.Outputs.TryGetValue(d, out var o) ? o : null).OfType<StepOutput>().ToArray();
-            var handedMessage = handedOn.Length > 0 ? ChatMessage.User(StepOutputContract.ForDependents(handedOn)) : null;
+            // As the step declared it (Plan Phase 1.4): a step it only waits for ("after") is an order, not data, and hands
+            // on nothing; of a step it consumes from, only what it consumes. Without a declaration, as before.
+            var handedOn = step.DependsOn.Where(d => step.OrderOnly?.Contains(d) != true)
+                .Select(d => session.Outputs.TryGetValue(d, out var o) ? o : null).OfType<StepOutput>().ToArray();
+            var handedMessage = handedOn.Length > 0 ? ChatMessage.User(StepOutputContract.ForDependents(handedOn, step.Consumes)) : null;
             if (handedMessage is not null)
                 convo.Add(handedMessage);
             // What each item came to, for a step after a join: done, or not and why - so a report is

@@ -433,9 +433,30 @@ internal static class StepOutputContract
         return kept;
     }
 
-    /// <summary>What the steps after this one are shown: the accepted values, as data.</summary>
-    internal static string ForDependents(IEnumerable<StepOutput> outputs)
+    /// <summary>
+    /// What the steps after this one are shown: the accepted values, as data. A step that declares what it consumes
+    /// (<paramref name="consumes"/>) is shown only those fields of each step it consumes from, and one line naming each
+    /// field left out, without its value - so it knows the field exists and cannot take an undeclared one as its input
+    /// (Plan Phase 1.4); a step it consumes nothing of is shown as before. Without a declaration, everything, as before.
+    /// </summary>
+    internal static string ForDependents(IEnumerable<StepOutput> outputs, IReadOnlyList<ConsumeSpec>? consumes = null)
         => "Results handed on by the steps this one depends on - values checked by the engine; use them, "
            + "not a retelling of them:\n"
-           + string.Join("\n", outputs.Select(o => $"- step {o.StepNo} \"{o.Step}\": {o.ValuesJson}"));
+           + string.Join("\n", outputs.Select(o => Consumed(o, consumes)));
+
+    private static string Consumed(StepOutput output, IReadOnlyList<ConsumeSpec>? consumes)
+    {
+        var line = $"- step {output.StepNo} \"{output.Step}\": ";
+        // A consume names its source by plan position, from 0; an output carries it from 1.
+        var fields = consumes?.Where(c => c.Step == output.StepNo - 1).Select(c => c.Field).ToHashSet(StringComparer.Ordinal);
+        if (fields is not { Count: > 0 } || JsonNode.Parse(output.ValuesJson) is not JsonObject values)
+            return line + output.ValuesJson;
+        var kept = new JsonObject();
+        var left = new List<string>();
+        foreach (var (name, value) in values)
+            if (fields.Contains(name)) kept[name] = value?.DeepClone();
+            else left.Add(name);
+        return line + kept.ToJsonString()
+               + string.Concat(left.Select(name => $"\n  - '{name}' is handed on too; this step does not consume it, so its value is not shown."));
+    }
 }
