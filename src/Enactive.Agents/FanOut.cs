@@ -153,10 +153,13 @@ public static class FanOut
     }
 
     /// <summary>One step per group of items, made from the "for each" step: its title, work, contract and dependencies.</summary>
+    // Which dependencies are only an order, and what it consumes, with them: given DependsOn alone, an item's step would
+    // be handed the data of a step its forEach step only waits for ("after"), and nothing it consumes would be filtered.
     public static IReadOnlyList<PlanStep> Steps(PlanStep forEach, IReadOnlyList<IReadOnlyList<string>> groups)
         => groups.Select(items => new PlanStep(Guid.NewGuid(), Title(forEach.Title, items), StepStatus.Pending, forEach.DependsOn, forEach.Complexity)
         {
-            ObligationIds = forEach.ObligationIds, Output = forEach.Output, Items = items, ExpandedFrom = forEach.Id
+            ObligationIds = forEach.ObligationIds, Output = forEach.Output, Items = items, ExpandedFrom = forEach.Id,
+            OrderOnly = forEach.OrderOnly, Consumes = forEach.Consumes
         }).ToArray();
 
     private static string Title(string title, IReadOnlyList<string> items)
