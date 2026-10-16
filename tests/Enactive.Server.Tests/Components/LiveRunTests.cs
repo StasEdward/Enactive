@@ -398,6 +398,82 @@ public sealed class LiveRunTests : ComponentHost
         Assert.False(File.Exists(Path.Combine(run.Workspace, "report.md")));
     }
 
+    // ── Pause after this step (Plan Phase 4.2) ─────────────────────────────
+
+    private static WorkEvent Plan()
+        => Script.Ev(EventKind.PlanCreated, "Disks — 2 steps", WorkEventPayload.PlanPayload("Disks", ["check the disks", "write the report"]));
+
+    private static AngleSharp.Dom.IElement? PauseButton(IRenderedComponent<LiveRun> page)
+        => page.FindAll(".task-header button.pause").SingleOrDefault();
+
+    /// <summary>
+    /// In the run's header, beside its phase, as the window's: pressed, the service is asked to pause THIS run, and the
+    /// button says the pause is pending and greys - the steps running now finish, and Stop still cancels at once.
+    /// </summary>
+    [Fact]
+    public async Task An_operator_pauses_the_run_from_its_header_and_is_told_it_is_pending()
+    {
+        var run = await StartedAsync();
+        _script.Emit(Plan());
+        await WaitUntil(() => run.Session.Seq == 1);
+
+        var page = Open("alice", run);
+
+        page.WaitForAssertion(() => Assert.Equal("Pause after this step", PauseButton(page)?.TextContent.Trim()));
+        Assert.False(PauseButton(page)!.HasAttribute("disabled"));
+        PauseButton(page)!.Click();
+
+        Assert.True(run.Pause.IsRequested);
+        page.WaitForAssertion(() => Assert.Equal("Pausing after the steps running now…", PauseButton(page)?.TextContent.Trim()));
+        Assert.True(PauseButton(page)!.HasAttribute("disabled"));
+        Assert.Contains(Users.AuditTrail(), e => e is { Account: "alice", Action: "run pause asked" });
+    }
+
+    /// <summary>A Viewer may not stop a run, so is not offered its pause either; the service refuses one anyway.</summary>
+    [Fact]
+    public async Task A_viewer_is_not_offered_the_pause()
+    {
+        var run = await StartedAsync();
+        _script.Emit(Plan());
+        await WaitUntil(() => run.Session.Seq == 1);
+
+        var page = Open("vera", run);
+
+        page.WaitForAssertion(() => Assert.Equal("Disks", page.Find(".task-title").TextContent.Trim()));
+        Assert.Null(PauseButton(page));
+    }
+
+    /// <summary>Before its plan a run has no step boundary yet: the pause is shown greyed and says when it comes.</summary>
+    [Fact]
+    public async Task Before_the_plan_the_pause_is_greyed_and_comes_with_the_plan()
+    {
+        var run = await StartedAsync();
+        _script.Emit(Script.Ev(EventKind.IntentReceived, "Intent: check the disks"));
+        await WaitUntil(() => run.Session.Seq == 1);
+
+        var page = Open("alice", run);
+
+        page.WaitForAssertion(() => Assert.True(PauseButton(page)?.HasAttribute("disabled")));
+        Assert.Contains("once the run has a plan", PauseButton(page)!.GetAttribute("title"));
+        _script.Emit(Plan());
+        page.WaitForAssertion(() => Assert.False(PauseButton(page)?.HasAttribute("disabled") ?? true));
+    }
+
+    /// <summary>A run that stages its changes ignores a pause, so its page offers none.</summary>
+    [Fact]
+    public async Task A_staging_run_offers_no_pause()
+    {
+        _script.Stages = true;
+        var run = await StartedAsync();
+        _script.Emit(Plan());
+        await WaitUntil(() => run.Session.Seq == 1);
+
+        var page = Open("alice", run);
+
+        page.WaitForAssertion(() => Assert.Equal("Disks", page.Find(".task-title").TextContent.Trim()));
+        Assert.Null(PauseButton(page));
+    }
+
     /// <summary>
     /// A staging run's files are proposals, not files it wrote (RunFiles): its Artifacts tab offers no Review or Delete for
     /// one - Review showed the person's file on disk, unchanged, and Delete deleted it. While the run goes they are

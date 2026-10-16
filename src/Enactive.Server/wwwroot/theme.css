@@ -414,6 +414,9 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
   background: transparent; border: 0; }
 .task-meta, .also-watching { margin: 0; font-size: 11px; color: var(--text-muted); }
 .task-header .pill { flex: none; }
+/* Pause after this step, beside the phase it changes - the plain button: neither the action you came for nor a destructive one. */
+.task-header .btn.pause { flex: none; font-size: 11px; padding: 2px 10px; }
+.live-run > .said { margin: 4px 0 0; font-size: 12px; }
 
 .tabs { display: flex; align-items: flex-end; height: 36px; border-bottom: 1px solid var(--border); }
 

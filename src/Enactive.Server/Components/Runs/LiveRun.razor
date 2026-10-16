@@ -29,6 +29,7 @@
     var title = view.Title.Length > 0 ? view.Title : run.Prompt;
     var others = run.Session.Watchers.Where(w => w != _me).ToList();
     var question = run.Questions.Pending;
+    var pause = run.Session.PauseOffer;
 }
 
 <PageTitle>@title - Enactive</PageTitle>
@@ -47,8 +48,20 @@
                 <p class="also-watching">also watching: @string.Join(", ", others)</p>
             }
         </div>
+        @if (MayStop && pause.Standing != PauseStanding.Hidden)
+        {
+            @* Pause after this step (Plan Phase 4.2), as the window's run header has it beside the phase: the steps running
+               now finish and the run ends Paused, to be resumed from UNFINISHED - unlike Stop, which cancels them. Offered to
+               whoever may stop the run, and only for a run that can pause (PauseOffer); the service decides (RunControl.Pause). *@
+            <button type="button" class="btn pause" title="@pause.Why" disabled="@(pause.Standing != PauseStanding.Offered)"
+                    @onclick="() => PauseAsync(run)">@pause.Text</button>
+        }
         <Pill Class="@Looks.Phase(RunState.Standing(run, view.Phase))">@RunState.Phase(run, view.Phase)</Pill>
     </header>
+    @if (_pauseSaid is { Length: > 0 } pauseSaid)
+    {
+        <p class="said" role="alert">@pauseSaid</p>
+    }
 
     <Tabs Label="Views of the run" Names="@TabNames(view)" Selected="_tab" SelectedChanged="tab => _tab = tab" />
 
@@ -165,7 +178,7 @@
         _shown = RunId;
         _user = (await Auth).User;
         _me = _user.Identity?.Name;
-        (_tab, _said, _lastShown, _answeredHere) = (0, null, null, null);
+        (_tab, _said, _lastShown, _answeredHere, _pauseSaid) = (0, null, null, null, null);
         // A view, and a reader, of this run's own: the last follower's read can still be under way when the screen moves
         // to another run, and it wrote the old run's view over the new one's - through a reader shared by two sessions'
         // locks. What it reads now lands in a view nobody draws.
@@ -297,6 +310,17 @@
         var minutes = Math.Max(0, (int)Math.Ceiling(left.TotalMinutes));
         return $"waits {minutes.ToString(CultureInfo.InvariantCulture)} min more, then goes to the Inbox";
     }
+
+    /// <summary>What the service said to this page's pause, when it refused it; null after one it took.</summary>
+    private string? _pauseSaid;
+
+    /// <summary>
+    /// Whoever may stop a run - its owner or any Operator (RunControl.Cancel) - may pause it. Only offered: the service
+    /// checks the account again at the action.
+    /// </summary>
+    private bool MayStop => ServerAuth.RoleOf(_user!) >= Role.Operator;
+
+    private async Task PauseAsync(ServerRun run) => _pauseSaid = Runs.Pause((await Auth).User, run.Id);
 
     private async Task AnswerAsync(Guid question, string choice)
     {

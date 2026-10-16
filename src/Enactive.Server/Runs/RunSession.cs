@@ -46,10 +46,13 @@ internal sealed class RunSession
     /// Where a provider runs, by its id, for the panel's split of the work (ModelReaches over the service's settings);
     /// null, every provider Unknown - a run with no settings to say it (a test's, a scripted one).
     /// </param>
-    public RunSession(string workspace, string owner, string title, Func<string?, ModelReach>? reachOf = null, int tailCapacity = 4096)
+    /// <param name="pause">The run's pause (ServerRun.Pause), handed to the engine with its request; null, it cannot be paused.</param>
+    public RunSession(string workspace, string owner, string title, Func<string?, ModelReach>? reachOf = null, int tailCapacity = 4096,
+        Core.Execution.RunPause? pause = null)
     {
         Workspace = workspace;
         Owner = owner;
+        PauseOffer = new PauseOffer(pause);
         _feed = new RunFeed(title);
         _panel = new RunPanel(reachOf ?? (_ => ModelReach.Unknown));
         _tailCapacity = tailCapacity;
@@ -78,6 +81,12 @@ internal sealed class RunSession
     /// runs drain here, not through the window's runner, and are to read the same in the Inbox. Read once the run has ended.
     /// </summary>
     public Agents.BackgroundTally Tally { get; } = new();
+
+    /// <summary>
+    /// The run's "Pause after this step" (Plan Phase 4.2) as its page offers it - folded here, with the events, so every
+    /// page reads the same: offered once the plan is in, gone for a quick action, a staged run and once the run is over.
+    /// </summary>
+    internal PauseOffer PauseOffer { get; }
 
     /// <summary>A test's: called as the run ends, its watchers taken and not yet told - where a page subscribing lands.</summary>
     internal Action? Ending { get; set; }
@@ -132,6 +141,8 @@ internal sealed class RunSession
     {
         lock (_gate)
             _panel.Files.Stages = true;
+        // A staged run cannot be resumed, so the engine ignores a pause in it: its page offers none.
+        PauseOffer.Staging();
     }
 
     /// <summary>
@@ -169,6 +180,8 @@ internal sealed class RunSession
         }
         finally
         {
+            // Over, however it ended - a cancelled or broken run sends no end of its own: nothing left to pause.
+            PauseOffer.Ended();
             List<Subscription> watchers;
             lock (_gate)
             {
@@ -202,6 +215,7 @@ internal sealed class RunSession
             if (ev.Kind is EventKind.TaskCompleted or EventKind.TaskFailed)
                 Outcome = ev.Outcome() ?? (ev.Kind == EventKind.TaskCompleted ? RunOutcomeKind.Completed : RunOutcomeKind.Failed);
             var entry = new JournalEntry(++_seq, ev);
+            PauseOffer.Apply(ev);
             _feed.Apply(ev);
             _activity.Apply(ev);
             _panel.Apply(ev);

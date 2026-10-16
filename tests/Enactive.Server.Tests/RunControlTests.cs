@@ -80,16 +80,33 @@ public sealed class RunControlTests : IDisposable
         public SessionApprovals Session { get; } = new();
         public ApprovalStore Approvals { get; } = approvals;
 
+        /// <summary>The run is planned: a plan of two steps before its first step, as the engine's planned runs have.</summary>
+        public bool Plan { get; set; }
+
+        /// <summary>The run is a quick action, as the engine announces one: no plan, no step boundary to pause at.</summary>
+        public bool Quick { get; set; }
+
+        /// <summary>The run is composed to stage its changes, as the engine's executor says it of a staging store.</summary>
+        public bool Stages { get; set; }
+
         public async Task ExecuteAsync(ServerRun run, IDecisionHandler decisions, CancellationToken ct)
         {
             lock (Handlers) Handlers.Add(decisions.GetType());
             if (Refuse is { } refusal)
                 throw new InvalidOperationException(refusal);
+            if (Stages)
+                run.Session.Staging();
             var events = Channel.CreateUnbounded<WorkEvent>();
             var drained = run.Session.DrainAsync(events.Reader.ReadAllAsync(ct), ct);
             var runId = Guid.NewGuid();
-            WorkEvent Ev(EventKind kind, string summary) => new(Guid.NewGuid(), Guid.NewGuid(), runId, DateTimeOffset.UtcNow, kind, summary, null);
+            WorkEvent Ev(EventKind kind, string summary, string? payload = null)
+                => new(Guid.NewGuid(), Guid.NewGuid(), runId, DateTimeOffset.UtcNow, kind, summary, payload);
 
+            if (Quick)
+                events.Writer.TryWrite(Ev(EventKind.Routed, "Quick action: write the digest", WorkEventPayload.QuickActionPayload("write the digest")));
+            if (Plan)
+                events.Writer.TryWrite(Ev(EventKind.PlanCreated, "Digest — 2 steps",
+                    WorkEventPayload.PlanPayload("Digest", ["write the digest", "mail it"])));
             events.Writer.TryWrite(Ev(EventKind.StepStarted, "step 1: write the digest"));
             if (Ask)
             {
@@ -583,6 +600,7 @@ public sealed class RunControlTests : IDisposable
         public IReadOnlyList<ServerRun> List(ClaimsPrincipal user) => inner.List(user);
         public ServerRun? Find(ClaimsPrincipal user, Guid id) => inner.Find(user, id);
         public string? Cancel(ClaimsPrincipal user, Guid id) => inner.Cancel(user, id);
+        public string? Pause(ClaimsPrincipal user, Guid id) => inner.Pause(user, id);
         public string? Answer(ClaimsPrincipal user, Guid id, Guid question, string choice) => inner.Answer(user, id, question, choice);
     }
 
@@ -843,6 +861,107 @@ public sealed class RunControlTests : IDisposable
             Assert.Contains("already", result.Refusal);
         }
         finally { await _control.StopAsync(TimeSpan.FromSeconds(10)); }
+    }
+
+    // ── Pause after this step (Plan Phase 4.2) ─────────────────────────────
+
+    /// <summary>A planned run of <paramref name="owner"/>'s in <paramref name="workspace"/>, going, its pause offered.</summary>
+    private async Task<ServerRun> PlannedAsync(string owner = "alice", string? workspace = null)
+    {
+        _engine.Plan = true;
+        var run = _control.Start(As(owner), workspace ?? _workspace, "write the digest").Run!;
+        await WaitUntil(() => run.Session.PauseOffer.Standing == Enactive.Application.Projections.PauseStanding.Offered);
+        return run;
+    }
+
+    /// <summary>
+    /// The same people who may stop a run may pause it - its owner or any Operator - and only the run asked about is
+    /// paused. Audited as a stop is, with whose run it was; asked again it is still pending, and audited once.
+    /// </summary>
+    [Fact]
+    public async Task An_operator_who_may_stop_a_run_may_pause_it_and_it_is_audited_like_a_stop()
+    {
+        var elsewhere = Path.Combine(_root, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+        var run = await PlannedAsync();
+        var other = await PlannedAsync(workspace: elsewhere);
+
+        Assert.Null(_control.Pause(As("bob"), run.Id));
+        Assert.Null(_control.Pause(As("alice"), run.Id));
+
+        Assert.True(run.Pause.IsRequested);
+        Assert.False(other.Pause.IsRequested);
+        Assert.Equal(Enactive.Application.Projections.PauseStanding.Pending, run.Session.PauseOffer.Standing);
+        var entry = Assert.Single(_users.AuditTrail(), e => e.Action == "run pause asked");
+        Assert.Equal("bob", entry.Account);
+        Assert.EndsWith("(started by alice)", entry.Detail);
+
+        _engine.ReleaseAll();
+        await run.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("The run has already ended.", _control.Pause(As("alice"), run.Id));
+        Assert.Equal("There is no such run.", _control.Pause(As("alice"), Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task A_viewer_may_not_pause_a_run()
+    {
+        var run = await PlannedAsync();
+
+        Assert.Equal("Your role does not include the right to pause a run.", _control.Pause(As("vera"), run.Id));
+
+        Assert.False(run.Pause.IsRequested);
+        Assert.DoesNotContain(_users.AuditTrail(), e => e.Action == "run pause asked");
+        _engine.ReleaseAll();
+    }
+
+    /// <summary>
+    /// A quick action has no step to pause after and a run that stages its changes ignores a pause: neither is offered one,
+    /// and asked anyway the service says why rather than accepting a pause that will not happen.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "stages its changes")]
+    [InlineData(false, "quick action")]
+    public async Task A_staged_run_or_a_quick_action_is_not_paused(bool staged, string why)
+    {
+        _engine.Stages = staged;
+        _engine.Quick = !staged;
+        _engine.Plan = staged;
+        var run = _control.Start(As("alice"), _workspace, "write the digest").Run!;
+        await WaitUntil(() => run.Session.Seq >= 2);
+
+        Assert.Equal(Enactive.Application.Projections.PauseStanding.Hidden, run.Session.PauseOffer.Standing);
+        Assert.Contains(why, _control.Pause(As("alice"), run.Id));
+        Assert.False(run.Pause.IsRequested);
+        _engine.ReleaseAll();
+    }
+
+    /// <summary>
+    /// Each run is composed with a pause of its own, the one its page asks (EngineExecutor.RequestFor) - and a resumed run,
+    /// a run of its own, with a fresh one: the pause the paused run was given has been asked for, and handed to the resume
+    /// it would pause it before its first step.
+    /// </summary>
+    [Fact]
+    public async Task Each_run_is_composed_with_a_pause_of_its_own_and_a_resume_with_a_fresh_one()
+    {
+        var paused = await PlannedAsync();
+        Assert.Null(_control.Pause(As("alice"), paused.Id));
+        _engine.ReleaseAll();
+        await paused.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+        var checkpoint = Interrupted("Done", "Pending") with { Paused = true };
+        new Enactive.Workspace.JsonCheckpointStore(Enactive.Core.Context.WorkspaceInfo.For(_workspace))
+            .SaveAsync(checkpoint, CancellationToken.None).GetAwaiter().GetResult();
+
+        var resumed = (await _control.ResumeAsync(As("alice"), _workspace, checkpoint.RunId)).Run!;
+        var background = _control.StartBackground(As("alice"), _workspace, "mail the digest").Run!;
+
+        Assert.NotSame(paused.Pause, resumed.Pause);
+        Assert.False(resumed.Pause.IsRequested);
+        var saved = new Enactive.Workspace.WorkspaceEntry("project", _workspace, DateTimeOffset.Now);
+        var workspace = Enactive.Core.Context.WorkspaceInfo.For(_workspace);
+        Assert.Same(resumed.Pause, EngineExecutor.RequestFor(resumed, workspace, saved, null).Pause);
+        Assert.Same(background.Pause, EngineExecutor.RequestFor(background, workspace, saved, null).Pause);
+        await _engine.ReleaseNextAsync();
+        await _engine.ReleaseNextAsync();
     }
 
     /// <summary>Said before the button: the step that was running runs again, and what it did outside may happen twice.</summary>
