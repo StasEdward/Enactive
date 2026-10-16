@@ -257,7 +257,9 @@ public sealed class AStepSaysWhatItConsumesTests
             checkpoints: store), "review the wiki");
 
         var afterFind = store.Saved.First(c => c.Steps[0].Status == "Done" && c.Steps[1].Status != "Done");
-        Assert.Equal(PlanContractVersions.Current, afterFind.PlanContractVersion);
+        // Typed criteria are off here, so the coverage contract never ran: the plan was not made under it, and is not
+        // recorded as if it had been (APlanThatDoesNotCoverAListTests has the run where it did).
+        Assert.Null(afterFind.PlanContractVersion);
         Assert.Equal([new ConsumeSpec(0, "pages") { Evidence = EvidenceKind.FileRead }], afterFind.Steps[1].Consumes);
         Assert.Equal([afterFind.Steps[1].Id], afterFind.Steps[2].OrderOnly);
         Assert.Equal([afterFind.Steps[1].Id], afterFind.Steps[2].DependsOn);

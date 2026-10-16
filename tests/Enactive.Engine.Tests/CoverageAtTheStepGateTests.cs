@@ -326,6 +326,33 @@ public sealed class CoverageAtTheStepGateTests
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
     }
 
+    /// <summary>
+    /// A step that hands on a note for one of two pages and then says it cannot go on, with nothing the engine found behind
+    /// its word, is reviewed as a finished step - and a passing review made it Succeeded with the gate never run: one
+    /// page of two stood as done. Counted at the gate like any finished step: short, it goes back with what it owes and
+    /// that nothing stops it, and no reviewer is asked until it has covered both.
+    /// </summary>
+    [Fact]
+    public async Task A_step_that_says_it_is_blocked_is_counted_at_the_gate_before_its_review()
+    {
+        var pages = Pages(2);
+        using var fx = Wiki(2);
+        fx.ReportBlocked = true;
+        var worker = new FakeChatProvider([Turn.Says(PlanFor()), .. Found(pages), Read(pages[0]), Notes(pages[..1]),
+            Turn.Calls1(AgentBlocked.ToolName, """{"reason":"the second page cannot be reviewed"}""", "b1"),
+            Read(pages[1]), Notes(pages), Turn.Says("Reviewed both.")]);
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+
+        var events = await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "review every wiki page");
+
+        var gate = Assert.Single(GateFailures(events, 2));
+        Assert.Contains("covered 1 of 2", gate.Summary, StringComparison.Ordinal);
+        Assert.Contains(worker.Requests.Last().Messages, m => m.Content?.Contains(Orchestrator.NotABlock, StringComparison.Ordinal) == true);
+        Assert.Single(ReviewsOf(reviewer, 2));
+        Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(events, 2).StepOutcome());
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
     /// <summary>Read, the same pages are more than mentioned: with review off the step stands as done.</summary>
     [Fact]
     public async Task Items_read_and_not_only_mentioned_stand_as_done_with_review_off()

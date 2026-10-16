@@ -30,8 +30,12 @@ public sealed partial class Orchestrator
         // The lists this step consumes, counted by the engine before any review - and with review off, before the step is
         // taken as done (Plan Phase 1.3). Short, it goes back to the step on the gate's own budget and the reviewer is not
         // asked: a reviewer shown two good notes passes them, and the ten pages with nothing behind them are a count the
-        // engine can make itself. Only a step that ended as done is counted; any other end is already not done.
-        var coverage = result.Succeeded && stepNumber is { } gatedNo && step.Coverage.Count > 0
+        // engine can make itself. Only a step that ended as done is counted; any other end is already not done - except a
+        // step that only SAID it cannot go on, which a review is about to judge as a finished step (SaidBlockedOnly): its
+        // pass made the step Succeeded with the gate never run, one page of two standing as done. With review off its word
+        // stands as Blocked, and there is nothing to count.
+        var gated = result.Succeeded || (models.ReviewOn && SaidBlockedOnly(result));
+        var coverage = gated && stepNumber is { } gatedNo && step.Coverage.Count > 0
             ? StepCoverageGate.Check(step.Coverage, session.Outputs.Values, step.OutputSlot.Build(gatedNo, title, step.Output), gatedNo)
             : null;
         if (coverage is not null && stepNumber is { } checkedNo)
@@ -84,12 +88,12 @@ public sealed partial class Orchestrator
     /// a review: on 2026-10-08 a read-only step wrote its whole analysis, called report_blocked because "the next step
     /// requires writing tests", and the run ended BLOCKED with the analysis done - seven minutes and the run lost.
     /// </summary>
+    private static bool SaidBlockedOnly(ToolLoopResult result)
+        => result.Kind == StepOutcomeKind.Blocked && result.Cause == OutcomeCause.BlockedReported;
+
     /// <summary>What a step that reported a block nothing stands behind is told when it is tried again.</summary>
     internal const string NotABlock = "Nothing stops this step: report_blocked is for a cause only a person can remove - a "
         + "refused permission, an input that is not there - and there is none. Do the step's own part, and finish it with what you found.";
-
-    private static bool SaidBlockedOnly(ToolLoopResult result)
-        => result.Kind == StepOutcomeKind.Blocked && result.Cause == OutcomeCause.BlockedReported;
 
     /// <summary>
     /// The run's guard on what the request says may be changed - only when it says something (a change limit in the
@@ -164,7 +168,9 @@ public sealed partial class Orchestrator
             {
                 if (++gateFailures < gates)
                 {
-                    RetryAfterCoverageCheck(step.Messages, shortOf.RepairAdvice, stepNumber is null ? "the work" : "this step");
+                    // A step that said it cannot go on is told, as after a review that failed it, that nothing stops it.
+                    RetryAfterCoverageCheck(step.Messages, shortOf.RepairAdvice + (SaidBlockedOnly(result) ? " " + NotABlock : ""),
+                        stepNumber is null ? "the work" : "this step");
                     continue;
                 }
                 // ReviewRejected, as a reviewer's last rejection is - the same consequences - with a cause of its own:
@@ -188,29 +194,28 @@ public sealed partial class Orchestrator
             // person to remove. Without a verdict, the step's word stands, as before.
             if (SaidBlockedOnly(result))
             {
-                if (verdict is ReviewVerdict.Pass)
+                if (verdict is ReviewVerdict.Fail notDone)
                 {
-                    await publish(scope.Ev(EventKind.ContextAssembled, prefix + "The step said it cannot go on, and the review found "
-                        + "its own part done: it stands as done, its report as a note - " + result.Reason, stepNumber));
-                    result.Set(StepOutcomeKind.Succeeded, null);
+                    await publish(scope.Ev(EventKind.ErrorObserved, prefix + "The step said it cannot go on, but nothing stops it and "
+                        + "the review found its part not done: it is an attempt like any other - " + notDone.Notes, stepNumber));
+                    if (++reviewFailures < reviews)
+                    {
+                        RetryAfterReview(step.Messages, notDone.RepairAdvice + " " + NotABlock, stepNumber is null ? "the work" : "this step");
+                        continue;
+                    }
+                    result.Set(StepOutcomeKind.ReviewRejected, "review not passed: " + notDone.Notes);
+                    result.Keep = notDone.Keep;
                     return;
                 }
-                if (verdict is not ReviewVerdict.Fail notDone)
+                if (verdict is not ReviewVerdict.Pass)
                     return;
-                await publish(scope.Ev(EventKind.ErrorObserved, prefix + "The step said it cannot go on, but nothing stops it and "
-                    + "the review found its part not done: it is an attempt like any other - " + notDone.Notes, stepNumber));
-                if (++reviewFailures < reviews)
-                {
-                    RetryAfterReview(step.Messages, notDone.RepairAdvice + " " + NotABlock, stepNumber is null ? "the work" : "this step");
-                    continue;
-                }
-                result.Set(StepOutcomeKind.ReviewRejected, "review not passed: " + notDone.Notes);
-                result.Keep = notDone.Keep;
-                return;
+                await publish(scope.Ev(EventKind.ContextAssembled, prefix + "The step said it cannot go on, and the review found "
+                    + "its own part done: it stands as done, its report as a note - " + result.Reason, stepNumber));
+                result.Set(StepOutcomeKind.Succeeded, null);
+                // On to the pass below: it stands only as far as the pass approved the step's coverage, as any pass does.
             }
             // No verdict to act on - the reviewer could not tell, no answer could be used, the budget was spent: the work
             // is done and only unconfirmed (ReviewVerdict.Missing says what that makes of the step, and why).
-            // Items left out with a reason and no verdict to permit them: the reason the step is unconfirmed names them too.
             // Items it left out, or only mentioned, with no verdict to approve them: the reason it is unconfirmed names them
             // too (StepCoverageGate.Outcome.Unconfirmed, with nothing approved).
             if (verdict.Missing is { } missing)

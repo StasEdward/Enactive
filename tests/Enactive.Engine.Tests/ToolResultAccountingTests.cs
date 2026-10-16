@@ -54,6 +54,29 @@ public sealed class ToolResultAccountingTests
     }
 
     /// <summary>
+    /// What a call named is read from its full arguments and kept with it only for the coverage it serves (step outputs
+    /// on): with them off nothing counts an item, and every call of every run paid for parsing its arguments again.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void What_a_call_named_is_kept_only_when_step_outputs_count_items(bool stepOutputs)
+    {
+        using var fx = new EngineFixture();
+        var tools = new ToolRegistry(EngineFixture.ShippedTools());
+        var journal = new ExecutionJournal();
+        var frame = new StepFrame(Guid.NewGuid(), Guid.NewGuid(), 1, fx.Workspace, tools.Definitions, [], journal, new(), fx.Artifacts.BeginStep());
+        var call = new ToolCall("l", "list_dir", """{"path":"wiki/p01.md"}""");
+
+        new ToolResultAccounting(frame, tools, new(), false, ToolCallOrigin.Native, recordNamed: stepOutputs)
+            .Record(call, new(ToolResults.Ok("listed") with { WorkspaceEffect = WorkspaceEffect.None }, 1, 1));
+
+        var named = Assert.Single(journal.Actions).Named;
+        if (stepOutputs) Assert.Equal(["wiki/p01.md"], named);
+        else Assert.Null(named);
+    }
+
+    /// <summary>
     /// A file a call created inside a step's boundary is the step's from then on - told to the boundary by the accounting of
     /// the call's result, where the tool loop used to do it itself beside the accounting.
     /// </summary>

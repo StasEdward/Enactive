@@ -6,8 +6,11 @@ using static Enactive.Agents.ToolCallParsing;
 
 /// <summary>One result enters progress, unresolved failures, read coverage, evidence and the step's boundary, in this
 /// order. Event emission, artifact publication and transcript lifetime remain with the tool loop.</summary>
+/// <param name="recordNamed">Whether to keep what each call named (ExecutedAction.Named): only the coverage of step
+/// outputs reads it, and with them off it is every call's arguments parsed again for nothing. Left out, kept - the safe
+/// way round: a missing record makes coverage fall back to the compacted arguments, which name less.</param>
 internal sealed class ToolResultAccounting(StepFrame frame, IToolRegistry tools, RepairAttempts repairAttempts,
-    bool repairEnabled, ToolCallOrigin origin)
+    bool repairEnabled, ToolCallOrigin origin, bool recordNamed = true)
 {
     internal string? Record(ToolCall call, ToolInvocation.Result invocation)
     {
@@ -54,7 +57,8 @@ internal sealed class ToolResultAccounting(StepFrame frame, IToolRegistry tools,
             origin: origin,
             // What the call named, from its FULL arguments: the recorded ones are compacted for reading and cut at 120
             // characters, and coverage read its mentions from those - a write_file call named nothing (EvidenceCoverage.NamesIn).
-            named: EvidenceCoverage.NamesIn(call.ArgumentsJson));
+            // Only when coverage will read it (recordNamed): nothing else does.
+            named: recordNamed ? EvidenceCoverage.NamesIn(call.ArgumentsJson) : null);
 
         // What the step may change, told of a change made within it - a result, so here and not in the loop.
         if (result.Success) frame.Boundary?.Succeeded(call);

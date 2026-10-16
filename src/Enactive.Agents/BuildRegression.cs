@@ -172,7 +172,9 @@ internal static class BuildRegression
 
     /// <summary>
     /// Whether a result is worth a second run before it is believed: tests that passed and fail now can be
-    /// flaky. A build is not run twice - what it prints is the same both times.
+    /// flaky, and tests that passed and are not named now may only have been missed by one run. The second run
+    /// confirms both - a failure stands only if it fails again, a test is gone only if it is not named again
+    /// (CompareTests). A build is not run twice - what it prints is the same both times.
     /// </summary>
     internal static bool WorthRunningAgain(BuildBaseline before, CriterionResult compared)
         => before.Kind == BaselineKind.Test && compared.Outcome == CriterionOutcome.Failed;

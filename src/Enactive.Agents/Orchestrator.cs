@@ -642,9 +642,15 @@ public sealed partial class Orchestrator : IOrchestrator
         // Before fan-out expansion, which happens at run time: an item's step carries no forEach and would read as a
         // consumer that never said so. Not on resume: the plan is the checkpoint's, and so are its obligations.
         IReadOnlyList<UpstreamCoverage.Derived> derivedCoverage = [];
+        // The contract the plan was made under, as its checkpoints record it: a resumed run keeps its checkpoint's, and a
+        // new one is under the current contract only if the contract ran on it. Stamped Current whatever happened, a plan
+        // made with typed criteria off was later resumed with them on and read as one whose consumes had been declared -
+        // and the "planned before the coverage contract" note below was never said.
+        var planContractVersion = resume?.PlanContractVersion;
         if (resume is null && _options.StepOutputs && _options.TypedCriteria && plan.Disposition != IntentDisposition.QuickAction
             && plan.Plan is { Steps.Count: > 0 } contracted && PlanValidation.Error(contracted) is null)
         {
+            planContractVersion = PlanContractVersions.Current;
             var contract = CoverageContract(plan);
             foreach (var note in contract.Notes)
                 yield return scope.Ev(EventKind.ContextAssembled, note);
@@ -1024,7 +1030,7 @@ public sealed partial class Orchestrator : IOrchestrator
             yield break;
         }
 
-        await foreach (var ev in RunPlanAsync(intent, resume, session, models, plan, ct))
+        await foreach (var ev in RunPlanAsync(intent, resume, session, models, plan, planContractVersion, ct))
             yield return ev;
     }
     /// <summary>
@@ -1142,8 +1148,10 @@ public sealed partial class Orchestrator : IOrchestrator
     /// The interrupted run this one carries on from, or null. Only this half takes it: a quick
     /// action has no step boundary to resume at.
     /// </param>
+    /// <param name="planContractVersion">The coverage contract the plan was made under, written to every checkpoint; null
+    /// when it was made without one.</param>
     private async IAsyncEnumerable<WorkEvent> RunPlanAsync(
-        Intent intent, RunCheckpoint? resume, RunSession session, RunModels models, PlanResult plan,
+        Intent intent, RunCheckpoint? resume, RunSession session, RunModels models, PlanResult plan, int? planContractVersion,
         [EnumeratorCancellation] CancellationToken ct)
     {
         var scope = session.Scope;
@@ -1496,8 +1504,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 scope.Budget.StepsRun, scope.Budget.TokensSpent, _settings) { Checks = CriteriaFor(plan), Restrictions = plan.Restrictions, ActionPolicy = plan.ActionPolicy,
                     Baseline = session.Builds.Count == 0 ? null : session.Builds.Select(b => b.ToSnapshot()).ToArray(),
                     Waves = waves?.ToCheckpoint(waveBeforeKept),
-                    // A resumed checkpoint keeps the contract it was planned under: a plan from before it is not one after.
-                    PlanContractVersion = resume is null ? PlanContractVersions.Current : resume.PlanContractVersion,
+                    // The contract it was planned under, if any (planContractVersion): a plan from before it is not one after.
+                    PlanContractVersion = planContractVersion,
                     CoverageObligations = plan.CoverageObligations.Count > 0 ? plan.CoverageObligations : null };
         });
 
@@ -1820,9 +1828,10 @@ public sealed partial class Orchestrator : IOrchestrator
                 => Publish(scope.Event(
                     EventKind.StepCompleted, summary, WorkEventPayload.StepPayload(no, kind, why, engineCheck)));
 
-            // Succeeded is the ONLY outcome that unblocks what comes after it - and MarkDone is what
-            // does the unblocking, so it goes LAST. It used to go first, which opened two races on
-            // everything a dependent is entitled to see the moment it starts:
+            // A step that is done - Succeeded, or DoneUnverified (below) - unblocks what comes after it,
+            // and MarkDone is what does the unblocking, so it goes LAST. (A failure releases too, but only
+            // a join, which waits for its items to end - see the failure path.) It used to go first, which
+            // opened two races on everything a dependent is entitled to see the moment it starts:
             //
             //   - the DIGEST. A dependent seeds its conversation from it, and could be dispatched
             //     and read it before this step's line was in - losing the conclusion of the very
@@ -4465,7 +4474,8 @@ public sealed partial class Orchestrator : IOrchestrator
             var turnOrigin = recovered ? ToolCallOrigin.Healed
                 : resent ? ToolCallOrigin.Nudged
                 : attemptOrigin;
-            var accounting = new ToolResultAccounting(frame, _tools, repairAttempts, _options.RepairConsultation.Enabled, turnOrigin);
+            var accounting = new ToolResultAccounting(frame, _tools, repairAttempts, _options.RepairConsultation.Enabled, turnOrigin,
+                recordNamed: _options.StepOutputs);
             var readResults = new Dictionary<int, ToolInvocation.Result>();
             // Calls admitted ahead of the batch of reads they run in, with what each left kept until its turn comes - the
             // feed, the journal and the conversation keep the calls' order (CallAdmission.Held).

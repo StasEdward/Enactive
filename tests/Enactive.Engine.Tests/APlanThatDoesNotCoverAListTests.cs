@@ -339,6 +339,7 @@ public sealed class APlanThatDoesNotCoverAListTests
             checkpoints: store), "summarise the wiki");
         var afterFind = store.Saved.First(c => c.Steps[0].Status == "Done" && c.Steps[1].Status != "Done");
         Assert.Null(afterFind.CoverageObligations);
+        Assert.Equal(PlanContractVersions.Current, afterFind.PlanContractVersion);
 
         foreach (var (version, said) in new (int?, bool)[] { (PlanContractVersions.Current, false), (null, true) })
         {
@@ -350,5 +351,27 @@ public sealed class APlanThatDoesNotCoverAListTests
                 && e.Summary.Contains("not guaranteed", StringComparison.Ordinal)));
             Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
         }
+    }
+
+    /// <summary>
+    /// A run whose contract never ran - typed criteria off, so nothing it consumes was classified or derived - was not
+    /// planned under it, and its checkpoint does not say it was: it used to be stamped Current all the same, and a resume
+    /// with the switches on read it as a plan whose coverage had been declared, and said nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_run_whose_contract_never_ran_is_not_recorded_as_planned_under_it()
+    {
+        using var fx = Wiki(typedCriteria: false);
+        var store = new Recording();
+        await fx.RunAsync(fx.Build(new FakeChatProvider([Turn.Says(Consuming), .. Find(), .. Summarise(read: 2, of: 2)]),
+            checkpoints: store), "summarise the wiki");
+        var afterFind = store.Saved.First(c => c.Steps[0].Status == "Done" && c.Steps[1].Status != "Done");
+        Assert.All(store.Saved, c => Assert.Null(c.PlanContractVersion));
+
+        fx.TypedCriteria = true;
+        var events = await fx.ResumeAsync(fx.Build(new FakeChatProvider(Summarise(read: 2, of: 2)), checkpoints: store), afterFind);
+
+        Assert.Contains(events, e => e.Kind == EventKind.ContextAssembled
+            && e.Summary.Contains("planned before the coverage contract", StringComparison.Ordinal));
     }
 }
