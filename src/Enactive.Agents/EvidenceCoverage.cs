@@ -114,7 +114,6 @@ public static class EvidenceCoverage
                + ". Read or check them, then hand the result on again.";
     }
 
-    /// <summary>Every string value in a call's arguments, however deep. Arguments that are not JSON name nothing.</summary>
     /// <summary>The longest string a call's arguments may name an item with, as far as the journal keeps it.</summary>
     internal const int MaxNamedChars = 512;
 
@@ -129,6 +128,7 @@ public static class EvidenceCoverage
     internal static IReadOnlyList<string> NamesIn(string arguments)
         => StringsIn(arguments).Where(s => s.Length is > 0 and <= MaxNamedChars).Distinct(StringComparer.Ordinal).Take(MaxNamed).ToArray();
 
+    /// <summary>Every string value in a call's arguments, however deep. Arguments that are not JSON name nothing.</summary>
     internal static IReadOnlyList<string> StringsIn(string arguments)
     {
         var found = new List<string>();

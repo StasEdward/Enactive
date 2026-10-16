@@ -117,6 +117,10 @@ public sealed class CoverageAtTheStepGateTests
         Assert.Equal(2, GateFailures(events, 2).Length);
         Assert.Contains("covered 2 of 12", GateFailures(events, 2)[0].Summary, StringComparison.Ordinal);
         Assert.All(GateFailures(events, 2), e => Assert.True(e.ByEngineCheck()));
+        // How the step ended, and the run, name the engine's check - not a reviewer.
+        Assert.True(end.ByEngineCheck());
+        Assert.Contains("REJECTED BY THE ENGINE'S COVERAGE CHECK", end.Summary, StringComparison.Ordinal);
+        Assert.Contains("[2] review pages - rejected by the engine's coverage check: covered 2 of 12", events.Last().Summary, StringComparison.Ordinal);
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
     }
 
@@ -375,30 +379,64 @@ public sealed class CoverageAtTheStepGateTests
     public async Task The_reviewer_gets_the_weak_items_when_the_reads_fill_the_evidence_budget()
     {
         var pages = Pages(12);
-        string[] background = ["notes/style.md", "notes/terms.md", "notes/owners.md"];
-        using var fx = new EngineFixture { StepOutputs = true, TypedCriteria = true };
-        foreach (var file in pages.Concat(background))
-            fx.Write(file, string.Join("\n", Enumerable.Range(1, 12).Select(l => $"{file} line {l}: some text about this page")) + "\n");
-        fx.ToolsOverride = [.. EngineFixture.ShippedTools(), new Tagging()];
-        // Twelve reads of about 600 characters each - nine pages and three background notes - and the last three pages
-        // only tagged: the weak items.
-        var worker = new FakeChatProvider([Turn.Says(PlanFor()), .. Found(pages), .. pages[..9].Concat(background).Select(Read),
-            .. pages[9..].Select(p => Turn.Calls1("tag_pages", JsonSerializer.Serialize(new { paths = new[] { p } }), "t-" + p)),
-            Notes(pages), Turn.Says("Reviewed all twelve.")]);
-        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+        var asked = await ReviewOfTwelveReads(Enactive.Core.Execution.ExecutionJournal.DefaultBudget);
 
-        await fx.RunAsync(fx.Build(worker, EngineFixture.WorkerWith("tag_pages", "read_file"), router: Routers.WithReviewer(), reviewProvider: reviewer),
-            "review every wiki page");
-
-        var asked = string.Join("\n", Assert.Single(ReviewsOf(reviewer, 2)).Messages.Select(m => m.Content));
         Assert.Contains("characters not shown here", asked, StringComparison.Ordinal);   // the reads did fill the budget
         foreach (var weak in pages[9..])
             Assert.Contains($"- {weak}: required mentioned; found mentioned; by tag_pages", asked, StringComparison.Ordinal);
         Assert.Contains("Backed as required: 9 of 12 - read whole 9.", asked, StringComparison.Ordinal);
         // Its room comes out of the evidence budget: the account and the calls together keep to it.
-        var account = asked[(asked.IndexOf(StepCoverageGate.SectionHeading, StringComparison.Ordinal) + StepCoverageGate.SectionHeading.Length)..asked.IndexOf("FILES this step changed:", StringComparison.Ordinal)].Trim();
-        var calls = asked[(asked.IndexOf("TOOL CALLS (cite them by [n]):", StringComparison.Ordinal) + "TOOL CALLS (cite them by [n]):".Length)..].Trim();
+        var (account, calls) = AccountAndCalls(asked);
         Assert.True(account.Length + calls.Length <= Enactive.Core.Execution.ExecutionJournal.DefaultBudget + 200, $"{account.Length} + {calls.Length}");
+    }
+
+    /// <summary>
+    /// A budget too small for both keeps to its total all the same: the account gives way - shortened at 3000, left out at
+    /// the journal's minimum of 1500, where the calls need all of it - and the calls are never squeezed below that minimum.
+    /// </summary>
+    [Theory]
+    [InlineData(3000, true)]
+    [InlineData(1500, false)]
+    public async Task A_small_evidence_budget_is_kept_to_and_the_account_gives_way(int budget, bool shown)
+    {
+        var asked = await ReviewOfTwelveReads(budget);
+
+        Assert.Equal(shown, asked.Contains(StepCoverageGate.SectionHeading, StringComparison.Ordinal));
+        var (account, calls) = AccountAndCalls(asked);
+        Assert.True(account.Length + calls.Length <= budget + 200, $"{account.Length} + {calls.Length} > {budget}");
+        if (shown) Assert.True(account.Length <= budget / 2, $"{account.Length}");
+    }
+
+    private static (string Account, string Calls) AccountAndCalls(string asked)
+    {
+        var at = asked.IndexOf(StepCoverageGate.SectionHeading, StringComparison.Ordinal);
+        var account = at < 0 ? "" : asked[(at + StepCoverageGate.SectionHeading.Length)..asked.IndexOf("FILES this step changed:", StringComparison.Ordinal)].Trim();
+        var calls = asked[(asked.IndexOf("TOOL CALLS (cite them by [n]):", StringComparison.Ordinal) + "TOOL CALLS (cite them by [n]):".Length)..].Trim();
+        return (account, calls);
+    }
+
+    /// <summary>
+    /// The short review of a consuming step that read twelve files of about 600 characters each - nine pages and three
+    /// background notes - and only tagged the last three pages: the weak items.
+    /// </summary>
+    private static async Task<string> ReviewOfTwelveReads(int evidenceBudget)
+    {
+        var pages = Pages(12);
+        string[] background = ["notes/style.md", "notes/terms.md", "notes/owners.md"];
+        using var fx = new EngineFixture { StepOutputs = true, TypedCriteria = true };
+        foreach (var file in pages.Concat(background))
+            fx.Write(file, string.Join("\n", Enumerable.Range(1, 12).Select(l => $"{file} line {l}: some text about this page")) + "\n");
+        fx.ToolsOverride = [.. EngineFixture.ShippedTools(), new Tagging()];
+        var worker = new FakeChatProvider([Turn.Says(PlanFor()), .. Found(pages), .. pages[..9].Concat(background).Select(Read),
+            .. pages[9..].Select(p => Turn.Calls1("tag_pages", JsonSerializer.Serialize(new { paths = new[] { p } }), "t-" + p)),
+            Notes(pages), Turn.Says("Reviewed all twelve.")]);
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+
+        await fx.RunAsync(fx.Build(worker, EngineFixture.WorkerWith("tag_pages", "read_file"), router: Routers.WithReviewer(), reviewProvider: reviewer,
+                evidenceBudget: evidenceBudget),
+            "review every wiki page");
+
+        return string.Join("\n", Assert.Single(ReviewsOf(reviewer, 2)).Messages.Select(m => m.Content));
     }
 
     /// <summary>The block keeps to its share of the evidence budget: what does not fit is named, then counted.</summary>

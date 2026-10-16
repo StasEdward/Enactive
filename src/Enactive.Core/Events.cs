@@ -609,6 +609,21 @@ public static class WorkEventPayload
     private sealed record ArtifactPayloadShape(string Kind, string Path, int? Step);
 
     /// <summary>
+    /// The payload of a verdict the ENGINE's own check gave (StepCoverageGate) - a ReviewFailed no reviewer gave. Said in
+    /// the payload, not only in the words, so the log, a step's card and the activity pill can tell it from a review.
+    /// </summary>
+    public static string EngineCheckPayload(int? stepNo)
+        => stepNo is { } n ? $"{{\"step\":{n},\"engineCheck\":true}}" : "{\"engineCheck\":true}";
+
+    /// <summary>
+    /// Whether the event is the engine's own check's verdict, not a reviewer's: a ReviewFailed of the coverage check, or
+    /// the StepCompleted of a step it rejected (see <see cref="EngineCheckPayload"/>, <see cref="StepPayload"/>). An
+    /// event recorded without the flag reads as before - a reviewer's.
+    /// </summary>
+    public static bool ByEngineCheck(this WorkEvent ev)
+        => ev.PayloadJson?.Contains("\"engineCheck\":true", StringComparison.Ordinal) == true;
+
+    /// <summary>
     /// Builds the payload of a <see cref="EventKind.StepCompleted"/> event: the step number, how
     /// that step ended, and WHY when it did not simply succeed. The UI used to decide whether a card
     /// goes green by searching the summary for "FAILED:" and "skipped (dependency failed)", so
@@ -624,23 +639,17 @@ public static class WorkEventPayload
     /// sentence the card does not parse — so the one card a person opens the run to look at was the
     /// one that would not say what happened.</para>
     /// </param>
-    /// <summary>
-    /// The payload of a verdict the ENGINE's own check gave (StepCoverageGate) - a ReviewFailed no reviewer gave. Said in
-    /// the payload, not only in the words, so the log, a step's card and the activity pill can tell it from a review.
-    /// </summary>
-    public static string EngineCheckPayload(int? stepNo)
-        => stepNo is { } n ? $"{{\"step\":{n},\"engineCheck\":true}}" : "{\"engineCheck\":true}";
-
-    /// <summary>Whether the event is the engine's own check's verdict, not a reviewer's (see <see cref="EngineCheckPayload"/>).</summary>
-    public static bool ByEngineCheck(this WorkEvent ev)
-        => ev.PayloadJson?.Contains("\"engineCheck\":true", StringComparison.Ordinal) == true;
-
-    public static string StepPayload(int? stepNo, StepOutcomeKind outcome, string? reason = null)
+    /// <param name="engineCheck">
+    /// The step was rejected by the engine's coverage check, not by a reviewer (OutcomeCause.CoverageGateRejected): its
+    /// card says so. Only written when true, so every other payload is as it was.
+    /// </param>
+    public static string StepPayload(int? stepNo, StepOutcomeKind outcome, string? reason = null, bool engineCheck = false)
     {
-        var parts = new List<string>(3);
+        var parts = new List<string>(4);
         if (stepNo is { } n) parts.Add($"\"step\":{n}");
         parts.Add($"\"stepOutcome\":\"{outcome}\"");
         if (!string.IsNullOrWhiteSpace(reason)) parts.Add($"\"reason\":{Quote(reason)}");
+        if (engineCheck) parts.Add("\"engineCheck\":true");
         return "{" + string.Join(',', parts) + "}";
     }
 

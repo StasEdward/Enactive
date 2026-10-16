@@ -475,7 +475,7 @@ public sealed class RunFeed
             : ev.OutcomeReason() ?? TailOf(ev.Summary);
 
         if (card is not null)
-            Finish(card, outcome, reason);
+            Finish(card, outcome, reason, ev.ByEngineCheck());
         if (card is not null)
             _running.Remove(card);
         _current = _running.Count == 1 ? _running[0] : null;
@@ -486,7 +486,8 @@ public sealed class RunFeed
     /// A card's end, in the words a person reads (RunOutcomeWords): the step's REASON when it recorded one, and the
     /// outcome word alone otherwise. Never an enum's name, and never the word twice.
     /// </summary>
-    private static void Finish(FeedCard card, StepOutcomeKind outcome, string? reason)
+    /// <param name="byEngineCheck">The step was rejected by the engine's coverage check, not a reviewer (its payload says so).</param>
+    private static void Finish(FeedCard card, StepOutcomeKind outcome, string? reason, bool byEngineCheck = false)
     {
         card.SetStatus(outcome switch
         {
@@ -503,7 +504,7 @@ public sealed class RunFeed
         });
         card.SetActivity(outcome == StepOutcomeKind.Succeeded
             ? string.IsNullOrWhiteSpace(reason) ? "Done" : reason
-            : RunOutcomeWords.StepActivity(outcome, reason));
+            : RunOutcomeWords.StepActivity(outcome, reason, byEngineCheck));
     }
 
     /// <summary>The tail of "[1/2] Title — INCOMPLETE: &lt;reason&gt;", for records written before the reason was a value.</summary>

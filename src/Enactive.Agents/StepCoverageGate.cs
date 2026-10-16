@@ -128,6 +128,12 @@ internal static class StepCoverageGate
     /// share like a read and lost its middle - the weak items - once a dozen reads filled the budget. Its room is taken
     /// out of the evidence budget instead (Orchestrator.ReviewAttemptAsync), so the reviewer is shown no more than before.
     /// </summary>
+    /// <summary>
+    /// The least room the account is given at all: below it, it could hold no more than its opening lines, which tell
+    /// the reviewer nothing the step's calls do not. Left out instead - see Orchestrator.ReviewAttemptAsync.
+    /// </summary>
+    internal const int MinimumAccountChars = 600;
+
     internal const string SectionHeading = "ITEMS - the engine's account of the list(s) this step consumes (not a call; the calls it names are among the TOOL CALLS):";
 
     /// <summary>

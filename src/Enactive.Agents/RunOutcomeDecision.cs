@@ -9,13 +9,16 @@ using Enactive.Core.Templates;
 /// <param name="Reason">What the step said, or the engine's record of it - a step joining items has only the record.</param>
 /// <param name="Parts">The parts of the request the step answers for.</param>
 /// <param name="BlockedBecause">The step's own block; null for a step only waiting behind another one.</param>
+/// <param name="Cause">Why it ended so, as the engine recorded it - what tells a rejection by the engine's coverage
+/// check from a reviewer's. Null where nothing was recorded.</param>
 internal sealed record SettledStep(
     int? Number,
     string Title,
     StepOutcomeKind? Outcome,
     string? Reason = null,
     IReadOnlyList<string>? Parts = null,
-    string? BlockedBecause = null);
+    string? BlockedBecause = null,
+    Enactive.Core.Tasks.OutcomeCause? Cause = null);
 
 /// <summary>What a run's work came to, gathered for <see cref="RunOutcomeDecision"/>.</summary>
 /// <param name="Resumable">Whether the engine kept a checkpoint this run can carry on from.</param>
@@ -62,7 +65,7 @@ internal static class RunOutcomeDecision
 
         var reason = outcome == RunOutcomeKind.Blocked
             ? Blocked(work, settled)
-            : RunOutcomeWords.Explain(settled, Reasons(work), work.Cycle, work.Limit);
+            : RunOutcomeWords.Explain(settled, Reasons(work), work.Cycle, work.Limit, ByEngineCheck(work));
 
         // Failed and Cancelled are not asked: their outcome was decided by something that actually
         // went wrong, or by the person, and a green build on top would bury it. Incomplete is asked,
@@ -196,7 +199,7 @@ internal static class RunOutcomeDecision
         if (!work.Resumable)
             return what + ". Put that right and run it again.";
 
-        var tally = RunOutcomeWords.Explain(settled, [], work.Cycle, work.Limit);
+        var tally = RunOutcomeWords.Explain(settled, [], work.Cycle, work.Limit, ByEngineCheck(work));
         return what + ". Put that right and resume this run: it carries on from the blocked step(s)"
                + (tally is { } t ? $" ({t})." : ".");
     }
@@ -209,7 +212,7 @@ internal static class RunOutcomeDecision
         {
             if (step.Outcome == StepOutcomeKind.Succeeded) continue;
             var parts = step.Parts is { Count: > 0 } ids ? $" ({string.Join(", ", ids)})" : "";
-            var said = step.Outcome is { } outcome ? Word(outcome) : "not run";
+            var said = step.Outcome is { } outcome ? Word(outcome, step.Cause) : "not run";
             var why = !string.IsNullOrWhiteSpace(step.Reason) ? ": " + Clip(step.Reason, 300) : "";
             lines.Add($"{Label(step)}{parts} - {said}{why}");
         }
@@ -246,10 +249,16 @@ internal static class RunOutcomeDecision
 
     private static string Clip(string text, int max) => text.Length <= max ? text : text[..max] + "…";
 
+    /// <summary>The steps the engine's coverage check rejected, with no reviewer asked - counted apart from a reviewer's.</summary>
+    private static int ByEngineCheck(RunWork work)
+        => work.Steps.Count(s => s.Outcome == StepOutcomeKind.ReviewRejected && s.Cause == Enactive.Core.Tasks.OutcomeCause.CoverageGateRejected);
+
     /// <summary>A step's outcome as one word in a line about the run.</summary>
-    internal static string Word(StepOutcomeKind kind) => kind switch
+    /// <param name="cause">What the engine recorded; a rejection by its coverage check is not called a review's.</param>
+    internal static string Word(StepOutcomeKind kind, Enactive.Core.Tasks.OutcomeCause? cause = null) => kind switch
     {
         StepOutcomeKind.Succeeded => "done",
+        StepOutcomeKind.ReviewRejected when cause == Enactive.Core.Tasks.OutcomeCause.CoverageGateRejected => "rejected by the engine's coverage check",
         StepOutcomeKind.ReviewRejected => "review rejected",
         StepOutcomeKind.Incomplete => "incomplete",
         StepOutcomeKind.Skipped => "skipped",

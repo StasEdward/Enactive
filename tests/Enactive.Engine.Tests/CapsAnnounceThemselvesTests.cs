@@ -136,7 +136,9 @@ public sealed class CapsAnnounceThemselvesTests
         ["FeedCard.CommandChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked),
         // Not a cut of anything shown: a string longer than this - a file's content - is not kept as what a call named.
         // An item it would have named is reported as having no mention behind it, by name, at the step's gate.
-        ["EvidenceCoverage.MaxNamedChars"] = nameof(EvidenceCoversAllTests.A_mention_is_read_from_the_full_arguments_not_the_cut_record)
+        ["EvidenceCoverage.MaxNamedChars"] = nameof(EvidenceCoversAllTests.A_mention_is_read_from_the_full_arguments_not_the_cut_record),
+        // A floor, not a cut: under it the reviewer's item account is left out whole, and the calls keep the budget.
+        ["StepCoverageGate.MinimumAccountChars"] = nameof(CoverageAtTheStepGateTests.A_small_evidence_budget_is_kept_to_and_the_account_gives_way)
     };
 
     /// <summary>

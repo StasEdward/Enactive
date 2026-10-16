@@ -1816,9 +1816,9 @@ public sealed partial class Orchestrator : IOrchestrator
             // The card's colour comes from this payload, not from the wording of the summary - and
             // so does the LINE UNDER IT. The reason used to be glued into the summary only, so a
             // replayed step said "Incomplete" and stopped there.
-            ValueTask EmitStepDone(string summary, int? no, StepOutcomeKind kind, string? why = null)
+            ValueTask EmitStepDone(string summary, int? no, StepOutcomeKind kind, string? why = null, bool engineCheck = false)
                 => Publish(scope.Event(
-                    EventKind.StepCompleted, summary, WorkEventPayload.StepPayload(no, kind, why)));
+                    EventKind.StepCompleted, summary, WorkEventPayload.StepPayload(no, kind, why, engineCheck)));
 
             // Succeeded is the ONLY outcome that unblocks what comes after it - and MarkDone is what
             // does the unblocking, so it goes LAST. It used to go first, which opened two races on
@@ -1887,8 +1887,13 @@ public sealed partial class Orchestrator : IOrchestrator
                 return;
             }
 
+            // Rejected by the engine's coverage check, which no reviewer saw: said so on the line and in the payload,
+            // which the card reads (WorkEventPayload.StepPayload).
+            var byGate = outcome == StepOutcomeKind.ReviewRejected && outcome == stepResult.Kind
+                         && stepResult.Cause == OutcomeCause.CoverageGateRejected;
             var label = outcome switch
             {
+                StepOutcomeKind.ReviewRejected when byGate => "REJECTED BY THE ENGINE'S COVERAGE CHECK",
                 StepOutcomeKind.ReviewRejected => "REVIEW REJECTED",
                 StepOutcomeKind.Incomplete => "INCOMPLETE",
                 _ => "FAILED"
@@ -1902,7 +1907,7 @@ public sealed partial class Orchestrator : IOrchestrator
             // The skipped steps are MarkFailed's cascade, so they still follow this step's own event.
             await EmitStepDone(
                 $"[{stepNumber}/{total}] {step.Title} — {label}{(string.IsNullOrWhiteSpace(outcomeReason) ? "" : ": " + outcomeReason)}",
-                stepNumber, outcome, outcomeReason);
+                stepNumber, outcome, outcomeReason, engineCheck: byGate);
             var skippedSteps = scheduler.MarkFailed(step.Id);
 
             foreach (var sk in skippedSteps)
@@ -2185,8 +2190,9 @@ public sealed partial class Orchestrator : IOrchestrator
                 var no = stepNumbers.TryGetValue(step.Id, out var rn) ? rn : 0;
                 yield return scope.Event(
                     EventKind.StepCompleted,
-                    $"[{(no > 0 ? no : 0)}/{total}] {step.Title} — {RunOutcomeDecision.Word(kind)} before this run",
-                    WorkEventPayload.StepPayload(no > 0 ? no : null, kind));
+                    $"[{(no > 0 ? no : 0)}/{total}] {step.Title} — {RunOutcomeDecision.Word(kind, session.Records.GetValueOrDefault(step.Id)?.Cause)} before this run",
+                    WorkEventPayload.StepPayload(no > 0 ? no : null, kind,
+                        engineCheck: session.Records.GetValueOrDefault(step.Id)?.Cause == OutcomeCause.CoverageGateRejected));
             }
         }
 
@@ -2439,7 +2445,9 @@ public sealed partial class Orchestrator : IOrchestrator
                 // A step's own reason, or the engine's record of it - a step joining items has only the record.
                 session.ReasonOf.GetValueOrDefault(s.Id) ?? session.Records.GetValueOrDefault(s.Id)?.Reason,
                 s.ObligationIds,
-                BlocksOf(s.Id) is { Count: > 0 } b && b[^1].Cause != OutcomeCause.BlockedDependency ? b[^1].Reason : null)).ToArray(),
+                BlocksOf(s.Id) is { Count: > 0 } b && b[^1].Cause != OutcomeCause.BlockedDependency ? b[^1].Reason : null,
+                // What tells a rejection by the engine's coverage check from a reviewer's (RunOutcomeDecision.Word).
+                session.Records.GetValueOrDefault(s.Id)?.Cause)).ToArray(),
             // A blocked run waits on its checkpoint (Phase 7) - where the engine was given a store to keep one in.
             Resumable: _checkpoints is not null,
             Cycle: cycle,

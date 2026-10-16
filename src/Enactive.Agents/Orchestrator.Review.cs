@@ -128,11 +128,16 @@ public sealed partial class Orchestrator
         // reviewer, item by item - the weakly backed ones in full - and not a judgement: the engine counted that evidence
         // is there, the reviewer judges the work. A section of the reviewer's input with room of its own, taken out of the
         // evidence budget: recorded as a call it was given a call's share and cut in the middle once a dozen reads filled
-        // the budget (StepCoverageGate.SectionHeading). Half the budget at most, so the step's own calls keep the rest - and
-        // never less than the journal's minimum for them. Made for this attempt only, so no earlier account goes with it.
-        var itemAccount = coverage is null ? null
-            : StepCoverageGate.ReviewerBlock(coverage, journal.Actions.Skip(stepStart).ToArray(), _evidenceBudget / 2);
-        var callBudget = itemAccount is null ? _evidenceBudget : Math.Max(ExecutionJournal.MinimumBudget, _evidenceBudget - itemAccount.Length);
+        // the budget (StepCoverageGate.SectionHeading). The two together keep to the budget: the account gets half of it at
+        // most, and never so much that the calls are left less than the journal's minimum - below that their view cannot
+        // hold its own header, and a review without the calls cannot cite anything. So it is the account that gives way:
+        // under a budget too small for both (one set near the minimum) it is shortened, and left out when what is left
+        // could not hold more than its opening lines - the gate has already decided the count; the reviewer loses only
+        // the per-item detail, never the calls. Made for this attempt only, so no earlier account goes with it.
+        var accountRoom = Math.Min(_evidenceBudget / 2, _evidenceBudget - ExecutionJournal.MinimumBudget);
+        var itemAccount = coverage is null || accountRoom < StepCoverageGate.MinimumAccountChars ? null
+            : StepCoverageGate.ReviewerBlock(coverage, journal.Actions.Skip(stepStart).ToArray(), accountRoom);
+        var callBudget = _evidenceBudget - (itemAccount?.Length ?? 0);
         // The file this step handed on as the result a criterion checks: the engine decides that it is there,
         // the reviewer decides whether it is what was asked - so it is shown whole, as it is now, even when the
         // step wrote none of it (run 68f92f: an earlier run's report, handed on as this run's).

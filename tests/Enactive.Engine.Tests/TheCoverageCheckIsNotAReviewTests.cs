@@ -64,6 +64,47 @@ public sealed class TheCoverageCheckIsNotAReviewTests
         Assert.StartsWith("[2] FAIL (the engine's coverage check", activity.CurrentAction, StringComparison.Ordinal);
     }
 
+    // ── how the step ended, and the run ──────────────────────────────────────────────────
+
+    [Fact]
+    public void The_end_card_says_the_engines_coverage_check_rejected_it()
+    {
+        Assert.Equal("Rejected by the engine's coverage check — covered 2 of 12",
+            RunOutcomeWords.StepActivity(StepOutcomeKind.ReviewRejected, "covered 2 of 12", byEngineCheck: true));
+        Assert.Equal("Rejected by the reviewer — wrong", RunOutcomeWords.StepActivity(StepOutcomeKind.ReviewRejected, "wrong"));
+
+        var feed = new RunFeed(null);
+        feed.Apply(Ev(EventKind.StepStarted, "[1/2] find pages", "{\"step\":1}"));
+        feed.Apply(Ev(EventKind.StepCompleted, "[1/2] find pages — REVIEW REJECTED: wrong",
+            WorkEventPayload.StepPayload(1, StepOutcomeKind.ReviewRejected, "wrong")));
+        feed.Apply(Ev(EventKind.StepStarted, "[2/2] review pages", "{\"step\":2}"));
+        feed.Apply(Ev(EventKind.StepCompleted, "[2/2] review pages — REJECTED BY THE ENGINE'S COVERAGE CHECK: covered 2 of 12",
+            WorkEventPayload.StepPayload(2, StepOutcomeKind.ReviewRejected, "covered 2 of 12", engineCheck: true)));
+
+        // A payload without the flag - every other rejection, and every one recorded before - reads as before.
+        Assert.Equal("Rejected by the reviewer — wrong", feed.Cards[^2].Activity);
+        Assert.Equal("Rejected by the engine's coverage check — covered 2 of 12", feed.Cards[^1].Activity);
+    }
+
+    [Fact]
+    public void The_run_counts_the_engines_rejections_apart_from_the_reviewers()
+    {
+        Assert.Equal("1 step(s) rejected by the reviewer; 1 step(s) rejected by the engine's coverage check",
+            RunOutcomeWords.Explain([StepOutcomeKind.ReviewRejected, StepOutcomeKind.ReviewRejected], [], cycle: false, rejectedByEngineCheck: 1));
+        Assert.Equal("1 step(s) rejected by the reviewer",
+            RunOutcomeWords.Explain([StepOutcomeKind.ReviewRejected], [], cycle: false));
+
+        var before = RunOutcomeDecision.BeforeChecks(new RunWork(
+        [
+            new SettledStep(1, "find pages", StepOutcomeKind.Succeeded),
+            new SettledStep(2, "review pages", StepOutcomeKind.ReviewRejected, "covered 2 of 12", Cause: OutcomeCause.CoverageGateRejected)
+        ], Resumable: false));
+        Assert.Equal("covered 2 of 12 (1 step(s) rejected by the engine's coverage check)", before.Reason);
+
+        Assert.Equal("rejected by the engine's coverage check", RunOutcomeDecision.Word(StepOutcomeKind.ReviewRejected, OutcomeCause.CoverageGateRejected));
+        Assert.Equal("review rejected", RunOutcomeDecision.Word(StepOutcomeKind.ReviewRejected));
+    }
+
     private sealed class Sink : ILogSink
     {
         public List<LogEntry> Entries { get; } = [];
