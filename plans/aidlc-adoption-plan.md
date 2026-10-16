@@ -4,7 +4,7 @@ Date: 2026-10-16
 
 Status: proposal, nothing implemented. Written against `master` at `7dc8866`; the line numbers below are from
 that commit and will drift. Revised after two reviews (`aidlc-adoption-review.md`, `aidlc-adoption-resolution.md`);
-one question is left open on purpose (open question 6: checks for staged runs).
+staged-run checks (Phase 3.2) and an unresolved coverage contract (Phase 1.2) are decided.
 
 Source studied: [awslabs/aidlc-workflows](https://github.com/awslabs/aidlc-workflows) (MIT-0), in particular
 the [engine and skill system](https://github.com/awslabs/aidlc-workflows/blob/main/docs/reference/17-skill-system.md),
@@ -155,16 +155,47 @@ The default obligation and the required declaration are distinct: omission is an
 - `mentioned` is cheap to satisfy: `EvidenceCoverage.Gather` counts an item when any string in a successful call's
   arguments equals it (`EvidenceCoverage.cs:83-85`), so one call naming all twelve paths covers all twelve.
   Coverage resting only on `mentioned` therefore cannot yield `Succeeded` without an approving review
-  (`DoneUnverified` at most), and the per-item evidence kind is part of what the step reviewer is shown, not only
-  of the report. The report distinguishes "every item accounted for" from "every file read".
+  (`DoneUnverified` at most). "Approving" means a usable positive verdict - not review being switched on, and not
+  `OutOfBudget` or an answer that could not be read. Final checks cannot lift that `DoneUnverified` to a
+  `Completed` run (`RunOutcomeDecision.cs:101-104` already guarantees it).
+- The step reviewer is shown, per item: the required and the found evidence kind; the concrete calls or read/write
+  records behind it; and the processed result or the exclusion reason. That has to fit the reviewer's evidence
+  budget (`EvidenceBudget`, 6000 characters by default): items with missing or weaker-than-required evidence and
+  every exclusion are shown in full; items backed as required are summarised by count and kind, with the records
+  available on request. Plan review remains an additional guard, not the guarantee.
+- The report distinguishes "every item accounted for" from "every file read".
 - Called after `FanOut.Validate` (`Orchestrator.cs` ~629) and before `TypedCriteria.Validate` (~666). A consume that
   `EvidenceCoverage.Invalid` refuses (no results field on a consumer of a list) **refuses the plan** with the reason
   and goes back to the planner once - not dropped with an `ErrorObserved` as today (`Orchestrator.cs:668-669`).
-  This point is after the only structural replan (L512-537), so it needs its own `ReplanAsync` call with the
-  diagnosis, on the pattern of L541-605.
-- If the replan does not fix it, do **not** fall back to the original plan (`before`) - that is the same hole by
-  another door. The plan proceeds with the derived criterion kept; it cannot pass, so the run ends `Incomplete` with
-  the reason, never green.
+  This point is after the only structural replan (L512-537, which stops the run `Incomplete` when it fails), so it
+  needs its own `ReplanAsync` call with the diagnosis, on the pattern of L541-605.
+- Two kinds of failure stay apart. A **structural** defect - a cycle, a missing dependency, an unreadable plan -
+  still stops the run, as `PlanValidation` does today. An **unresolved coverage contract** on a structurally
+  executable DAG does not stop it: the work may still be worth doing. The existing `before` fallbacks (L541-605) are
+  about the report declaration and the distribution of request lines; the new path is separate and does not reuse
+  them.
+- An unresolved contract is kept as a **run obligation with its reason**, persisted in the plan and checkpoint. It
+  forbids `Completed` and nothing else: it is a separate input to `RunOutcomeDecision.Settle`, not a failed
+  criterion (a failed criterion does not always yield `Incomplete`, and `verification` is null when
+  `RunOutcomeBeforeChecks.Verify` is false). It turns `Completed` into `Incomplete` with the reason and never
+  overwrites `Failed`, `Cancelled`, `NeedsUser` or `Blocked` - the same rule the existing
+  `verification.IncompleteReason` path follows.
+- **Asked once, before the work, when there is someone to ask** - on the pattern of the unsettled-final-checks
+  question (`Orchestrator.cs:695-733`): a `DecisionRequest` before the first step, with `DecisionRequested`/
+  `DecisionResolved` events. Why ask: in an attended run this is the last cheap moment to rephrase the request
+  (2026-10-03: a request with a typing mistake was stopped at that question to be typed again). Why not always
+  stop: the replan already failed, and the partial result has value.
+  - Topic: "The plan does not cover a list"; detail: `<step>.<field> -> <consumer>` and why the replan did not fix it.
+  - Options: "Go on - the run cannot end as completed" (recommended), and "Stop - no work starts", which ends the
+    run `Cancelled`, as in the precedent.
+  - "Go on" does **not** waive the requirement: the obligation stays in the plan and checkpoint and still forbids
+    `Completed`. The person only agrees to spend the budget on a run that cannot be green. There is no "drop the
+    requirement" option in the first version - it would turn the guarantee into a tick box.
+  - Not a standing answer and not remembered: every plan's gap is different.
+  - **Unattended and scheduled runs go on** with the obligation and an Inbox item naming it. This deliberately
+    differs from the precedent, where "nobody to ask" means no work starts: there the risk is safety (commands
+    nobody confirmed), here it is only completeness, and stopping unattended would throw the partial result away.
+  - Resume does not ask again: the answer is in the decision ledger, and resume skips planning anyway.
 - Planner-written `covers_all` keeps working; a derived criterion that duplicates one is de-duplicated by
   the complete obligation, including evidence kind and exclusion policy; never discard a stronger explicit check
   because a weaker derived check names the same source and result.
@@ -221,6 +252,16 @@ The default obligation and the required declaration are distinct: omission is an
 - `subset: true`: processed/excluded partition the source; missing reasons, overlaps, gaps and foreign items fail.
   Valid exclusions pass only with reviewer approval; without review they cannot yield `Succeeded`.
 - Incomplete fan-out preserves its partial join output and downstream report, but cannot produce a green run.
+- Replan that leaves a coverage contract unresolved on an executable DAG: the steps run, the run ends `Incomplete`
+  with the obligation's reason; with a cycle instead, the run stops as today. A run that also fails or is cancelled
+  keeps `Failed`/`Cancelled`.
+- Same, attended: the question is asked once before any step; "go on" -> steps run, `Incomplete` with the reason;
+  "stop" -> `Cancelled`, no step started.
+- Same, unattended: no question, steps run, `Incomplete`, an Inbox item names the obligation.
+- Resume after the answer does not ask again; the obligation survives the checkpoint.
+- One call naming all twelve paths with `mentioned` and no usable approving verdict (review off, `OutOfBudget`,
+  unreadable answer): the step is `DoneUnverified`, and passing final checks do not make the run `Completed`.
+- The reviewer's evidence block names items with missing or weaker evidence and every exclusion, within budget.
 - Characterization: expansion preserves source/result numbering. New contract tests cover checkpoint round-trip.
 - `ForDependents` hands on only consumed fields.
 
@@ -355,17 +396,30 @@ tool catalog in `Docs/TOOL_CATALOG_PLAN.md`).
   where staged writes are not. Record the deferral visibly and persist it; pending checks are not passes and cannot
   support a green result - a staged run ends at best "not verified: checks pending apply". Checks against the old
   on-disk files never discharge the obligation.
-- **Open - where a staged run's checks run.** Apply is not one moment: `ServerStaging.ActAsync` applies or rejects
-  **each file separately**, by a person, after the run has ended (`ServerStaging.cs:134-178`). Unresolved:
-  - when to fire: after each file (a build on "3 of 7 applied"), after the last decision (a state the person
-    composed, possibly with rejections, not what the run produced), or only on an explicit "apply all";
-  - whose status it is: the run's outcome is already recorded, so "applied, checks pending/failed" belongs to the
-    proposal set - a new state, new events and UI on two hosts;
-  - candidate v1: no automatic checks at apply; a "Run checks now" action on the proposals page runs them on the
-    current state, records the result against the proposal set and rolls nothing back. Automatic checks wait for an
-    atomic "apply all". An isolated copy with the staged changes laid over the workspace is the later stage that
-    checks before the workspace changes.
-  The owner decides before 3.2 is implemented for staged runs.
+- **Staged runs, first version (decided).** Apply is not a boundary that can judge the run: `ServerStaging.ActAsync`
+  applies or rejects **each file separately**, by a person, after the run has ended (`ServerStaging.cs:134-178`).
+  After each file the workspace is a mix the person composed, and the run's outcome is already recorded. So:
+  - Checks that need applied files (commands, file checks) get `Unknown` **with the reason** "staged: needs the
+    applied files" during a staged run. A required one keeps the run from `Completed`, as `Unknown` on a required
+    criterion does today. Deterministic coverage from the journal and the structured results (Phase 1) still runs -
+    it does not read the workspace.
+  - A **"Run checks now"** action, started by a person after their decisions on the files, runs the run's
+    **snapshotted** checks under the **current** permissions against the workspace **as it is now**. No automatic
+    run after each file. Its result is a separate, persisted **check record** in the run's history - run id, who,
+    when, the check definitions used, the results, and a fingerprint of the state. It cannot hang off the proposal
+    set: `ServerStaging` deletes the set's folder once every file is decided (`ServerStaging.cs:181-186`); the
+    action and its records stay reachable from the run's history afterwards.
+  - The fingerprint: in a git repository, `HEAD` + a hash of `git status --porcelain` + content hashes of the changed
+    files, which catches any change in the tracked tree; without git, content hashes of the paths the run proposed
+    and of the paths the checks' `matches` cover, which does not catch everything.
+  - A check record means "this state was checked at this time", not a standing green. It never rewrites the run's
+    historical outcome and never rolls anything back. The UI always shows it as "checked at <time>"; a fingerprint
+    mismatch marks it outdated explicitly. A match is not proof that nothing outside the fingerprint changed, and
+    the UI does not imply it is.
+  - The action runs commands in a workspace from a UI, so it goes through the same permission engine as the run's
+    checks, is limited to roles that may apply proposals, and is written to the audit log next to apply/reject.
+  - Deferred: automatic checks after apply (they wait for an atomic "apply all"), and checking an isolated copy with
+    the staged changes laid over the workspace (the stage that checks **before** the workspace changes).
 - `FireOn = Run`: joins the final checks (`Orchestrator.cs:2301`) with a non-System origin, so `Settle` can block.
 
 ### 3.3 Records
@@ -400,8 +454,13 @@ tool catalog in `Docs/TOOL_CATALOG_PLAN.md`).
 - Write-time check output appears in the tool result the fake worker receives.
 - A check edited or deleted after compose does not change the running run or a checkpoint-resumed continuation.
 - A parallel step check runs only after the wave drains. A staged run never runs a blocking check against old disk
-  content and ends "not verified: checks pending apply". A pause/resume before either boundary retains the
-  obligation, and pending checks cannot turn green.
+  content and cannot end green; its Phase 1 coverage is still decided. A pause/resume before either boundary retains
+  the obligation, and pending checks cannot turn green.
+- A staged run: a required command check is `Unknown` with the staged reason, and the run is not `Completed`.
+- "Run checks now" after every proposal is decided (set folder deleted): the record is written to and read from the
+  run's history; the run's outcome is unchanged; applying another file or editing a tracked file afterwards marks
+  the record outdated (git workspace); a check edited since the run still runs as snapshotted.
+- "Run checks now" from a role that may not apply proposals is refused and audited.
 - A shell command cannot write `.enactive/checks/` (or a changed manifest is refused) - before the anti-tamper claim.
 - A blocking check the policy would ask about is `Unknown` and shown as such, never `Succeeded`.
 - Deleted test under `Protects` -> blocking finding; `CompareTests` reports the disappearance.
@@ -599,5 +658,7 @@ should not repeat it. This is a measurement, not a guarantee - report it as such
 3. Phase 3: is a global (machine-wide) check layer wanted, or workspace only?
 4. Deferred Phase 4.1: who exclusively owns state, and what is the commit/recovery protocol when persistence fails?
 5. Phase 5: is "Global" enough as the broader layer, or is a per-team layer (server, several operators) needed?
-6. Phase 3: where do a staged run's checks run, given that apply is per file, by a person, after the run ended -
-   a manual "Run checks now", automatic on an atomic "apply all", or an isolated copy before apply?
+
+Decided since the reviews: staged-run checks (Phase 3.2 - `Unknown` during the run, a manual "Run checks now"
+with a persisted, fingerprinted record) and an unresolved coverage contract (Phase 1.2 - asked once when attended,
+the obligation kept either way).
