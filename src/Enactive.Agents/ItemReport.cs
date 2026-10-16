@@ -17,6 +17,7 @@ internal static class ItemReport
     public static string Status(StepRecord? record) => record is null ? "Not reached" : record.Cause switch
     {
         OutcomeCause.ReviewRejected => "Rejected by review",
+        OutcomeCause.CoverageGateRejected => "Rejected by the engine's coverage check",
         OutcomeCause.ReviewUnprocessable => "Unconfirmed: the review could not be processed",
         OutcomeCause.ReviewUndecided => "Unconfirmed: the reviewer could not decide",
         OutcomeCause.CoverageMentionedOnly => "Unconfirmed: its items were only mentioned",

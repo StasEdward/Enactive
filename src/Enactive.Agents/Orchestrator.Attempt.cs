@@ -40,8 +40,9 @@ public sealed partial class Orchestrator
             {
                 // The reviewer's emission (ReviewAttemptAsync) is bypassed, so the gate says its own verdict - as the
                 // engine's, so nobody reads a reviewer's judgement into a count.
-                await publish(scope.Ev(EventKind.ReviewFailed,
-                    $"[{checkedNo}] FAIL (the engine's coverage check - no reviewer was asked): {coverage.Notes}", checkedNo));
+                await publish(scope.Event(EventKind.ReviewFailed,
+                    $"[{checkedNo}] FAIL (the engine's coverage check - no reviewer was asked): {coverage.Notes}",
+                    WorkEventPayload.EngineCheckPayload(checkedNo)));
                 return new(new ReviewResult(new ReviewVerdict.Fail(coverage.Notes, coverage.RepairAdvice, [])), ByGate: true);
             }
             await publish(scope.Ev(EventKind.ContextAssembled, $"[{checkedNo}] The engine's coverage check passed: "
@@ -164,7 +165,9 @@ public sealed partial class Orchestrator
                     RetryAfterCoverageCheck(step.Messages, shortOf.RepairAdvice, stepNumber is null ? "the work" : "this step");
                     continue;
                 }
-                result.Set(StepOutcomeKind.ReviewRejected, shortOf.Notes);
+                // ReviewRejected, as a reviewer's last rejection is - the same consequences - with a cause of its own:
+                // the report says the engine's check rejected it, not a review nobody gave.
+                result.Set(StepOutcomeKind.ReviewRejected, shortOf.Notes, OutcomeCause.CoverageGateRejected);
                 result.Keep = [];
                 return;
             }

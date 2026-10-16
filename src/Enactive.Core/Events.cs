@@ -624,6 +624,17 @@ public static class WorkEventPayload
     /// sentence the card does not parse — so the one card a person opens the run to look at was the
     /// one that would not say what happened.</para>
     /// </param>
+    /// <summary>
+    /// The payload of a verdict the ENGINE's own check gave (StepCoverageGate) - a ReviewFailed no reviewer gave. Said in
+    /// the payload, not only in the words, so the log, a step's card and the activity pill can tell it from a review.
+    /// </summary>
+    public static string EngineCheckPayload(int? stepNo)
+        => stepNo is { } n ? $"{{\"step\":{n},\"engineCheck\":true}}" : "{\"engineCheck\":true}";
+
+    /// <summary>Whether the event is the engine's own check's verdict, not a reviewer's (see <see cref="EngineCheckPayload"/>).</summary>
+    public static bool ByEngineCheck(this WorkEvent ev)
+        => ev.PayloadJson?.Contains("\"engineCheck\":true", StringComparison.Ordinal) == true;
+
     public static string StepPayload(int? stepNo, StepOutcomeKind outcome, string? reason = null)
     {
         var parts = new List<string>(3);

@@ -116,6 +116,7 @@ public sealed class CoverageAtTheStepGateTests
         // The gate's own budget with review on: as many retries as the review has (1), so two attempts.
         Assert.Equal(2, GateFailures(events, 2).Length);
         Assert.Contains("covered 2 of 12", GateFailures(events, 2)[0].Summary, StringComparison.Ordinal);
+        Assert.All(GateFailures(events, 2), e => Assert.True(e.ByEngineCheck()));
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
     }
 

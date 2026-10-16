@@ -24,7 +24,11 @@ public static class EventLogTap
             {
                 try
                 {
-                    var (src, level) = Map(ev.Kind);
+                    // The engine's coverage check gives its verdict as a ReviewFailed: logged as the orchestrator's, since
+                    // no reviewer gave it (WorkEventPayload.EngineCheckPayload).
+                    var (src, level) = ev.Kind == EventKind.ReviewFailed && ev.ByEngineCheck()
+                        ? (LogSource.Orchestrator, LogLevel.Warn)
+                        : Map(ev.Kind);
                     log.Log(new LogEntry(
                         Seq: 0,
                         At: ev.At,

@@ -65,7 +65,14 @@ public enum OutcomeCause
     /// review approved the work: done, not confirmed. One call naming every path covers every item. Last, so no stored
     /// value moves.
     /// </summary>
-    CoverageMentionedOnly
+    CoverageMentionedOnly,
+
+    /// <summary>
+    /// The engine's coverage check at the step's gate found items of a list it consumes not covered, on every attempt
+    /// its budget allowed (StepCoverageGate): rejected with no reviewer asked. Kept apart from ReviewRejected so nothing
+    /// says a review rejected a step no reviewer saw. Last, so no stored value moves.
+    /// </summary>
+    CoverageGateRejected
 }
 
 /// <summary>

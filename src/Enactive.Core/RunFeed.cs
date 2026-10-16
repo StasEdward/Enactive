@@ -332,8 +332,10 @@ public sealed class RunFeed
             case EventKind.ReviewFailed:
                 var reviewed = CardFor(step) ?? EnsureCurrent(added);
                 reviewed.AddNote(ev.Summary);
+                // The engine's own coverage check gives its verdict as a ReviewFailed too - and no reviewer saw the step.
                 reviewed.SetActivity(ev.Kind == EventKind.ReviewRequested ? "Reviewing…"
-                    : ev.Kind == EventKind.ReviewPassed ? "Review passed" : "Review flagged an issue…");
+                    : ev.Kind == EventKind.ReviewPassed ? "Review passed"
+                    : ev.ByEngineCheck() ? "The engine's coverage check sent it back…" : "Review flagged an issue…");
                 break;
 
             case EventKind.DecisionRequested:
