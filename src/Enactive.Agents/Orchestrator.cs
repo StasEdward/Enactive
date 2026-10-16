@@ -1741,8 +1741,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     ? CriteriaFor(plan).Where(c => c.Step == stepNumber - 1 || c.Typed?.PathFromStep == stepNumber - 1).ToArray()
                     : [],
                 // The lists it consumes, counted at its gate (Plan Phase 1.3). Not for a step done for each item, nor
-                // for the join its forEach step becomes: their coverage is the item steps', decided at the run's end
-                // for now (the join's own gate is Task 6b).
+                // for the join its forEach step becomes: their coverage is the item steps' together, counted at the
+                // join (JoinCoverage) - which leaves the join unconfirmed and never sends anything back.
                 Coverage = step.ExpandedFrom is null && step.ForEach is null
                     ? StepCoverageGate.For(CriteriaFor(plan), stepNumber - 1)
                     : []
@@ -2086,10 +2086,26 @@ public sealed partial class Orchestrator : IOrchestrator
                         + (record?.Result is { } result && ItemReport.Standing(record) is { } worth && record.Standing != ResultStanding.Unreviewed
                             ? $" [{worth} {Gist(result.ValuesJson, 300)}]" : ""));
                 }
+                // The items the coverage the plan requires does not count, by name - a finished item without its evidence
+                // among them, which its status above does not show - so the report can say what is missing. Counted again
+                // from what the join handed on, as the join counted it, so a resumed run says the same.
+                if (join.NotExpanded is null && stepNumbers.TryGetValue(join.Id, out var joinNo)
+                    && JoinCoverage(joinNo, session.Outputs.TryGetValue(join.Id, out var joined) ? joined : null) is { Passed: false } shortOf)
+                    lines.Add(shortOf.HandOff($"'{join.Title}'"));
             }
             return ChatMessage.User("What the steps for each item came to (engine record) - report on EVERY item, "
                 + "the ones not done included, and say why they were not:\n" + string.Join("\n", lines));
         }
+
+        // The coverage the plan owes for the items of a step done for each item, decided at its join (Plan Phase 1.3): the
+        // covers_all criteria - derived from the forEach or a consume, or the planner's - whose results are this step's,
+        // over what its finished items handed on as one and the evidence each recorded when it did. The item steps are
+        // not gated themselves: each has one item, and the list is the join's. Null when it owes none, or when its source
+        // handed on no list.
+        StepCoverageGate.Outcome? JoinCoverage(int joinNo, StepOutput? joinedOutput)
+            => StepCoverageGate.For(CriteriaFor(plan), joinNo - 1) is { Count: > 0 } owed
+                ? StepCoverageGate.Check(owed, session.Outputs.Values, joinedOutput, joinNo)
+                : null;
 
         // The join: what its items' steps handed on, as one, once every one of them has ended. An item
         // that did not finish is named, and the others are handed on all the same (amendment D).
@@ -2103,18 +2119,33 @@ public sealed partial class Orchestrator : IOrchestrator
             var finished = items.Where(i => ended.GetValueOrDefault(i.Id) is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified).ToArray();
             var unfinished = items.Except(finished).ToArray();
 
+            // What the finished items handed on, as one - put together before the join's outcome is decided, because the
+            // coverage the plan owes for its items is counted on it (Plan Phase 1.3). Pure: nothing is stored or said yet.
+            var handedOn = finished.Select(f => (Step: f, Output: session.Outputs.TryGetValue(f.Id, out var o) ? o : null))
+                .Where(x => x.Output is not null).Select(x => (x.Step, x.Output!)).ToArray();
+            var joined = join.NotExpanded is null ? FanOut.Join(join, joinNo, handedOn) : null;
+            // Items not covered - a step that did not finish, or one that finished without the evidence the item owes - keep
+            // the join unconfirmed with the count, and never reject it: what the others handed on is still handed on and the
+            // steps after it still run, so a report can say what is missing (amendment D). The run-end check is what keeps
+            // the run from Completed; this only says so where the items are.
+            var coverage = join.NotExpanded is null ? JoinCoverage(joinNo, joined) : null;
+            var uncovered = coverage is { Passed: false } ? coverage.Notes : null;
+
             var (outcome, reason) = join.NotExpanded is { } notExpanded
                 ? (StepOutcomeKind.Incomplete, notExpanded)
                 : unfinished.Length > 0
-                    ? (StepOutcomeKind.DoneUnverified, $"{unfinished.Length} of {items.Length} item step(s) did not finish: "
-                        + string.Join("; ", unfinished.Select(u => u.Title)))
-                    : finished.Any(f => ended[f.Id] == StepOutcomeKind.DoneUnverified)
-                        ? (StepOutcomeKind.DoneUnverified, "some item steps were done but not verified")
-                        : (StepOutcomeKind.Succeeded, (string?)null);
+                    ? (StepOutcomeKind.DoneUnverified, (uncovered is null ? "" : uncovered + " ")
+                        + $"{unfinished.Length} of {items.Length} item step(s) did not finish: " + string.Join("; ", unfinished.Select(u => u.Title)))
+                    : uncovered is not null
+                        ? (StepOutcomeKind.DoneUnverified, uncovered)
+                        : finished.Any(f => ended[f.Id] == StepOutcomeKind.DoneUnverified)
+                            ? (StepOutcomeKind.DoneUnverified, "some item steps were done but not verified")
+                            : (StepOutcomeKind.Succeeded, (string?)null);
 
             Note(join.Id, outcome,
                 join.NotExpanded is not null ? OutcomeCause.NotExpanded
                     : unfinished.Length > 0 ? OutcomeCause.ItemsUnfinished
+                    : uncovered is not null ? OutcomeCause.ItemsNotCovered
                     : outcome == StepOutcomeKind.DoneUnverified ? OutcomeCause.ReviewUnprocessable : OutcomeCause.None,
                 reason, null);
 
@@ -2125,9 +2156,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
             if (outcome is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified)
             {
-                var handedOn = finished.Select(f => (Step: f, Output: session.Outputs.TryGetValue(f.Id, out var o) ? o : null))
-                    .Where(x => x.Output is not null).Select(x => (x.Step, x.Output!)).ToArray();
-                if (FanOut.Join(join, joinNo, handedOn) is { } joined)
+                if (joined is not null)
                 {
                     session.Outputs[join.Id] = joined;
                     await Publish(new WorkEvent(Guid.NewGuid(), scope.TaskId, scope.RunId, DateTimeOffset.UtcNow,

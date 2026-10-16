@@ -22,6 +22,7 @@ internal static class ItemReport
         OutcomeCause.ReviewUndecided => "Unconfirmed: the reviewer could not decide",
         OutcomeCause.CoverageMentionedOnly => "Unconfirmed: its items were only mentioned",
         OutcomeCause.CoverageExclusionsUnapproved => "Unconfirmed: no review approved the items it left out",
+        OutcomeCause.ItemsNotCovered => "Unconfirmed: not every item is covered",
         OutcomeCause.NotReached => "Not reached",
         OutcomeCause.NotExpanded => "Not given steps",
         OutcomeCause.StepFailed => "Failed",

@@ -79,7 +79,14 @@ public enum OutcomeCause
     /// confirmed. A reason is the step's word; whether the request permits the omission is a reviewer's to judge (Plan
     /// Phase 1.2). Last, so no stored value moves.
     /// </summary>
-    CoverageExclusionsUnapproved
+    CoverageExclusionsUnapproved,
+
+    /// <summary>
+    /// A join: every step for its items finished, and some items are still not covered as the plan requires - a result
+    /// handed on without the evidence it owes (Plan Phase 1.3). Done, not confirmed: never rejected wholesale, so what the
+    /// items handed on still goes on. Items whose steps did not finish are ItemsUnfinished. Last, so no stored value moves.
+    /// </summary>
+    ItemsNotCovered
 }
 
 /// <summary>

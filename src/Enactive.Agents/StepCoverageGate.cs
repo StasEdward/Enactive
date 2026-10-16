@@ -68,6 +68,22 @@ internal static class StepCoverageGate
             .DistinctBy(x => EvidenceCoverage.Normal(x.Item), StringComparer.OrdinalIgnoreCase).ToArray();
 
         /// <summary>
+        /// What the steps after a join are told when its items are not all covered (Plan Phase 1.3): every item not
+        /// covered, by name and why, so a report can say what is missing rather than present the work as whole. The
+        /// item steps' own account lists each item's status; this says which the coverage the plan requires does not
+        /// count, which a finished item without its evidence is too.
+        /// </summary>
+        public string HandOff(string what)
+            => string.Join(" ", Checks.Where(c => !c.Passed).Select(c =>
+               {
+                   var missing = c.Items.Where(i => !i.Covered).ToArray();
+                   return $"{what} leaves items not covered, as the coverage the plan requires counts them (covered {c.Covered} of {c.Items.Count}): "
+                          + string.Join(", ", missing.Take(NamedInAdvice).Select(i => $"{i.Item} ({i.Why})"))
+                          + (missing.Length > NamedInAdvice ? $", and {missing.Length - NamedInAdvice} more" : "") + ".";
+               }))
+               + " Say which items are not covered, and why, in what this step writes - do not present the work as complete.";
+
+        /// <summary>
         /// What a step is told, and its end says, when it left items out and no reviewer approved it: the items and their
         /// reasons, and that a reason is not an approval.
         /// </summary>
@@ -138,8 +154,9 @@ internal static class StepCoverageGate
 
     /// <summary>
     /// The coverage criteria this step's gate decides: every covers_all - derived from a consume, or the planner's - whose
-    /// results step is this one. The caller passes none for a step done for each item and for its join (Task 6b): the
-    /// join's coverage is the item steps', and stays with the run-end check for now.
+    /// results step is this one. The caller passes none for a step done for each item: its coverage is decided at its join
+    /// (Orchestrator's JoinAsync), over what all its items handed on - which never rejects the join, only leaves it
+    /// unconfirmed.
     /// </summary>
     internal static IReadOnlyList<SuccessCriterionDefinition> For(IEnumerable<SuccessCriterionDefinition> criteria, int planIndex)
         => criteria.Where(c => c.Typed is { Kind: TypedCriterionKind.EvidenceCoversAll } t && t.ResultsStep == planIndex)
