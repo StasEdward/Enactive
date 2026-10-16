@@ -173,7 +173,11 @@ public sealed class Planner
             steps = steps.Select(s => new
             {
                 title = s.Title,
-                dependsOn = s.DependsOn.Select(id => indices.TryGetValue(id, out var index) ? index : -1).ToArray(),
+                // An order-only edge is said once, as "after": read back, "after" puts it in DependsOn again.
+                dependsOn = s.DependsOn.Where(id => s.OrderOnly?.Contains(id) != true)
+                    .Select(id => indices.TryGetValue(id, out var index) ? index : -1).ToArray(),
+                after = s.OrderOnly?.Select(id => indices.TryGetValue(id, out var index) ? index : -1).ToArray(),
+                consumes = s.Consumes?.Select(ConsumeJson).ToArray(),
                 complexity = s.Complexity.ToString().ToLowerInvariant(),
                 obligations = s.ObligationIds,
                 output = s.Output is { } declared ? OutputJson(declared) : null,
@@ -357,6 +361,8 @@ public sealed class Planner
                                 ObligationIds = obligationIds,
                                 Output = el.TryGetProperty("output", out var output) ? ParseOutput(output, specs.Count + 1) : null,
                                 ForEach = ParseForEach(el),
+                                Consumes = ParseConsumes(el),
+                                After = ParseAfter(el),
                                 Report = el.TryGetProperty("report", out var report) && report.ValueKind == JsonValueKind.String
                                     && !string.IsNullOrWhiteSpace(report.GetString()) ? report.GetString() : null,
                                 Critical = el.TryGetProperty("critical", out var critical) && critical.ValueKind == JsonValueKind.True,
@@ -511,6 +517,50 @@ public sealed class Planner
             ? new ForEachSource(index, f.GetString()!)
             : null;
 
+    /// <summary>
+    /// A step's "consumes", read as leniently as its forEach: an entry without a step number and a field is dropped;
+    /// whether the rest can be honoured is PlanConsumes' to say. An evidence word the engine does not know is kept
+    /// as written - read as "mentioned", a typo would quietly ask for the weakest evidence there is.
+    /// </summary>
+    internal static IReadOnlyList<ConsumeSpec>? ParseConsumes(JsonElement step)
+    {
+        if (!step.TryGetProperty("consumes", out var consumes) || consumes.ValueKind != JsonValueKind.Array) return null;
+        var found = new List<ConsumeSpec>();
+        foreach (var c in consumes.EnumerateArray())
+        {
+            if (c.ValueKind != JsonValueKind.Object
+                || !c.TryGetProperty("step", out var s) || s.ValueKind != JsonValueKind.Number || !s.TryGetInt32(out var index)
+                || !c.TryGetProperty("field", out var f) || f.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(f.GetString()))
+                continue;
+            var consume = new ConsumeSpec(index, f.GetString()!)
+                { Subset = c.TryGetProperty("subset", out var subset) && subset.ValueKind == JsonValueKind.True };
+            if (c.TryGetProperty("evidence", out var e) && e.ValueKind != JsonValueKind.Null)
+            {
+                var word = e.ValueKind == JsonValueKind.String ? e.GetString()! : e.GetRawText();
+                consume = EvidenceCoverage.KindNamed(word) is { } kind ? consume with { Evidence = kind } : consume with { UnknownEvidence = word };
+            }
+            found.Add(consume);
+        }
+        return found.Count == 0 ? null : found;
+    }
+
+    /// <summary>A step's "after": the 0-based positions it only waits for. What is not a number is dropped.</summary>
+    internal static IReadOnlyList<int>? ParseAfter(JsonElement step)
+    {
+        if (!step.TryGetProperty("after", out var after) || after.ValueKind != JsonValueKind.Array) return null;
+        var found = after.EnumerateArray().Where(a => a.ValueKind == JsonValueKind.Number && a.TryGetInt32(out _))
+            .Select(a => a.GetInt32()).ToArray();
+        return found.Length == 0 ? null : found;
+    }
+
+    /// <summary>A consume as the planner wrote it, for a plan sent back to it to repair: an unknown word as written.</summary>
+    private static object ConsumeJson(ConsumeSpec c) => new
+    {
+        step = c.Step, field = c.Field,
+        evidence = c.UnknownEvidence ?? EvidenceCoverage.NameOf(c.Evidence),
+        subset = c.Subset ? true : (bool?)null
+    };
+
     /// <summary>A declared output as the planner wrote it, for a plan sent back to it to repair.</summary>
     private static Dictionary<string, object?> OutputJson(StepOutputSchema schema)
         => schema.Fields.ToDictionary(f => f.Name, f => (object?)new Dictionary<string, object?>
@@ -585,7 +635,12 @@ public sealed class Planner
         " A step whose RESULT later steps must use as data (pages to process, files found, names, counts) declares it: "
         + "\"output\":{\"<field>\":{\"type\":\"path[]\",\"description\":\"...\",\"maxItems\":12}}; types: text, string, integer, "
         + "boolean, path, path[], string[], results. The step hands the values on with a tool and its dependents receive them. "
-        + "Limits are this task's (maxItems, maxLength). Declare nothing when prose is enough.";
+        + "Limits are this task's (maxItems, maxLength). Declare nothing when prose is enough."
+        // Plan Phase 1.1: a dependency on a step that hands on a list is unclassified until the plan says which it is.
+        + " A step that depends on a step handing on a list (path[], string[]) says which way: it consumes it - "
+        + "\"consumes\":[{\"step\":0,\"field\":\"pages\"}] - and a list you consume is a list you must cover, every item; "
+        + "\"evidence\" says what proves an item (mentioned - named in a call - by default; file_read, file_write, command), "
+        + "and \"subset\":true marks a step that filters. Or it only waits for that step: \"after\":[0].";
 
     // "A temporary change ... are ONE step": run bb77e810, 2026-10-09, planned "Break behaviour, confirm test fails" and
     // "Restore behaviour, confirm test passes" as two steps. The second, with nothing of its own to restore from, read

@@ -56,6 +56,12 @@ public sealed record CheckpointStep(
 
     /// <summary>Every time this step was blocked, oldest first (Phase 7) - kept, so a resume loses no attempt.</summary>
     public IReadOnlyList<Enactive.Core.Tasks.StepBlock>? Blocks { get; init; }
+
+    /// <summary>What the step consumes, so a resumed step is held to account for the same lists.</summary>
+    public IReadOnlyList<Enactive.Core.Tasks.ConsumeSpec>? Consumes { get; init; }
+
+    /// <summary>The dependencies the step only waits for - an order, not data.</summary>
+    public IReadOnlyList<Guid>? OrderOnly { get; init; }
 }
 
 /// <summary>A step of a wave not yet validated, and what it changed as the engine recorded it.</summary>
@@ -166,6 +172,12 @@ public sealed record RunCheckpoint(
 
     /// <summary>Where the plan's waves had got to (Phase 6). Null when waves were not validated.</summary>
     public WaveCheckpoint? Waves { get; init; }
+
+    /// <summary>
+    /// The <see cref="Enactive.Core.Tasks.PlanContractVersions"/> version the plan was made under. Null: a checkpoint from
+    /// before the contract, whose steps never declared what they consume - it must not be read as if they had.
+    /// </summary>
+    public int? PlanContractVersion { get; init; }
 }
 
 /// <summary>

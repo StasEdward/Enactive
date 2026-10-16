@@ -66,10 +66,52 @@ public sealed record PlanStep(
     /// changes no file (Phase 6.1). Declared by the planner; the engine refuses its file changes.
     /// </summary>
     public bool ReadOnly { get; init; }
+
+    /// <summary>The lists of earlier steps this step takes as data, and must account for item by item (Plan Phase 1.1).</summary>
+    public IReadOnlyList<ConsumeSpec>? Consumes { get; init; }
+
+    /// <summary>
+    /// The steps among <see cref="DependsOn"/> this one only waits for ("after"): an order, not data. Kept apart
+    /// because the scheduler needs no difference and coverage does - an edge on a step that hands on a list is an
+    /// obligation to cover it unless the plan said it is only an order.
+    /// </summary>
+    public IReadOnlyList<Guid>? OrderOnly { get; init; }
 }
 
 /// <summary>Where a step's items come from: a list field of an earlier step's output, by its plan position (0-based).</summary>
 public sealed record ForEachSource(int Step, string Field);
+
+/// <summary>
+/// A list field of an earlier step's output, by its plan position (0-based), that a step takes as data - the same
+/// reference <see cref="ForEachSource"/> makes (a forEach is by definition a consume), with what proves an item
+/// (<see cref="Evidence"/>, "mentioned" unless said) and whether the step may leave items out (<see cref="Subset"/>).
+/// </summary>
+public sealed record ConsumeSpec(int Step, string Field)
+{
+    public EvidenceKind Evidence { get; init; } = EvidenceKind.Call;
+
+    /// <summary>A step that filters: it may exclude items, each with a reason, instead of processing every one.</summary>
+    public bool Subset { get; init; }
+
+    /// <summary>
+    /// The evidence word the planner wrote when it is none the engine knows. Kept rather than read as "mentioned",
+    /// so the plan is refused for it (PlanConsumes) instead of quietly asking for the weakest evidence there is.
+    /// </summary>
+    public string? UnknownEvidence { get; init; }
+}
+
+/// <summary>
+/// Versions of what a plan's steps declare, kept with the plan in a checkpoint. Not named PlanContract: that is the
+/// plan-check review's contract (Enactive.Agents), a different thing.
+/// </summary>
+public static class PlanContractVersions
+{
+    /// <summary>
+    /// 1: steps declare what they consume and what they only wait for. A checkpoint without a version was planned
+    /// before that, and a resume must not treat its plan as if it had made those declarations.
+    /// </summary>
+    public const int Current = 1;
+}
 
 /// <summary>A plan is a graph of steps. v1 builds a linear chain via <see cref="LinearPlan"/>.</summary>
 public sealed record Plan(Guid Id, IReadOnlyList<PlanStep> Steps);
@@ -109,6 +151,10 @@ public sealed record PlanStepSpec(
     public string? Report { get; init; }
     public bool Critical { get; init; }
     public bool ReadOnly { get; init; }
+    public IReadOnlyList<ConsumeSpec>? Consumes { get; init; }
+
+    /// <summary>0-based positions of steps this one only waits for ("after"): dependencies that hand on no data.</summary>
+    public IReadOnlyList<int>? After { get; init; }
 }
 
 /// <summary>
@@ -125,23 +171,30 @@ public static class DagPlan
         for (var i = 0; i < specs.Count; i++)
             ids[i] = Guid.NewGuid();
 
-        var graph = specs.Any(s => s.DependenciesDeclared || s.DependsOn.Count > 0);
+        // An "after" is a statement about dependencies too: a plan that makes one is a graph, not a list of titles.
+        var graph = specs.Any(s => s.DependenciesDeclared || s.DependsOn.Count > 0 || s.After is { Count: > 0 });
+        IReadOnlyList<Guid> Ids(IEnumerable<int> indices)
+            => indices.Where(d => d >= 0 && d < specs.Count).Distinct().Select(d => ids[d]).ToArray();
+
         var steps = new List<PlanStep>(specs.Count);
         for (var i = 0; i < specs.Count; i++)
         {
             IReadOnlyList<Guid> deps;
+            IReadOnlyList<Guid>? orderOnly = null;
             if (graph)
-                deps = specs[i].DependsOn
-                    .Where(d => d >= 0 && d < specs.Count)
-                    .Distinct()
-                    .Select(d => ids[d])
-                    .ToArray();
+            {
+                // The scheduler waits on an "after" like any dependency; which edges were only an order is kept
+                // beside them, because coverage treats an edge on a step that hands on a list differently.
+                orderOnly = specs[i].After is { } after ? Ids(after) : null;
+                deps = Ids(specs[i].DependsOn).Concat(orderOnly ?? []).Distinct().ToArray();
+            }
             else
                 deps = i > 0 ? new[] { ids[i - 1] } : Array.Empty<Guid>();
 
             steps.Add(new PlanStep(ids[i], specs[i].Title, StepStatus.Pending, deps, specs[i].Complexity)
                 { ObligationIds = specs[i].ObligationIds, Output = specs[i].Output, ForEach = specs[i].ForEach, Report = specs[i].Report,
-                  Critical = specs[i].Critical, ReadOnly = specs[i].ReadOnly });
+                  Critical = specs[i].Critical, ReadOnly = specs[i].ReadOnly, Consumes = specs[i].Consumes,
+                  OrderOnly = orderOnly is { Count: > 0 } ? orderOnly : null });
         }
         return new Plan(Guid.NewGuid(), steps);
     }

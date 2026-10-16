@@ -1347,6 +1347,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
                         Record = session.Records.TryGetValue(s.Id, out var record) ? record : null,
                         Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly,
+                        Consumes = s.Consumes, OrderOnly = s.OrderOnly,
                         Blocks = BlocksOf(s.Id),
                         Owned = s.ExpandedFrom is null ? null : _progress.OwnedBy(scope.TaskId, s.Id) is { Count: > 0 } owned ? owned.ToArray() : null
                     })
@@ -1359,7 +1360,9 @@ public sealed partial class Orchestrator : IOrchestrator
                 produced.Select(a => a.RelativePath).ToArray(),
                 scope.Budget.StepsRun, scope.Budget.TokensSpent, _settings) { Checks = CriteriaFor(plan), Restrictions = plan.Restrictions, ActionPolicy = plan.ActionPolicy,
                     Baseline = session.Builds.Count == 0 ? null : session.Builds.Select(b => b.ToSnapshot()).ToArray(),
-                    Waves = waves?.ToCheckpoint(waveBeforeKept) };
+                    Waves = waves?.ToCheckpoint(waveBeforeKept),
+                    // A resumed checkpoint keeps the contract it was planned under: a plan from before it is not one after.
+                    PlanContractVersion = resume is null ? PlanContractVersions.Current : resume.PlanContractVersion };
         });
 
         // Forgets the checkpoint: this run reached an end, and an ending is not resumable. Called
@@ -2365,7 +2368,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 {
                     ObligationIds = s.ObligationIds, Output = s.Output,
                     ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
-                    Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly
+                    Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly,
+                    Consumes = s.Consumes, OrderOnly = s.OrderOnly
                 })
             .ToArray();
 

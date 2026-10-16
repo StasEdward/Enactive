@@ -163,7 +163,7 @@ public static class TypedCriteria
                 case "covers_all":
                     var coverage = new TypedCriterion(TypedCriterionKind.EvidenceCoversAll,
                         SourceStep: c.SourceStep, SourceField: c.SourceField, ResultsStep: c.ResultsStep, ResultsField: c.ResultsField,
-                        Evidence: EvidenceCoverage.KindNamed(c.Evidence));
+                        Evidence: CriterionKindNamed(c.Evidence));
                     if (c.Evidence is { } named && coverage.Evidence is null) { Drop(c, $"'{named}' is not an evidence kind (file_read, command, call)"); break; }
                     if (EvidenceCoverage.Invalid(coverage, plan) is { } why) { Drop(c, why); break; }
                     accepted.Add(new SuccessCriterionDefinition(
@@ -177,7 +177,7 @@ public static class TypedCriteria
                     if (said.Length < MinSemanticText) { Drop(c, "it states nothing a result could be held to"); break; }
                     if (said.Length > MaxSemanticText) { Drop(c, $"it is longer than {MaxSemanticText} characters - one checkable statement, not a specification"); break; }
                     if (c.Step is null) { Drop(c, "a semantic criterion is judged with the step whose work it is about - state it on that step"); break; }
-                    var kinds = c.EvidenceList.Select(k => (Named: k, Kind: EvidenceCoverage.KindNamed(k))).ToArray();
+                    var kinds = c.EvidenceList.Select(k => (Named: k, Kind: CriterionKindNamed(k))).ToArray();
                     if (kinds.FirstOrDefault(k => k.Kind is null) is { Named: { } unknownKind })
                     { Drop(c, $"'{unknownKind}' is not an evidence kind (file_read, command, call)"); break; }
                     var judged = new TypedCriterion(TypedCriterionKind.Semantic, Text: said,
@@ -304,9 +304,21 @@ public static class TypedCriteria
         return typed.Kind == TypedCriterionKind.FileContains ? $"{file} says what it should" : $"{file} exists";
     }
 
+    /// <summary>
+    /// An evidence kind a criterion can be held to. Not file_write: nothing records write evidence for a criterion
+    /// yet (coverage gathers reads and calls, the review admits commands, calls and reads), so a criterion asking
+    /// for it could never pass - refused as an unknown word, as it was before the word existed.
+    /// </summary>
+    private static Enactive.Core.Tasks.EvidenceKind? CriterionKindNamed(string? name)
+        => EvidenceCoverage.KindNamed(name) is { } kind && kind != Enactive.Core.Tasks.EvidenceKind.FileWrite ? kind : null;
+
     /// <summary>The evidence kinds a semantic criterion allows, in its own words.</summary>
+    // Call keeps the word "call" here: for a judged criterion it is any successful call the reviewer cites (as the
+    // review's instruction defines it), not an item named in a call's arguments, which is what "mentioned" says.
     internal static string KindsOf(TypedCriterion typed)
-        => typed.Kinds is { Count: > 0 } kinds ? string.Join(", ", kinds.Select(EvidenceCoverage.NameOf)) : "file_read, command, call";
+        => typed.Kinds is { Count: > 0 } kinds
+            ? string.Join(", ", kinds.Select(k => k == Enactive.Core.Tasks.EvidenceKind.Call ? "call" : EvidenceCoverage.NameOf(k)))
+            : "file_read, command, call";
 
     private static string Describe(TypedCriterion typed)
     {

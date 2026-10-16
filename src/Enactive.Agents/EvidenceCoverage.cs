@@ -27,20 +27,24 @@ using Enactive.Core.Tools;
 /// </summary>
 public static class EvidenceCoverage
 {
-    /// <summary>The planner's words for the evidence kinds.</summary>
+    /// <summary>The planner's words for the evidence kinds. "call" is the older word for "mentioned", still read.</summary>
     internal static EvidenceKind? KindNamed(string? name) => name?.Trim().ToLowerInvariant().Replace('-', '_') switch
     {
         "file_read" or "read" => EvidenceKind.FileRead,
+        "file_write" => EvidenceKind.FileWrite,
         "command" => EvidenceKind.Command,
-        "call" or "tool_call" => EvidenceKind.Call,
+        "mentioned" or "call" or "tool_call" => EvidenceKind.Call,
         _ => null
     };
 
+    // Call is shown as "mentioned": "call" read as if the item had been worked on, when all it says is that a
+    // successful call named it - one call naming twelve paths "covers" all twelve (Plan Phase 1.2).
     internal static string NameOf(EvidenceKind kind) => kind switch
     {
         EvidenceKind.FileRead => "file_read",
+        EvidenceKind.FileWrite => "file_write",
         EvidenceKind.Command => "command",
-        _ => "call"
+        _ => "mentioned"
     };
 
     /// <summary>How an item is compared: a path written either way round, with or without "./", is the same item.</summary>

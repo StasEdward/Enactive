@@ -118,7 +118,14 @@ public enum EvidenceKind
     Command,
 
     /// <summary>Any call succeeded with the item among its arguments: a page fetched, a message opened.</summary>
-    Call
+    /// <remarks>
+    /// Shown as "mentioned": the item was named in a successful call's arguments, which proves neither that it was
+    /// read nor that the requested action was done to it. The member keeps its name because it is stored by name.
+    /// </remarks>
+    Call,
+
+    /// <summary>A successful write to the item's path was recorded. Last, so stored names and numbers keep their meaning.</summary>
+    FileWrite
 }
 
 /// <summary>What one item's result was backed by when it was handed on, and, when not by a whole read, why.</summary>
