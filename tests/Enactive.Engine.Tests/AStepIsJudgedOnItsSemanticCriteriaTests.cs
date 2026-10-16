@@ -99,6 +99,36 @@ public sealed class AStepIsJudgedOnItsSemanticCriteriaTests
         Assert.Equal(StepOutcomeKind.Succeeded, Assert.Single(events, e => e.Kind == EventKind.StepCompleted).StepOutcome());
     }
 
+    /// <summary>
+    /// An earlier step's write is not this step's: with one conversation for the whole plan the reviewer is shown the
+    /// earlier step's calls too, and citing its write as this step's file_write evidence is not taken.
+    /// </summary>
+    [Fact]
+    public async Task An_earlier_steps_write_is_not_write_evidence_for_this_step()
+    {
+        const string plan = """
+            {"disposition":"task","title":"stocktake",
+             "steps":[{"title":"Write the report","dependsOn":[]},
+                      {"title":"Check the report","dependsOn":[0],
+                       "criteria":[{"kind":"semantic","text":"The report states the number of boxes the shelf listing shows","evidence":["file_write"]}]}]}
+            """;
+        using var fx = new EngineFixture { TypedCriteria = true, SemanticCriteria = true };
+        fx.Write("stock/shelf17.txt", "shelf 17: 42 boxes");
+        var worker = new FakeChatProvider(
+            Turn.Says(plan),
+            Turn.Calls1("write_file", """{"path":"stock/report.md","content":"Shelf 17: 42 boxes"}""", "w1"), Turn.Says("Written."),
+            Turn.Calls1("read_file", """{"path":"stock/report.md"}""", "r1"), Turn.Says("Checked."));
+        var citesTheWrite = Turn.Says("""{"criteria":[{"id":"C1","verdict":"pass","reason":"the report says 42","calls":[1],"files":[]}]}""");
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), citesTheWrite, citesTheWrite);
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer),
+            "Count the boxes on shelf 17 and write a report.");
+
+        Assert.Contains("call 1 (write_file) is not evidence of a kind this criterion allows (file_write)",
+            reviewer.Requests[^1].Messages.Last().Content, StringComparison.Ordinal);
+        Assert.Equal(StepOutcomeKind.DoneUnverified, events.Last(e => e.Kind == EventKind.StepCompleted).StepOutcome());
+    }
+
     [Fact]
     public async Task A_read_of_part_of_a_file_is_not_a_read_of_the_file()
     {

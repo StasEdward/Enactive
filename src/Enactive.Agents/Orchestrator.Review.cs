@@ -158,7 +158,7 @@ public sealed partial class Orchestrator
                         await StepFilesNowAsync(changes, before, journal, stepStart, store, ct),
                         journal.Describe(evidenceStart, callBudget),
                         obligations ?? RequestObligations.Create(request, title, stepNumber, planSteps), itemAccount),
-                    judged, (action, kind) => Admits(action, kind, reads), models.ReviewProvider!, models.ReviewModel,
+                    judged, (action, kind) => Admits(action, kind, reads, judgedNo), models.ReviewProvider!, models.ReviewModel,
                     scope.Budget.TurnExhaustedAfter, ct),
                 ReviewMode.Criteria)
             // The user's model (2026-09-29): one short verdict per step - done, and its report true? - and the task is
@@ -198,7 +198,8 @@ public sealed partial class Orchestrator
     /// engine's own observation, a command that ran, a call that succeeded. No tool is named: what a call is comes
     /// from its definition and its record.
     /// </summary>
-    private bool Admits(ExecutedAction action, EvidenceKind kind, ReadLedger? reads) => kind switch
+    /// <param name="step">The step under review: only its own calls are write evidence for it.</param>
+    private bool Admits(ExecutedAction action, EvidenceKind kind, ReadLedger? reads, int? step) => kind switch
     {
         EvidenceKind.Command => action.ExitCode is not null && action.Outcome != ActionOutcome.Refused,
         EvidenceKind.Call => action.Outcome == ActionOutcome.Succeeded,
@@ -207,8 +208,11 @@ public sealed partial class Orchestrator
                 && _tools.DefinitionOf(action.Tool)?.FileCoverage == FileCoverageBehavior.Read
                 && PathsIn(action.Arguments).Any(p => reads?.SeenWhole(p).Whole == true)),
         // A call that succeeded and recorded which paths it changed: a write, an edit, a deletion, a rename. A command
-        // does not record its writes by file, so it is command evidence, never write evidence.
-        EvidenceKind.FileWrite => action.Outcome == ActionOutcome.Succeeded && action.ChangedPaths is { Count: > 0 },
+        // does not record its writes by file, so it is command evidence, never write evidence. And a call of THIS step:
+        // with one conversation for the whole plan the review is shown the earlier steps' calls too, and an earlier
+        // step's write is not the work of the step under review (as EvidenceCoverage.Gather counts only the step's own).
+        EvidenceKind.FileWrite => action.Outcome == ActionOutcome.Succeeded && action.ChangedPaths is { Count: > 0 }
+                                  && (step is null || action.Step == step),
         _ => false
     };
 
