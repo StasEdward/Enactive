@@ -89,7 +89,7 @@ public sealed class EveryOutcomeIsPlacedTests
     {
         var at = DateTimeOffset.UtcNow;
         var record = new RunRecord(Guid.NewGuid(), Guid.NewGuid(), "Nightly books", null, at, at, nameof(RunOutcomeKind.Paused),
-            [new RunEventRecord(at, nameof(EventKind.TaskFailed), "Paused: Paused at step 2 of 4",
+            [new RunEventRecord(at, nameof(EventKind.TaskFailed), "Paused at step 2 of 4: 2 step(s) left.",
                 null, WorkEventPayload.OutcomePayload(RunOutcomeKind.Paused, "Paused at step 2 of 4: 2 step(s) left."))],
             [], []);
 

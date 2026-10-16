@@ -126,6 +126,7 @@ public sealed class APausedRunCarriesOnTests
         Assert.Equal(RunOutcomeKind.Paused, events.Last().Outcome());
         Assert.StartsWith("Paused at step 2 of 4", events.Last().OutcomeReason(), StringComparison.Ordinal);
         Assert.Equal(EventKind.TaskFailed, events.Last().Kind);                       // only Completed is TaskCompleted
+        Assert.StartsWith("Paused at step 2 of 4", events.Last().Summary, StringComparison.Ordinal); // not "Paused: Paused at"
         var done = Completed(events).ToArray();
         Assert.Equal(2, done.Length);                                                 // both finished - not cancelled
         Assert.All(done, e => Assert.Equal(StepOutcomeKind.Succeeded, e.StepOutcome()));
@@ -188,6 +189,7 @@ public sealed class APausedRunCarriesOnTests
         var events = await fx.RunAsync(fx.Build(worker, maxParallelSteps: 2, checkpoints: store), "count the books and summarise them");
 
         Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
+        Assert.StartsWith("Incomplete: Paused at step 2 of 4", events.Last().Summary, StringComparison.Ordinal); // not paused: says so
         var reason = events.Last().OutcomeReason()!;
         Assert.Contains("the pause could not be saved: the disk is full", reason, StringComparison.Ordinal);
         Assert.Contains("offered as an interrupted run - resume it to carry on with the 2 step(s) left", reason, StringComparison.Ordinal);
@@ -339,6 +341,7 @@ public sealed class APausedRunCarriesOnTests
 
         Assert.Equal(RunOutcomeKind.Paused, events.Last().Outcome());
         Assert.Equal("Paused before the first of 4 step(s): 4 left - resume the run to carry on with them.", events.Last().OutcomeReason());
+        Assert.Equal(events.Last().OutcomeReason(), events.Last().Summary);           // said once, not "Paused: Paused before"
         Assert.DoesNotContain(events, e => e.Kind is EventKind.StepStarted or EventKind.StepCompleted);
         Assert.Empty(worker.RequestsFor(Invoices));
         var kept = Assert.Single(store.Kept);

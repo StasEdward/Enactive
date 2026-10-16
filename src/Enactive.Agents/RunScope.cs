@@ -140,7 +140,11 @@ public sealed class RunScope
                kind == RunOutcomeKind.Completed ? EventKind.TaskCompleted : EventKind.TaskFailed,
                kind == RunOutcomeKind.Completed
                    ? summarize(Artifacts)
-                   : $"{kind}{(string.IsNullOrWhiteSpace(reason) ? "" : ": " + reason)}",
+                   // A paused run's reason already leads with "Paused ..." (RunOutcomeDecision.Paused): the timeline and
+                   // the log read "Paused: Paused at step 2 of 4" until it was said once, as InboxLines says it.
+                   : kind == RunOutcomeKind.Paused && reason is { Length: > 0 } && reason.StartsWith("Paused", StringComparison.OrdinalIgnoreCase)
+                       ? reason
+                       : $"{kind}{(string.IsNullOrWhiteSpace(reason) ? "" : ": " + reason)}",
                WorkEventPayload.OutcomePayload(kind, reason));
 
     /// <summary>
