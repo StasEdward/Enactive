@@ -444,6 +444,21 @@ internal sealed class OpenFailures
         => string.Equals(a.Replace('\\', '/').Trim('/'), b.Replace('\\', '/').Trim('/'),
                          StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// The calls <see cref="Describe"/> describes, by their identity (tool and arguments) and not their error text - what
+    /// the obligation loop compares turn to turn. A call that fails again with another message is the same call still
+    /// open; a call made good, or a new one gone wrong, is a step that moved.
+    /// </summary>
+    public IReadOnlyList<string> Keys
+    {
+        get
+        {
+            var forgiven = Forgiven;
+            var open = _byCall.Keys.Where(k => !forgiven.Contains(k));
+            return (_anythingWorked ? open : open.Concat(_foundNothing.Keys)).Order(StringComparer.Ordinal).ToArray();
+        }
+    }
+
     public string Describe()
     {
         var forgiven = Forgiven;

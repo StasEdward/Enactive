@@ -226,6 +226,7 @@ public sealed class SettingsDeclaredOnceTests
             : type == typeof(int?) ? 1000 + n
             : type == typeof(GenerationBudgets) ? new GenerationBudgets(Action: 2000 + n)
             : type == typeof(RepairConsultation) ? new RepairConsultation(FailedRepairs: n)
+            : type == typeof(ObligationNudges) ? new ObligationNudges { Attended = new(2, 10 + n), Unattended = new(3, 20 + n) }
             : throw new Xunit.Sdk.XunitException($"No different value is known for {type.Name}; add one here.");
 
     // ── provider settings ───────────────────────────────────────────────────

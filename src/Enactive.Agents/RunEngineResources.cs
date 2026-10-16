@@ -86,6 +86,15 @@ public sealed record RunEngineResources
     /// </summary>
     public RunSettings? Settings { get; init; }
 
+    /// <summary>
+    /// Nobody is watching this run: it was started in the background, on a schedule or from a phone - not at a screen
+    /// that shows its questions (RunComposer.Attended). Decides which of EngineOptions.ObligationNudges' pairs its steps
+    /// are told under. Not the decision handler's CanApprove: that says whether an approval is possible at all, and is
+    /// false as well for a console run under "--approve deny", which somebody is watching. False - watched - for every
+    /// caller that does not say, which is what a test driving the engine is.
+    /// </summary>
+    public bool Unattended { get; init; }
+
     // ── this machine's places ───────────────────────────────────────────────
 
     /// <summary>

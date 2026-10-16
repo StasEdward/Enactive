@@ -209,6 +209,9 @@ public sealed partial class Orchestrator : IOrchestrator
     /// </summary>
     private readonly RunSettings? _settings;
 
+    /// <summary>Nobody watches this run (RunEngineResources.Unattended): its steps are told what they owe under the unattended limits.</summary>
+    private readonly bool _unattended;
+
     /// <summary>
     /// An orchestrator for one run: what the run is given, and the engine's switches - two values, both said.
     /// The switches used to default to EngineOptions.Default when left out, so a host could forget the
@@ -222,6 +225,7 @@ public sealed partial class Orchestrator : IOrchestrator
         _writableRoots = resources.WritableRoots;
         _checkpoints = resources.Checkpoints;
         _settings = resources.Settings;
+        _unattended = resources.Unattended;
         _successCriteria = resources.SuccessCriteria;
         _limits = resources.Limits;
         _workspaceChanges = resources.WorkspaceChanges;
@@ -3713,11 +3717,13 @@ public sealed partial class Orchestrator : IOrchestrator
         // What happens to each call before its tool runs, in order - see CallAdmission. It also keeps the step's
         // own report that it cannot go on: the turn's other calls are answered, not run, and the step ends blocked
         // when the turn does.
-        // Whether each turn ends the step, and how - in one order, with its once-only reminders (see StepEnding). It
-        // keeps the step's open calls, which the admission and the accounting of results write to and this loop does not.
+        // Whether each turn ends the step, and how - in one order, with its reminders told under this run's limits, the
+        // attended or the unattended pair (see StepEnding, ObligationLoop). One per attempt, so what it has told lives as
+        // long as the attempt. It keeps the step's open calls, which the admission and the accounting of results write to
+        // and this loop does not.
         var stepEnding = new StepEnding(frame,
             async (path, token) => await store.TryReadPendingAsync(path, token) ?? await ReadOrNullAsync(path, token),
-            stepCriteria, reviewed);
+            stepCriteria, reviewed, _options.ObligationNudges.For(_unattended), () => _ledgered.Waiting(taskId));
 
         var admission = new CallAdmission(frame, _tools, _permissions, worker, EffectivePolicyFor(worker), offer, _progress,
             _decisions, _decisionGate, granted, _writableRoots, toolsOnRequest, mayReportBlocked,
@@ -4429,7 +4435,7 @@ public sealed partial class Orchestrator : IOrchestrator
             var ending = new StepEnding.Verdict();
             await foreach (var ev in stepEnding.EndAsync(new StepEnding.Turn(replyText, toolCalls, forcedThisTurn, described,
                                actionsTaken, reasoningBuilder.Length, lastCompletionTokens, lastPromptTokens,
-                               () => provider.ContextWindow(request)), ending, ct))
+                               () => provider.ContextWindow(request), TurnsSpent: runBudget.TurnExhausted is not null), ending, ct))
                 yield return ev;
             if (ending.Next == StepEnding.Next.End)
             {

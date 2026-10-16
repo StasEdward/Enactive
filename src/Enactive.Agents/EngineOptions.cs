@@ -152,4 +152,13 @@ public sealed record EngineOptions
     /// characters of each - too little to check anything quoted from one.
     /// </summary>
     public int EvidenceBudget { get; init; } = ExecutionJournal.DefaultBudget;
+
+    /// <summary>
+    /// Plan Phase 2: how many times a step is told of what it still owes before it ends - a call it described instead of
+    /// making, a criterion of its own that fails, a result it has not handed on, calls still open - per kind and in all,
+    /// for a run somebody watches and for one nobody does (see ObligationLoop). A step is told again only when what the
+    /// engine sees of it changed since the last time. The default, one per kind and a ceiling of the number of kinds, is
+    /// what the engine did when each kind had a once-only flag of its own. Clamped by ObligationLoop to its hard ceiling.
+    /// </summary>
+    public ObligationNudges ObligationNudges { get; init; } = ObligationNudges.Default;
 }

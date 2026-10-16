@@ -724,7 +724,6 @@ internal sealed class CallAdmission(
         if (checkedOutput.Accepted)
         {
             frame.OutputSlot.Accept(checkedOutput);
-            frame.OutputSlot.LastRefused = null;
             trail.Leave(() => frame.Open.HandedOn());
             // What the step had shown for each item it hands a result on for, recorded now
             // and by the engine (Phase 5.1): later, only this counts as coverage.
@@ -745,7 +744,9 @@ internal sealed class CallAdmission(
             // does not say so changes nothing about what the model does next.
             handed = (sameAgain ? "This is the same submission as the last one, unchanged - the problems below still stand. " : "")
                 + string.Join(" ", checkedOutput.Errors) + " Nothing was stored; send the corrected submission.";
-            frame.OutputSlot.LastRefused = TaskProgress.Canonical(call.ArgumentsJson);
+            // What was missing and what was wrong, as values beside the message (Plan Phase 2): the accepted result, if
+            // there is one, is left as it was.
+            frame.OutputSlot.Refuse(checkedOutput, TaskProgress.Canonical(call.ArgumentsJson));
             trail.Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, handed, WorkspaceEffect.None));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> failed: {handed}");
         }

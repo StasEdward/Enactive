@@ -269,7 +269,10 @@ public static class RunComposer
                 SuccessCriteria = spec?.SuccessCriteria ?? [],
                 Limits = spec?.Limits ?? ExecutionLimits.None,
                 Checkpoints = new JsonCheckpointStore(workspace),
-                Settings = runSettings
+                Settings = runSettings,
+                // Where the run was started, and so whether anybody watches it - not who answers its questions: a
+                // console run under "--approve deny" can approve nothing and is watched all the same.
+                Unattended = !Attended(request)
             }, engine.EngineOptions);
 
             var context = await new ContextProvider(workspace, new EnvironmentProbe(), memory)
