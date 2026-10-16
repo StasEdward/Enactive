@@ -2604,11 +2604,16 @@ public sealed partial class Orchestrator : IOrchestrator
         // A dependency the classifier adds for a consume can close a cycle (the source already waits for the consumer).
         // The plan with it cannot run, and would be stopped as structurally invalid - for a coverage gap, which never
         // stops a run. So it is not taken: the plan stays as it was, and the consume it could not honour is a defect.
+        // Said of the plan that is kept, in which the dependency is NOT there: the classifier's notes say it was added,
+        // and quoted here they told the person, the planner and the run's reason that the step runs after the list exists.
         if (!ReferenceEquals(classified.Plan, folded) && PlanValidation.Error(classified.Plan) is { } closes)
         {
             var asWas = UpstreamCoverage.Derive(folded);
-            var unrunnable = "the dependencies the plan's consumes need would make it unable to run (" + closes.TrimEnd('.') + "): "
-                             + string.Join("; ", classified.Notes);
+            var unrunnable = "the dependencies the plan's consumes need would make it unable to run: "
+                             + string.Join("; ", classified.Added.Select(a =>
+                                 $"step {a.Consumer + 1} consumes step {a.Source + 1}'s list {a.Field} but does not depend on it"))
+                             + $"; adding {(classified.Added.Count == 1 ? "that dependency" : "those dependencies")} would close a cycle ("
+                             + closes.TrimEnd('.') + ")";
             return new(folded, [], [.. classified.Defects, unrunnable, .. asWas.Defects], asWas.Criteria, unrunnable);
         }
         var derived = UpstreamCoverage.Derive(classified.Plan);

@@ -19,7 +19,15 @@ public static class PlanConsumes
     /// <param name="Plan">The plan, with a dependency added for each consume of a step the consumer did not wait for.</param>
     /// <param name="Notes">What was added, and why.</param>
     /// <param name="Defects">What the plan leaves unsaid or contradicts - for the planner to correct.</param>
-    public sealed record Result(Plan Plan, IReadOnlyList<string> Notes, IReadOnlyList<string> Defects);
+    public sealed record Result(Plan Plan, IReadOnlyList<string> Notes, IReadOnlyList<string> Defects)
+    {
+        /// <summary>
+        /// Each dependency added for a consume, by plan position (from 0): the consumer, its source and the list. Kept
+        /// apart from the notes, which say the dependency WAS added - a caller that cannot take the plan with them (it
+        /// would not run) must say what is true of the plan it keeps instead.
+        /// </summary>
+        public IReadOnlyList<(int Consumer, int Source, string Field)> Added { get; init; } = [];
+    }
 
     public static Result Classify(Plan plan)
     {
@@ -34,6 +42,7 @@ public static class PlanConsumes
 
         var notes = new List<string>();
         var defects = new List<string>();
+        var added = new List<(int Consumer, int Source, string Field)>();
         var changed = false;
         var position = steps.Select((s, i) => (s.Id, i)).GroupBy(x => x.Id).ToDictionary(g => g.Key, g => g.First().i);
 
@@ -85,6 +94,7 @@ public static class PlanConsumes
                 {
                     steps[s] = steps[s] with { DependsOn = [.. steps[s].DependsOn, steps[c.Step].Id] };
                     changed = true;
+                    added.Add((s, c.Step, c.Field));
                     notes.Add($"step {s + 1} consumes step {c.Step + 1}'s {c.Field} but did not depend on it: the dependency "
                               + $"was added, so step {s + 1} runs after the list exists");
                 }
@@ -115,6 +125,6 @@ public static class PlanConsumes
             }
         }
 
-        return new(changed ? plan with { Steps = steps } : plan, notes, defects);
+        return new(changed ? plan with { Steps = steps } : plan, notes, defects) { Added = added };
     }
 }

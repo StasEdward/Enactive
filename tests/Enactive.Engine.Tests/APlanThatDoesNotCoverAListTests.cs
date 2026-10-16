@@ -189,6 +189,16 @@ public sealed class APlanThatDoesNotCoverAListTests
         Assert.Equal(2, events.Count(e => e.Kind == EventKind.StepCompleted));
         Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
         Assert.Contains("would make it unable to run", Reason(events), StringComparison.Ordinal);
+        // Said truthfully: the dependency was NOT added. The obligation reaches the run's reason, the question to the
+        // person and the planner; it used to quote the classifier's "the dependency was added, so step 2 runs after the
+        // list exists", for a plan in which step 2 runs before it.
+        const string truthful = "step 2 consumes step 1's list pages but does not depend on it; adding that dependency would close a cycle (Plan contains a dependency cycle";
+        Assert.Contains(truthful, Reason(events), StringComparison.Ordinal);
+        Assert.Contains(truthful, Assert.Single(CoverageQuestions(fx.Decisions)).FullDetail, StringComparison.Ordinal);
+        Assert.Contains(worker.Requests, r => Asked(r, truthful));
+        Assert.DoesNotContain("dependency was added", Reason(events), StringComparison.Ordinal);
+        Assert.DoesNotContain("dependency was added", Assert.Single(CoverageQuestions(fx.Decisions)).FullDetail, StringComparison.Ordinal);
+        Assert.DoesNotContain(worker.Requests, r => Asked(r, "dependency was added"));
     }
 
     /// <summary>A coverage criterion the run was given says what the step does with the list, as a planner's would.</summary>
