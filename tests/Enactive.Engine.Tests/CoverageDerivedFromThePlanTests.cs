@@ -141,6 +141,12 @@ public sealed class CoverageDerivedFromThePlanTests
         Assert.Empty(UpstreamCoverage.NotAlreadyChecked(derived, [Written(EvidenceKind.FileRead)]));
     }
 
+    /// <summary>A written check of another field of the consumer's results is not this one.</summary>
+    [Fact]
+    public void A_derived_criterion_is_kept_beside_one_the_planner_wrote_over_another_results_field()
+        => Assert.Single(UpstreamCoverage.NotAlreadyChecked(UpstreamCoverage.Derive(Reviewed(EvidenceKind.FileRead)).Criteria,
+            [Written(EvidenceKind.FileRead, results: "other")]));
+
     /// <summary>Every kind of evidence the engine records for an item also names it, so "mentioned" adds nothing to a read.</summary>
     [Fact]
     public void A_weaker_derived_criterion_adds_nothing_to_a_stronger_one_the_planner_wrote()

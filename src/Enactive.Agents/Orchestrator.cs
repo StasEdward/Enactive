@@ -667,6 +667,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     if (replanned.Usage.Any)
                         yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, replanned.Usage);
                 }
+                // The earlier repairs - the report declaration, the request lines given to no step - are not asked again of
+                // this plan: each would be one more planner call, and the planner was handed the plan they produced.
                 // The corrected plan is shaped as the first one was - a forEach only where the switch allows it, and
                 // checked - and taken only if it can run. One that cannot does not replace the plan that can: that one
                 // runs, with what it leaves uncovered.
@@ -680,10 +682,13 @@ public sealed partial class Orchestrator : IOrchestrator
                         shaped = fresh with { Steps = fresh.Steps.Select(st => st.Joins ? st : st with { ForEach = null }).ToArray() };
                     else if (fresh.Steps.Any(st => st.ForEach is not null))
                         (shaped, runOnce) = FanOut.Validate(fresh);
-                    if (PlanValidation.Error(shaped) is null)
+                    // Its contract may need a dependency that closes a cycle (CoverageContract): a plan that could not run
+                    // that way is no better than one that cannot run at all, and the one before it is kept.
+                    var second = PlanValidation.Error(shaped) is null ? CoverageContract(replanned with { Plan = shaped }) : null;
+                    if (second is { Unrunnable: null })
                     {
                         notTaken = runOnce;
-                        contract = CoverageContract(replanned with { Plan = shaped });
+                        contract = second;
                         plan = replanned with { Plan = contract.Plan };
                         foreach (var note in contract.Notes)
                             yield return scope.Ev(EventKind.ContextAssembled, note);
@@ -1591,11 +1596,23 @@ public sealed partial class Orchestrator : IOrchestrator
                 unverifiedSteps = stepOutcomes.Where(p => p.Value == StepOutcomeKind.DoneUnverified).Select(p => p.Key).ToArray();
             }
             // What the steps it depends on handed on, as values (Phase 2) - not a retelling of them.
-            // As the step declared it (Plan Phase 1.4): a step it only waits for ("after") is an order, not data, and hands
-            // on nothing; of a step it consumes from, only what it consumes. Without a declaration, as before.
-            var handedOn = step.DependsOn.Where(d => step.OrderOnly?.Contains(d) != true)
-                .Select(d => session.Outputs.TryGetValue(d, out var o) ? o : null).OfType<StepOutput>().ToArray();
-            var handedMessage = handedOn.Length > 0 ? ChatMessage.User(StepOutputContract.ForDependents(handedOn, step.Consumes)) : null;
+            // As the step declared it (Plan Phase 1.4), when the run holds steps to their declarations - step outputs and
+            // typed criteria both on, the switches of this run (a resume has them too). The planner is asked for
+            // consumes/after whenever step outputs are on, but only with typed criteria are they checked; unchecked, a
+            // typo'd consume would starve the step of the values it needs. A step it only waits for ("after") is an
+            // order, not data, and hands on nothing; of a step it consumes a list from, the lists it does not consume
+            // are withheld (StepOutputContract.ForDependents). Its forEach is a consume too, so its own list is never
+            // withheld from it or its items. Without a declaration, as before.
+            var declared = _options.StepOutputs && _options.TypedCriteria;
+            var stepsNow = scheduler.Steps;
+            var eachOf = step.ForEach ?? (step.ExpandedFrom is { } from ? stepsNow.FirstOrDefault(s => s.Id == from)?.ForEach : null);
+            IReadOnlyList<ConsumeSpec>? consumed = declared && step.Consumes is { Count: > 0 } own
+                ? [.. own, .. eachOf is { } each ? [new ConsumeSpec(each.Step, each.Field)] : Array.Empty<ConsumeSpec>()]
+                : null;
+            var handedOn = step.DependsOn.Where(d => !declared || step.OrderOnly?.Contains(d) != true)
+                .Select(d => (Handed: session.Outputs.TryGetValue(d, out var o) ? o : null, Schema: stepsNow.FirstOrDefault(s => s.Id == d)?.Output))
+                .Where(h => h.Handed is not null).Select(h => (h.Handed!, h.Schema)).ToArray();
+            var handedMessage = handedOn.Length > 0 ? ChatMessage.User(StepOutputContract.ForDependents(handedOn, consumed)) : null;
             if (handedMessage is not null)
                 convo.Add(handedMessage);
             // What each item came to, for a step after a join: done, or not and why - so a report is
@@ -2491,20 +2508,38 @@ public sealed partial class Orchestrator : IOrchestrator
     }
 
     /// <summary>What a plan's steps do with the lists they depend on, and what they owe for it - see <see cref="CoverageContract"/>.</summary>
+    /// <param name="Unrunnable">Why the dependencies the classifier would add make the plan unable to run; null when they do not.</param>
     private sealed record PlanCoverage(Plan Plan, IReadOnlyList<string> Notes, IReadOnlyList<string> Defects,
-        IReadOnlyList<UpstreamCoverage.Derived> Derived);
+        IReadOnlyList<UpstreamCoverage.Derived> Derived, string? Unrunnable = null);
 
     /// <summary>
-    /// A plan's coverage contract (Plan Phase 1.1-1.2): each covers_all the planner wrote and the engine accepts, read
-    /// as the consume it states; every list dependency classified (PlanConsumes); and the coverage each consume owes
-    /// (UpstreamCoverage). A defect is either one the classifier found or a consume no criterion can be derived for.
+    /// A plan's coverage contract (Plan Phase 1.1-1.2): each covers_all the planner wrote and the engine accepts, or the
+    /// run was given (a template's, a person's), read as the consume it states; every list dependency classified
+    /// (PlanConsumes); and the coverage each consume owes (UpstreamCoverage). A defect is either one the classifier found
+    /// or a consume no criterion can be derived for.
     /// </summary>
     private PlanCoverage CoverageContract(PlanResult plan)
     {
         var written = TypedCriteria.Validate(
             plan.PlannedCriteria.Where(c => c.Kind.Trim().Equals("covers_all", StringComparison.OrdinalIgnoreCase)).ToArray(),
             _workspace.RootPath, _ecosystems, plan.Plan).Accepted;
-        var classified = PlanConsumes.Classify(UpstreamCoverage.WithPlannedCoverage(plan.Plan!, written));
+        // The run's own coverage criteria say the same about the plan as the planner's: a dependency they cover is not
+        // unsaid. Only one the engine can check against this plan; any other declares nothing.
+        var given = _successCriteria.Where(c => c.Typed is { Kind: TypedCriterionKind.EvidenceCoversAll } t
+                                                && EvidenceCoverage.Invalid(t, plan.Plan) is null);
+        var folded = UpstreamCoverage.WithPlannedCoverage(plan.Plan!, [.. written, .. given]);
+        var classified = PlanConsumes.Classify(folded);
+
+        // A dependency the classifier adds for a consume can close a cycle (the source already waits for the consumer).
+        // The plan with it cannot run, and would be stopped as structurally invalid - for a coverage gap, which never
+        // stops a run. So it is not taken: the plan stays as it was, and the consume it could not honour is a defect.
+        if (!ReferenceEquals(classified.Plan, folded) && PlanValidation.Error(classified.Plan) is { } closes)
+        {
+            var asWas = UpstreamCoverage.Derive(folded);
+            var unrunnable = "the dependencies the plan's consumes need would make it unable to run (" + closes.TrimEnd('.') + "): "
+                             + string.Join("; ", classified.Notes);
+            return new(folded, [], [.. classified.Defects, unrunnable, .. asWas.Defects], asWas.Criteria, unrunnable);
+        }
         var derived = UpstreamCoverage.Derive(classified.Plan);
         return new(classified.Plan, classified.Notes, [.. classified.Defects, .. derived.Defects], derived.Criteria);
     }

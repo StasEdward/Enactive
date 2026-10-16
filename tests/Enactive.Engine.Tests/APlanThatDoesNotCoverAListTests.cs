@@ -164,6 +164,59 @@ public sealed class APlanThatDoesNotCoverAListTests
         Assert.Contains(events, e => e.Summary.Contains("No steps were started", StringComparison.Ordinal));
     }
 
+    // Step 1 already waits for step 2, and step 2 consumes step 1's pages: the dependency the consume needs closes a cycle.
+    private const string ClosingACycle = """
+        {"disposition":"task","title":"summarise the wiki",
+         "steps":[{"title":"find pages","dependsOn":[1],"output":{"pages":{"type":"path[]","description":"the pages"}}},
+                  {"title":"summarise pages","dependsOn":[],"consumes":[{"step":0,"field":"pages"}]}]}
+        """;
+
+    /// <summary>
+    /// A coverage gap never stops a run. The dependency a consume needs is not added when it would make the plan unable
+    /// to run: the plan runs as it was, and the consume it cannot honour is an obligation.
+    /// </summary>
+    [Fact]
+    public async Task A_consume_whose_dependency_would_close_a_cycle_is_an_obligation_not_a_stop()
+    {
+        using var fx = Wiki();
+        fx.Decisions.Answer = "go_on";
+        var worker = new FakeChatProvider([Turn.Says(ClosingACycle), Turn.Says(ClosingACycle), Turn.Says("Summarised."), .. Find()]);
+
+        var events = await fx.RunAsync(fx.Build(worker), "summarise the wiki");
+
+        Assert.Single(worker.Requests, r => Asked(r, "unable to run"));
+        Assert.DoesNotContain(events, e => e.Summary.Contains("No steps were started", StringComparison.Ordinal));
+        Assert.Equal(2, events.Count(e => e.Kind == EventKind.StepCompleted));
+        Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
+        Assert.Contains("would make it unable to run", Reason(events), StringComparison.Ordinal);
+    }
+
+    /// <summary>A coverage criterion the run was given says what the step does with the list, as a planner's would.</summary>
+    [Fact]
+    public async Task A_dependency_a_given_coverage_criterion_covers_is_not_sent_back()
+    {
+        using var fx = Wiki();
+        const string reviewing = """
+            {"disposition":"task","title":"summarise the wiki",
+             "steps":[{"title":"find pages","dependsOn":[],"output":{"pages":{"type":"path[]","description":"the pages"}}},
+                      {"title":"summarise pages","dependsOn":[0],"output":{"notes":{"type":"results","description":"a note per page"}}}]}
+            """;
+        var given = new Enactive.Core.Templates.SuccessCriterionDefinition("Every page is summarised", "covers_all")
+        {
+            Typed = new Enactive.Core.Templates.TypedCriterion(Enactive.Core.Templates.TypedCriterionKind.EvidenceCoversAll,
+                SourceStep: 0, SourceField: "pages", ResultsStep: 1, ResultsField: "notes", Evidence: EvidenceKind.Call)
+        };
+        var worker = new FakeChatProvider([Turn.Says(reviewing), .. Find(), .. Summarise(read: 2, of: 2)]);
+
+        var events = await fx.RunAsync(fx.Build(worker, successCriteria: [given]), "summarise the wiki");
+
+        Assert.DoesNotContain(worker.Requests, r => Asked(r, "account for the lists"));
+        Assert.Empty(CoverageQuestions(fx.Decisions));
+        // Already checked by the criterion the run was given: not derived again beside it.
+        Assert.DoesNotContain(events, e => e.Summary.Contains("is covered by step", StringComparison.Ordinal));
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
     // ── the replan says it ──────────────────────────────────────────────────────────────
 
     private static Turn[] Summarise(int read, int of)

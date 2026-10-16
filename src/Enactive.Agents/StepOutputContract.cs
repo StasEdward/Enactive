@@ -433,30 +433,41 @@ internal static class StepOutputContract
         return kept;
     }
 
+    /// <summary>What the steps after this one are shown: the accepted values, as data.</summary>
+    internal static string ForDependents(IEnumerable<StepOutput> outputs)
+        => ForDependents(outputs.Select(o => (o, (StepOutputSchema?)null)), null);
+
     /// <summary>
-    /// What the steps after this one are shown: the accepted values, as data. A step that declares what it consumes
-    /// (<paramref name="consumes"/>) is shown only those fields of each step it consumes from, and one line naming each
-    /// field left out, without its value - so it knows the field exists and cannot take an undeclared one as its input
-    /// (Plan Phase 1.4); a step it consumes nothing of is shown as before. Without a declaration, everything, as before.
+    /// The same, for a step that declared what it consumes (Plan Phase 1.4): of a step it consumes a list from, the
+    /// LISTS it does not consume are withheld - named, one line each, without their values - and everything else that
+    /// step handed on (text, numbers, results, the lists it consumes) is shown as before. A consume says which lists the
+    /// step owes coverage for; it is not a reason to starve it of the step's other values, which it could not declare
+    /// anyway - a consume can only name a list. Only a consume of a list the source declares counts: a consume naming
+    /// a field that is not one (a typo, a text field) would otherwise withhold every list, so that source is shown
+    /// whole. A step it consumes nothing of, and every step when <paramref name="consumes"/> is null, as before.
     /// </summary>
-    internal static string ForDependents(IEnumerable<StepOutput> outputs, IReadOnlyList<ConsumeSpec>? consumes = null)
+    internal static string ForDependents(IEnumerable<(StepOutput Output, StepOutputSchema? Schema)> handed,
+        IReadOnlyList<ConsumeSpec>? consumes)
         => "Results handed on by the steps this one depends on - values checked by the engine; use them, "
            + "not a retelling of them:\n"
-           + string.Join("\n", outputs.Select(o => Consumed(o, consumes)));
+           + string.Join("\n", handed.Select(h => Consumed(h.Output, h.Schema, consumes)));
 
-    private static string Consumed(StepOutput output, IReadOnlyList<ConsumeSpec>? consumes)
+    private static string Consumed(StepOutput output, StepOutputSchema? schema, IReadOnlyList<ConsumeSpec>? consumes)
     {
         var line = $"- step {output.StepNo} \"{output.Step}\": ";
+        var lists = schema?.Fields.Where(f => f.Type is StepOutputFieldType.PathList or StepOutputFieldType.StringList)
+            .Select(f => f.Name).ToHashSet(StringComparer.Ordinal) ?? [];
         // A consume names its source by plan position, from 0; an output carries it from 1.
-        var fields = consumes?.Where(c => c.Step == output.StepNo - 1).Select(c => c.Field).ToHashSet(StringComparer.Ordinal);
-        if (fields is not { Count: > 0 } || JsonNode.Parse(output.ValuesJson) is not JsonObject values)
+        var consumed = consumes?.Where(c => c.Step == output.StepNo - 1 && lists.Contains(c.Field)).Select(c => c.Field)
+            .ToHashSet(StringComparer.Ordinal) ?? [];
+        if (consumed.Count == 0 || JsonNode.Parse(output.ValuesJson) is not JsonObject values)
             return line + output.ValuesJson;
         var kept = new JsonObject();
-        var left = new List<string>();
+        var withheld = new List<string>();
         foreach (var (name, value) in values)
-            if (fields.Contains(name)) kept[name] = value?.DeepClone();
-            else left.Add(name);
+            if (lists.Contains(name) && !consumed.Contains(name)) withheld.Add(name);
+            else kept[name] = value?.DeepClone();
         return line + kept.ToJsonString()
-               + string.Concat(left.Select(name => $"\n  - '{name}' is handed on too; this step does not consume it, so its value is not shown."));
+               + string.Concat(withheld.Select(name => $"\n  - '{name}' is handed on too; this step does not consume that list, so its items are not shown."));
     }
 }

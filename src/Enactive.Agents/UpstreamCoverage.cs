@@ -86,7 +86,8 @@ public static class UpstreamCoverage
 
     /// <summary>
     /// The derived criteria that add something to <paramref name="existing"/>. One is redundant beside a covers_all
-    /// over the same list and the same consuming step that asks for the same evidence - or for any evidence when the
+    /// over the same list and the same consuming step's same results field that asks for the same evidence - a check of
+    /// another field of the step's results is not this one - or for any evidence when the
     /// derived one asks only "mentioned", which every kind the engine records implies (EvidenceCoverage.Gather counts a
     /// read or a command as a mention). Never the other way: an explicit "mentioned" does not stand in for a declared
     /// read, and a filtering step owes more than any written criterion states.
@@ -97,7 +98,8 @@ public static class UpstreamCoverage
         var written = existing.Select(e => e.Typed).OfType<TypedCriterion>().Where(t => t.Kind == TypedCriterionKind.EvidenceCoversAll).ToArray();
         return derived
             .Where(d => d.Consume.Subset || !written.Any(t => t.SourceStep == d.Consume.Step && t.SourceField == d.Consume.Field
-                && t.ResultsStep == d.Consumer && (t.Evidence == d.Consume.Evidence || d.Consume.Evidence == EvidenceKind.Call)))
+                && t.ResultsStep == d.Consumer && t.ResultsField == d.Criterion.Typed!.ResultsField
+                && (t.Evidence == d.Consume.Evidence || d.Consume.Evidence == EvidenceKind.Call)))
             .DistinctBy(d => (d.Criterion.Typed, d.Consume.Subset))
             .Select(d => d.Criterion).ToArray();
     }
