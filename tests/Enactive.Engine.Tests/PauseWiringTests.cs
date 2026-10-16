@@ -86,6 +86,16 @@ public sealed class PauseWiringTests
         Assert.Matches(@"pauseOffer\.Ended\(\);\s+keysDone\.Cancel\(\);\s+await keys;", program);
     }
 
+    /// <summary>"--resume" says what the run it carries on came to - paused or stopped - by the line tested in ConsolePauseKeyTests.</summary>
+    [Fact]
+    public void The_console_says_whether_the_run_it_resumes_was_paused()
+    {
+        var program = ConsoleSource();
+
+        Assert.Contains("Console.WriteLine(ConsolePauseKey.Resuming(resumeFrom));", program, StringComparison.Ordinal);
+        Assert.DoesNotContain("Resuming a run stopped on", program, StringComparison.Ordinal);
+    }
+
     /// <summary>P is read beside the run, never while the permission prompt reads its answer, and the banner names it.</summary>
     [Fact]
     public void The_console_reads_P_beside_the_run_and_leaves_the_prompt_its_keys()

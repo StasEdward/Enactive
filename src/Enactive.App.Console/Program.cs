@@ -462,9 +462,7 @@ if (args.Contains("--resume", StringComparer.OrdinalIgnoreCase))
     }
 
     command = resumeFrom.Request;
-    Console.WriteLine(
-        $"Resuming a run stopped on {resumeFrom.At.ToLocalTime():yyyy-MM-dd HH:mm}: "
-        + $"{resumeFrom.Finished} of {resumeFrom.Steps.Count} step(s) were done.");
+    Console.WriteLine(ConsolePauseKey.Resuming(resumeFrom));
 }
 
 // ── Run ──────────────────────────────────────────────────────────────────────

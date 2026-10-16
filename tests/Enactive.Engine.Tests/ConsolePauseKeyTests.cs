@@ -4,6 +4,7 @@ using Enactive.Application;
 using Enactive.Application.Projections;
 using Enactive.Core.Events;
 using Enactive.Core.Execution;
+using Enactive.Core.History;
 using Xunit;
 
 /// <summary>
@@ -71,4 +72,23 @@ public sealed class ConsolePauseKeyTests
     public void The_banner_names_the_key_and_Stop()
         => Assert.Equal("P pauses the run after the steps running now (then --resume carries it on); Ctrl+C stops it at once",
             ConsolePauseKey.Banner);
+
+    /// <summary>
+    /// What "--resume" says of the run it carries on: one paused at a step boundary was paused, not stopped - "stopped"
+    /// reads as something that went wrong, for a run somebody paused on purpose.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "paused")]
+    [InlineData(false, "stopped")]
+    public void Resuming_says_paused_for_a_paused_run_and_stopped_for_one_that_stopped(bool paused, string word)
+    {
+        var checkpoint = new RunCheckpoint(Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.Now,
+            new DateTimeOffset(2026, 10, 16, 9, 30, 0, TimeSpan.Zero), "count the books", "books", null, null,
+            [Step("Count the invoices", "Done"), Step("Write the summary", "Pending")], [], [], [], 1, 0) { Paused = paused };
+
+        Assert.Equal($"Resuming a run {word} on {checkpoint.At.ToLocalTime():yyyy-MM-dd HH:mm}: 1 of 2 step(s) were done.",
+            ConsolePauseKey.Resuming(checkpoint));
+    }
+
+    private static CheckpointStep Step(string title, string status) => new(Guid.NewGuid(), title, [], "Normal", status);
 }

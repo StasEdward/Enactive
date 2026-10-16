@@ -30,4 +30,12 @@ internal static class ConsolePauseKey
             ? "  >> The pause is already asked for: the steps running now finish first."
             : "  >> Pausing after the steps running now… Ctrl+C still stops the run at once.";
     }
+
+    /// <summary>
+    /// What "--resume" prints of the run it carries on. A run paused at a step boundary is said to be paused: "stopped"
+    /// read as something that went wrong, for a run somebody paused on purpose with P.
+    /// </summary>
+    public static string Resuming(Enactive.Core.History.RunCheckpoint checkpoint)
+        => $"Resuming a run {(checkpoint.Paused ? "paused" : "stopped")} on {checkpoint.At.ToLocalTime():yyyy-MM-dd HH:mm}: "
+           + $"{checkpoint.Finished} of {checkpoint.Steps.Count} step(s) were done.";
 }
