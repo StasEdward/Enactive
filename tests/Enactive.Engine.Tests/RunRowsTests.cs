@@ -95,6 +95,22 @@ public sealed class RunRowsTests
     }
 
     /// <summary>
+    /// A paused run can hold a blocked step, which a resume does again: the row's hint says so, as the "Resume?" warning does
+    /// (RunRecovery) - it said nothing was done again while the warning said a step was.
+    /// </summary>
+    [Fact]
+    public void A_paused_run_with_a_blocked_step_says_that_step_is_done_again_as_the_resume_warning_does()
+    {
+        var paused = Unfinished(paused: true);
+        var withBlocked = paused with { Steps = [paused.Steps[0], paused.Steps[1] with { Status = "Blocked" }, paused.Steps[2]] };
+
+        Assert.StartsWith("paused ", RunRows.Meta(withBlocked));
+        Assert.Contains("a blocked step is done again from its beginning", RunRows.Tooltip(withBlocked));
+        Assert.DoesNotContain("no step it finished is done again", RunRows.Tooltip(withBlocked));
+        Assert.Contains("runs again from its start", Enactive.Application.RunRecovery.Warning(withBlocked));
+    }
+
+    /// <summary>
     /// Forgetting a workspace asks first, in words that say what is lost and what is not - the window's, which the service's
     /// switcher asks too.
     /// </summary>

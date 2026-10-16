@@ -47,15 +47,18 @@ internal static class RunRows
            + $"{checkpoint.Finished} of {checkpoint.Steps.Count} steps done";
 
     /// <summary>
-    /// What Resume does. A paused run ended between steps, so nothing it finished is done again - the warning a stopped
-    /// run carries would warn a person off a resume that redoes nothing (RunRecovery says the same before a resume).
+    /// What Resume does. A paused run ended between steps, so a resume redoes nothing - the warning a stopped run carries
+    /// would warn a person off it. Unless it holds a blocked step, which a resume does again. Decided by the test the
+    /// "Resume?" warning uses (RunRecovery.RedoesNothing), so the row's hint and the warning never disagree.
     /// </summary>
     public static string Tooltip(RunCheckpoint checkpoint)
         => $"{checkpoint.Request}\n\nResume runs the {checkpoint.Remaining} step(s) that are left, "
            + "under the permissions this run started with. "
-           + (checkpoint.Paused
+           + (RunRecovery.RedoesNothing(checkpoint)
                ? "It was paused between steps, so no step it finished is done again."
-               : "A step that was in progress when it stopped is done again from its beginning.");
+               : checkpoint.Paused
+                   ? "It was paused between steps, but a blocked step is done again from its beginning."
+                   : "A step that was in progress when it stopped is done again from its beginning.");
 
     /// <summary>The resume button is an icon beside the delete one, as on every other row - so what it does is said on it.</summary>
     public static string ResumeTip(RunCheckpoint checkpoint) => $"Resume: run the {checkpoint.Remaining} step(s) that are left";
