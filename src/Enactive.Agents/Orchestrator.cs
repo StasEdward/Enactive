@@ -1734,10 +1734,16 @@ public sealed partial class Orchestrator : IOrchestrator
                 _ => "FAILED"
             };
 
-            var skippedSteps = scheduler.MarkFailed(step.Id);
+            // Reported BEFORE MarkFailed, for the COMPLETION EVENT race described above the success path:
+            // a failure releases too. A join waits for its items to END, not to succeed (DagScheduler.
+            // DependenciesSatisfied), so this step's MarkFailed can be what lets the join start - and with
+            // MarkFailed first, the join's StepStarted reached the channel ahead of this StepCompleted
+            // (ParallelStepTests: a failing item is reported before the join its failure releases starts).
+            // The skipped steps are MarkFailed's cascade, so they still follow this step's own event.
             await EmitStepDone(
                 $"[{stepNumber}/{total}] {step.Title} — {label}{(string.IsNullOrWhiteSpace(outcomeReason) ? "" : ": " + outcomeReason)}",
                 stepNumber, outcome, outcomeReason);
+            var skippedSteps = scheduler.MarkFailed(step.Id);
 
             foreach (var sk in skippedSteps)
             {
