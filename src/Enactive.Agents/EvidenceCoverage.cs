@@ -56,6 +56,13 @@ public static class EvidenceCoverage
     internal const string OwnItems = "*";
 
     /// <summary>
+    /// The results field a step that filters (a subset consume) names what it left out in, each item with the reason. One
+    /// name, fixed, so the engine can tell a step's processed results from its exclusions without the plan saying which is
+    /// which.
+    /// </summary>
+    internal const string ExcludedField = "excluded";
+
+    /// <summary>
     /// For every item of every results field in a submission, what the step had shown for it: recorded
     /// when the result is handed on, from the step's own reads, calls and recorded changes.
     /// </summary>
@@ -106,7 +113,9 @@ public static class EvidenceCoverage
     /// <summary>The items of a submission handed on without any complete evidence - said back to the step, so it can still read them.</summary>
     internal static string? Unbacked(IReadOnlyList<ItemEvidence> items)
     {
-        var bare = items.Where(i => i.Complete.Count == 0).ToArray();
+        // An item left out needs a reason, not evidence: told it had nothing behind it, a filtering step was asked to read
+        // the very pages it had decided to leave out.
+        var bare = items.Where(i => i.Complete.Count == 0 && i.Field != ExcludedField).ToArray();
         if (bare.Length == 0) return null;
         return $"Not backed by anything this step did, so not counted as covered: "
                + string.Join("; ", bare.Take(8).Select(i => i.Gap is { } gap ? $"{i.Item} ({gap})" : i.Item))
@@ -176,6 +185,12 @@ public static class EvidenceCoverage
         var perItem = plan.Steps[results].ForEach is { } each && each.Step == source && each.Field == typed.SourceField;
         if (map is null || (map.Type != StepOutputFieldType.Results && !perItem))
             return $"step {results} declares no results output '{typed.ResultsField}'";
+        // A step that filters says what it left out, and why, in a field of its own (the controller's ruling): without it a
+        // left-out item and a forgotten one look the same, and a reason could be read out of nowhere.
+        if (typed.Subset && typed.ResultsField == ExcludedField)
+            return $"its results '{ExcludedField}' are where step {results} says what it leaves out, not what it processed";
+        if (typed.Subset && plan.Steps[results].Output?.Fields.FirstOrDefault(f => f.Name == ExcludedField)?.Type != StepOutputFieldType.Results)
+            return $"step {results} filters the list (subset) but declares no results output '{ExcludedField}' giving the reason for each item it leaves out";
         if (perItem) return null;
 
         // The results step must be able to see the items: it depends on the source, directly or not.
@@ -190,7 +205,7 @@ public static class EvidenceCoverage
 
     internal static string Describe(TypedCriterion typed)
         => $"covers_all step {typed.SourceStep}.{typed.SourceField} -> step {typed.ResultsStep}.{typed.ResultsField} "
-           + $"({NameOf(typed.Evidence ?? EvidenceKind.Call)})";
+           + $"({NameOf(typed.Evidence ?? EvidenceKind.Call)})" + (typed.Subset ? $", the rest left out in '{ExcludedField}' with reasons" : "");
 
     /// <summary>
     /// Decides the criterion from the run's step outputs. A step's number in <paramref name="outputs"/> is its
@@ -203,8 +218,18 @@ public static class EvidenceCoverage
         CriterionResult Result(CriterionOutcome outcome, string? detail)
             => new(criterion.Name, criterion.Command, criterion.Required, outcome, null, detail, criterion.Origin, criterion.AlreadyPassing);
 
-        if (Account(typed, outputs) is not { } items)
+        var all = outputs.ToArray();
+        if (Account(typed, all) is not { } items)
             return Result(CriterionOutcome.Failed, $"step {typed.SourceStep + 1} handed on no list '{typed.SourceField}', so there is nothing to show covered.");
+        if (typed.Subset)
+        {
+            // A step that filters: the partition, with the gate's words (StepCoverageGate.Checked) - the two cannot disagree.
+            var foreign = Foreign(typed, all);
+            var problems = PartitionProblems(typed, items, foreign, max: 12);
+            return problems.Count == 0
+                ? Result(CriterionOutcome.Passed, PartitionPassed(typed, items))
+                : Result(CriterionOutcome.Failed, $"covered {items.Count(i => i.Covered)} of {items.Count}; " + string.Join("; ", problems) + ".");
+        }
         if (items.Count == 0)
             return Result(CriterionOutcome.Passed, $"step {typed.SourceStep + 1} named no items.");
 
@@ -236,12 +261,83 @@ public static class EvidenceCoverage
     internal sealed record ItemAccount(string Item, EvidenceKind Required, bool HasResult, IReadOnlyList<EvidenceKind> Found,
         string? Gap, string? Result)
     {
-        public bool Covered => HasResult && Found.Contains(Required);
+        /// <summary>The criterion is a step that filters: the item may be left out with a reason instead of processed.</summary>
+        public bool Subset { get; init; }
+
+        /// <summary>
+        /// Under a subset criterion, the reason the item was left out (its entry in <see cref="ExcludedField"/>), or null
+        /// when it was not left out. Empty when it was left out with no reason - which leaves it not covered.
+        /// </summary>
+        public string? Excluded { get; init; }
+
+        public bool Excluding => Excluded is not null;
+
+        /// <summary>A result backed as required - or, for a step that filters, left out with a reason and nothing else.</summary>
+        public bool Covered => !Subset ? HasResult && Found.Contains(Required)
+            : HasResult ? !Excluding && Found.Contains(Required)
+            : Excluding && !string.IsNullOrWhiteSpace(Excluded);
+
+        /// <summary>Left out with a reason, and not processed as well: an exclusion a reviewer is asked to permit.</summary>
+        public bool ExcludedWithReason => Subset && !HasResult && Excluding && !string.IsNullOrWhiteSpace(Excluded);
 
         /// <summary>Why it is not covered, as the criterion's detail says it.</summary>
-        public string Why => !HasResult ? "no result"
+        public string Why => Subset && HasResult && Excluding ? "both processed and excluded"
+            : Subset && !HasResult && !Excluding ? "neither processed nor excluded"
+            : Subset && !HasResult ? "excluded without a reason"
+            : !HasResult ? "no result"
             : Required == EvidenceKind.FileRead && Gap is { } gap ? gap
             : $"no {NameOf(Required)} evidence";
+    }
+
+    /// <summary>
+    /// What is wrong with a filtering step's partition of the list, each fault said apart and in this order: items both
+    /// processed and excluded; items in neither field that are not on the list at all; items of the list in neither; items
+    /// left out with no reason; items processed without the evidence required. Empty when the partition holds. Each
+    /// names at most <paramref name="max"/> items and counts the rest.
+    /// </summary>
+    internal static IReadOnlyList<string> PartitionProblems(TypedCriterion typed, IReadOnlyList<ItemAccount> items,
+        IReadOnlyList<string> foreign, int max)
+    {
+        var problems = new List<string>();
+        void Add(string what, IEnumerable<string> which)
+        {
+            var named = which.ToArray();
+            if (named.Length > 0)
+                problems.Add($"{what}: " + string.Join(", ", named.Take(max)) + (named.Length > max ? $" and {named.Length - max} more" : ""));
+        }
+        var kind = typed.Evidence ?? EvidenceKind.Call;
+        Add($"both processed ('{typed.ResultsField}') and excluded", items.Where(i => i.HasResult && i.Excluding).Select(i => i.Item));
+        Add($"not in step {typed.SourceStep + 1}'s list '{typed.SourceField}'", foreign);
+        Add("neither processed nor excluded", items.Where(i => !i.HasResult && !i.Excluding).Select(i => i.Item));
+        Add("excluded without a reason", items.Where(i => !i.HasResult && i.Excluding && !i.Covered).Select(i => i.Item));
+        Add($"processed without {NameOf(kind)} evidence", items.Where(i => i.HasResult && !i.Excluding && !i.Covered)
+            .Select(i => kind == EvidenceKind.FileRead && i.Gap is { } gap ? $"{i.Item} ({gap})" : i.Item));
+        return problems;
+    }
+
+    /// <summary>What a filtering step's partition that holds says: how many were processed, on what, and how many left out.</summary>
+    internal static string PartitionPassed(TypedCriterion typed, IReadOnlyList<ItemAccount> items)
+    {
+        var left = items.Count(i => i.ExcludedWithReason);
+        return $"covered {items.Count(i => i.Covered)} of {items.Count}: {items.Count - left} processed - "
+               + $"{AccountedFor(typed.Evidence ?? EvidenceKind.Call)} - and {left} left out, each with a reason.";
+    }
+
+    /// <summary>
+    /// The items a filtering step processed or left out that are not on the list it consumes: something it was not given
+    /// cannot stand for an item it was. Empty for a criterion that is not a subset - there a stray result was never read.
+    /// </summary>
+    internal static IReadOnlyList<string> Foreign(TypedCriterion typed, IEnumerable<StepOutput> outputs)
+    {
+        if (!typed.Subset) return [];
+        var all = outputs.ToArray();
+        var list = all.FirstOrDefault(o => o.StepNo == typed.SourceStep + 1)?.Value(typed.SourceField!) is { ValueKind: JsonValueKind.Array } l
+            ? l.EnumerateArray().Where(i => i.ValueKind == JsonValueKind.String).Select(i => i.GetString()!).ToArray() : [];
+        var holder = all.FirstOrDefault(o => o.StepNo == typed.ResultsStep + 1);
+        return new[] { typed.ResultsField!, ExcludedField }
+            .SelectMany(field => holder?.Value(field) is { ValueKind: JsonValueKind.Object } map ? map.EnumerateObject().Select(p => p.Name) : [])
+            .Where(key => !list.Any(item => Same(item, key)))
+            .DistinctBy(Normal, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     /// <summary>
@@ -267,11 +363,27 @@ public static class EvidenceCoverage
             ? named.EnumerateObject().Select(p => (p.Name, Text: (string?)(p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() : p.Value.GetRawText()))).ToArray()
             : evidence.Where(e => e.Field == OwnItems).Select(e => (Name: e.Item, Text: (string?)null)).ToArray();
 
+        // A step that filters names what it left out, and why, in a field of its own: an item there needs a reason and no
+        // evidence. A reason that is not text is read as written; an empty one, or none, is no reason.
+        var excluded = typed.Subset && holder?.Value(ExcludedField) is { ValueKind: JsonValueKind.Object } left
+            ? left.EnumerateObject().Select(p => (p.Name, Reason: p.Value.ValueKind switch
+            {
+                JsonValueKind.String => p.Value.GetString() ?? "",
+                JsonValueKind.Null => "",
+                _ => p.Value.GetRawText()
+            })).ToArray()
+            : [];
+
         return items.Select(item =>
         {
             var result = results.FirstOrDefault(r => Same(r.Name, item));
             var backed = evidence.FirstOrDefault(e => Same(e.Item, item));
-            return new ItemAccount(item, kind, result.Name is not null, backed?.Complete ?? [], backed?.Gap, result.Text);
+            var reason = excluded.FirstOrDefault(x => Same(x.Name, item));
+            return new ItemAccount(item, kind, result.Name is not null, backed?.Complete ?? [], backed?.Gap, result.Text)
+            {
+                Subset = typed.Subset,
+                Excluded = reason.Name is null ? null : reason.Reason.Trim()
+            };
         }).ToArray();
     }
 }

@@ -53,13 +53,22 @@ public sealed partial class Orchestrator
             // approve them, and the step is done but not confirmed - never Succeeded on a count a single call can make.
             // With review on the verdict decides as for any step: a pass stands, a fail is a fail, and a missing verdict
             // is already DoneUnverified (ReviewVerdict.Missing).
-            if (!models.ReviewOn && coverage.OnlyMentioned is { Count: > 0 } mentioned)
+            //
+            // Items a step that filters left out, each with a reason (StepCoverageGate.Outcome.Exclusions): the engine
+            // checked the partition, and only a reviewer can say the request permits each omission. With no review there is
+            // no verdict to permit them, and the step is done but not confirmed - a reason alone never authorises leaving
+            // an item out. With review on, the reviewer is asked (ReviewerBlock) and its verdict decides; a missing one
+            // says so below (RunAttemptsAsync).
+            var onlyMentioned = models.ReviewOn ? null : coverage.OnlyMentioned is { Count: > 0 } mentioned
+                ? $"{mentioned.Count} item(s) were only mentioned - named in a call that succeeded, and not read, written or run: "
+                  + string.Join(", ", mentioned.Take(5)) + (mentioned.Count > 5 ? $" and {mentioned.Count - 5} more" : "")
+                  + ". That shows neither a read nor the work on them, and no review confirmed it."
+                : null;
+            var unapproved = models.ReviewOn ? null : coverage.Unapproved();
+            if (unapproved is not null || onlyMentioned is not null)
             {
-                result.Set(StepOutcomeKind.DoneUnverified,
-                    $"{mentioned.Count} item(s) were only mentioned - named in a call that succeeded, and not read, written or run: "
-                    + string.Join(", ", mentioned.Take(5)) + (mentioned.Count > 5 ? $" and {mentioned.Count - 5} more" : "")
-                    + ". That shows neither a read nor the work on them, and no review confirmed it.",
-                    OutcomeCause.CoverageMentionedOnly);
+                result.Set(StepOutcomeKind.DoneUnverified, string.Join(" ", new[] { unapproved, onlyMentioned }.OfType<string>()),
+                    unapproved is not null ? OutcomeCause.CoverageExclusionsUnapproved : OutcomeCause.CoverageMentionedOnly);
                 return null;
             }
         }
@@ -67,13 +76,13 @@ public sealed partial class Orchestrator
         // The step's own word that it cannot go on, with nothing the engine found behind it, is reviewed as a finished step
         // is (SaidBlockedOnly): whether its own part is done is the review's to say, not the report's.
         if (!models.ReviewOn || !(result.Succeeded || SaidBlockedOnly(result))) return null;
-        return await ReviewAttemptAsync(title, step.Messages, step.Journal, step.EvidenceStart,
+        return (await ReviewAttemptAsync(title, step.Messages, step.Journal, step.EvidenceStart,
             step.StepStart, step.Store, scope, models, stepNumber, changes, before, request,
             publish, ct, planSteps, stepNumber is { } number && session.Obligations?.AtStep(number) is { } at
                 ? at with { ScopeNote = session.ScopeNotes.GetValueOrDefault(number) } : null,
             step.OutputSlot.Values is { } handed ? CitedPlaces.TextOf(handed) : null, step.Criteria, step.OutputSlot.Values,
             session.Builds, step.Reads, context.Restrictions, result.KeptBack,
-            saidBlocked: SaidBlockedOnly(result) ? result.Reason : null, coverage: coverage);
+            saidBlocked: SaidBlockedOnly(result) ? result.Reason : null, coverage: coverage)) with { Coverage = coverage };
     }
 
     /// <summary>
@@ -208,9 +217,11 @@ public sealed partial class Orchestrator
             }
             // No verdict to act on - the reviewer could not tell, no answer could be used, the budget was spent: the work
             // is done and only unconfirmed (ReviewVerdict.Missing says what that makes of the step, and why).
+            // Items left out with a reason and no verdict to permit them: the reason the step is unconfirmed names them too.
             if (verdict.Missing is { } missing)
             {
-                result.Set(missing.Kind, verdict.Notes, missing.Cause);
+                result.Set(missing.Kind, assessed.Coverage?.Unapproved() is { } unapproved ? verdict.Notes + " " + unapproved : verdict.Notes,
+                    missing.Cause);
                 await publish(scope.Ev(EventKind.ErrorObserved, prefix + verdict.Notes, stepNumber));
                 return;
             }

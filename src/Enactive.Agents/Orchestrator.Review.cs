@@ -39,7 +39,9 @@ public sealed partial class Orchestrator
 
     /// <param name="ByGate">The verdict is the engine's coverage check's (StepCoverageGate), not a reviewer's: it is
     /// retried on the gate's own budget.</param>
-    private sealed record AttemptReview(ReviewResult Review, bool ByGate = false);
+    /// <param name="Coverage">What the gate found for the attempt the review judged, when it passed - its exclusions are
+    /// named if no verdict comes back to permit them.</param>
+    private sealed record AttemptReview(ReviewResult Review, bool ByGate = false, StepCoverageGate.Outcome? Coverage = null);
 
     /// <summary>
     /// Shared review/proof phase of an attempt. Callers own retries, rollback, checkpoints and

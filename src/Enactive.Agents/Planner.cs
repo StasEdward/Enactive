@@ -366,7 +366,8 @@ public sealed class Planner
                             specs.Add(new PlanStepSpec(stepTitle!, deps, ParseComplexity(el), declared)
                             {
                                 ObligationIds = obligationIds,
-                                Output = el.TryGetProperty("output", out var output) ? ParseOutput(output, specs.Count + 1) : null,
+                                Output = Partitioned(el.TryGetProperty("output", out var output) ? ParseOutput(output, specs.Count + 1) : null,
+                                    ParseConsumes(el)),
                                 ForEach = ParseForEach(el),
                                 Consumes = ParseConsumes(el),
                                 After = ParseAfter(el),
@@ -516,6 +517,17 @@ public sealed class Planner
         return fields.Count == 0 ? null : new StepOutputSchema($"step{stepNo}", 1, fields);
     }
 
+    /// <summary>
+    /// A filtering step's output (a subset consume), with its results fields optional - its processed results and its
+    /// 'excluded' reasons. A step that leaves nothing out has nothing to put in 'excluded', and one that leaves everything
+    /// out nothing to process; an empty results field is refused (StepOutputContract), so a required one could not be
+    /// handed on at all and the step would be sent back for a field it has no entry for. Whether every item is in one of
+    /// the two is the coverage check's to decide (EvidenceCoverage.PartitionProblems), not the output contract's.
+    /// </summary>
+    internal static StepOutputSchema? Partitioned(StepOutputSchema? output, IReadOnlyList<ConsumeSpec>? consumes)
+        => output is null || consumes?.Any(c => c.Subset) != true ? output
+            : output with { Fields = output.Fields.Select(f => f.Type == StepOutputFieldType.Results ? f with { Required = false } : f).ToArray() };
+
     /// <summary>A step's "forEach", read leniently; whether it can be honoured is the engine's to check (FanOut.Validate).</summary>
     internal static ForEachSource? ParseForEach(JsonElement step)
         => step.TryGetProperty("forEach", out var each) && each.ValueKind == JsonValueKind.Object
@@ -648,7 +660,11 @@ public sealed class Planner
         + " A step that depends on a step handing on a list (path[], string[]) says which way: it consumes it - "
         + "\"consumes\":[{\"step\":0,\"field\":\"pages\"}] - and a list you consume is a list you must cover, every item; "
         + "\"evidence\" says what proves an item (mentioned - named in a call - by default; file_read, file_write, command), "
-        + "and \"subset\":true marks a step that filters. Or it only waits for that step: \"after\":[0].";
+        + "and \"subset\":true marks a step that filters. "
+        // Task 6b: a filtering step is checked as a partition - processed, or left out with a reason - and refused without
+        // the field that holds the reasons.
+        + "A subset step also declares an \"excluded\" results output giving the reason for each item it leaves out. "
+        + "Or it only waits for that step: \"after\":[0].";
 
     // "A temporary change ... are ONE step": run bb77e810, 2026-10-09, planned "Break behaviour, confirm test fails" and
     // "Restore behaviour, confirm test passes" as two steps. The second, with nothing of its own to restore from, read

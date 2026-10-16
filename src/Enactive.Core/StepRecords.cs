@@ -72,7 +72,14 @@ public enum OutcomeCause
     /// its budget allowed (StepCoverageGate): rejected with no reviewer asked. Kept apart from ReviewRejected so nothing
     /// says a review rejected a step no reviewer saw. Last, so no stored value moves.
     /// </summary>
-    CoverageGateRejected
+    CoverageGateRejected,
+
+    /// <summary>
+    /// A step that filters left items of a list it consumes out, each with a reason, and no review approved it: done, not
+    /// confirmed. A reason is the step's word; whether the request permits the omission is a reviewer's to judge (Plan
+    /// Phase 1.2). Last, so no stored value moves.
+    /// </summary>
+    CoverageExclusionsUnapproved
 }
 
 /// <summary>

@@ -129,9 +129,14 @@ public sealed class CoverageDerivedFromThePlanTests
                 ResultsStep: 1, ResultsField: results, Evidence: evidence)
         };
 
+    // A filtering step says what it left out in an 'excluded' results field (Task 6b): without one it is a defect.
     private static Plan Reviewed(EvidenceKind evidence, bool subset = false)
         => PlanOf(new PlanStepSpec("find pages", []) { Output = Pages },
-                  new PlanStepSpec("review pages", [0]) { Output = Notes, Consumes = [new ConsumeSpec(0, "pages") { Evidence = evidence, Subset = subset }] });
+                  new PlanStepSpec("review pages", [0])
+                  {
+                      Output = subset ? Out(("notes", StepOutputFieldType.Results), ("excluded", StepOutputFieldType.Results)) : Notes,
+                      Consumes = [new ConsumeSpec(0, "pages") { Evidence = evidence, Subset = subset }]
+                  });
 
     [Fact]
     public void A_derived_criterion_the_planner_already_wrote_is_not_added_twice()

@@ -44,8 +44,11 @@ public static class UpstreamCoverage
                 var perItem = steps[s].ForEach is { } over && over.Step == c.Step && over.Field == c.Field;
                 // A results field names its items; a step done for each item accounts for them by being one step per
                 // item, and whatever it hands on is the item's result (the perItem case EvidenceCoverage accepts).
-                var field = steps[s].Output?.Fields.FirstOrDefault(f => f.Type == StepOutputFieldType.Results)?.Name
-                            ?? (perItem ? steps[s].Output?.Fields.FirstOrDefault()?.Name : null);
+                // A step that filters says what it left out in its own results field ('excluded'): that one is not where it
+                // accounts for what it processed, wherever the plan declared it.
+                var field = steps[s].Output?.Fields.FirstOrDefault(f => f.Type == StepOutputFieldType.Results
+                                                                         && !(c.Subset && f.Name == EvidenceCoverage.ExcludedField))?.Name
+                            ?? (perItem ? steps[s].Output?.Fields.FirstOrDefault(f => !(c.Subset && f.Name == EvidenceCoverage.ExcludedField))?.Name : null);
                 if (field is null)
                 {
                     defects.Add(perItem
@@ -58,16 +61,17 @@ public static class UpstreamCoverage
                 // Built with the evidence the plan declared, file_write included: asking for less than was declared would
                 // be the quiet weakening this exists to stop. A write is the step's own recorded change to the item's
                 // path (EvidenceCoverage.Gather).
+                // A subset consume (a step that filters) is checked as a partition of the list - processed with evidence, or
+                // left out with a reason (EvidenceCoverage.PartitionProblems) - and needs its 'excluded' results field to
+                // say what it left out: without one, Invalid refuses it, and that is a defect of the contract like any other.
                 var typed = new TypedCriterion(TypedCriterionKind.EvidenceCoversAll,
-                    SourceStep: c.Step, SourceField: c.Field, ResultsStep: s, ResultsField: field, Evidence: c.Evidence);
+                    SourceStep: c.Step, SourceField: c.Field, ResultsStep: s, ResultsField: field, Evidence: c.Evidence, Subset: c.Subset);
                 if (EvidenceCoverage.Invalid(typed, plan) is { } why)
                 {
                     defects.Add($"step {s + 1}'s coverage of step {c.Step + 1}'s list {c.Field} cannot be checked: {why}");
                     continue;
                 }
 
-                // A subset consume (a step that filters) gets the same covers_all: every item still needs a result. The
-                // processed/excluded partition it owes on top of that is Task 6 and is not checked here.
                 //
                 // Declared and required, so it BLOCKS (CriterionResult.Blocking): failed, or not decidable, the run
                 // cannot be Completed. Proposed would let "could not be decided" through - right for a planner's guess,
@@ -89,17 +93,20 @@ public static class UpstreamCoverage
     /// another field of the step's results is not this one - or for any evidence when the
     /// derived one asks only "mentioned", which every kind the engine records implies (EvidenceCoverage.Gather counts a
     /// read or a command as a mention). Never the other way: an explicit "mentioned" does not stand in for a declared
-    /// read, and a filtering step owes more than any written criterion states.
+    /// read. And only one with the same exclusion policy: a step that filters owes a partition (processed or left out with
+    /// a reason), which a criterion asking a result for every item does not check, and that one asks more than a
+    /// partition does - neither stands in for the other.
     /// </summary>
     public static IReadOnlyList<SuccessCriterionDefinition> NotAlreadyChecked(IReadOnlyList<Derived> derived,
         IEnumerable<SuccessCriterionDefinition> existing)
     {
         var written = existing.Select(e => e.Typed).OfType<TypedCriterion>().Where(t => t.Kind == TypedCriterionKind.EvidenceCoversAll).ToArray();
         return derived
-            .Where(d => d.Consume.Subset || !written.Any(t => t.SourceStep == d.Consume.Step && t.SourceField == d.Consume.Field
+            .Where(d => !written.Any(t => t.SourceStep == d.Consume.Step && t.SourceField == d.Consume.Field
                 && t.ResultsStep == d.Consumer && t.ResultsField == d.Criterion.Typed!.ResultsField
+                && t.Subset == d.Criterion.Typed.Subset
                 && (t.Evidence == d.Consume.Evidence || d.Consume.Evidence == EvidenceKind.Call)))
-            .DistinctBy(d => (d.Criterion.Typed, d.Consume.Subset))
+            .DistinctBy(d => d.Criterion.Typed)
             .Select(d => d.Criterion).ToArray();
     }
 
@@ -122,7 +129,7 @@ public static class UpstreamCoverage
                 continue;
             steps[results] = steps[results] with
             {
-                Consumes = [.. steps[results].Consumes ?? [], new ConsumeSpec(source, field) { Evidence = t.Evidence ?? EvidenceKind.Call }]
+                Consumes = [.. steps[results].Consumes ?? [], new ConsumeSpec(source, field) { Evidence = t.Evidence ?? EvidenceKind.Call, Subset = t.Subset }]
             };
             changed = true;
         }
