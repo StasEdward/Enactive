@@ -3,10 +3,11 @@ namespace Enactive.Core.Memory;
 /// <summary>
 /// What a finished run is allowed to tell the project about itself.
 ///
-/// <para><b>Why this exists.</b> Project memory is read into the PROMPT of every step of every
-/// later run (<c>ContextProvider.MemoryLimit</c> bounds it at twenty entries for exactly that
-/// reason). It is therefore not a log: an entry that is not a fact about the project is a
-/// permanent tax on the context window and on the bill.</para>
+/// <para><b>Why this exists.</b> Project memory is written for the timeline and the run history; since
+/// 2026-09-28 it is NOT read into the worker's prompt (the block is disabled in the orchestrator's prompt
+/// assembly), but it was, and <c>ContextProvider.MemoryLimit</c> still bounds it at twenty entries for that
+/// reason. It is therefore not a log: an entry that is not a fact about the project is noise in what a person
+/// reads, and a permanent tax on the context window and on the bill if memory goes back into the prompt.</para>
 ///
 /// <para>On 2026-09-11 Stas read the assembled prompt in his own exported log and found, under
 /// "What this project has already decided and done" in a workspace rooted at

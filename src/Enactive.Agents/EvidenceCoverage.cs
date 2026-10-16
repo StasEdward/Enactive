@@ -161,8 +161,9 @@ public static class EvidenceCoverage
            + $"({NameOf(typed.Evidence ?? EvidenceKind.Call)})";
 
     /// <summary>
-    /// Decides the criterion from the run's step outputs. Steps in <paramref name="outputs"/> are
-    /// numbered from 1, as they ran; the criterion names them from 0, as they were planned.
+    /// Decides the criterion from the run's step outputs. A step's number in <paramref name="outputs"/> is its
+    /// plan position + 1 (renumbered by position after a fan-out expands the plan), not the order the steps ran in;
+    /// the criterion names them from 0, as they were planned.
     /// </summary>
     public static CriterionResult Evaluate(SuccessCriterionDefinition criterion, IEnumerable<StepOutput> outputs)
     {

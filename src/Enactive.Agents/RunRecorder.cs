@@ -94,9 +94,10 @@ public sealed class RunRecorder
                 await _store.SaveAsync(record, CancellationToken.None);
 
                 // Fold each resolved decision into the project's durable memory -
-                // but only what this project actually learned. See ProjectFacts: memory is read
-                // into the PROMPT of every step of every later run, so an entry that is not a fact
-                // about the project is a permanent tax on the window and on the bill.
+                // but only what this project actually learned. See ProjectFacts: memory is written for the
+                // timeline and the run history and is NOT given to the worker (since 2026-09-28), but an entry
+                // that is not a fact about the project is still noise there, and would be a tax on the window
+                // again if memory went back into the prompt.
                 if (_memory is not null && ProjectFacts.WorthRemembering(ToolsUsed(events), record.Artifacts))
                 {
                     // Read once, for the duplicate check below. Best-effort like everything else

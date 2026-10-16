@@ -222,6 +222,10 @@ internal sealed class StepEnding(
                 + (Open.Count > 0
                     ? " These calls are still open and keep the step unfinished: " + Open.Describe()
                     : "")));
+            // The criteria nudge and the open-calls nudge say so on the timeline; this one changed what the model
+            // was asked and left no trace, so a step that turned on it could not be read back from the events.
+            yield return Ev(EventKind.ContextAssembled, $"The step has not handed its result on with {StepOutputContract.ToolName}. "
+                + "The step is told, once.");
             yield break;
         }
 
@@ -299,6 +303,33 @@ internal sealed class StepEnding(
                 + "so the steps after it would have nothing to work from");
             yield return Ev(EventKind.ErrorObserved, "The step finished without submitting its declared output.");
             yield break;
+        }
+
+        // The plan's criteria for this step, looked at once more now that the step was told of them and ended anyway.
+        // Without this the step fell through to Succeeded with nothing said: a reviewer, when there is one, is shown
+        // the failure by the review itself (Orchestrator.Review), but with none nothing ever saw it - a step whose
+        // own check still failed counted as done. Last on purpose, after every rule that can still tell the step
+        // something or end it for a reason of its own: the output nudge and the open calls come first, so this
+        // pre-empts neither, and it asks for no further turn - the one nudge above was the step's chance.
+        if (_criteriaNudged && stepCriteria is { Count: > 0 } && frame.StepNo is { } stepNo
+            && TypedCriteria.OfStep(stepCriteria, stepNo - 1, frame.WorkspaceRoot)
+                .Where(r => r.Outcome == CriterionOutcome.Failed).ToArray() is { Length: > 0 } stillFailing)
+        {
+            var named = string.Join("; ", stillFailing.Select(r => $"{r.Name} ({r.Detail})"));
+            if (reviewed)
+            {
+                // No journal entry here: the review records the same check as the engine's own finding.
+                yield return Ev(EventKind.ErrorObserved, "The plan's criteria for this step still fail after the step was told: "
+                    + named + " - the review decides, with them shown as the engine's own finding.");
+            }
+            else
+            {
+                var reason = "the plan's criteria for this step still fail: " + named;
+                yield return Ev(EventKind.ErrorObserved, "Finished with the plan's criteria for this step still failing, after "
+                    + "being told once: " + named);
+                verdict.Ends(StepOutcomeKind.Incomplete, reason);
+                yield break;
+            }
         }
 
         verdict.Ends(StepOutcomeKind.Succeeded, null); // genuine final answer - no tool calls
