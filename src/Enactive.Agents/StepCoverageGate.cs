@@ -122,8 +122,13 @@ internal static class StepCoverageGate
         return checks.Length == 0 ? null : new Outcome(checks);
     }
 
-    /// <summary>The name the engine's per-item account for the reviewer is recorded under - no tool the model can call.</summary>
-    internal const string ToolName = "engine_checked_step_coverage";
+    /// <summary>
+    /// The heading of the engine's per-item account in the reviewer's input. A section of its own, not a journal entry
+    /// among the calls: the evidence budget is shared out fairly between call results, so an entry there got an equal
+    /// share like a read and lost its middle - the weak items - once a dozen reads filled the budget. Its room is taken
+    /// out of the evidence budget instead (Orchestrator.ReviewAttemptAsync), so the reviewer is shown no more than before.
+    /// </summary>
+    internal const string SectionHeading = "ITEMS - the engine's account of the list(s) this step consumes (not a call; the calls it names are among the TOOL CALLS):";
 
     /// <summary>
     /// What the reviewer is shown of the step's coverage, item by item (Plan Phase 1.2): the items with less than the

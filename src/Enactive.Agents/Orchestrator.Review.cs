@@ -126,16 +126,13 @@ public sealed partial class Orchestrator
                 WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
         // What the step did for each item of the lists it consumes, as the gate found it (StepCoverageGate): a fact for the
         // reviewer, item by item - the weakly backed ones in full - and not a judgement: the engine counted that evidence
-        // is there, the reviewer judges the work. Half the evidence budget at most, so the step's own calls keep the rest.
-        // An earlier attempt's account is history, as an earlier review's cited places are.
-        if (coverage is not null)
-        {
-            journal.MarkHistorical(evidenceStart, StepCoverageGate.ToolName,
-                "(the engine's account of the items for an earlier attempt - superseded by the one after it)");
-            journal.Record(stepNumber, StepCoverageGate.ToolName, "{}", ActionOutcome.Succeeded,
-                StepCoverageGate.ReviewerBlock(coverage, journal.Actions.Skip(stepStart).ToArray(), _evidenceBudget / 2),
-                WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
-        }
+        // is there, the reviewer judges the work. A section of the reviewer's input with room of its own, taken out of the
+        // evidence budget: recorded as a call it was given a call's share and cut in the middle once a dozen reads filled
+        // the budget (StepCoverageGate.SectionHeading). Half the budget at most, so the step's own calls keep the rest - and
+        // never less than the journal's minimum for them. Made for this attempt only, so no earlier account goes with it.
+        var itemAccount = coverage is null ? null
+            : StepCoverageGate.ReviewerBlock(coverage, journal.Actions.Skip(stepStart).ToArray(), _evidenceBudget / 2);
+        var callBudget = itemAccount is null ? _evidenceBudget : Math.Max(ExecutionJournal.MinimumBudget, _evidenceBudget - itemAccount.Length);
         // The file this step handed on as the result a criterion checks: the engine decides that it is there,
         // the reviewer decides whether it is what was asked - so it is shown whole, as it is now, even when the
         // step wrote none of it (run 68f92f: an earlier run's report, handed on as this run's).
@@ -159,8 +156,8 @@ public sealed partial class Orchestrator
             ? (await CriteriaReview.RunAsync(
                     new CriteriaReviewInput(title, judgedNo, LastAssistant(messages), handedOn,
                         await StepFilesNowAsync(changes, before, journal, stepStart, store, ct),
-                        journal.Describe(evidenceStart, _evidenceBudget),
-                        obligations ?? RequestObligations.Create(request, title, stepNumber, planSteps)),
+                        journal.Describe(evidenceStart, callBudget),
+                        obligations ?? RequestObligations.Create(request, title, stepNumber, planSteps), itemAccount),
                     judged, (action, kind) => Admits(action, kind, reads), models.ReviewProvider!, models.ReviewModel,
                     scope.Budget.TurnExhaustedAfter, ct),
                 ReviewMode.Criteria)
@@ -172,10 +169,10 @@ public sealed partial class Orchestrator
                                 .Select(p => $"{p.i + 1}. {p.t}").ToArray() ?? [],
                             LastAssistant(messages), handedOn,
                             await StepFilesNowAsync(changes, before, journal, stepStart, store, ct),
-                            journal.Describe(evidenceStart, _evidenceBudget), obligations?.ScopeNote,
+                            journal.Describe(evidenceStart, callBudget), obligations?.ScopeNote,
                             obligations?.Owned().Select(o => $"{o.Unit.Id}: {o.Unit.Text.Trim()}"
                                 + (o.AlsoTo.Count > 0 ? $" (also given to step {string.Join(", ", o.AlsoTo.Select(scope => scope.TrimStart('S')))})" : "")).ToArray(),
-                            restrictions),
+                            restrictions, itemAccount),
                         models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct),
                     ReviewMode.Step);
         await Usage(review.Usage.Prompt, review.Usage.Completion, review.Usage.Cached, review.Usage.Created);

@@ -13,7 +13,9 @@ using Enactive.Core.Tools;
 internal sealed record CriteriaReviewInput(
     string StepTitle, int StepNumber, string Report, string? HandedOn,
     IReadOnlyList<ShownFile> Files, EvidenceView Evidence,
-    RequestObligations Obligations);
+    RequestObligations Obligations,
+    // The engine's account of the lists the step consumes - see StepVerdictInput.Coverage.
+    string? Coverage = null);
 
 /// <summary>
 /// A step judged against the semantic criteria its plan set - only those (Phase 1.4, 5.2). The plan's invariant: the
@@ -69,6 +71,8 @@ internal static class CriteriaReview
         sb.AppendLine("REPORT - the worker's claim, not evidence:").AppendLine(input.Report).AppendLine();
         if (input.HandedOn is { Length: > 0 } handed)
             sb.AppendLine("HANDED ON by the step (accepted values):").AppendLine(handed).AppendLine();
+        if (input.Coverage is { Length: > 0 } coverage)
+            sb.AppendLine(StepCoverageGate.SectionHeading).AppendLine(coverage).AppendLine();
         sb.AppendLine("FILES this step changed:");
         foreach (var file in input.Files)
             sb.AppendLine($"--- {file.Path}{(file.Whole ? "" : " (shown in part - not whole)")}{(file.Heading is { } heading ? " - " + heading : "")}").AppendLine(file.Text);

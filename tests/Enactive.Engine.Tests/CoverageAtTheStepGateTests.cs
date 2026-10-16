@@ -358,12 +358,46 @@ public sealed class CoverageAtTheStepGateTests
 
         Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(events, 2).StepOutcome());
         var asked = string.Join("\n", Assert.Single(ReviewsOf(reviewer, 2)).Messages.Select(m => m.Content));
-        Assert.Contains(StepCoverageGate.ToolName, asked, StringComparison.Ordinal);
+        Assert.Contains(StepCoverageGate.SectionHeading, asked, StringComparison.Ordinal);
         Assert.Contains("whether the work on each item is what was asked is yours to judge", asked, StringComparison.Ordinal);
         foreach (var weak in pages[9..])
             Assert.Contains($"- {weak}: required mentioned; found mentioned; by tag_pages {{\"paths\":[\"{weak}\"]}}; result: {weak} is fine", asked, StringComparison.Ordinal);
         Assert.Contains("Backed as required: 9 of 12 - read whole 9.", asked, StringComparison.Ordinal);
         Assert.DoesNotContain("- wiki/p01.md:", asked, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The block reaches the reviewer whole when the step's own calls fill the evidence budget: twelve reads of several
+    /// hundred characters each share it out, and an entry among them was cut in the middle - where the weak items are.
+    /// </summary>
+    [Fact]
+    public async Task The_reviewer_gets_the_weak_items_when_the_reads_fill_the_evidence_budget()
+    {
+        var pages = Pages(12);
+        string[] background = ["notes/style.md", "notes/terms.md", "notes/owners.md"];
+        using var fx = new EngineFixture { StepOutputs = true, TypedCriteria = true };
+        foreach (var file in pages.Concat(background))
+            fx.Write(file, string.Join("\n", Enumerable.Range(1, 12).Select(l => $"{file} line {l}: some text about this page")) + "\n");
+        fx.ToolsOverride = [.. EngineFixture.ShippedTools(), new Tagging()];
+        // Twelve reads of about 600 characters each - nine pages and three background notes - and the last three pages
+        // only tagged: the weak items.
+        var worker = new FakeChatProvider([Turn.Says(PlanFor()), .. Found(pages), .. pages[..9].Concat(background).Select(Read),
+            .. pages[9..].Select(p => Turn.Calls1("tag_pages", JsonSerializer.Serialize(new { paths = new[] { p } }), "t-" + p)),
+            Notes(pages), Turn.Says("Reviewed all twelve.")]);
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+
+        await fx.RunAsync(fx.Build(worker, EngineFixture.WorkerWith("tag_pages", "read_file"), router: Routers.WithReviewer(), reviewProvider: reviewer),
+            "review every wiki page");
+
+        var asked = string.Join("\n", Assert.Single(ReviewsOf(reviewer, 2)).Messages.Select(m => m.Content));
+        Assert.Contains("characters not shown here", asked, StringComparison.Ordinal);   // the reads did fill the budget
+        foreach (var weak in pages[9..])
+            Assert.Contains($"- {weak}: required mentioned; found mentioned; by tag_pages", asked, StringComparison.Ordinal);
+        Assert.Contains("Backed as required: 9 of 12 - read whole 9.", asked, StringComparison.Ordinal);
+        // Its room comes out of the evidence budget: the account and the calls together keep to it.
+        var account = asked[(asked.IndexOf(StepCoverageGate.SectionHeading, StringComparison.Ordinal) + StepCoverageGate.SectionHeading.Length)..asked.IndexOf("FILES this step changed:", StringComparison.Ordinal)].Trim();
+        var calls = asked[(asked.IndexOf("TOOL CALLS (cite them by [n]):", StringComparison.Ordinal) + "TOOL CALLS (cite them by [n]):".Length)..].Trim();
+        Assert.True(account.Length + calls.Length <= Enactive.Core.Execution.ExecutionJournal.DefaultBudget + 200, $"{account.Length} + {calls.Length}");
     }
 
     /// <summary>The block keeps to its share of the evidence budget: what does not fit is named, then counted.</summary>
