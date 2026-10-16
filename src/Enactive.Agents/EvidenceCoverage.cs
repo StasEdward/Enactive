@@ -111,7 +111,7 @@ public static class EvidenceCoverage
     }
 
     /// <summary>Every string value in a call's arguments, however deep. Arguments that are not JSON name nothing.</summary>
-    private static IReadOnlyList<string> StringsIn(string arguments)
+    internal static IReadOnlyList<string> StringsIn(string arguments)
     {
         var found = new List<string>();
         void Walk(JsonElement e)

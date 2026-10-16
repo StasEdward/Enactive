@@ -72,7 +72,7 @@ public sealed partial class Orchestrator
                 ? at with { ScopeNote = session.ScopeNotes.GetValueOrDefault(number) } : null,
             step.OutputSlot.Values is { } handed ? CitedPlaces.TextOf(handed) : null, step.Criteria, step.OutputSlot.Values,
             session.Builds, step.Reads, context.Restrictions, result.KeptBack,
-            saidBlocked: SaidBlockedOnly(result) ? result.Reason : null);
+            saidBlocked: SaidBlockedOnly(result) ? result.Reason : null, coverage: coverage);
     }
 
     /// <summary>

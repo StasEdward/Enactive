@@ -122,6 +122,93 @@ internal static class StepCoverageGate
         return checks.Length == 0 ? null : new Outcome(checks);
     }
 
+    /// <summary>The name the engine's per-item account for the reviewer is recorded under - no tool the model can call.</summary>
+    internal const string ToolName = "engine_checked_step_coverage";
+
+    /// <summary>
+    /// What the reviewer is shown of the step's coverage, item by item (Plan Phase 1.2): the items with less than the
+    /// evidence required, or with nothing but a mention behind them, in full - what was required, what was found, the
+    /// recorded calls behind it, the result handed on - and the items backed as required as a count by kind. A mention
+    /// meets "mentioned" but shows neither a read nor the work, and it is exactly what the reviewer's verdict is needed
+    /// for (OnlyMentioned), so it is shown, not counted. Within <paramref name="maxChars"/>: what does not fit is named,
+    /// then counted.
+    ///
+    /// <para>Said in the entry: the engine decided that the evidence is THERE; whether the work on each item is what was
+    /// asked is the reviewer's. A count read as a verdict is how a run with twelve mentions passed as twelve reviews.</para>
+    /// </summary>
+    /// <param name="actions">The step's recorded calls - the concrete reads, writes and calls behind each item.</param>
+    internal static string ReviewerBlock(Outcome outcome, IReadOnlyList<Enactive.Core.Execution.ExecutedAction> actions, int maxChars)
+    {
+        const int CallChars = 80, ResultChars = 120, Reserve = 160;
+        var sb = new StringBuilder("Checked by the engine before this review: for each item of the list(s) this step consumes, whether "
+            + "it handed a result on and what it recorded behind it. The engine decided only that the evidence is THERE; "
+            + "whether the work on each item is what was asked is yours to judge.\n");
+        var calls = actions.Where(a => a.Outcome == Enactive.Core.Execution.ActionOutcome.Succeeded
+                                       && a.Origin != Enactive.Core.Execution.ToolCallOrigin.Engine && a.Tool != StepOutputContract.ToolName)
+            .Select(a => (Action: a, Named: EvidenceCoverage.StringsIn(a.Arguments))).ToArray();
+
+        foreach (var c in outcome.Checks)
+        {
+            sb.AppendLine($"Step {c.Typed.SourceStep + 1}'s list '{c.Typed.SourceField}' -> this step's results '{c.Typed.ResultsField}', "
+                + $"each item requiring {EvidenceCoverage.NameOf(c.Typed.Evidence ?? EvidenceKind.Call)}: {c.Line()}");
+            bool Weak(EvidenceCoverage.ItemAccount i) => !i.Covered || i.Found.All(k => k == EvidenceKind.Call);
+            var strong = c.Items.Where(i => !Weak(i)).ToArray();
+            if (strong.Length > 0)
+                sb.AppendLine($"Backed as required: {strong.Length} of {c.Items.Count} - "
+                    + string.Join(", ", strong.GroupBy(Strongest).OrderBy(g => g.Key).Select(g => $"{Label(g.Key)} {g.Count()}")) + ".");
+            var weak = c.Items.Where(Weak).ToArray();
+            if (weak.Length == 0) continue;
+            sb.AppendLine("Shown in full - items with less than required, or with no more than a mention behind them (named in a call "
+                + "that succeeded: neither a read nor the work):");
+            var shown = 0;
+            foreach (var i in weak)
+            {
+                var behind = calls.Where(x => x.Named.Any(s => EvidenceCoverage.Same(s, i.Item))
+                                              || x.Action.ChangedPaths?.Any(p => EvidenceCoverage.Same(p, i.Item)) == true)
+                    .Select(x => $"{x.Action.Tool} {Clip(x.Action.Arguments, CallChars)}").ToArray();
+                var line = $"- {i.Item}: required {EvidenceCoverage.NameOf(i.Required)}; found {Found(i)}; "
+                    + (behind.Length == 0 ? "by no recorded call" : "by " + string.Join(", ", behind.Take(3)) + (behind.Length > 3 ? $" and {behind.Length - 3} more" : ""))
+                    + $"; result: {(i.HasResult ? Clip(i.Result ?? "", ResultChars) : "none")}";
+                if (sb.Length + line.Length + 1 > maxChars - Reserve) break;
+                sb.AppendLine(line);
+                shown++;
+            }
+            if (shown < weak.Length)
+            {
+                var rest = weak.Skip(shown).Select(i => i.Item).ToArray();
+                var tail = new StringBuilder($"- and {rest.Length} more item(s) with no more than a mention behind them, or less than required, "
+                    + "not shown in full for room: ");
+                var named = 0;
+                foreach (var item in rest)
+                {
+                    if (sb.Length + tail.Length + item.Length + 2 > maxChars - 1) break;
+                    tail.Append(named++ == 0 ? item : ", " + item);
+                }
+                if (named < rest.Length && sb.Length + tail.Length + 12 <= maxChars) tail.Append(named == 0 ? "(no room to name them)" : ", …");
+                sb.AppendLine(tail.ToString());
+            }
+        }
+        var text = sb.ToString().TrimEnd();
+        return text.Length <= maxChars ? text : text[..(maxChars - 1)] + "…";
+    }
+
+    private static EvidenceKind Strongest(EvidenceCoverage.ItemAccount item)
+        => new[] { EvidenceKind.FileWrite, EvidenceKind.FileRead, EvidenceKind.Command }.FirstOrDefault(item.Found.Contains, EvidenceKind.Call);
+
+    private static string Label(EvidenceKind kind) => kind switch
+    {
+        EvidenceKind.FileWrite => "written",
+        EvidenceKind.FileRead => "read whole",
+        EvidenceKind.Command => "named by a command that ran",
+        _ => "mentioned"
+    };
+
+    private static string Clip(string text, int max)
+    {
+        var flat = text.Replace('\r', ' ').Replace('\n', ' ');
+        return flat.Length <= max ? flat : flat[..(max - 1)] + "…";
+    }
+
     internal static string Needs(EvidenceCoverage.ItemAccount item, string resultsField)
         => (item.HasResult ? "" : $"a result in '{resultsField}', and ") + item.Required switch
         {

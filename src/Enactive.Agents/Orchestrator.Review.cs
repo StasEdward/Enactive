@@ -53,7 +53,8 @@ public sealed partial class Orchestrator
         RequestObligations? obligations = null, string? handedOn = null,
         IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null, System.Text.Json.Nodes.JsonObject? handedValues = null,
         IReadOnlyList<BuildBaseline>? measuredBefore = null, ReadLedger? reads = null,
-        IReadOnlyList<TaskRestriction>? restrictions = null, string? keptBack = null, string? saidBlocked = null)
+        IReadOnlyList<TaskRestriction>? restrictions = null, string? keptBack = null, string? saidBlocked = null,
+        StepCoverageGate.Outcome? coverage = null)
     {
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
         ValueTask Emit(EventKind kind, string summary) => publish(scope.Ev(kind, prefix + summary, stepNumber));
@@ -123,6 +124,18 @@ public sealed partial class Orchestrator
                 + string.Join("\n", checkedNow.Select(r => $"- {r.Name}: {(r.Outcome == CriterionOutcome.Passed ? "PASS" : r.Outcome == CriterionOutcome.Failed ? "FAIL" : "NOT CHECKED")}"
                     + (string.IsNullOrWhiteSpace(r.Detail) ? "" : $" - {r.Detail}"))),
                 WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
+        // What the step did for each item of the lists it consumes, as the gate found it (StepCoverageGate): a fact for the
+        // reviewer, item by item - the weakly backed ones in full - and not a judgement: the engine counted that evidence
+        // is there, the reviewer judges the work. Half the evidence budget at most, so the step's own calls keep the rest.
+        // An earlier attempt's account is history, as an earlier review's cited places are.
+        if (coverage is not null)
+        {
+            journal.MarkHistorical(evidenceStart, StepCoverageGate.ToolName,
+                "(the engine's account of the items for an earlier attempt - superseded by the one after it)");
+            journal.Record(stepNumber, StepCoverageGate.ToolName, "{}", ActionOutcome.Succeeded,
+                StepCoverageGate.ReviewerBlock(coverage, journal.Actions.Skip(stepStart).ToArray(), _evidenceBudget / 2),
+                WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
+        }
         // The file this step handed on as the result a criterion checks: the engine decides that it is there,
         // the reviewer decides whether it is what was asked - so it is shown whole, as it is now, even when the
         // step wrote none of it (run 68f92f: an earlier run's report, handed on as this run's).

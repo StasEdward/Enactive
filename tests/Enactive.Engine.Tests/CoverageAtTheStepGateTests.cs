@@ -301,6 +301,55 @@ public sealed class CoverageAtTheStepGateTests
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
     }
 
+    // ── what the reviewer is shown ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The reviewer is shown, item by item, what the engine found: the items with no more than a mention behind them in
+    /// full - what was required, what was found, the calls, the result - and the items backed as required as a count.
+    /// The engine says it decided only that the evidence is there; whether the work is what was asked is the reviewer's.
+    /// </summary>
+    [Fact]
+    public async Task The_reviewer_is_shown_each_weakly_backed_item_in_full_and_the_rest_as_a_count()
+    {
+        var pages = Pages(12);
+        using var fx = Wiki(12);
+        fx.ToolsOverride = [.. EngineFixture.ShippedTools(), new Tagging()];
+        var worker = new FakeChatProvider([Turn.Says(PlanFor()), .. Found(pages), .. pages[..9].Select(Read),
+            .. pages[9..].Select(p => Turn.Calls1("tag_pages", JsonSerializer.Serialize(new { paths = new[] { p } }), "t-" + p)),
+            Notes(pages), Turn.Says("Reviewed all twelve.")]);
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.WorkerWith("tag_pages", "read_file"), router: Routers.WithReviewer(), reviewProvider: reviewer),
+            "review every wiki page");
+
+        Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(events, 2).StepOutcome());
+        var asked = string.Join("\n", Assert.Single(ReviewsOf(reviewer, 2)).Messages.Select(m => m.Content));
+        Assert.Contains(StepCoverageGate.ToolName, asked, StringComparison.Ordinal);
+        Assert.Contains("whether the work on each item is what was asked is yours to judge", asked, StringComparison.Ordinal);
+        foreach (var weak in pages[9..])
+            Assert.Contains($"- {weak}: required mentioned; found mentioned; by tag_pages {{\"paths\":[\"{weak}\"]}}; result: {weak} is fine", asked, StringComparison.Ordinal);
+        Assert.Contains("Backed as required: 9 of 12 - read whole 9.", asked, StringComparison.Ordinal);
+        Assert.DoesNotContain("- wiki/p01.md:", asked, StringComparison.Ordinal);
+    }
+
+    /// <summary>The block keeps to its share of the evidence budget: what does not fit is named, then counted.</summary>
+    [Fact]
+    public void The_reviewers_block_fits_its_budget()
+    {
+        var pages = Enumerable.Range(1, 200).Select(i => $"wiki/a-rather-long-page-name-{i:000}.md").ToArray();
+        var gate = StepCoverageGate.Check([Coverage(1)], [Output(1, new { pages }),
+            Output(2, new { notes = pages.ToDictionary(p => p, p => new string('x', 300)) }, pages.Select(p => new ItemEvidence("notes", p, [EvidenceKind.Call], null)).ToArray())],
+            null, 3)!;
+        var actions = pages.Select(p => new Enactive.Core.Execution.ExecutedAction(DateTimeOffset.UtcNow, 2, "tag_pages",
+            JsonSerializer.Serialize(new { paths = new[] { p } }), Enactive.Core.Execution.ActionOutcome.Succeeded, "tagged")).ToArray();
+
+        var block = StepCoverageGate.ReviewerBlock(gate, actions, maxChars: 3000);
+
+        Assert.True(block.Length <= 3000, $"{block.Length} characters");
+        Assert.Contains($"- {pages[0]}: required mentioned; found mentioned; by tag_pages", block, StringComparison.Ordinal);
+        Assert.Contains("more item(s) with no more than a mention behind them", block, StringComparison.Ordinal);
+    }
+
     /// <summary>A step with nothing to cover is tried and reviewed exactly as before: no gate, the review's budget alone.</summary>
     [Fact]
     public async Task A_step_with_no_coverage_to_check_is_tried_and_reviewed_as_before()
