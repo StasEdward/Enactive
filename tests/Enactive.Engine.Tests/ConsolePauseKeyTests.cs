@@ -1,0 +1,74 @@
+namespace Enactive.Engine.Tests;
+
+using Enactive.Application;
+using Enactive.Application.Projections;
+using Enactive.Core.Events;
+using Enactive.Core.Execution;
+using Xunit;
+
+/// <summary>
+/// The console's "Pause after this step": P, pressed while a run runs (Ctrl+C stays Stop). Read here without a terminal -
+/// what a key does and the one line it prints; the console's loop only reads the key and prints the line.
+/// </summary>
+public sealed class ConsolePauseKeyTests
+{
+    private static PauseOffer Offered(RunPause pause)
+    {
+        var offer = new PauseOffer(pause);
+        offer.Apply(new WorkEvent(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, EventKind.PlanCreated,
+            "Report — 2 steps", WorkEventPayload.PlanPayload("Report", ["gather", "write"])));
+        return offer;
+    }
+
+    [Theory]
+    [InlineData('p')]
+    [InlineData('P')]
+    public void P_asks_the_run_to_pause_and_says_so_in_one_line(char key)
+    {
+        var pause = new RunPause();
+
+        var said = ConsolePauseKey.Press(key, Offered(pause));
+
+        Assert.True(pause.IsRequested);
+        Assert.Equal("  >> Pausing after the steps running now… Ctrl+C still stops the run at once.", said);
+    }
+
+    [Fact]
+    public void Any_other_key_does_nothing_and_says_nothing()
+    {
+        var pause = new RunPause();
+
+        Assert.Null(ConsolePauseKey.Press('x', Offered(pause)));
+        Assert.Null(ConsolePauseKey.Press('\r', Offered(pause)));
+
+        Assert.False(pause.IsRequested);
+    }
+
+    [Fact]
+    public void Pressed_again_it_says_the_pause_is_already_asked_for()
+    {
+        var offer = Offered(new RunPause());
+        ConsolePauseKey.Press('p', offer);
+
+        Assert.Equal("  >> The pause is already asked for: the steps running now finish first.", ConsolePauseKey.Press('p', offer));
+    }
+
+    /// <summary>Before the plan there is no step boundary: said, and nothing asked - the person can press it again later.</summary>
+    [Fact]
+    public void Before_the_plan_it_says_why_not()
+    {
+        var pause = new RunPause();
+
+        var said = ConsolePauseKey.Press('p', new PauseOffer(pause));
+
+        Assert.StartsWith("  >> Not paused: ", said);
+        Assert.Contains("no plan yet", said);
+        Assert.False(pause.IsRequested);
+    }
+
+    /// <summary>The banner says the key is there; a key nobody is told about is not a control.</summary>
+    [Fact]
+    public void The_banner_names_the_key_and_Stop()
+        => Assert.Equal("P pauses the run after the steps running now (then --resume carries it on); Ctrl+C stops it at once",
+            ConsolePauseKey.Banner);
+}

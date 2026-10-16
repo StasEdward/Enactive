@@ -124,6 +124,12 @@ steps under something other than what was typed, or other than what the run was 
 be wrong either way. Asking for the same is fine, so a scheduler line that names its level resumes as
 before; and a run recorded without its level runs the rest under the one given.
 
+While a run runs at a terminal, **P** pauses it after the steps running now: they finish, no new step
+starts, and the run ends Paused (exit code `5`) at a step boundary, so `--resume` carries it on with
+exactly the steps that are left and does none again. Ctrl+C still stops it at once. A run is paused
+only once it has a plan; a quick action and a run that stages its changes are not paused, and P says
+why. P is not read while a permission prompt waits for its answer, nor when input is redirected.
+
 ## Unattended permission behavior
 
 Without `--approve`, a free-text run asks at the terminal and a `--template` run uses the unattended
@@ -190,6 +196,7 @@ The report includes workspace, run/task identifiers, outcome and reason, recorde
 | `0` | Completed |
 | `1` | Failed, or handled provider connection failure |
 | `2` | Incomplete |
+| `5` | Paused: resume it with `--resume` |
 | `64` | Invalid invocation: an unknown template parameter, tier, role, or approval answer. Nothing ran |
 | `130` | Cancelled, including handled Ctrl+C |
 
