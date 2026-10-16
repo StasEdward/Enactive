@@ -129,6 +129,8 @@ starts, and the run ends Paused (exit code `5`) at a step boundary, so `--resume
 exactly the steps that are left and does none again. Ctrl+C still stops it at once. A run is paused
 only once it has a plan; a quick action and a run that stages its changes are not paused, and P says
 why. P is not read while a permission prompt waits for its answer, nor when input is redirected.
+Any other key typed while a run runs is read and dropped: the console cannot look for a P without
+taking the key, so keys typed ahead no longer reach the next prompt or the shell after the run.
 
 ## Unattended permission behavior
 

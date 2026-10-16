@@ -501,8 +501,10 @@ if (readsKeys)
 Console.WriteLine(new string('-', 72));
 
 // The keys, read beside the run until it ends. Never while the permission prompt reads its answer (ConsoleDecisionHandler
-// .Asking): a key taken here would be a letter missing from "allow". Any key that is not P is dropped, as before - a
-// run is not a prompt.
+// .Asking): a key taken here would be a letter missing from "allow". Every other key typed while the run runs is read
+// here, and one that is not P is dropped. That is a change: before, keys typed during a run stayed buffered, and reached
+// the next permission prompt or the shell after the run. The console cannot look at a key without taking it, so seeing a
+// P means taking the rest too - and a line typed ahead into a run is no answer to a question it has not asked yet.
 using var keysDone = new CancellationTokenSource();
 var keys = readsKeys ? Task.Run(async () =>
 {
