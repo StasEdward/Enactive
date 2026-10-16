@@ -318,7 +318,10 @@ public sealed class DotnetTestOutputTests
     public void A_build_error_is_not_a_test_run()
         => Assert.Null(new DotnetEcosystem().ParseTests("C:\\p\\A.cs(3,1): error CS0103: The name 'x' does not exist\n"));
 
-    /// <summary>Only what was seen twice is compared: a test missing from either run is not guessed about.</summary>
+    /// <summary>
+    /// Regressions are only what was seen in both runs: a test missing from either one is not a regression. (A test
+    /// that passed before and is gone now is reported separately, by <c>Disappeared</c>, when both runs name tests.)
+    /// </summary>
     [Fact]
     public void Regressions_are_tests_seen_passing_before_and_failing_now()
     {

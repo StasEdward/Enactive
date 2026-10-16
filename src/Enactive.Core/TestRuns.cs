@@ -12,12 +12,13 @@ public sealed record TestRunSummary(int Passed, int Failed, int Skipped, int Tot
 /// <summary>
 /// What one run of a test target reported: the tests it named, and its totals when it printed them.
 ///
-/// <para><b>Compared by name, and only what was seen twice.</b> A test that PASSED before the work
-/// and FAILS now is a regression: the work broke it. A test failing now that was not in the run
-/// before is not one - it may be exactly what the work was asked to add, a test written to fail on
-/// a known bug - so it is reported, not counted against the run. And a test the output did not name,
-/// because it was cut or its runner does not list passing tests, is not guessed about in either
-/// direction.</para>
+/// <para><b>Compared by name.</b> A test that PASSED before the work and FAILS now is a regression: the
+/// work broke it. A test failing now that was not in the run before is not one - it may be exactly what
+/// the work was asked to add, a test written to fail on a known bug - so it is reported, not counted
+/// against the run. A test that PASSED before and is not named now has <see cref="Disappeared"/>: deleted,
+/// renamed or no longer run, and a worker that deletes a failing test must not make the check pass - but
+/// that is only said when both runs name their tests. A run whose output named none (totals only, or cut
+/// before any) is not guessed about in either direction: the absence of names is not the absence of tests.</para>
 /// </summary>
 public sealed record TestRunReport(IReadOnlyList<TestCaseResult> Cases, TestRunSummary? Summary)
 {

@@ -295,9 +295,37 @@ internal static class BuildRegression
 
         // A test that passed before and is not named now is a regression too: a worker that deletes a failing test
         // must not make this check pass. Reported in the same finding at the same severity - it may be deliberate (a
-        // test retired with the code it covered), so it is advisory like the rest. A flaky test is still named by a
-        // second run, so the second run has nothing to say about one that is gone.
+        // test retired with the code it covered), so it is advisory like the rest.
+        //
+        // Believed like a failure is: not on one run. The second run (WorthRunningAgain asks for one whenever the first
+        // came out Failed) is what confirms it - a test is gone only if the second run does not name it either. That
+        // guards against a first run that crashed or was cut short, and means the second run is never spent on a result
+        // it cannot change. A second run that did not happen, or names no tests, confirms nothing.
         var gone = now.Disappeared(was);
+        var goneUnconfirmed = Array.Empty<string>();
+        if (gone.Count > 0 && again is not null)
+        {
+            var second = again.ExitCode is null ? null : before.Ecosystem.ParseTests(again.Output ?? "");
+            if (second is null || second.Cases.Count == 0)
+            {
+                goneUnconfirmed = gone.ToArray();
+                gone = [];
+                flakyNote += $" {goneUnconfirmed.Length} test(s) that passed before {span} were not run now and were not "
+                    + "confirmed by a second run ("
+                    + (again.ExitCode is null
+                        ? "it did not run" + (string.IsNullOrWhiteSpace(again.Detail) ? "" : ": " + again.Detail)
+                        : "nothing it printed names a test")
+                    + "): " + Named(goneUnconfirmed) + ".";
+            }
+            else
+            {
+                var back = gone.Where(t => second.VerdictOf(t) is not null).ToArray();
+                gone = gone.Where(t => second.VerdictOf(t) is null).ToArray();
+                if (back.Length > 0)
+                    flakyNote += $" {back.Length} test(s) that passed before {span} were not run the first time and ran when "
+                        + "run again - not counted: " + Named(back) + ".";
+            }
+        }
         var goneNote = gone.Count == 0 ? ""
             : $"{gone.Count} test(s) passed before {span} and were not run now (deleted, renamed or no longer run): "
               + Named(gone) + ".";
@@ -311,6 +339,9 @@ internal static class BuildRegression
         if (unconfirmed.Length > 0)
             return result(CriterionOutcome.Unknown, $"no test that passed before {span} failed twice, and not every failure "
                 + $"could be checked again ({totals}).{newNote}{flakyNote}");
+        if (goneUnconfirmed.Length > 0)
+            return result(CriterionOutcome.Unknown, $"no test that passed before {span} fails now, but not every test missing "
+                + $"from the run could be checked again ({totals}).{newNote}{flakyNote}");
 
         return result(CriterionOutcome.Passed, $"no test that passed before {span} fails now ({totals}).{newNote}{flakyNote}");
     }
