@@ -269,4 +269,111 @@ public sealed class RunOutcomeDecisionTests
         Assert.Equal(RunOutcomeKind.Completed, outcome);
         Assert.Null(reason);
     }
+
+    // ── a plan that does not cover a list (Plan Phase 1.2) ──────────────────
+
+    private const string Uncovered =
+        "step 2 depends on step 1, which hands on the list(s) pages, without saying whether it consumes them (consumes) or only waits for it (after)";
+
+    /// <summary>
+    /// A coverage contract the replan left unresolved forbids Completed and nothing else. It is its own input, not a
+    /// failed criterion: a failed criterion can fail a run, and the criteria are not asked at all of some runs.
+    /// </summary>
+    [Fact]
+    public void A_run_whose_plan_does_not_cover_a_list_is_not_completed_and_says_which_list()
+    {
+        var work = Work(true, Step(1, "Find pages", StepOutcomeKind.Succeeded), Step(2, "Review pages", StepOutcomeKind.Succeeded));
+        var before = RunOutcomeDecision.BeforeChecks(work);
+
+        var (outcome, reason) = RunOutcomeDecision.Settle(work, before,
+            new RunVerification(new SuccessReport([Check("notes exist", CriterionOutcome.Passed)]), null), [], [Uncovered]);
+
+        Assert.Equal(RunOutcomeKind.Incomplete, outcome);
+        Assert.StartsWith("Not complete - ", reason);
+        Assert.Contains("the plan does not cover a list: " + Uncovered, reason);
+    }
+
+    /// <summary>Checks that prove the work cannot lift the run past the obligation either.</summary>
+    [Fact]
+    public void Checks_that_prove_the_work_do_not_lift_a_run_past_an_unresolved_coverage_contract()
+    {
+        var work = Work(true, Step(1, "Review pages", StepOutcomeKind.Incomplete, "two shell calls left open"));
+        var before = RunOutcomeDecision.BeforeChecks(work);
+
+        var (outcome, reason) = RunOutcomeDecision.Settle(work, before,
+            new RunVerification(new SuccessReport([Check("notes exist", CriterionOutcome.Passed)]), null), [], [Uncovered]);
+
+        Assert.Equal(RunOutcomeKind.Incomplete, outcome);
+        Assert.Contains(Uncovered, reason);
+    }
+
+    /// <summary>The criteria are not asked of every run (Verify false): the obligation holds without them.</summary>
+    [Fact]
+    public void An_unresolved_coverage_contract_holds_when_the_criteria_were_not_asked()
+    {
+        var work = Work(true, Step(1, "Review pages", StepOutcomeKind.Succeeded));
+
+        var (outcome, reason) = RunOutcomeDecision.Settle(work, new RunOutcomeBeforeChecks(RunOutcomeKind.Completed, null, Verify: false),
+            null, [], [Uncovered]);
+
+        Assert.Equal(RunOutcomeKind.Incomplete, outcome);
+        Assert.Contains(Uncovered, reason);
+    }
+
+    /// <summary>
+    /// What something else decided stays decided, with its own reason: the person's stop, a question waiting for an
+    /// answer, a block waiting to be put right.
+    /// </summary>
+    [Theory]
+    [InlineData(RunOutcomeKind.Cancelled)]
+    [InlineData(RunOutcomeKind.NeedsUser)]
+    [InlineData(RunOutcomeKind.Blocked)]
+    public void An_unresolved_coverage_contract_does_not_overwrite_an_outcome_decided_otherwise(RunOutcomeKind kind)
+    {
+        var work = Work(true, Step(1, "Review pages", StepOutcomeKind.Succeeded));
+
+        var (outcome, reason) = RunOutcomeDecision.Settle(work, new RunOutcomeBeforeChecks(kind, "their own reason", Verify: false),
+            null, [], [Uncovered]);
+
+        Assert.Equal(kind, outcome);
+        Assert.Equal("their own reason", reason);
+    }
+
+    [Fact]
+    public void A_failed_run_stays_failed_and_its_list_of_what_is_not_complete_names_the_contract_too()
+    {
+        var work = Work(true, Step(1, "Find pages", StepOutcomeKind.Succeeded), Step(2, "Review pages", StepOutcomeKind.Failed, "the tool broke"));
+        var before = RunOutcomeDecision.BeforeChecks(work);
+
+        var (outcome, reason) = RunOutcomeDecision.Settle(work, before, null, [], [Uncovered]);
+
+        Assert.Equal(RunOutcomeKind.Failed, outcome);
+        Assert.Contains("[2] Review pages - failed: the tool broke", reason);
+        Assert.Contains(Uncovered, reason);
+    }
+
+    /// <summary>An incomplete run keeps the reason it had - a cycle here - and the contract is said after it.</summary>
+    [Fact]
+    public void An_incomplete_run_keeps_its_reason_and_adds_the_contract()
+    {
+        var work = new RunWork([Step(1, "Review pages", StepOutcomeKind.Succeeded)], Resumable: true, Cycle: true);
+        var before = RunOutcomeDecision.BeforeChecks(work);
+        var (_, without) = RunOutcomeDecision.Settle(work, before, null, []);
+
+        var (outcome, reason) = RunOutcomeDecision.Settle(work, before, null, [], [Uncovered]);
+
+        Assert.Equal(RunOutcomeKind.Incomplete, outcome);
+        Assert.False(string.IsNullOrEmpty(without));
+        Assert.StartsWith(without!, reason);
+        Assert.Contains(Uncovered, reason);
+    }
+
+    [Fact]
+    public void Without_an_unresolved_coverage_contract_nothing_changes()
+    {
+        var work = Work(true, Step(1, "Review pages", StepOutcomeKind.Succeeded));
+        var before = RunOutcomeDecision.BeforeChecks(work);
+
+        Assert.Equal(RunOutcomeDecision.Settle(work, before, null, []), RunOutcomeDecision.Settle(work, before, null, [], []));
+    }
 }

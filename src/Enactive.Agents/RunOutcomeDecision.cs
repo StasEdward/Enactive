@@ -82,8 +82,10 @@ internal static class RunOutcomeDecision
     /// </summary>
     /// <param name="verification">What the criteria said; null when <see cref="RunOutcomeBeforeChecks.Verify"/> was false.</param>
     /// <param name="finalChecks">The engine's own checks on the workspace - produced files, new build errors.</param>
+    /// <param name="coverageObligations">What the plan leaves uncovered of a list it depends on (Plan Phase 1.2).</param>
     public static (RunOutcomeKind Outcome, string? Reason) Settle(RunWork work, RunOutcomeBeforeChecks before,
-        RunVerification? verification, IReadOnlyList<CriterionResult> finalChecks)
+        RunVerification? verification, IReadOnlyList<CriterionResult> finalChecks,
+        IReadOnlyList<string>? coverageObligations = null)
     {
         var outcome = before.Outcome;
         var reason = before.Reason;
@@ -111,13 +113,32 @@ internal static class RunOutcomeDecision
             }
         }
 
+        // A list the plan depends on and does not cover (Plan Phase 1.2): the replan did not settle it, and the person
+        // went on, or nobody was there to ask. It forbids Completed and nothing else - a run that failed, was stopped,
+        // waits for an answer or is blocked keeps the outcome and the reason something else gave it. A separate input,
+        // not a failed criterion: a failed criterion can turn a run Failed, and the criteria are not asked at all of a
+        // run whose steps were skipped - the obligation has to hold either way.
+        var uncovered = (coverageObligations ?? []).Select(o => "the plan does not cover a list: " + o).ToArray();
+        var heldBack = false;
+        if (uncovered.Length > 0 && outcome == RunOutcomeKind.Completed)
+        {
+            outcome = RunOutcomeKind.Incomplete;
+            heldBack = true;
+        }
+
         // What is not complete, named - every step not confirmed, with the parts of the request it
         // answers for, and every check that failed - instead of the first reason any step happened
         // to give (the user's model: "no - list concretely what is not finished").
         if (outcome is RunOutcomeKind.Failed or RunOutcomeKind.Incomplete
             && NotComplete(work, verification, finalChecks) is { Length: > 0 } open)
-            reason = "Not complete - " + string.Join("; ", work.ItemsCameTo is null ? open : [work.ItemsCameTo, .. open])
+            reason = "Not complete - " + string.Join("; ", work.ItemsCameTo is null ? [.. open, .. uncovered] : [work.ItemsCameTo, .. open, .. uncovered])
                      + (work.Limit is null ? "" : $" ({work.Limit})");
+        // Nothing else is open: a run held back by the obligation alone says so; one already short of Completed for a
+        // reason with no line here (a cycle) keeps that reason first.
+        else if (uncovered.Length > 0 && outcome is RunOutcomeKind.Failed or RunOutcomeKind.Incomplete)
+            reason = heldBack || string.IsNullOrWhiteSpace(reason)
+                ? "Not complete - " + string.Join("; ", uncovered)
+                : $"{reason} - not complete: {string.Join("; ", uncovered)}";
 
         // The engine's own checks never decide a run: a new build error at the end does not prove
         // THIS run made it, because the workspace can change around a run (run 3fe4f8, commit
