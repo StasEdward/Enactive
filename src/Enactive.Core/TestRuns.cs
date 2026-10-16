@@ -51,6 +51,25 @@ public sealed record TestRunReport(IReadOnlyList<TestCaseResult> Cases, TestRunS
             .Select(t => t.Key).Order(StringComparer.Ordinal).ToArray();
     }
 
+    /// <summary>
+    /// Tests that passed in <paramref name="before"/> and are not named at all now: deleted, renamed, or no longer run.
+    ///
+    /// <para>Without this, a worker that deletes a failing test makes the regression check pass - the test is not
+    /// failing, it is not there. A rename is not matched up: the old name is reported here and the new one is simply
+    /// new, which is the honest account of what the output shows.</para>
+    ///
+    /// <para>Only meaningful when BOTH runs name their tests. A run that printed only totals (see the
+    /// <see cref="Summary"/> fallback in <see cref="Describe"/>) names none, and the absence of names is not the
+    /// absence of tests - so it says nothing, and the result is empty.</para>
+    /// </summary>
+    public IReadOnlyList<string> Disappeared(TestRunReport before)
+    {
+        if (Cases.Count == 0 || before.Cases.Count == 0) return [];
+        var now = ByName();
+        return before.ByName().Where(t => t.Value == TestVerdict.Passed && !now.ContainsKey(t.Key))
+            .Select(t => t.Key).Order(StringComparer.Ordinal).ToArray();
+    }
+
     /// <summary>The totals, or counted from the named tests when the run printed none.</summary>
     public string Describe()
     {

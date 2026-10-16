@@ -292,9 +292,22 @@ internal static class BuildRegression
                         : "it skipped them or did not name them")
                     + "): " + Named(unconfirmed) + ".";
         }
+
+        // A test that passed before and is not named now is a regression too: a worker that deletes a failing test
+        // must not make this check pass. Reported in the same finding at the same severity - it may be deliberate (a
+        // test retired with the code it covered), so it is advisory like the rest. A flaky test is still named by a
+        // second run, so the second run has nothing to say about one that is gone.
+        var gone = now.Disappeared(was);
+        var goneNote = gone.Count == 0 ? ""
+            : $"{gone.Count} test(s) passed before {span} and were not run now (deleted, renamed or no longer run): "
+              + Named(gone) + ".";
+
         if (broken.Count > 0)
             return result(CriterionOutcome.Failed, $"{broken.Count} test(s) passed before {span} and fail now: "
-                + Named(broken) + (again is null ? "" : ", both times it ran") + $". ({totals}){newNote}{flakyNote}");
+                + Named(broken) + (again is null ? "" : ", both times it ran") + "."
+                + (goneNote.Length == 0 ? "" : " " + goneNote) + $" ({totals}){newNote}{flakyNote}");
+        if (gone.Count > 0)
+            return result(CriterionOutcome.Failed, $"{goneNote} ({totals}){newNote}{flakyNote}");
         if (unconfirmed.Length > 0)
             return result(CriterionOutcome.Unknown, $"no test that passed before {span} failed twice, and not every failure "
                 + $"could be checked again ({totals}).{newNote}{flakyNote}");
