@@ -17,13 +17,18 @@ internal enum Obligation
 }
 
 /// <summary>
-/// How many times one step may be told of what it owes (Plan Phase 2): per kind of obligation, and in all. The default
-/// is what the engine did when each kind had a once-only flag of its own - once per kind, so a ceiling of the number of
-/// kinds - and not "once in all", which would have let a criteria reminder use up the reminder to hand the result on.
+/// How many times one step may be told of what it owes (Plan Phase 2): per kind of obligation, and how many reminders
+/// the loop may add in all. The default is what the engine did when each kind had a once-only flag of its own - once per
+/// kind, nothing added - and not "once in all", which would have let a criteria reminder use up the reminder to hand the
+/// result on.
 /// </summary>
 /// <param name="PerKind">How many times a step may be told of one kind of obligation. 0: never told.</param>
-/// <param name="Ceiling">How many times a step may be told of anything, all kinds together.</param>
-public sealed record ObligationNudgeLimits(int PerKind = 1, int Ceiling = ObligationLoop.KindCount);
+/// <param name="Ceiling">How many reminders beyond the first of each kind a step may be told, all kinds together. The
+/// first of each kind is never counted and never held back by it: when it counted every reminder, a step told twice of
+/// its criteria and twice of its result at two per kind had spent a ceiling of four, and was never told of its open
+/// calls - the reminder that saved run 0cf51c. Null: every added reminder the limit per kind allows,
+/// (PerKind - 1) x the number of kinds, so raising PerKind does not leave a ceiling sized for one per kind behind it.</param>
+public sealed record ObligationNudgeLimits(int PerKind = 1, int? Ceiling = null);
 
 /// <summary>
 /// The limits for a run somebody watches and for one nobody does. Which one a run is, is the run's own property - where it
@@ -123,21 +128,36 @@ internal sealed class ObligationLoop(ObligationNudgeLimits limits)
     /// <summary>The limit per kind, clamped to 0..<see cref="HardPerKind"/>.</summary>
     public int PerKind { get; } = Math.Clamp(limits.PerKind, 0, HardPerKind);
 
-    /// <summary>The ceiling over all kinds, clamped to 0..what every kind at its hard limit adds up to.</summary>
-    public int Ceiling { get; } = Math.Clamp(limits.Ceiling, 0, HardPerKind * KindCount);
+    /// <summary>
+    /// The most reminders the loop adds over all kinds - beyond the first of each, which it never counts - clamped to
+    /// 0..what every kind at its hard limit adds up to. Unset, it is every added reminder <see cref="PerKind"/> allows:
+    /// at one per kind nothing, as before the loop.
+    /// </summary>
+    public int Ceiling { get; } = Math.Clamp(limits.Ceiling ?? (Math.Clamp(limits.PerKind, 0, HardPerKind) - 1) * KindCount,
+        0, (HardPerKind - 1) * KindCount);
 
     private readonly int[] _told = new int[KindCount];
     private readonly string?[] _released = new string?[KindCount];
     private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
-    private int _total;
+    private int _added;
+
+    /// <summary>
+    /// Whether this kind may be told again as far as its own limit goes: told at least once, and fewer times than
+    /// <see cref="PerKind"/>. Only then is anything else - a carve-out, the ceiling, a position seen before - the reason
+    /// a step is not told, and only then is that said on the timeline.
+    /// </summary>
+    public bool MayAdd(Obligation kind) => _told[(int)kind] is var told && told >= 1 && told < PerKind;
 
     /// <summary>Whether to tell the step of <paramref name="kind"/> now, standing where <paramref name="signature"/> says.</summary>
     public ObligationDecision Nudge(Obligation kind, ObligationSignature signature)
     {
         var k = (int)kind;
-        if (signature.Empty) return Release(kind, "nothing is owed");
+        // Let go in silence when nothing is owed, or when the kind has had as many reminders as its limit allows: at the
+        // shipped limits that is every kind after its one reminder, and the engine before the loop said nothing when a
+        // once-only flag was spent - "Not told again" on every step's ending, naming the limit, was noise.
+        if (signature.Empty) return Quiet(kind, "nothing is owed");
         if (_told[k] >= PerKind)
-            return Release(kind, PerKind switch
+            return Quiet(kind, PerKind switch
             {
                 0 => "this run tells a step nothing of it",
                 1 => "it was told once already",
@@ -145,20 +165,26 @@ internal sealed class ObligationLoop(ObligationNudgeLimits limits)
             });
         if (_seen.Contains(k + "\u001d" + signature.Key))
             return Release(kind, "it was told of this already, and nothing the engine can see has changed since");
-        if (_total >= Ceiling)
-            return Release(kind, $"the step has been told {_total} times in all, the most for one step");
+        // The ceiling caps only what the loop adds: the first reminder of each kind is the engine's as it always was, and
+        // is never spent by reminders of other kinds (ObligationNudgeLimits.Ceiling).
+        var first = _told[k] == 0;
+        if (!first && _added >= Ceiling)
+            return Release(kind, $"the step has been told again {_added} times in all, the most for one step");
 
         _seen.Add(k + "\u001d" + signature.Key);
         _told[k]++;
-        _total++;
+        if (!first) _added++;
         _released[k] = null;
         return new(true, "", _told[k], PerKind, false);
     }
 
+    /// <summary>A release that is not said: nothing more would have been told anyway.</summary>
+    private ObligationDecision Quiet(Obligation kind, string why) => new(false, why, _told[(int)kind], PerKind, false);
+
     /// <summary>
-    /// Lets <paramref name="kind"/> go without telling: a nudge was refused, by the loop or by a rule of the step's (it
-    /// waits for a person, it is blocked, the window is full). Announced the first time for
-    /// this reason only, so a release that holds over several turns is said once.
+    /// Lets <paramref name="kind"/> go without telling: a reminder the loop would have added was refused, by the loop (a
+    /// position seen before, the ceiling) or by a rule of the step's (it is blocked, the window is full). Announced the
+    /// first time for this reason only, so a release that holds over several turns is said once.
     /// </summary>
     public ObligationDecision Release(Obligation kind, string why)
     {

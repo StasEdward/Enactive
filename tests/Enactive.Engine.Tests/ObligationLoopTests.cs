@@ -84,8 +84,9 @@ public sealed class ObligationLoopTests : IDisposable
 
         var (first, _) = await End(ending, Turn());
         var told = LastTold;
-        var (second, _) = await End(ending, Turn());
+        var (second, events) = await End(ending, Turn());
 
+        Assert.DoesNotContain(events, e => e.Summary.StartsWith("Not told again", StringComparison.Ordinal));
         Assert.Equal(StepEnding.Next.Continue, first.Next);
         Assert.Contains(kind switch
         {
@@ -117,22 +118,57 @@ public sealed class ObligationLoopTests : IDisposable
         Assert.Contains("nothing the engine can see has changed", back.Why, StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// A -> B -> A cannot reset the count: an alternation between two positions is told twice and then let go, and the
-    /// ceiling holds over every kind together.
-    /// </summary>
+    /// <summary>A -> B -> A cannot reset the count: an alternation between two positions is told twice and then let go.</summary>
     [Fact]
-    public void An_alternation_is_released_at_the_ceiling_and_not_looped()
+    public void An_alternation_is_released_and_not_looped()
     {
-        var loop = new ObligationLoop(new ObligationNudgeLimits(PerKind: 3, Ceiling: 2));
+        var loop = new ObligationLoop(new ObligationNudgeLimits(PerKind: 3, Ceiling: 8));
 
         var told = Enumerable.Range(0, 10).Count(i => loop.Nudge(Obligation.Criteria, At(i % 2 == 0 ? "a" : "b")).Nudge);
-        var other = loop.Nudge(Obligation.Output, At("c"));
 
         Assert.Equal(2, told);
-        Assert.False(other.Nudge);
-        Assert.Contains("in all", other.Why, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// The ceiling holds over every kind together, and counts only the reminders the loop adds: a small one stops the
+    /// second reminder of a kind, never the first of another - the first of each kind is untouchable.
+    /// </summary>
+    [Fact]
+    public void A_small_ceiling_stops_added_reminders_and_never_a_first_one()
+    {
+        var loop = new ObligationLoop(new ObligationNudgeLimits(PerKind: 3, Ceiling: 1));
+
+        var criteria = new[] { "a", "b", "c" }.Select(p => loop.Nudge(Obligation.Criteria, At(p))).ToArray();
+        var firsts = new[] { Obligation.DescribedCall, Obligation.Output, Obligation.OpenCalls }
+            .Select(kind => loop.Nudge(kind, At("x"))).ToArray();
+        var addedOutput = loop.Nudge(Obligation.Output, At("y"));
+
+        Assert.Equal([true, true, false], criteria.Select(d => d.Nudge));
+        Assert.Contains("in all", criteria[2].Why, StringComparison.Ordinal);
+        Assert.All(firsts, d => Assert.True(d.Nudge));
+        Assert.False(addedOutput.Nudge);
+    }
+
+    /// <summary>A ceiling of 0 lets no kind be told twice, and every kind be told once.</summary>
+    [Fact]
+    public void A_ceiling_of_nothing_still_gives_every_kind_its_first_reminder()
+    {
+        var loop = new ObligationLoop(new ObligationNudgeLimits(PerKind: 2, Ceiling: 0));
+
+        Assert.All(Enum.GetValues<Obligation>(), kind => Assert.True(loop.Nudge(kind, At("a")).Nudge));
+        Assert.All(Enum.GetValues<Obligation>(), kind => Assert.False(loop.Nudge(kind, At("b")).Nudge));
+    }
+
+    /// <summary>
+    /// The default ceiling grows with the limit per kind: it is there to cap what the loop adds, and at two per kind every
+    /// kind may be told twice - a fixed ceiling of four would have let the first two kinds use it up.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(2, 4)]
+    [InlineData(3, 8)]
+    public void The_default_ceiling_is_every_added_reminder_the_limit_per_kind_allows(int perKind, int ceiling)
+        => Assert.Equal(ceiling, new ObligationLoop(new ObligationNudgeLimits(PerKind: perKind)).Ceiling);
 
     [Fact]
     public void The_same_position_twice_is_released_after_one_nudge_however_high_the_limit()
@@ -163,29 +199,34 @@ public sealed class ObligationLoopTests : IDisposable
         var told = Enumerable.Range(0, 10).Count(i => loop.Nudge(Obligation.Output, At("field" + i)).Nudge);
 
         Assert.Equal(ObligationLoop.HardPerKind, told);
-        Assert.Equal(ObligationLoop.HardPerKind * ObligationLoop.KindCount, loop.Ceiling);
+        Assert.Equal((ObligationLoop.HardPerKind - 1) * ObligationLoop.KindCount, loop.Ceiling);
     }
 
     [Fact]
     public void Nothing_owed_is_never_told()
         => Assert.False(new ObligationLoop(new ObligationNudgeLimits()).Nudge(Obligation.Criteria, At()).Nudge);
 
-    /// <summary>The compatible default is one per kind and a ceiling of the number of kinds, attended and unattended alike.</summary>
+    /// <summary>
+    /// The compatible default is one per kind - each kind told once, as by its old flag - with the default ceiling, which
+    /// at one per kind adds nothing to cap, attended and unattended alike.
+    /// </summary>
     [Fact]
-    public void The_shipped_limits_are_one_per_kind_and_a_ceiling_of_the_number_of_kinds()
+    public void The_shipped_limits_are_one_per_kind_and_nothing_added()
     {
         var shipped = EngineOptions.Default.ObligationNudges;
 
         Assert.Equal(ObligationLoop.KindCount, Enum.GetValues<Obligation>().Length);
-        Assert.Equal(new ObligationNudgeLimits(1, ObligationLoop.KindCount), shipped.Attended);
-        Assert.Equal(new ObligationNudgeLimits(1, ObligationLoop.KindCount), shipped.Unattended);
+        Assert.Equal(new ObligationNudgeLimits(1), shipped.Attended);
+        Assert.Equal(new ObligationNudgeLimits(1), shipped.Unattended);
+        Assert.Null(shipped.Attended.Ceiling);
+        Assert.Equal(0, new ObligationLoop(shipped.Attended).Ceiling);
     }
 
     // ── the step's ending, through the loop ─────────────────────────────────
 
     private StepEnding Ending(ObligationNudgeLimits? limits = null, IReadOnlyList<SuccessCriterionDefinition>? criteria = null,
-        StepFrame? frame = null, Func<bool>? waitingForAnswer = null)
-        => new(frame ?? Frame(), (_, _) => Task.FromResult<string?>(null), criteria, nudges: limits, waitingForAnswer: waitingForAnswer);
+        StepFrame? frame = null)
+        => new(frame ?? Frame(), (_, _) => Task.FromResult<string?>(null), criteria, nudges: limits);
 
     private static SuccessCriterionDefinition Exists(string name, string path)
         => new(name, "") { Step = 0, Typed = new TypedCriterion(TypedCriterionKind.FileExists, path) };
@@ -262,8 +303,8 @@ public sealed class ObligationLoopTests : IDisposable
 
     private static readonly ObligationNudgeLimits TwoPerKind = new(PerKind: 2, Ceiling: 8);
 
-    private StepEnding TwoCriteria(Func<bool>? waitingForAnswer = null)
-        => Ending(TwoPerKind, [Exists("disk report", "disk-report.md"), Exists("summary", "summary.md")], waitingForAnswer: waitingForAnswer);
+    private StepEnding TwoCriteria()
+        => Ending(TwoPerKind, [Exists("disk report", "disk-report.md"), Exists("summary", "summary.md")]);
 
     /// <summary>
     /// Context guard: every further nudge is a turn with the whole prompt, and near the window there is no room for one.
@@ -293,21 +334,56 @@ public sealed class ObligationLoopTests : IDisposable
         }
     }
 
-    /// <summary>A step waiting on a person's answer is not told anything more - nobody is going to change what it waits on by a reminder.</summary>
+    /// <summary>
+    /// A kind told as often as its limit allows is let go by that limit alone, and silently: a carve-out that also holds
+    /// is not named as the reason - here the window, which used to be said for a step that would not have been told
+    /// again anyway.
+    /// </summary>
     [Fact]
-    public async Task A_step_waiting_for_a_person_s_answer_is_not_told_again()
+    public async Task A_kind_at_its_limit_is_let_go_without_naming_a_carve_out()
     {
-        var ending = TwoCriteria(waitingForAnswer: () => true);
+        var ending = Ending(new ObligationNudgeLimits(PerKind: 1, Ceiling: 4), [Exists("disk report", "disk-report.md"), Exists("summary", "summary.md")]);
 
-        var (first, _) = await End(ending, Says("Done."));
+        var (first, _) = await End(ending, Says("Done.", prompt: 950, window: 1000));
         _fx.Write("disk-report.md", "all disks healthy");
-        var before = _messages.Count;
-        var (second, events) = await End(ending, Says("Wrote the report."));
+        var (second, events) = await End(ending, Says("Wrote the report.", prompt: 950, window: 1000));
 
         Assert.Equal(StepEnding.Next.Continue, first.Next);
         Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Incomplete), (second.Next, second.Kind));
-        Assert.Equal(before, _messages.Count);
-        Assert.Contains(events, e => e.Summary.Contains("waiting for a person's answer", StringComparison.Ordinal));
+        Assert.DoesNotContain(events, e => e.Summary.StartsWith("Not told again", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The first reminder of each kind is untouchable: at two per kind, a step told of a described call, twice of its
+    /// criteria and once of its result is still told of its open calls - run 0cf51c's reminder - where a ceiling of four
+    /// in all used to have been spent.
+    /// </summary>
+    [Fact]
+    public async Task At_two_per_kind_a_step_that_owes_every_kind_is_told_of_each_at_least_once()
+    {
+        var ending = Ending(new ObligationNudgeLimits(PerKind: 2), [Exists("disk report", "disk-report.md"), Exists("summary", "summary.md")],
+            Frame(Findings, new StepOutputSlot()));
+        ending.Open.Failed(Call("run_command", """{"command":"wmic diskdrive get status"}"""), "'wmic' is not recognized");
+        var told = new List<string>();
+
+        await End(ending, Says("Done.", described: Call("read_file", """{"path":"disks.md"}""")));
+        told.Add(LastTold);
+        await End(ending, Says("Done."));
+        told.Add(LastTold);
+        _fx.Write("disk-report.md", "all disks healthy");
+        await End(ending, Says("Wrote the report."));
+        told.Add(LastTold);
+        await End(ending, Says("Done."));
+        told.Add(LastTold);
+        var (open, _) = await End(ending, Says("Done."));
+        told.Add(LastTold);
+
+        Assert.Contains("instead of invoking it", told[0], StringComparison.Ordinal);
+        Assert.StartsWith("Before this step ends: the plan checks this step's work", told[1]);
+        Assert.StartsWith("Before this step ends: the plan checks this step's work", told[2]);
+        Assert.StartsWith("This step is not finished until it hands its result on", told[3]);
+        Assert.Equal(StepEnding.Next.Continue, open.Next);
+        Assert.StartsWith("Before this step ends: this call did not go through", told[4]);
     }
 
     /// <summary>

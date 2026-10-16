@@ -3801,10 +3801,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // and this loop does not.
         var stepEnding = new StepEnding(frame,
             async (path, token) => await store.TryReadPendingAsync(path, token) ?? await ReadOrNullAsync(path, token),
-            stepCriteria, reviewed, _options.ObligationNudges.For(_unattended),
-            // THIS step's question, not the task's: with steps running side by side, one that stops at a question
-            // unwinds while the others are still finishing their turns, and they are not the ones waiting.
-            () => _progress.HasParked(taskId, stepNo));
+            stepCriteria, reviewed, _options.ObligationNudges.For(_unattended));
 
         var admission = new CallAdmission(frame, _tools, _permissions, worker, EffectivePolicyFor(worker), offer, _progress,
             _decisions, _decisionGate, granted, _writableRoots, toolsOnRequest, mayReportBlocked,

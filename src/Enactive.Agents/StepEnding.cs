@@ -26,9 +26,8 @@ using Enactive.Core.Tools;
 /// followed by the end of the step. They now ask one <see cref="ObligationLoop"/>, which tells again while what the
 /// engine sees of the step changes, within <paramref name="nudges"/>; its default is once per kind, as before. When
 /// the loop lets an obligation go, its rule ends the step as it always did. The first reminder of each kind is given as
-/// before; nothing beyond it is told to a step waiting for a person's answer, a step the engine sees is blocked, or with
-/// a prompt too near the model's window for another turn (see Ask). The loop lives as long as this object - one attempt
-/// at the step.</para>
+/// before; nothing beyond it is told to a step the engine sees is blocked, or with a prompt too near the model's window
+/// for another turn (see Ask). The loop lives as long as this object - one attempt at the step.</para>
 ///
 /// <para><b>What it records.</b> What a step is told - the reminders, the request to re-send a call - is added to its
 /// conversation here, and every event about the ending is emitted here, as it happens. The loop learns only what
@@ -43,14 +42,12 @@ using Enactive.Core.Tools;
 /// <param name="reviewed">Whether a reviewer judges this step when it ends.</param>
 /// <param name="nudges">How often the step may be told what it owes - the run's attended or unattended pair
 /// (EngineOptions.ObligationNudges). Null: the shipped default, once per kind.</param>
-/// <param name="waitingForAnswer">Whether this step is waiting for a person's answer to a question it stopped at.</param>
 internal sealed class StepEnding(
     StepFrame frame,
     Func<string, CancellationToken, Task<string?>> readFile,
     IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null,
     bool reviewed = false,
-    ObligationNudgeLimits? nudges = null,
-    Func<bool>? waitingForAnswer = null)
+    ObligationNudgeLimits? nudges = null)
 {
     /// <summary>One turn as the step ends it - or not.</summary>
     /// <param name="Calls">The tool calls the turn made, or null.</param>
@@ -378,8 +375,9 @@ internal sealed class StepEnding(
 
     /// <summary>
     /// Whether to tell the step of <paramref name="kind"/> now. The first reminder of each kind is the loop's alone, as it
-    /// always was; a further one is first held back by what keeps any step from being told again - the carve-outs AI-DLC's
-    /// Stop hook has for a person's wait, and the context guard - and then left to the loop.
+    /// always was; a further one that the limit per kind allows is first held back by what keeps any step from being told
+    /// again - a block, which waits on a person as the work AI-DLC's Stop hook lets go of does, and the context guard - and
+    /// then left to the loop.
     ///
     /// <para><b>Why only beyond the first.</b> The first reminder is what the engine has always given, and what it bought
     /// is measured: a step with a declared output and one refused call - a block, as the engine reads it - was reminded,
@@ -394,12 +392,12 @@ internal sealed class StepEnding(
     /// </summary>
     private ObligationDecision Ask(Obligation kind, Turn turn, Func<ObligationSignature> position)
     {
-        if (_loop.TimesTold(kind) >= 1)
+        // After the limit per kind, not before it: a kind its limit lets go is let go by the limit, silently, and a
+        // carve-out that happens to hold as well is not named as the reason (ObligationLoop.MayAdd).
+        if (_loop.MayAdd(kind))
         {
-            // A question this step stopped at is answered by a person, not by the step: a reminder is a turn spent where
-            // nothing the step can do changes what it waits for.
-            if (waitingForAnswer?.Invoke() == true)
-                return _loop.Release(kind, "the step is waiting for a person's answer, which no reminder changes");
+            // No carve-out for a step waiting for a person's answer: no such step reaches its ending - a parked question
+            // unwinds the step by exception, an attended one is answered inside the call that asked it.
             // Blocked (Phase 7.1): a permission refused, or nothing the step looked for there - for a person to put right.
             if (Open.Block is { } block)
                 return _loop.Release(kind, "the step is blocked (" + block.Reason + "), which is for a person to put right");

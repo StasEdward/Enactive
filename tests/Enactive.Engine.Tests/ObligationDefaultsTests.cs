@@ -36,10 +36,16 @@ public sealed class ObligationDefaultsTests : IDisposable
     private static StepEnding.Turn Says(string reply, ToolCall? described = null, int? prompt = null, int? window = null)
         => new(reply, null, false, described, 1, 0, null, prompt, () => window);
 
+    /// <summary>
+    /// One turn's ending. At the shipped limits nothing is ever "not told again": the engine before the loop said nothing
+    /// when a kind's once-only flag was spent, and a release is announced only when something held back a reminder the
+    /// loop would have added - which at one per kind it never adds.
+    /// </summary>
     private static async Task<StepEnding.Verdict> End(StepEnding ending, StepEnding.Turn turn)
     {
         var verdict = new StepEnding.Verdict();
-        await foreach (var _ in ending.EndAsync(turn, verdict, CancellationToken.None)) { }
+        await foreach (var e in ending.EndAsync(turn, verdict, CancellationToken.None))
+            Assert.False(e.Summary.StartsWith("Not told again", StringComparison.Ordinal), e.Summary);
         return verdict;
     }
 
@@ -175,5 +181,6 @@ public sealed class ObligationDefaultsTests : IDisposable
         Assert.Equal(RunOutcomeKind.Incomplete, events.Last(e => e.Kind is EventKind.TaskCompleted or EventKind.TaskFailed).Outcome());
         Assert.Contains("token(s)", events.Last(e => e.Kind is EventKind.TaskCompleted or EventKind.TaskFailed).OutcomeReason());
         Assert.Equal(2, provider.Requests.Count);
+        Assert.DoesNotContain(events, e => e.Summary.StartsWith("Not told again", StringComparison.Ordinal));
     }
 }
