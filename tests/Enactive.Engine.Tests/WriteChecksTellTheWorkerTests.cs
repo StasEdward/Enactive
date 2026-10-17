@@ -262,7 +262,10 @@ public sealed class WriteChecksTellTheWorkerTests
             Assert.Empty(checker.Seen);
             return (ToolResults(worker).ToArray(),
                 // The fixture's folder is a new one per run, and the workspace is named after it.
-                events.Select(e => $"{e.Kind}: {e.Summary.Replace(fx.Root, "<root>", StringComparison.OrdinalIgnoreCase)
+                // The run's one line on which checks judge it (WorkspaceChecks.Inventory) is said whenever there are any -
+                // it is about the run's checks, not about write time, and is left out of the comparison.
+                events.Where(e => !e.Summary.StartsWith("Declared checks judging this run", StringComparison.Ordinal))
+                    .Select(e => $"{e.Kind}: {e.Summary.Replace(fx.Root, "<root>", StringComparison.OrdinalIgnoreCase)
                     .Replace(fx.Workspace.Name, "<workspace>", StringComparison.OrdinalIgnoreCase)}").ToArray());
         }
 
