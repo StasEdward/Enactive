@@ -12,6 +12,7 @@ using Enactive.Core.Permissions;
 using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Tools;
+using Enactive.Workspace;
 using Xunit;
 
 /// <summary>
@@ -206,6 +207,79 @@ public sealed class DeclaredChecksAreRunInTheirTimeTests
         var gammaStarted = resumed.FindIndex(e => e.Kind == EventKind.StepStarted && e.Summary.Contains(Gamma, StringComparison.Ordinal));
         Assert.True(gammaStarted > resumed.IndexOf(ran), resumed.Text());
         Assert.Equal(RunOutcomeKind.Completed, resumed.Last().Outcome());
+    }
+
+    /// <summary>
+    /// A blocking check that did not run at a wave's end (it outlasted its time) holds the run back - and still does after
+    /// a pause: the paused checkpoint keeps what it came to, and the resumed run, whose one step writes nothing and so
+    /// owes no check of its own, is not Completed on it. Without the pause the run is Incomplete; a pause is no way out.
+    /// </summary>
+    [Fact]
+    public async Task A_blocking_wave_check_that_did_not_run_still_holds_the_run_back_after_a_pause()
+    {
+        var (fx, store, checkpoint, plan) = await PausedAfterAWaveCheckThatDidNotRunAsync();
+        using var _ = fx;
+
+        var held = Assert.Single(checkpoint.HeldBackBy ?? []);
+        Assert.Equal(CriterionOutcome.Unknown, held.Outcome);
+        Assert.Equal("slow", held.Check?.CheckId);
+        Assert.Null(held.Output);
+
+        var resumed = await ResumeWithAStepThatWritesNothingAsync(fx, plan, checkpoint);
+
+        Assert.Empty(Checks(resumed, "slow ("));
+        Assert.Equal(RunOutcomeKind.Incomplete, resumed.Last().Outcome());
+        Assert.Contains("slow", resumed.Last().OutcomeReason() ?? "", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The same from a process killed after the wave's boundary: what it leaves is a checkpoint written there, not a paused
+    /// one - and the resumed run is held back on the check all the same.
+    /// </summary>
+    [Fact]
+    public async Task A_blocking_wave_check_that_did_not_run_still_holds_back_a_run_resumed_after_a_crash()
+    {
+        var (fx, store, checkpoint, plan) = await PausedAfterAWaveCheckThatDidNotRunAsync();
+        using var _ = fx;
+
+        // Read back from disk, as a new process would: what holds the run back must survive the file, not only memory.
+        var disk = new JsonCheckpointStore(fx.Workspace);
+        await disk.SaveAsync(checkpoint with { Paused = false }, CancellationToken.None);
+        var left = await disk.LoadAsync(checkpoint.RunId, CancellationToken.None);
+        Assert.Equal(CriterionOutcome.Unknown, Assert.Single(left!.HeldBackBy ?? []).Outcome);
+
+        var resumed = await ResumeWithAStepThatWritesNothingAsync(fx, plan, left);
+
+        Assert.Equal(RunOutcomeKind.Incomplete, resumed.Last().Outcome());
+        Assert.Contains("slow", resumed.Last().OutcomeReason() ?? "", StringComparison.Ordinal);
+    }
+
+    private static async Task<(EngineFixture Fx, Store Store, RunCheckpoint Checkpoint, string Plan)> PausedAfterAWaveCheckThatDidNotRunAsync()
+    {
+        var plan = WavesAreValidatedAndAttributedTests.Plan((Alpha, []), (Beta, []), (Gamma, [0, 1]));
+        var fx = WavesAreValidatedAndAttributedTests.Wiki();
+        fx.Pause = new RunPause();
+        fx.Checks = Snapshot(Check("slow", Sleep(4), CheckFire.Step, CheckSeverity.Blocking, timeout: 1, matches: "pages/**"));
+        var store = new Store();
+        var first = new ByStepChatProvider(plan);
+        first.Step(Alpha, WavesAreValidatedAndAttributedTests.Writes("pages/a.page", "# A", "a1"), Turn.Says("Wrote a."));
+        first.Step(Beta, WavesAreValidatedAndAttributedTests.Writes("pages/b.page", "# B", "b1"), Turn.Says("Wrote b."));
+        PauseWhileRunning(first, fx.Pause, Alpha, Beta);
+
+        var paused = await fx.RunAsync(fx.Build(first, EngineFixture.Role("developer"), maxParallelSteps: 2, checkpoints: store), "write the pages");
+
+        Assert.Equal(RunOutcomeKind.Paused, paused.Last().Outcome());
+        Assert.StartsWith("NOT CHECKED", Assert.Single(Checks(paused, "slow (wave 1: steps 1 and 2)")).Summary, StringComparison.Ordinal);
+        var checkpoint = Assert.Single(store.Kept);
+        Assert.Null(checkpoint.PendingChecks);
+        return (fx, store, checkpoint, plan);
+    }
+
+    private static async Task<List<WorkEvent>> ResumeWithAStepThatWritesNothingAsync(EngineFixture fx, string plan, RunCheckpoint checkpoint)
+    {
+        fx.Pause = null;
+        var second = new ByStepChatProvider(plan) { Resumed = true }.Step(Gamma, Turn.Says("Nothing left to write."));
+        return (await fx.ResumeAsync(fx.Build(second, EngineFixture.Role("developer"), maxParallelSteps: 2, checkpoints: new Store()), checkpoint)).ToList();
     }
 
     // ── the quick action ────────────────────────────────────────────────────────────────────

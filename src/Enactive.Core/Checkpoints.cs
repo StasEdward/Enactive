@@ -215,6 +215,16 @@ public sealed record RunCheckpoint(
     public IReadOnlyList<Enactive.Core.Checks.PendingCheck>? PendingChecks { get; init; }
 
     /// <summary>
+    /// What the checks at a wave's end came to that holds the run back (Plan Phase 3.2) - a blocking check that failed or
+    /// did not run there - without its whole output (that is kept in the run's folder). A wave's check is discharged once
+    /// it has run, so it is no longer owed; its result was only in the running process, and a pause or a crash after the
+    /// wave's end lost it: the resumed run, with nothing owed and nothing failing, ended Completed on a blocking check
+    /// that never passed. Kept here, a resumed run's end is decided on it as the run's own would have been. Null when
+    /// nothing holds the run back, and for a checkpoint from before.
+    /// </summary>
+    public IReadOnlyList<Enactive.Core.Templates.CriterionResult>? HeldBackBy { get; init; }
+
+    /// <summary>
     /// The files the run's checks protect, with their hashes as its baseline found them (Plan Phase 3.4). A resumed run
     /// judges a step's removals against THESE: taken again on resume, they would be the files as the run's first half left
     /// them - a file it had already removed would no longer be protected, and one added meanwhile would be. Null when no

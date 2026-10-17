@@ -1109,6 +1109,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // What the interrupted run was asked to remove stays released (RunCheckpoint.ProtectedReleased).
         foreach (var released in resume?.ProtectedReleased ?? [])
             session.ProtectedReleased.Add(released);
+        // What held the interrupted run back at a wave's end (RunCheckpoint.HeldBackBy): run and discharged there, so not
+        // owed again - and, not carried, a resumed run ended as if that blocking check had passed.
+        session.BoundaryChecks.AddRange(resume?.HeldBackBy ?? []);
 
         // The manifests as they are now against what the checkpoint's snapshot hashed: a person may have edited them
         // while the run was interrupted. The resumed run is judged by its snapshot all the same, so this is only SAID -
@@ -1649,6 +1652,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     // The checks whole, and what is still owed of them (Plan Phase 3.1): a resume reads both from here.
                     CheckSnapshot = session.Checks,
                     PendingChecks = PendingChecksNow(session),
+                    HeldBackBy = HeldBackNow(session),
                     // With the baseline, as it was taken (Plan Phase 3.4): a resume judges removals against these.
                     ProtectedFiles = session.Protected.Count > 0 ? session.Protected : null,
                     ProtectedReleased = ReleasedNow(session) };
@@ -2902,6 +2906,18 @@ public sealed partial class Orchestrator : IOrchestrator
     {
         lock (session.PendingChecks)
             return session.PendingChecks.Count > 0 ? session.PendingChecks.ToArray() : null;
+    }
+
+    /// <summary>
+    /// What the waves' checks came to that holds the run back, for a checkpoint (RunCheckpoint.HeldBackBy): the results that
+    /// keep the run from Completed (CriterionResult.Blocking), without their whole output - it is in the run's folder
+    /// already, and a checkpoint is written on every step boundary. Null rather than empty when none does.
+    /// </summary>
+    private static IReadOnlyList<CriterionResult>? HeldBackNow(RunSession session)
+    {
+        lock (session.BoundaryChecks)
+            return session.BoundaryChecks.Where(r => r.Blocking).Select(r => r with { Output = null }).ToArray() is { Length: > 0 } held
+                ? held : null;
     }
 
     /// <summary>The protected files released so far, for a checkpoint - null rather than empty when none was.</summary>
