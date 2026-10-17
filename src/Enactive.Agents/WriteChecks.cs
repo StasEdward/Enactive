@@ -35,6 +35,13 @@ using Enactive.Core.Tools;
 internal sealed class WriteChecks
 {
     /// <summary>
+    /// What a turn's write checks came to, a line each for the run's feed: with the check's result when one was decided (it
+    /// ran, or was not run and why) - published as the check's criterion event, fired on write (Plan Phase 3.3) - and
+    /// without one for a line that is about no single result (the turn's budget used up).
+    /// </summary>
+    internal sealed record Said(string Line, string? CheckId = null, CriterionResult? Result = null);
+
+    /// <summary>
     /// How much of what a check said the WORKER is shown: its start and its end, about ten lines of a linter's or a
     /// compiler's output - the first finding and the summary line. It is added to the result of a write, every turn the
     /// check runs, in the conversation of a worker that is often a small local model with a small window; a check's
@@ -186,10 +193,10 @@ internal sealed class WriteChecks
     /// A check that may not run is not run, and the worker is told so once.</param>
     /// <param name="run">Runs one check as a criterion through the run's SuccessEvaluator: the same permission gate, the
     /// same "the exit code decides", the same reading of a test command that ran no tests.</param>
-    public async Task<IReadOnlyList<string>> RunOwedAsync(string? whyNotRun,
+    public async Task<IReadOnlyList<Said>> RunOwedAsync(string? whyNotRun,
         Func<SuccessCriterionDefinition, CancellationToken, Task<CriterionResult>> run, CancellationToken ct)
     {
-        var said = new List<string>();
+        var said = new List<Said>();
         var started = Time.GetTimestamp();
         var overBudget = new List<(ResolvedCheck Check, string CallId)>();
         foreach (var check in _checks)
@@ -204,7 +211,8 @@ internal sealed class WriteChecks
                     continue;
                 Tell(owed.CallId, $"[Write-time check '{check.Id}': {whyNotRun}. It is not run at write time in this step; "
                     + "nothing about your write follows from that.]");
-                said.Add(Record(check, after, whyNotRun, null));
+                said.Add(new Said(Record(check, after, whyNotRun, null), check.Id,
+                    new CriterionResult(Name(check), check.Definition.Command!, false, CriterionOutcome.Unknown, null, whyNotRun)));
                 continue;
             }
 
@@ -259,7 +267,10 @@ internal sealed class WriteChecks
                 + (result?.Outcome == CriterionOutcome.Failed
                     ? "\nAdvisory: it does not undo your write or end the step. If what it says is about your change, fix it.]"
                     : "]"));
-            said.Add(Record(check, after, verdict, string.IsNullOrWhiteSpace(output) ? null : SuccessEvaluator.Trim(output)));
+            said.Add(new Said(Record(check, after, verdict, string.IsNullOrWhiteSpace(output) ? null : SuccessEvaluator.Trim(output)),
+                check.Id,
+                (result ?? new CriterionResult(criterion.Name, criterion.Command, false, CriterionOutcome.Unknown, null,
+                    SuccessEvaluator.DidNotFinish(seconds))) with { Name = Name(check), Required = false, Origin = CriterionOrigin.Declared }));
         }
 
         if (overBudget.Count > 0)
@@ -267,7 +278,7 @@ internal sealed class WriteChecks
             var names = string.Join(", ", overBudget.Select(o => $"'{o.Check.Id}'"));
             Tell(overBudget[^1].CallId, $"[Write-time check(s) {names}: not run this turn - the checks before them used the "
                 + $"{TurnBudgetSeconds}s this turn's write-time checks may take. They run again after your next write they cover.]");
-            said.Add($"Write-time check(s) {names}: not run this turn - the turn's {TurnBudgetSeconds}s for write-time checks was used.");
+            said.Add(new Said($"Write-time check(s) {names}: not run this turn - the turn's {TurnBudgetSeconds}s for write-time checks was used."));
         }
         _owed.Clear();
         return said;
@@ -310,6 +321,10 @@ internal sealed class WriteChecks
     /// When the check ran, by the writes that made it owed. Not "on" them: the check's command judges whatever it
     /// covers, which may be more than - or other than - the files just written.
     /// </summary>
+    /// <summary>A write check's result's name, as a step check's is named by where it was owed: "spell (after a write in step 2)".</summary>
+    private string Name(ResolvedCheck check)
+        => WorkspaceChecks.Label(check.Id, _frame.StepNo is { } step ? $"after a write in step {step}" : "after a write");
+
     private static string After(IReadOnlyList<string> paths)
         => "after writing " + string.Join(", ", paths.Take(NamedPaths))
            + (paths.Count > NamedPaths ? $" and {paths.Count - NamedPaths} more" : "");

@@ -76,6 +76,10 @@ public sealed class CapsAnnounceThemselvesTests
         ["SuccessEvaluator.MaxDetailChars"] = nameof(A_criterions_output_says_how_much_of_it_is_shown),
         // A write-time check's finding, added to the result of the write the worker reads next.
         ["WriteChecks.WorkerOutputChars"] = nameof(WriteChecksTellTheWorkerTests.A_long_finding_is_told_to_the_worker_in_part_and_says_so),
+        // A check's whole output kept beside the run (Plan Phase 3.3), and the files a run protects (Plan Phase 3.4).
+        ["CheckRecords.MaxDetailChars"] = nameof(CheckRecordsTests.A_check_record_past_its_size_is_cut_and_says_so),
+        ["ProtectedFiles.MaxFiles"] = nameof(ProtectedFilesTests.Protected_files_past_the_most_that_are_hashed_say_so),
+        ["Orchestrator.ProtectedDiffChars"] = nameof(ProtectedFilesTests.A_long_diff_of_a_protected_file_is_shown_in_part_and_says_so),
         ["ProcessExec.MaxOutputChars"] = nameof(Command_output_past_the_cap_says_it_was_truncated),
         ["ReadFilesTool.MaxFiles"] = nameof(More_paths_than_read_files_takes_says_how_many),
         ["FilePreview.MaxInputChars"] = nameof(BoundedFilePreviewTests.Large_preview_bounds_allocations_and_announces_the_input_limit),

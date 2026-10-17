@@ -54,6 +54,12 @@ public sealed record CheckpointStep(
     /// <summary>Only looks, and changes no file.</summary>
     public bool ReadOnly { get; init; }
 
+    /// <summary>
+    /// The planner marked it as a step the request asks to change protected files (Plan Phase 3.4): a protected file it
+    /// removes is shown to the reviewer, not sent back. Kept, so a resumed step is judged as it was planned.
+    /// </summary>
+    public bool ChangesProtected { get; init; }
+
     /// <summary>Every time this step was blocked, oldest first (Phase 7) - kept, so a resume loses no attempt.</summary>
     public IReadOnlyList<Enactive.Core.Tasks.StepBlock>? Blocks { get; init; }
 
@@ -207,6 +213,14 @@ public sealed record RunCheckpoint(
     /// interruption cannot lose one: a deferred blocking check is not a pass. Null when none is owed.
     /// </summary>
     public IReadOnlyList<Enactive.Core.Checks.PendingCheck>? PendingChecks { get; init; }
+
+    /// <summary>
+    /// The files the run's checks protect, with their hashes as its baseline found them (Plan Phase 3.4). A resumed run
+    /// judges a step's removals against THESE: taken again on resume, they would be the files as the run's first half left
+    /// them - a file it had already removed would no longer be protected, and one added meanwhile would be. Null when no
+    /// check protects anything, and for a checkpoint from before protected files.
+    /// </summary>
+    public IReadOnlyList<Enactive.Core.Checks.ProtectedFile>? ProtectedFiles { get; init; }
 }
 
 /// <summary>

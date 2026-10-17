@@ -67,6 +67,13 @@ public sealed record PlanStep(
     /// </summary>
     public bool ReadOnly { get; init; }
 
+    /// <summary>
+    /// A step the request asks to change files a check protects - remove or rename a test, say (Plan Phase 3.4). Declared by
+    /// the planner, never guessed: a protected file such a step removes is shown to the reviewer instead of sending the
+    /// step back. For this step only - the next one that removes one is sent back as any is.
+    /// </summary>
+    public bool ChangesProtected { get; init; }
+
     /// <summary>The lists of earlier steps this step takes as data, and must account for item by item (Plan Phase 1.1).</summary>
     public IReadOnlyList<ConsumeSpec>? Consumes { get; init; }
 
@@ -151,6 +158,7 @@ public sealed record PlanStepSpec(
     public string? Report { get; init; }
     public bool Critical { get; init; }
     public bool ReadOnly { get; init; }
+    public bool ChangesProtected { get; init; }
     public IReadOnlyList<ConsumeSpec>? Consumes { get; init; }
 
     /// <summary>0-based positions of steps this one only waits for ("after"): dependencies that hand on no data.</summary>
@@ -193,7 +201,8 @@ public static class DagPlan
 
             steps.Add(new PlanStep(ids[i], specs[i].Title, StepStatus.Pending, deps, specs[i].Complexity)
                 { ObligationIds = specs[i].ObligationIds, Output = specs[i].Output, ForEach = specs[i].ForEach, Report = specs[i].Report,
-                  Critical = specs[i].Critical, ReadOnly = specs[i].ReadOnly, Consumes = specs[i].Consumes,
+                  Critical = specs[i].Critical, ReadOnly = specs[i].ReadOnly, ChangesProtected = specs[i].ChangesProtected,
+                  Consumes = specs[i].Consumes,
                   OrderOnly = orderOnly is { Count: > 0 } ? orderOnly : null });
         }
         return new Plan(Guid.NewGuid(), steps);

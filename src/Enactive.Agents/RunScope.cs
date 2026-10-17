@@ -155,5 +155,5 @@ public sealed class RunScope
         => new(Guid.NewGuid(), TaskId, RunId, DateTimeOffset.UtcNow, EventKind.CriterionEvaluated,
                r.Describe(),
                WorkEventPayload.CriterionPayload(r.Name, r.Outcome.ToString(), r.Required, r.ExitCode,
-                   r.Origin.ToString()));
+                   r.Origin.ToString(), r.Check));
 }

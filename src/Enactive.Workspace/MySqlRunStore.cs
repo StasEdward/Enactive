@@ -24,10 +24,19 @@ public sealed class MySqlRunStore : IRunStore
     private readonly SemaphoreSlim _gate = new(1, 1);
     private bool _initialized;
 
-    public MySqlRunStore(string connectionString, Guid workspaceId)
+    /// <summary>The workspace's folder, for what a run's checks leave on its disk (Plan Phase 3.3); null when not known here.</summary>
+    private readonly string? _root;
+
+    /// <param name="workspaceRoot">
+    /// The workspace's folder: the database holds the run, the workspace's disk holds what its checks left behind
+    /// (CheckRecords), and deleting the run removes both. Null for a caller with no workspace on this machine - then only
+    /// the row is deleted.
+    /// </param>
+    public MySqlRunStore(string connectionString, Guid workspaceId, string? workspaceRoot = null)
     {
         _connectionString = connectionString;
         _workspaceId = workspaceId;
+        _root = workspaceRoot is null ? null : Path.GetFullPath(workspaceRoot);
     }
 
     public async Task SaveAsync(RunRecord record, CancellationToken ct)
@@ -79,10 +88,13 @@ public sealed class MySqlRunStore : IRunStore
     /// Scoped to THIS workspace, like every other query here. One database can hold several
     /// workspaces' runs, and a delete that matched on run id alone would reach into another
     /// workspace's history from a window that is not showing it.
+    ///
+    /// <para>What the run's checks left on the workspace's disk goes first (CheckRecords.RemoveRun), as in the other stores.</para>
     /// </summary>
     public async Task DeleteAsync(Guid runId, CancellationToken ct)
     {
         await EnsureSchemaAsync(ct);
+        if (_root is not null) CheckRecords.RemoveRun(_root, runId);
 
         await using var connection = new MySqlConnection(_connectionString);
         await connection.OpenAsync(ct);

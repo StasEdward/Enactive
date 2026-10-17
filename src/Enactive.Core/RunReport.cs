@@ -92,6 +92,41 @@ public static class RunReport
              + ". The timeline has what it got through.";
     }
 
+    /// <summary>
+    /// The CHECKS list's lines: every criterion as it was said - except a write-time check (Plan Phase 3.3), which is said
+    /// once per check and step, the latest of its runs and how many there were. A write check runs after every turn that
+    /// writes what it covers; listed whole, an edit loop of thirty turns would put thirty lines about one linter above the
+    /// checks that decided the run. The latest is the one the step ended on.
+    /// </summary>
+    private static IEnumerable<string> CheckLines(IReadOnlyList<RunEventRecord> checks)
+    {
+        var written = checks.Select(e => WorkEventPayload.CheckIn(e.Payload))
+            .Select((c, i) => (Check: c, At: i))
+            .Where(x => x.Check?.FiredOn == Enactive.Core.Checks.CheckBoundary.Write)
+            .GroupBy(x => (Id: x.Check!.CheckId.ToLowerInvariant(), x.Check.Step))
+            .ToDictionary(g => g.Key, g => (Last: g.Max(x => x.At), Count: g.Count()));
+
+        for (var i = 0; i < checks.Count; i++)
+        {
+            var summary = checks[i].Summary;
+            if (WorkEventPayload.CheckIn(checks[i].Payload) is not { FiredOn: Enactive.Core.Checks.CheckBoundary.Write } write)
+            {
+                yield return summary;
+                continue;
+            }
+            var (last, count) = written[(write.CheckId.ToLowerInvariant(), write.Step)];
+            if (i != last) continue;
+            if (count > 1)
+            {
+                var folded = $" (the latest of {count} times it ran at write time in "
+                             + (write.Step is { } step ? $"step {step})" : "the step)");
+                var end = summary.IndexOf('\n');
+                summary = end < 0 ? summary + folded : summary[..end] + folded + summary[end..];
+            }
+            yield return summary;
+        }
+    }
+
     public static string Render(RunRecord record, string workspaceRoot)
     {
         var sb = new StringBuilder();
@@ -123,8 +158,8 @@ public static class RunReport
         else
         {
             sb.AppendLine("  CHECKS");
-            foreach (var check in checks)
-                sb.AppendLine("    " + check.Summary.Replace("\n", "\n      "));
+            foreach (var line in CheckLines(checks))
+                sb.AppendLine("    " + line.Replace("\n", "\n      "));
         }
 
         // ── what it did ──

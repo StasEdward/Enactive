@@ -17,9 +17,13 @@ public sealed class JsonRunStore : IRunStore
     };
 
     private readonly string _directory;
+    private readonly string _root;
 
     public JsonRunStore(WorkspaceInfo workspace)
-        => _directory = Path.Combine(Path.GetFullPath(workspace.RootPath), ".enactive", "runs");
+    {
+        _root = Path.GetFullPath(workspace.RootPath);
+        _directory = Path.Combine(_root, ".enactive", "runs");
+    }
 
     public async Task SaveAsync(RunRecord record, CancellationToken ct)
     {
@@ -35,9 +39,13 @@ public sealed class JsonRunStore : IRunStore
     /// Deletes the file this run lives in. The id is in the NAME, so nothing has to be opened to
     /// find it - which also means a file too corrupt to read can still be removed, and that is
     /// exactly the one somebody most wants gone.
+    ///
+    /// <para>What the run's checks left behind goes with it, first (CheckRecords.RemoveRun): a folder that cannot be removed
+    /// leaves the run listed, to be deleted again, rather than gone with its records left where nothing lists them.</para>
     /// </summary>
     public Task DeleteAsync(Guid runId, CancellationToken ct)
     {
+        Enactive.Core.Checks.CheckRecords.RemoveRun(_root, runId);
         if (Directory.Exists(_directory))
             foreach (var file in Directory.EnumerateFiles(_directory, $"*_{runId:N}.json"))
                 try { File.Delete(file); }

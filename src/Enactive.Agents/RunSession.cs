@@ -39,6 +39,18 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     /// </summary>
     public List<Enactive.Core.Templates.CriterionResult> BoundaryChecks { get; } = [];
 
+    /// <summary>
+    /// The files the run's checks protect, as its baseline hashed them (Plan Phase 3.4) - taken when the run started, or a
+    /// resumed run's checkpoint's. Empty when no check protects anything. What every checkpoint the run writes carries.
+    /// </summary>
+    public IReadOnlyList<Enactive.Core.Checks.ProtectedFile> Protected { get; init; } = [];
+
+    /// <summary>
+    /// Protected files a step the request asks to change them has removed: no longer looked for, so a later step whose
+    /// changes were not measured is not sent back for a removal the run was asked to make. Guarded by its own lock.
+    /// </summary>
+    public HashSet<string> ProtectedReleased { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>What the request says may be changed, held against each step's first change to a file the run found. Null when it says nothing.</summary>
     public ChangeLimitGuard? ChangeLimits { get; init; }
 
@@ -148,4 +160,10 @@ internal sealed record StepAttemptState(
 
     /// <summary>The plan step this is, for a check deferred on its account; null for a quick action's one step.</summary>
     public Guid? StepId { get; init; }
+
+    /// <summary>
+    /// The planner marked it as one the request asks to change protected files (Plan Phase 3.4): a protected file it removes
+    /// is shown to the reviewer instead of sending it back.
+    /// </summary>
+    public bool ChangesProtected { get; init; }
 }

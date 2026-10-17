@@ -176,6 +176,14 @@ public sealed record PendingCheck(string CheckId, CheckBoundary DeferredTo, stri
 
     /// <summary>The wave it is owed at, when it was deferred to one.</summary>
     public int? Wave { get; init; }
+
+    /// <summary>
+    /// The protected files (Plan Phase 3.4) this obligation is about - ones a step removed or renamed while steps ran side
+    /// by side, or proposed to remove in a staged run - to be looked for again at the boundary. Null: the check's command
+    /// is what is owed. Kept apart from the command: a check that protects tests and also lints them owes both, and
+    /// running its command would not say whether a test file is back.
+    /// </summary>
+    public IReadOnlyList<string>? Protected { get; init; }
 }
 
 /// <summary>

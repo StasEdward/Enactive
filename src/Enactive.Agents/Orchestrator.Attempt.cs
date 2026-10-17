@@ -58,7 +58,21 @@ public sealed partial class Orchestrator
         // output, and the reviewer is not asked - an exit code is not an opinion, and a reviewer shown a failing build
         // would only be asked to agree with it. An advisory one is evidence for the review. Run on a step that ended as done
         // (or only said it could not go on, which a review is about to judge as done); any other end is already not done.
-        var checks = gated ? await StepChecksAsync(session, step, stepNumber, context, changes, before, publish, ct) : null;
+        //
+        // What the step changed is measured once here, for those checks and for the files a check protects (Plan Phase 3.4)
+        // - looked at first: a protected file the step removed sends it back on the same budget, with no reviewer asked and
+        // no check's command run on a workspace that has lost what it checks.
+        var measure = gated && (session.Protected.Count > 0 || WorkspaceChecks.Firing(session.Checks, Enactive.Core.Checks.CheckFire.Step).Count > 0)
+            ? await StepChangesAsync(step, changes, before, ct)
+            : null;
+        if (measure is not null && await ProtectedFilesAsync(session, step, stepNumber, measure, changes, before, publish, ct) is { } lost)
+        {
+            await publish(scope.Event(EventKind.ReviewFailed,
+                $"{(stepNumber is { } lostNo ? $"[{lostNo}] " : "")}FAIL (the engine's check '{lost.CheckId}' - no reviewer was asked): {lost.Notes}",
+                WorkEventPayload.EngineCheckPayload(stepNumber, lost.CheckId)));
+            return new(new ReviewResult(new ReviewVerdict.Fail(lost.Notes, lost.Advice, [])), ByGate: true) { ByCheck = lost.CheckId };
+        }
+        var checks = measure is not null ? await StepChecksAsync(session, step, stepNumber, context, measure.Changed, publish, ct) : null;
         if (checks?.Failed is { } failedCheck)
         {
             var advice = WorkspaceChecks.RepairAdvice(failedCheck.Check.Id, failedCheck.Result);

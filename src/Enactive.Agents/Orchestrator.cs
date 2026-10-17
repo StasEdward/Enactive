@@ -219,6 +219,13 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly Enactive.Core.Checks.CheckSnapshot? _checks;
 
     /// <summary>
+    /// Whether a check a new run is judged by protects files (Plan Phase 3.4) - then, and only then, the planner is told it
+    /// can mark a step the request asks to change them. Planning is for a new run: a resume does not plan.
+    /// </summary>
+    private bool ChecksProtectFiles
+        => _checks?.Checks.Any(c => c.Definition.Enabled && c.Definition.Protects is { Count: > 0 }) == true;
+
+    /// <summary>
     /// An orchestrator for one run: what the run is given, and the engine's switches - two values, both said.
     /// The switches used to default to EngineOptions.Default when left out, so a host could forget the
     /// person's settings and nothing would notice.
@@ -554,7 +561,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         turnCeiling: RunawayCeiling, outputBudget: _options.GenerationBudgets.For(GenerationPurpose.Planning),
                         stepOutputs: _options.StepOutputs, typedCriteria: _options.TypedCriteria,
                         exhaustedAfter: budget.TurnExhaustedAfter, dynamicSteps: _options.DynamicSteps, validateWaves: _options.ValidateWaves,
-                        semanticCriteria: _options.SemanticCriteria));
+                        semanticCriteria: _options.SemanticCriteria, protectsFiles: ChecksProtectFiles));
         }
         catch (RetryBudgetExceededException ex)
         {
@@ -596,7 +603,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                     intent.RawText, intent.Context, plan, defect, models.PlanProvider, models.Plan.Model, ct,
                     _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
-                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
+                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria, protectsFiles: ChecksProtectFiles));
                 replanFailure = plan.IncompleteReason;
                 if (plan.Usage.Any)
                     yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
@@ -627,7 +634,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                     intent.RawText, intent.Context, plan, missing.Diagnostic, models.PlanProvider, models.Plan.Model, ct,
                     _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
-                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
+                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria, protectsFiles: ChecksProtectFiles));
                 unclear = plan.IncompleteReason;
                 if (plan.Usage.Any)
                     yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
@@ -666,7 +673,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                     intent.RawText, intent.Context, plan, diagnostic, models.PlanProvider, models.Plan.Model, ct,
                     _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
-                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
+                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria, protectsFiles: ChecksProtectFiles));
                 unclear = plan.IncompleteReason;
                 if (plan.Usage.Any)
                     yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
@@ -744,7 +751,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     replanned = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                         intent.RawText, intent.Context, before, diagnostic, models.PlanProvider, models.Plan.Model, ct,
                         _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
-                        _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
+                        _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria, protectsFiles: ChecksProtectFiles));
                     unclear = replanned.IncompleteReason;
                     if (replanned.Usage.Any)
                         yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, replanned.Usage);
@@ -1070,15 +1077,34 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
+        // A resumed run is judged by the checks it was STARTED with, as its checkpoint carried them - never by the
+        // manifests as they are now, which may have been edited or deleted since (Plan Phase 3.1). The checkpoint is
+        // the precedent's place too (PlanContractVersion, CoverageObligations): resume does not compose again. A
+        // checkpoint from before check manifests had none, and its resume has none.
+        var runChecks = resume is null ? _checks : resume.CheckSnapshot;
+
+        // The files those checks protect, hashed with the baseline (Plan Phase 3.4), and on the same terms: a run carrying
+        // the task on takes them from the checkpoint or the task's own file, never from the workspace as the earlier attempt
+        // left it - a file that attempt removed would no longer be protected. Taken whether or not any ecosystem builds here:
+        // what is protected is a person's list of files, not a build's.
+        IReadOnlyList<Enactive.Core.Checks.ProtectedFile> protectedFiles;
+        if (resume is not null)
+            protectedFiles = resume.ProtectedFiles ?? [];
+        else if (_baselines.LoadProtected(scope.TaskId) is { } carried)
+            protectedFiles = carried;
+        else
+        {
+            protectedFiles = Enactive.Core.Checks.ProtectedFiles.Take(_workspace.RootPath, runChecks, out var notAll);
+            if (protectedFiles.Count > 0) _baselines.SaveProtected(scope.TaskId, protectedFiles);
+            if (notAll is not null) yield return scope.Ev(EventKind.ErrorObserved, notAll);
+        }
+
         var session = new RunSession(scope, messages)
         {
             Builds = builds, ChangeLimits = ChangeLimitsFor(intent, models, scope),
-            // A resumed run is judged by the checks it was STARTED with, as its checkpoint carried them - never by the
-            // manifests as they are now, which may have been edited or deleted since (Plan Phase 3.1). The checkpoint is
-            // the precedent's place too (PlanContractVersion, CoverageObligations): resume does not compose again. A
-            // checkpoint from before check manifests had none, and its resume has none.
-            Checks = resume is null ? _checks : resume.CheckSnapshot,
-            PendingChecks = resume?.PendingChecks?.ToList() ?? []
+            Checks = runChecks,
+            PendingChecks = resume?.PendingChecks?.ToList() ?? [],
+            Protected = protectedFiles
         };
 
         // The manifests as they are now against what the checkpoint's snapshot hashed: a person may have edited them
@@ -1166,7 +1192,9 @@ public sealed partial class Orchestrator : IOrchestrator
                 // One step, nothing beside it: its declared checks run at its gate - never against the disk when staged.
                 var attemptState = session.BeginStep(messages, store) with
                 {
-                    CheckTiming = _settings?.Staged == true ? StepCheckTiming.Staged : StepCheckTiming.AtGate
+                    CheckTiming = _settings?.Staged == true ? StepCheckTiming.Staged : StepCheckTiming.AtGate,
+                    // A quick action has no steps for the planner to mark: it says so beside its disposition (Plan Phase 3.4).
+                    ChangesProtected = plan.ChangesProtected
                 };
                 await RunAttemptsAsync(session, attemptState, models, models.Provider, models.Model,
                     intent.Context, quickResult, plan.Title, intent.RawText, null, quickChanges, quickBefore,
@@ -1596,7 +1624,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         Result = session.Outputs.TryGetValue(s.Id, out var handed) ? handed : null,
                         ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
                         Record = session.Records.TryGetValue(s.Id, out var record) ? record : null,
-                        Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly,
+                        Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly, ChangesProtected = s.ChangesProtected,
                         Consumes = s.Consumes, OrderOnly = s.OrderOnly,
                         Blocks = BlocksOf(s.Id),
                         Owned = s.ExpandedFrom is null ? null : _progress.OwnedBy(scope.TaskId, s.Id) is { Count: > 0 } owned ? owned.ToArray() : null
@@ -1616,7 +1644,9 @@ public sealed partial class Orchestrator : IOrchestrator
                     CoverageObligations = plan.CoverageObligations.Count > 0 ? plan.CoverageObligations : null,
                     // The checks whole, and what is still owed of them (Plan Phase 3.1): a resume reads both from here.
                     CheckSnapshot = session.Checks,
-                    PendingChecks = PendingChecksNow(session) };
+                    PendingChecks = PendingChecksNow(session),
+                    // With the baseline, as it was taken (Plan Phase 3.4): a resume judges removals against these.
+                    ProtectedFiles = session.Protected.Count > 0 ? session.Protected : null };
         }
 
         // Whether a step boundary of this task is in the store to carry on from - this run's own, or on a resume the one
@@ -1883,7 +1913,9 @@ public sealed partial class Orchestrator : IOrchestrator
                 CheckTiming = _settings?.Staged == true ? StepCheckTiming.Staged
                     : maxParallel == 1 || step.Critical ? StepCheckTiming.AtGate
                     : StepCheckTiming.Deferred,
-                StepId = step.Id
+                StepId = step.Id,
+                // The planner's word that the request asks this step to change protected files (Plan Phase 3.4).
+                ChangesProtected = step.ChangesProtected
             };
 
             // The workspace as this step found it. Taken once, before the first attempt: a retry
@@ -2877,7 +2909,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 {
                     ObligationIds = s.ObligationIds, Output = s.Output,
                     ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
-                    Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly,
+                    Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly, ChangesProtected = s.ChangesProtected,
                     Consumes = s.Consumes, OrderOnly = s.OrderOnly
                 })
             .ToArray();
@@ -4885,10 +4917,21 @@ public sealed partial class Orchestrator : IOrchestrator
             // The write checks this turn's writes owe, each run once now that the turn's calls are answered, and told with
             // the result of the last write each covers - before the worker is asked again (WriteChecks). The engine's own
             // commands, under the run's policy, as the final checks are run.
+            //
+            // Each result is the check's criterion event, fired on write (Plan Phase 3.3) - said in the words the worker's
+            // line was, its output kept in the run's folder: one file per check and step, written over at each turn, as its
+            // journal entry is (the latest is the one the step ends on; a file per turn would be an edit loop's worth).
             if (writeChecks is { Owed: true })
                 foreach (var said in await writeChecks.RunOwedAsync(WriteChecks.WhyNotRun(_tools, _permissions, _policy),
                              async (criterion, token) => (await CheckSuccessAsync([criterion], taskId, runId, context, token)).Results[0], ct))
-                    yield return Ev(EventKind.ContextAssembled, said);
+                    yield return said is { Result: { } wrote, CheckId: { } writeCheck }
+                        ? WriteCheckEvent(said.Line, Recorded(wrote, new Enactive.Core.Checks.CheckFiring(writeCheck, Enactive.Core.Checks.CheckBoundary.Write) { Step = stepNo }, runId,
+                            replace: true))
+                        : Ev(EventKind.ContextAssembled, said.Line);
+
+            WorkEvent WriteCheckEvent(string line, CriterionResult r)
+                => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.CriterionEvaluated, line,
+                       WorkEventPayload.CriterionPayload(r.Name, r.Outcome.ToString(), r.Required, r.ExitCode, r.Origin.ToString(), r.Check));
 
             // A step that said it cannot go on ends blocked now that its turn's calls are answered (StepEnding).
             if (admission.ReportedBlocked is { } reportedBlocked)

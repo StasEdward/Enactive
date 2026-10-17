@@ -143,4 +143,22 @@ public sealed class WorkspaceStoreSchemaTests : IAsyncLifetime
         Assert.Contains("\"Blocking\"", await _database.StringsAsync(
             $"SELECT checks_json FROM runs WHERE run_id = '{with.RunId}'") is [var json] ? json : "", StringComparison.Ordinal);
     }
+
+    /// <summary>Deleting a run from MySQL removes what its checks left on the workspace's disk (Plan Phase 3.3), as the other stores do.</summary>
+    [Fact]
+    public async Task Deleting_a_run_through_mysql_removes_its_check_records()
+    {
+        var store = new MySqlRunStore(_database.ConnectionString, _workspace.Id, _workspace.RootPath);
+        var run = new Enactive.Core.History.RunRecord(Guid.NewGuid(), Guid.NewGuid(), "a run", "model",
+            DateTimeOffset.Now.AddMinutes(-1), DateTimeOffset.Now, "Completed", [], [], []);
+        await store.SaveAsync(run, CancellationToken.None);
+        var folder = Path.Combine(_workspace.RootPath, ".enactive", "checks", "runs", run.RunId.ToString("D"));
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "step-1-lint.txt"), "output");
+
+        await store.DeleteAsync(run.RunId, CancellationToken.None);
+
+        Assert.False(Directory.Exists(folder));
+        Assert.Null(await store.LoadAsync(run.RunId, CancellationToken.None));
+    }
 }

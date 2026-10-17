@@ -806,9 +806,17 @@ public static class WorkEventPayload
     /// One success criterion's result, as VALUES. The panel that will show a run's checks reads
     /// these; nothing has to take the sentence apart.
     /// </summary>
+    /// <param name="check">
+    /// The declared workspace check this is the result of (Plan Phase 3.3): its id, where it fired (write, step, wave, apply,
+    /// run), the step or wave it belongs to, why it waited, and the file its whole output is in. Only written for one - every
+    /// other criterion's payload is byte for byte what it was, and an event recorded before reads as it did
+    /// (<see cref="CheckIn"/> is null for it).
+    /// </param>
     public static string CriterionPayload(
-        string name, string outcome, bool required, int? exitCode, string origin = "Declared")
-        => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object?>
+        string name, string outcome, bool required, int? exitCode, string origin = "Declared",
+        Enactive.Core.Checks.CheckFiring? check = null)
+    {
+        var values = new Dictionary<string, object?>
         {
             ["criterion"] = name,
             ["outcome"] = outcome,
@@ -817,7 +825,57 @@ public static class WorkEventPayload
             // Who asked for the check. Without it a reader of the values could not tell the engine's
             // own look at the files from a check a person or the planner wrote.
             ["origin"] = origin
-        }, PayloadJson);
+        };
+        if (check is not null)
+        {
+            values["checkId"] = check.CheckId;
+            values["firedOn"] = Enactive.Core.Checks.CheckRecords.NameOf(check.FiredOn);
+            // "step" as every other event names it, so a step's card places the check on it.
+            if (check.Step is { } step) values["step"] = step;
+            if (check.Wave is { } wave) values["wave"] = wave;
+            if (check.Deferred is { Length: > 0 } deferred) values["deferred"] = deferred;
+            if (check.DetailPath is { Length: > 0 } detail) values["detailPath"] = detail;
+        }
+        return System.Text.Json.JsonSerializer.Serialize(values, PayloadJson);
+    }
+
+    /// <summary>The declared check a criterion event is the result of (Plan Phase 3.3), or null when it is none.</summary>
+    public static Enactive.Core.Checks.CheckFiring? CriterionCheck(this WorkEvent ev) => CheckIn(ev.PayloadJson);
+
+    /// <summary>
+    /// The same, from a stored event's payload. Null for a payload without a check - any other criterion, and every
+    /// criterion recorded before checks had records - and for one that cannot be read.
+    /// </summary>
+    public static Enactive.Core.Checks.CheckFiring? CheckIn(string? payloadJson)
+    {
+        if (string.IsNullOrEmpty(payloadJson))
+            return null;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(payloadJson);
+            var root = doc.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object
+                || !root.TryGetProperty("checkId", out var id) || id.ValueKind != System.Text.Json.JsonValueKind.String
+                || !root.TryGetProperty("firedOn", out var fired) || fired.ValueKind != System.Text.Json.JsonValueKind.String
+                || !Enum.TryParse<Enactive.Core.Checks.CheckBoundary>(fired.GetString(), ignoreCase: true, out var boundary))
+                return null;
+
+            int? Number(string field) => root.TryGetProperty(field, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.Number
+                                         && v.TryGetInt32(out var n) ? n : null;
+            string? Text(string field) => root.TryGetProperty(field, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String
+                ? v.GetString() : null;
+
+            return new Enactive.Core.Checks.CheckFiring(id.GetString()!, boundary)
+            {
+                Step = Number("step"), Wave = Number("wave"), Deferred = Text("deferred"), DetailPath = Text("detailPath")
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     /// <summary>The criterion outcome this event carries, or null when it carries none.</summary>
     public static string? CriterionOutcomeName(this WorkEvent ev)

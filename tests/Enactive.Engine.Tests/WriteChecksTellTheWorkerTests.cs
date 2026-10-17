@@ -110,7 +110,9 @@ public sealed class WriteChecksTellTheWorkerTests
         Assert.Contains("'teh' is not a word", reviewed, StringComparison.Ordinal);
 
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
-        Assert.Contains(events, e => e.Kind == EventKind.ContextAssembled && e.Summary.Contains("Write-time check 'spell': FAIL", StringComparison.Ordinal));
+        // A check's result like any other (Plan Phase 3.3): a criterion event, fired on write.
+        Assert.Contains(events, e => e.Kind == EventKind.CriterionEvaluated && e.Summary.Contains("Write-time check 'spell': FAIL", StringComparison.Ordinal)
+                                     && e.CriterionCheck()?.FiredOn == CheckBoundary.Write);
     }
 
     /// <summary>
@@ -451,7 +453,7 @@ public sealed class WriteChecksTellTheWorkerTests
 
         Assert.Equal(["c1", "c2"], ran);
         Assert.Contains("[Write-time check(s) 'c3': not run this turn", messages[0].Content, StringComparison.Ordinal);
-        Assert.Single(said, s => s.Contains("not run this turn", StringComparison.Ordinal));
+        Assert.Single(said, s => s.Line.Contains("not run this turn", StringComparison.Ordinal));
         Assert.False(checks.Owed);
     }
 

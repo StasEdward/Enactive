@@ -30,6 +30,36 @@ public sealed partial class Orchestrator
     /// pass it cannot stand behind: a staged run's check, one the policy would ask about, one that found nothing to run or
     /// did not finish in its time are each <see cref="CriterionOutcome.Unknown"/>, with the reason.
     /// </summary>
+    /// <param name="firing">Where it fires, for its record (Plan Phase 3.3): said in its event, and where its output is kept.</param>
+    private async Task<CriterionResult> RunDeclaredCheckAsync(ResolvedCheck check, string at, RunScope scope,
+        WorkContext context, CheckFiring firing, CancellationToken ct)
+        => Recorded(await RunDeclaredCheckAsync(check, at, scope, context, ct), firing, scope.RunId);
+
+    /// <summary>
+    /// A declared check's result with its record (Plan Phase 3.3): where it fired, and its whole output kept in the run's
+    /// folder - the event's summary keeps only the start and the end of it (SuccessEvaluator.Trim). Written here, where the
+    /// result is made and before it is published, because the output is not in the event and is gone with the result.
+    /// </summary>
+    /// <param name="replace">Write over the last file of this check here, rather than beside it - see CheckRecords.WriteDetail.</param>
+    private CriterionResult Recorded(CriterionResult result, CheckFiring firing, Guid runId, bool replace = false)
+        => result with
+        {
+            Check = firing with
+            {
+                DetailPath = string.IsNullOrEmpty(result.Output) ? null
+                    : CheckRecords.WriteDetail(_workspace.RootPath, runId, DetailStem(firing), firing.CheckId, result.Output!, replace)
+            }
+        };
+
+    /// <summary>A detail file's name before the check's id: where it fired, and the step or wave - "step-3", "wave-1", "run".</summary>
+    private static string DetailStem(CheckFiring firing) => firing.FiredOn switch
+    {
+        CheckBoundary.Step => firing.Step is { } step ? $"step-{step}" : "step",
+        CheckBoundary.Write => firing.Step is { } step ? $"step-{step}-write" : "step-write",
+        CheckBoundary.Wave => firing.Wave is { } wave ? $"wave-{wave}" : "wave",
+        _ => CheckRecords.NameOf(firing.FiredOn)
+    };
+
     private async Task<CriterionResult> RunDeclaredCheckAsync(ResolvedCheck check, string at, RunScope scope,
         WorkContext context, CancellationToken ct)
     {
@@ -77,18 +107,16 @@ public sealed partial class Orchestrator
     /// owed when the files are applied. What ran is said as a criterion each, and put in the journal for the reviewer as
     /// the engine's own record; null when nothing is owed.
     /// </summary>
+    /// <param name="changed">What the step changed (StepChangesAsync) - measured once at the gate for these checks and the
+    /// protected files both.</param>
     private async Task<StepCheckVerdict?> StepChecksAsync(RunSession session, StepAttemptState step, int? stepNumber,
-        WorkContext context, IWorkspaceChanges? changes, WorkspaceSnapshot? before, Func<WorkEvent, ValueTask> publish,
-        CancellationToken ct)
+        WorkContext context, StepChanges changed, Func<WorkEvent, ValueTask> publish, CancellationToken ct)
     {
         var owed = WorkspaceChecks.Firing(session.Checks, CheckFire.Step);
         if (owed.Count == 0) return null;
         var scope = session.Scope;
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
 
-        var changed = WorkspaceChecks.Of(await MeasuredSinceAsync(changes, before, ct),
-            step.Journal.Actions.Skip(step.StepStart), step.Store.TouchedPaths, _workspace.RootPath,
-            tool => _tools.DefinitionOf(tool)?.Kind == ToolKind.Command);
         var due = changed.Unmeasured is not null ? owed : owed.Where(c => WorkspaceChecks.Covers(c, changed.Paths, _ecosystems)).ToArray();
         if (due.Count == 0) return null;
         if (changed.Unmeasured is { } unmeasured)
@@ -129,7 +157,8 @@ public sealed partial class Orchestrator
         var ran = new List<(ResolvedCheck Check, CriterionResult Result)>();
         foreach (var check in now)
         {
-            var result = await RunDeclaredCheckAsync(check, at, scope, context, ct);
+            var result = await RunDeclaredCheckAsync(check, at, scope, context,
+                new CheckFiring(check.Id, CheckBoundary.Step) { Step = stepNumber }, ct);
             ran.Add((check, result));
             await publish(scope.Criterion(result));
         }
@@ -151,28 +180,59 @@ public sealed partial class Orchestrator
             notRun.Length == 0 ? null : string.Join("; ", notRun));
     }
 
-    /// <summary>What the workspace measurement found changed since <paramref name="before"/>, or null when nothing was measured.</summary>
-    private static async Task<IReadOnlyList<string>?> MeasuredSinceAsync(IWorkspaceChanges? changes, WorkspaceSnapshot? before,
+    /// <summary>
+    /// What a step changed, as its gate reads it (Plan Phase 3.2 / 3.4): the paths, for the checks owed and the protected
+    /// files; and what the measurement found - each change's kind and its old path - with the snapshot it was found in,
+    /// for a protected file's diff. Measured once, for both: a git status twice per step is a cost with no second answer.
+    /// </summary>
+    internal sealed record StepMeasure(StepChanges Changed, IReadOnlyList<FileChange>? Measured, WorkspaceSnapshot? After);
+
+    private async Task<StepMeasure> StepChangesAsync(StepAttemptState step, IWorkspaceChanges? changes, WorkspaceSnapshot? before,
         CancellationToken ct)
     {
-        if (changes is null || before is null) return null;
+        var (after, found) = await MeasuredSinceAsync(changes, before, ct);
+        var changed = WorkspaceChecks.Of(found?.SelectMany(c => c.OldPath is { } old ? new[] { c.Path, old } : [c.Path]),
+            step.Journal.Actions.Skip(step.StepStart), step.Store.TouchedPaths, _workspace.RootPath,
+            tool => _tools.DefinitionOf(tool)?.Kind == ToolKind.Command);
+        return new(changed, found, after);
+    }
+
+    /// <summary>What the workspace measurement found changed since <paramref name="before"/>, or null when nothing was measured.</summary>
+    private static async Task<(WorkspaceSnapshot? After, IReadOnlyList<FileChange>? Found)> MeasuredSinceAsync(IWorkspaceChanges? changes,
+        WorkspaceSnapshot? before, CancellationToken ct)
+    {
+        if (changes is null || before is null) return (null, null);
         try
         {
             if (await changes.TakeAsync(ct) is not { } after || await changes.ComparePathsAsync(before, after, ct) is not { } found)
-                return null;
-            return found.SelectMany(c => c.OldPath is { } old ? new[] { c.Path, old } : [c.Path]).ToArray();
+                return (null, null);
+            return (after, found);
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return (null, null); }
     }
 
-    /// <summary>A check owed later, once per check and boundary: a check two steps both owe at a wave's end runs there once.</summary>
+    /// <summary>
+    /// A check owed later, once per check and boundary: a check two steps both owe at a wave's end runs there once.
+    ///
+    /// <para>A protected-files obligation (PendingCheck.Protected) is its own, beside the check's command: two steps that each
+    /// removed a file the check protects owe one look at the boundary, for both files.</para>
+    /// </summary>
     private static void Owe(RunSession session, PendingCheck pending)
     {
         lock (session.PendingChecks)
-            if (!session.PendingChecks.Any(p => string.Equals(p.CheckId, pending.CheckId, StringComparison.OrdinalIgnoreCase)
-                                                && p.DeferredTo == pending.DeferredTo && p.Wave == pending.Wave))
+        {
+            var at = session.PendingChecks.FindIndex(p => string.Equals(p.CheckId, pending.CheckId, StringComparison.OrdinalIgnoreCase)
+                                                          && p.DeferredTo == pending.DeferredTo && p.Wave == pending.Wave
+                                                          && (p.Protected is null) == (pending.Protected is null));
+            if (at < 0)
                 session.PendingChecks.Add(pending);
+            else if (pending.Protected is { } more && session.PendingChecks[at].Protected is { } already)
+                session.PendingChecks[at] = session.PendingChecks[at] with
+                {
+                    Protected = already.Union(more, StringComparer.OrdinalIgnoreCase).ToArray()
+                };
+        }
     }
 
     /// <summary>Whether a check is owed at the end of the wave now running - while one is, nothing new is started.</summary>
@@ -201,14 +261,19 @@ public sealed partial class Orchestrator
 
         var at = span is null ? $"wave {wave}" : $"wave {wave}: {span}";
         var results = new List<CriterionResult>();
-        var ran = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ran = new HashSet<PendingCheck>();
         try
         {
-            foreach (var id in owed.Select(p => p.CheckId).Distinct(StringComparer.OrdinalIgnoreCase))
+            // A check's command once, however many steps owed it; its protected files once, for every file they removed.
+            foreach (var group in owed.GroupBy(p => (Id: p.CheckId.ToLowerInvariant(), Protected: p.Protected is not null)))
             {
-                var result = await OwedCheckAsync(session, id, at, context, ct);
+                var first = group.First();
+                var firing = new CheckFiring(first.CheckId, CheckBoundary.Wave) { Wave = wave, Deferred = first.Reason };
+                var result = group.Key.Protected
+                    ? ProtectedOwed(session, first.CheckId, group.SelectMany(p => p.Protected!), at, firing)
+                    : await OwedCheckAsync(session, first.CheckId, at, context, firing, ct);
                 results.Add(result);
-                ran.Add(id);
+                ran.UnionWith(group);
                 await publish(session.Scope.Criterion(result));
             }
         }
@@ -217,7 +282,7 @@ public sealed partial class Orchestrator
             // Only what ran is discharged. A run stopped in the middle of them leaves the rest owed - a check that never
             // ran is not a pass, and an obligation dropped on the way out is one a resume could not know to run.
             lock (session.PendingChecks)
-                session.PendingChecks.RemoveAll(p => owed.Contains(p) && ran.Contains(p.CheckId));
+                session.PendingChecks.RemoveAll(ran.Contains);
             lock (session.BoundaryChecks)
                 session.BoundaryChecks.AddRange(results);
         }
@@ -229,11 +294,13 @@ public sealed partial class Orchestrator
     }
 
     /// <summary>A check owed at a boundary, run there - or, gone from the run's checks, not run and said so. Never a pass.</summary>
-    private async Task<CriterionResult> OwedCheckAsync(RunSession session, string id, string at, WorkContext context, CancellationToken ct)
+    private async Task<CriterionResult> OwedCheckAsync(RunSession session, string id, string at, WorkContext context,
+        CheckFiring firing, CancellationToken ct)
         => session.Checks?.Find(id) is { } check
-            ? await RunDeclaredCheckAsync(check, at, session.Scope, context, ct)
+            ? await RunDeclaredCheckAsync(check, at, session.Scope, context, firing, ct)
             : new CriterionResult(WorkspaceChecks.Label(id, at), id, Required: true, CriterionOutcome.Unknown, null,
-                "it was owed, and is not among the checks this run was started with, so it could not be run", CriterionOrigin.Declared);
+                "it was owed, and is not among the checks this run was started with, so it could not be run", CriterionOrigin.Declared)
+                { Check = firing };
 
     /// <summary>
     /// The declared checks at the run's end (Plan Phase 3.2): every check still owed - deferred from a step whose siblings
@@ -249,23 +316,33 @@ public sealed partial class Orchestrator
         lock (session.PendingChecks)
             owed = session.PendingChecks.ToArray();
         var said = new List<CriterionResult>();
-        foreach (var group in owed.GroupBy(p => (Id: p.CheckId.ToLowerInvariant(), Staged: p.DeferredTo == CheckBoundary.Apply)))
+        foreach (var group in owed.GroupBy(p => (Id: p.CheckId.ToLowerInvariant(), Staged: p.DeferredTo == CheckBoundary.Apply,
+                     Protected: p.Protected is not null)))
         {
             var first = group.First();
             if (group.Key.Staged)
             {
                 var check = session.Checks?.Find(first.CheckId);
-                said.Add(new CriterionResult(WorkspaceChecks.Label(first.CheckId, "staged, owed when its files are applied"),
-                    check is null ? first.CheckId : WorkspaceChecks.CommandOf(check, []),
+                const string applied = "staged, owed when its files are applied";
+                said.Add(new CriterionResult(group.Key.Protected ? ProtectedLabel(first.CheckId, applied) : WorkspaceChecks.Label(first.CheckId, applied),
+                    group.Key.Protected ? ProtectedCommand(first.CheckId, group.SelectMany(p => p.Protected!))
+                        : check is null ? first.CheckId : WorkspaceChecks.CommandOf(check, []),
                     // A pending check whose severity is not known any more is taken as blocking: an obligation is never a pass.
-                    Required: check?.Definition.Severity != CheckSeverity.Advisory, CriterionOutcome.Unknown, null,
-                    WorkspaceChecks.StagedDetail, CriterionOrigin.Declared));
+                    // A removed protected file is blocking whatever the check's severity (Plan Phase 3.4).
+                    Required: group.Key.Protected || check?.Definition.Severity != CheckSeverity.Advisory, CriterionOutcome.Unknown, null,
+                    WorkspaceChecks.StagedDetail, CriterionOrigin.Declared)
+                    { Check = new CheckFiring(first.CheckId, CheckBoundary.Apply) { Deferred = first.Reason } });
             }
             else
-                said.Add(await OwedCheckAsync(session, first.CheckId, "the run", context, ct));
+            {
+                var firing = new CheckFiring(first.CheckId, CheckBoundary.Run) { Deferred = first.Reason };
+                said.Add(group.Key.Protected
+                    ? ProtectedOwed(session, first.CheckId, group.SelectMany(p => p.Protected!), "the run", firing)
+                    : await OwedCheckAsync(session, first.CheckId, "the run", context, firing, ct));
+            }
         }
         foreach (var check in WorkspaceChecks.Firing(session.Checks, CheckFire.Run))
-            said.Add(await RunDeclaredCheckAsync(check, "the run", session.Scope, context, ct));
+            said.Add(await RunDeclaredCheckAsync(check, "the run", session.Scope, context, new CheckFiring(check.Id, CheckBoundary.Run), ct));
         lock (session.PendingChecks)
             session.PendingChecks.RemoveAll(owed.Contains);
 

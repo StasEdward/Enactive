@@ -20,9 +20,12 @@ public sealed class SqliteRunStore : IRunStore
     private readonly SemaphoreSlim _gate = new(1, 1);
     private bool _initialized;
 
+    private readonly string _root;
+
     public SqliteRunStore(WorkspaceInfo workspace)
     {
-        var directory = Path.Combine(Path.GetFullPath(workspace.RootPath), ".enactive");
+        _root = Path.GetFullPath(workspace.RootPath);
+        var directory = Path.Combine(_root, ".enactive");
         Directory.CreateDirectory(directory);
         _connectionString = $"Data Source={Path.Combine(directory, "enactive.db")}";
     }
@@ -67,9 +70,14 @@ public sealed class SqliteRunStore : IRunStore
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    /// <summary>
+    /// Deletes the run's row - and, first, what its checks left behind (CheckRecords.RemoveRun): a folder that cannot be
+    /// removed leaves the run listed, to be deleted again, rather than gone with its records left where nothing lists them.
+    /// </summary>
     public async Task DeleteAsync(Guid runId, CancellationToken ct)
     {
         await EnsureSchemaAsync(ct);
+        CheckRecords.RemoveRun(_root, runId);
 
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(ct);

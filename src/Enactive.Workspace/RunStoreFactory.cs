@@ -25,7 +25,9 @@ public static class RunStoreFactory
                 ?? throw new InvalidOperationException(
                     "ENACTIVE_STORE=mysql requires the ENACTIVE_MYSQL connection string, e.g. "
                     + "\"Server=localhost;Database=enactive;User ID=root;Password=...\"."),
-                workspace.Id),
+                workspace.Id,
+                // And the folder, for what a run's checks leave on its disk: deleting the run removes that too.
+                workspace.RootPath),
             _ => new SqliteRunStore(workspace)
         };
     }

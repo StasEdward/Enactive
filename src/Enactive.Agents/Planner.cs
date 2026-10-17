@@ -63,6 +63,12 @@ public sealed record PlanResult(
     /// run, and the partial result has value.
     /// </summary>
     public IReadOnlyList<string> CoverageObligations { get; init; } = [];
+
+    /// <summary>
+    /// A quick action the request asks to change protected files (Plan Phase 3.4), said beside its disposition - it has no
+    /// steps to mark, and without it a request to remove an obsolete test could only be sent back for removing it.
+    /// </summary>
+    public bool ChangesProtected { get; init; }
 }
 
 /// <summary>
@@ -124,11 +130,12 @@ public sealed class Planner
         CancellationToken ct, int? maxSteps = null, bool proposeChecks = false,
         int? turnCeiling = null, int outputBudget = 4096,
         Func<int, int, string?>? exhaustedAfter = null, bool stepOutputs = false, bool typedCriteria = false,
-        bool dynamicSteps = false, bool validateWaves = false, bool semanticCriteria = false)
+        bool dynamicSteps = false, bool validateWaves = false, bool semanticCriteria = false, bool protectsFiles = false)
     {
         var messages = new List<ChatMessage>
         {
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves, semanticCriteria)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves,
+                semanticCriteria, protectsFiles)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request))
         };
 
@@ -169,7 +176,8 @@ public sealed class Planner
     internal async Task<PlanResult> ReplanAsync(string request, WorkContext context, PlanResult invalid,
         string diagnostic, IChatProvider provider, string model, CancellationToken ct,
         int? maxSteps, bool proposeChecks, int turnCeiling, int outputBudget = 4096, bool stepOutputs = false,
-        bool typedCriteria = false, bool dynamicSteps = false, bool validateWaves = false, bool semanticCriteria = false)
+        bool typedCriteria = false, bool dynamicSteps = false, bool validateWaves = false, bool semanticCriteria = false,
+        bool protectsFiles = false)
     {
         var steps = invalid.Plan!.Steps;
         var indices = steps.Select((step, index) => (step.Id, index)).GroupBy(x => x.Id)
@@ -191,12 +199,16 @@ public sealed class Planner
                 forEach = s.ForEach is { } each ? new { step = each.Step, field = each.Field } : null,
                 report = s.Report,
                 critical = s.Critical ? true : (bool?)null,
-                readOnly = s.ReadOnly ? true : (bool?)null
+                readOnly = s.ReadOnly ? true : (bool?)null,
+                // Given back as the planner wrote it (Plan Phase 3.4): a corrected plan that dropped it would send back the
+                // step the request asked to remove a test.
+                changesProtected = s.ChangesProtected ? true : (bool?)null
             })
         }, new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
         ChatMessage[] messages =
         [
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves, semanticCriteria)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves,
+                semanticCriteria, protectsFiles)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request)),
             ChatMessage.Assistant(prior),
             ChatMessage.User("The entire plan was rejected before execution: " + diagnostic
@@ -374,7 +386,9 @@ public sealed class Planner
                                 Report = el.TryGetProperty("report", out var report) && report.ValueKind == JsonValueKind.String
                                     && !string.IsNullOrWhiteSpace(report.GetString()) ? report.GetString() : null,
                                 Critical = el.TryGetProperty("critical", out var critical) && critical.ValueKind == JsonValueKind.True,
-                                ReadOnly = el.TryGetProperty("readOnly", out var readOnly) && readOnly.ValueKind == JsonValueKind.True
+                                ReadOnly = el.TryGetProperty("readOnly", out var readOnly) && readOnly.ValueKind == JsonValueKind.True,
+                                ChangesProtected = el.TryGetProperty("changesProtected", out var changesProtected)
+                                                   && changesProtected.ValueKind == JsonValueKind.True
                             });
                         }
                     }
@@ -395,7 +409,10 @@ public sealed class Planner
                 {
                     Checks = ParseChecks(root, fallbackTitle, notes),
                     PlannedCriteria = TypedCriteria.Read(root),
-                    ContractNotes = notes
+                    ContractNotes = notes,
+                    // Only a quick action's: a task's steps say it each for themselves.
+                    ChangesProtected = disposition == IntentDisposition.QuickAction
+                                       && root.TryGetProperty("changesProtected", out var whole) && whole.ValueKind == JsonValueKind.True
                 };
             }
             catch (JsonException)
@@ -660,6 +677,14 @@ public sealed class Planner
         + "such as a shared interface, a schema or a project file - may add \"critical\":true: it then runs alone and the "
         + "engine builds and tests right after it. Use it rarely; it takes the step out of parallel work.";
 
+    /// <summary>
+    /// Files the workspace's checks protect (Plan Phase 3.4): a step that removes one is sent back unless the plan says the
+    /// request asks for it. One sentence, sent only when a check protects files (SystemPromptFor).
+    /// </summary>
+    internal const string ProtectedFilesPrompt =
+        " This workspace protects some files (such as its tests): a step that removes or renames one is sent back, unless the "
+        + "request asks for that change - then that step adds \"changesProtected\":true (a quick_action puts it beside its disposition).";
+
     /// <summary>A result file the request names no path for: the step names it, and the check follows (run 68f92f).</summary>
     internal const string HandedPathPrompt =
         " When the request names no file for a result, do not invent a name: the step that makes it declares "
@@ -751,7 +776,7 @@ public sealed class Planner
     /// </param>
     internal static string SystemPromptFor(int? maxSteps, bool proposeChecks = false, int? turnCeiling = null,
         bool stepOutputs = false, bool typedCriteria = false, bool dynamicSteps = false, bool validateWaves = false,
-        bool semanticCriteria = false)
+        bool semanticCriteria = false, bool protectsFiles = false)
     {
         var prompt = SystemPrompt;
 
@@ -787,6 +812,11 @@ public sealed class Planner
 
         if (proposeChecks)
             prompt += ChecksPrompt;
+
+        // Sent only when a check of this workspace protects files: a sentence about protected files in every run's plan is
+        // one a planner may act on where nothing is protected. Last, so the prompt before it is the same either way.
+        if (protectsFiles)
+            prompt += ProtectedFilesPrompt;
 
         return prompt;
     }
