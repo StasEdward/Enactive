@@ -22,7 +22,11 @@ public sealed class RunComposerFailureTests
         {
             Providers = [new ProviderConfig { Id = "fixture", BaseUrl = "http://localhost:1", Models = ["fixture"] }],
             Workers = [new WorkerConfig { Id = "fixture", Role = "fixture", Model = "fixture/fixture" }]
-        }, http, log);
+        }, http, log) with
+        {
+            // Never the machine's own %APPDATA% checks: a run here must not depend on who runs the suite.
+            GlobalChecks = Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-global-checks")
+        };
         var request = new RunRequest(fx.Workspace, "answer", IntentSource.CommandBar) { Defaults = new(2) };
         var oldStore = Environment.GetEnvironmentVariable("ENACTIVE_STORE");
         var oldConnection = Environment.GetEnvironmentVariable("ENACTIVE_MYSQL");

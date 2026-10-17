@@ -565,7 +565,9 @@ public sealed class ObligationLoopTests : IDisposable
             new SessionApprovals())
         {
             Planner = new Planner(checksAuditEnabled: false),
-            Approvals = new ApprovalStore(Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-permissions.json"))
+            Approvals = new ApprovalStore(Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-permissions.json")),
+            // Never the machine's own %APPDATA% checks: a run here must not depend on who runs the suite.
+            GlobalChecks = Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-global-checks")
         };
         IDecisionHandler decisions = handler switch
         {

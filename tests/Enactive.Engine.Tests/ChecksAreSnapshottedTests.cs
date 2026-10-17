@@ -136,6 +136,32 @@ public sealed class ChecksAreSnapshottedTests
         Enactive.Tests.SqlitePools.ClearUnder(fx.Root);
     }
 
+    /// <summary>The composer reads the global checks the ENGINE names - a test's own folder - never the machine's.</summary>
+    [Fact]
+    public async Task The_composer_reads_the_global_checks_the_engine_names()
+    {
+        using var fx = new EngineFixture();
+        var global = fx.Root + "-global";
+        Directory.CreateDirectory(global);
+        File.WriteAllText(Path.Combine(global, "audit.json"), Audit);
+        var engine = Engine(new FakeChatProvider(Turn.Says("""{"disposition":"quick_action","title":"answer","steps":[]}"""), Turn.Says("done")), global);
+        try
+        {
+            await using var composed = await RunComposer.ComposeAsync(engine,
+                new RunRequest(fx.Workspace, "answer", IntentSource.CommandBar) { Defaults = new(2) },
+                new ScriptedDecisionHandler("allow"), CancellationToken.None);
+
+            var audit = Assert.Single(composed.Checks!.Checks);
+            Assert.Equal(CheckOrigin.Global, audit.Origin);
+            Assert.Equal(Path.Combine(global, "audit.json"), audit.File);
+        }
+        finally
+        {
+            Directory.Delete(global, recursive: true);
+            Enactive.Tests.SqlitePools.ClearUnder(fx.Root);
+        }
+    }
+
     /// <summary>A checkpoint store that keeps what it was given, in memory.</summary>
     private sealed class Kept : IRunCheckpointStore
     {

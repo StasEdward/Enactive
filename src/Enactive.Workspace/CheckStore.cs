@@ -1,6 +1,5 @@
 namespace Enactive.Workspace;
 
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Enactive.Core.Builds;
@@ -19,7 +18,14 @@ using Enactive.Core.Templates;
 /// is .NET - a Node or Python workspace declares its commands.
 /// </param>
 public sealed record CheckInventory(
-    IReadOnlyList<ResolvedCheck> Checks, IReadOnlyList<CheckProblem> Problems, string? NoImplicitChecks);
+    IReadOnlyList<ResolvedCheck> Checks, IReadOnlyList<CheckProblem> Problems, string? NoImplicitChecks)
+{
+    /// <summary>
+    /// What a person should know about manifests that ARE read: a write check asked to block, read as advisory; a global
+    /// raise of an implicit check that does not apply in this workspace. Not problems - nothing was skipped for them.
+    /// </summary>
+    public IReadOnlyList<CheckProblem> Notes { get; init; } = [];
+}
 
 /// <summary>
 /// Check manifests as files, one check per file named by its id (Plan Phase 3.1), modelled on <see cref="TemplateStore"/>
@@ -86,6 +92,7 @@ public sealed class CheckStore
     public CheckInventory Inventory()
     {
         var problems = new List<CheckProblem>();
+        var notes = new List<CheckProblem>();
         var byId = new Dictionary<string, ResolvedCheck>(StringComparer.OrdinalIgnoreCase);
 
         var (implicitChecks, noImplicit) = Implicit();
@@ -97,7 +104,25 @@ public sealed class CheckStore
             {
                 byId.TryGetValue(manifest.Id, out var below);
                 if (Resolve(manifest, scope, below, noImplicit) is { } resolved)
+                {
+                    // A write check is ALWAYS advisory (Plan Phase 3.2): it runs mid-step to inform the worker, and a
+                    // refusal there would fight the worker in the middle of an edit. A manifest that asks for a blocking
+                    // one is otherwise valid, so it is read as advisory and the note says so, rather than skipped.
+                    if (resolved.Definition is { FireOn: CheckFire.Write, Severity: CheckSeverity.Blocking } blocking)
+                    {
+                        resolved = resolved with { Definition = blocking with { Severity = CheckSeverity.Advisory } };
+                        notes.Add(new CheckProblem(scope, manifest.File,
+                            $"'{manifest.Id}' fires on write, and a write check is always advisory - it informs the worker "
+                            + "mid-step and never refuses its edit - so it is read as advisory, not blocking."));
+                    }
                     byId[manifest.Id] = resolved;
+                }
+                // A GLOBAL raise of the implicit build or test is meant for the workspaces it applies to; in one no
+                // ecosystem recognises it simply does not apply - every non-.NET workspace listing it as broken would be
+                // noise about a file that is right.
+                else if (scope == CheckScope.Global && below is null && noImplicit is not null && manifest.Id is BuildId or TestId)
+                    notes.Add(new CheckProblem(scope, manifest.File,
+                        $"'{manifest.Id}' raises the implicit '{manifest.Id}' check, which does not apply here: {noImplicit}"));
                 else
                     problems.Add(new CheckProblem(scope, manifest.File, ProblemWithoutCommand(manifest.Id, below, noImplicit)));
             }
@@ -105,7 +130,10 @@ public sealed class CheckStore
         return new CheckInventory(
             byId.Values.OrderBy(c => c.Id, StringComparer.OrdinalIgnoreCase).ToArray(),
             problems.OrderBy(p => p.File, StringComparer.OrdinalIgnoreCase).ToArray(),
-            noImplicit);
+            noImplicit)
+        {
+            Notes = notes.OrderBy(p => p.File, StringComparer.OrdinalIgnoreCase).ToArray()
+        };
     }
 
     /// <summary>
@@ -119,31 +147,13 @@ public sealed class CheckStore
         {
             TakenAt = DateTimeOffset.UtcNow,
             NoImplicitChecks = inventory.NoImplicitChecks,
-            Problems = inventory.Problems
+            Problems = inventory.Problems,
+            Notes = inventory.Notes
         };
     }
 
-    /// <summary>
-    /// What each manifest directly in a checks folder hashes to (SHA-256), by file name. Only the folder's own
-    /// <c>*.json</c>: a check's detail output kept below it (Plan Phase 3.3) is not a manifest and judges nothing.
-    /// </summary>
-    public static IReadOnlyList<CheckManifestHash> HashManifests(string folder)
-    {
-        try
-        {
-            if (!Directory.Exists(folder)) return [];
-            return Directory.GetFiles(folder, "*.json")
-                .Select(f =>
-                {
-                    try { return new CheckManifestHash(Path.GetFileName(f), Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(f)))); }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
-                })
-                .OfType<CheckManifestHash>()
-                .OrderBy(h => h.File, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
-    }
+    /// <summary>What each manifest directly in a checks folder hashes to - see <see cref="CheckFolders.HashManifests"/>.</summary>
+    public static IReadOnlyList<CheckManifestHash> HashManifests(string folder) => CheckFolders.HashManifests(folder);
 
     /// <summary>
     /// What is wrong with a check before it is saved to <paramref name="scope"/> - the same rules a manifest is read by,
@@ -153,6 +163,12 @@ public sealed class CheckStore
     {
         var problems = Intrinsic(ManifestOf(check, file: PathOrName(check.Id, scope)));
         if (problems.Count > 0) return problems;
+
+        // <id>.json holding ANOTHER check (a file renamed by hand) is that check's file, and a save of this id must not
+        // overwrite it - nor write a second file of this id beside it.
+        var named = PathFor(check.Id, scope);
+        if (File.Exists(named) && DeclaredId(named) is var holds && !string.Equals(holds, check.Id, StringComparison.OrdinalIgnoreCase))
+            return [$"{Path.GetFileName(named)} holds the check '{holds}'; rename that file to {holds}.json first"];
 
         // A check without a command changes one below it; there must be one to change.
         if (string.IsNullOrWhiteSpace(check.Command))
@@ -166,34 +182,55 @@ public sealed class CheckStore
     }
 
     /// <summary>
-    /// Writes a check to its file, <c>&lt;id&gt;.json</c> in <paramref name="scope"/>, refusing one the store would skip -
-    /// a refusal here is an exception, because it is somebody's explicit save, not a listing.
+    /// Writes a check to the file that declares it in <paramref name="scope"/> - <c>&lt;id&gt;.json</c>, or the one file
+    /// named otherwise by hand that declares this id - refusing one the store would skip. A refusal here is an exception,
+    /// because it is somebody's explicit save, not a listing.
+    ///
+    /// <para>Written where it is declared, not always to <c>&lt;id&gt;.json</c>: a save of <c>lint</c> beside a
+    /// hand-named <c>my-linter.json</c> declaring <c>lint</c> made two files of one id, and a listing refuses both - the
+    /// save turned the check off. Where several files declare it, this save settles which is in force: it is written to
+    /// <c>&lt;id&gt;.json</c> and the others are removed.</para>
     /// </summary>
     public void Save(CheckDefinition check, CheckScope scope)
     {
         if (Validate(check, scope) is { Count: > 0 } problems)
             throw new ArgumentException("This check cannot be stored: " + string.Join("; ", problems), nameof(check));
 
-        var path = PathFor(check.Id, scope);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        AtomicWrite.Replace(path, ToJson(check));
+        var named = PathFor(check.Id, scope);
+        var declaring = Declaring(check.Id, Path.GetDirectoryName(named)!);
+        var target = declaring.Count == 1 ? declaring[0] : named;
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        AtomicWrite.Replace(target, ToJson(check));
+        foreach (var twin in declaring.Where(f => !string.Equals(f, target, StringComparison.OrdinalIgnoreCase)))
+            File.Delete(twin);
     }
 
     /// <summary>
-    /// Removes a check from one scope: its file, and any other manifest there that declares the same id (a file named
-    /// otherwise by hand). A check that is not there is not an error - it is the goal.
+    /// Removes a check from one scope: every manifest there that declares the id, whatever its file is called - and never a
+    /// file that declares another, even one named <c>&lt;id&gt;.json</c>. A check that is not there is not an error - it is
+    /// the goal.
     /// </summary>
     public void Delete(string id, CheckScope scope)
     {
-        var path = PathFor(id, scope);
-        if (File.Exists(path)) File.Delete(path);
-
-        var folder = Path.GetDirectoryName(path)!;
-        if (!Directory.Exists(folder)) return;
-        foreach (var file in Directory.GetFiles(folder, "*.json"))
-            if (Read(file, out _) is { } manifest && string.Equals(manifest.Id, id, StringComparison.OrdinalIgnoreCase))
-                File.Delete(file);
+        foreach (var file in Declaring(id, Path.GetDirectoryName(PathFor(id, scope))!))
+            File.Delete(file);
     }
+
+    /// <summary>The manifests in a folder that declare this id.</summary>
+    private static IReadOnlyList<string> Declaring(string id, string folder)
+    {
+        if (!Directory.Exists(folder)) return [];
+        return Directory.GetFiles(folder, "*.json")
+            .Where(f => string.Equals(DeclaredId(f), id, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// The id a manifest declares - or, for one that cannot be read, the id its name gives it, as a listing reads it: a
+    /// broken <c>lint.json</c> is the <c>lint</c> check's file, to be replaced by its save or removed by its delete.
+    /// </summary>
+    private static string DeclaredId(string file) => Read(file, out _)?.Id ?? Path.GetFileNameWithoutExtension(file);
 
     /// <summary>The file a check with this id lives in. Refuses an id that is not a safe slug - it becomes a file name.</summary>
     public string PathFor(string id, CheckScope scope)

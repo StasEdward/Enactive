@@ -188,6 +188,9 @@ public sealed record CheckSnapshot(IReadOnlyList<ResolvedCheck> Checks, IReadOnl
     /// <summary>The manifests that were skipped, and why - so a run's record says what it was NOT given.</summary>
     public IReadOnlyList<CheckProblem> Problems { get; init; } = [];
 
+    /// <summary>What was noted about manifests that were read (a write check read as advisory, a raise that does not apply).</summary>
+    public IReadOnlyList<CheckProblem> Notes { get; init; } = [];
+
     /// <summary>A check of the snapshot by id, or null.</summary>
     public ResolvedCheck? Find(string id)
         => Checks.FirstOrDefault(c => string.Equals(c.Id, id, StringComparison.OrdinalIgnoreCase));
@@ -201,6 +204,34 @@ public static class CheckFolders
 
     /// <summary>Whether a file in that folder is a manifest: a <c>.json</c> directly in it.</summary>
     public static bool IsManifest(string fileName) => fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// What each manifest directly in a checks folder hashes to (SHA-256), by file name, ordered. Only the folder's own
+    /// <c>*.json</c>: a check's detail output kept below it (Plan Phase 3.3) is not a manifest and judges nothing. A file
+    /// that cannot be read is left out. Here, beside the folder, so the store that snapshots and the engine that compares
+    /// on a resume hash the same way.
+    /// </summary>
+    public static IReadOnlyList<CheckManifestHash> HashManifests(string folder)
+    {
+        try
+        {
+            if (!Directory.Exists(folder)) return [];
+            return Directory.GetFiles(folder)
+                .Where(f => IsManifest(Path.GetFileName(f)))
+                .Select(f =>
+                {
+                    try { return new CheckManifestHash(Path.GetFileName(f), HashOf(File.ReadAllBytes(f))); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+                })
+                .OfType<CheckManifestHash>()
+                .OrderBy(h => h.File, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
+    }
+
+    /// <summary>SHA-256 of a manifest's bytes, lower-case hex.</summary>
+    public static string HashOf(byte[] bytes) => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
 }
 
 /// <summary>The limits a check is read within.</summary>
@@ -235,94 +266,177 @@ public static class CheckLimits
 ///
 /// <para>Case is ignored on Windows and macOS, whose file systems ignore it, and kept elsewhere: a check that missed
 /// <c>Src/A.cs</c> because it said <c>src/**</c> would be silently not owed on the machine where the two are one file.</para>
+///
+/// <para><b>One parser for both questions.</b> <see cref="Problem"/> and <see cref="IsMatch"/> read a pattern through the
+/// same translation, so a pattern with no problem is one that can be matched: when they were two readings, a comma in
+/// a [set] inside {alternatives} passed the check and then threw out of the match.</para>
+///
+/// <para><b>Linear time.</b> The regex is built with <see cref="RegexOptions.NonBacktracking"/>, and repeated
+/// <c>**/</c> are collapsed into one. A pattern is written by whoever writes a manifest, and is matched against every
+/// path a step changed: a backtracking engine given <c>**/**/**/x</c> or <c>*a*a*a*b</c> over a deep path takes time
+/// exponential in the pattern, inside a step.</para>
 /// </summary>
 public static class CheckGlob
 {
     private static readonly bool IgnoreCase = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS();
 
-    /// <summary>What is wrong with a pattern, or null when it is one.</summary>
-    public static string? Problem(string? pattern)
-    {
-        if (string.IsNullOrWhiteSpace(pattern))
-            return "a glob is empty";
-        var p = Normalize(pattern);
-        // A path outside the workspace cannot be what a step changed: every changed path is workspace-relative.
-        if (p.StartsWith('/') || (p.Length >= 2 && p[1] == ':'))
-            return $"'{pattern}' is not relative to the workspace";
-        if (p.Split('/').Any(segment => segment == ".."))
-            return $"'{pattern}' leaves the workspace with '..'";
+    private static readonly RegexOptions Options = RegexOptions.NonBacktracking | RegexOptions.CultureInvariant
+                                                   | (IgnoreCase ? RegexOptions.IgnoreCase : RegexOptions.None);
 
-        var inSet = false;
-        var inBraces = false;
-        for (var i = 0; i < p.Length; i++)
-        {
-            var c = p[i];
-            if (inSet)
-            {
-                if (c == ']' && p[i - 1] != '[' && !(p[i - 1] == '!' && p[i - 2] == '[')) inSet = false;
-                continue;
-            }
-            switch (c)
-            {
-                case '[': inSet = true; break;
-                case ']': return $"'{pattern}' closes a [set] it never opened";
-                case '{' when inBraces: return $"'{pattern}' nests {{alternatives}}, which is not supported";
-                case '{': inBraces = true; break;
-                case '}' when !inBraces: return $"'{pattern}' closes {{alternatives}} it never opened";
-                case '}': inBraces = false; break;
-            }
-        }
-        if (inSet) return $"'{pattern}' opens a [set] it never closes";
-        if (inBraces) return $"'{pattern}' opens {{alternatives}} it never closes";
-        return null;
-    }
+    /// <summary>
+    /// Patterns already translated. A check's globs are asked about every changed path of every step, and building a
+    /// non-backtracking regex is the expensive part. Bounded: patterns come from manifests, but a cache that only grows
+    /// is a leak waiting for a long-lived service.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (Regex? Regex, string? Problem)> Compiled = new();
+
+    private const int CacheLimit = 512;
+
+    /// <summary>What is wrong with a pattern, or null when it is one. A pattern with none never throws from <see cref="IsMatch"/>.</summary>
+    public static string? Problem(string? pattern)
+        => string.IsNullOrWhiteSpace(pattern) ? "a glob is empty" : Compile(pattern).Problem;
 
     /// <summary>Whether a workspace-relative path is one the pattern names. A pattern with a <see cref="Problem"/> names none.</summary>
     public static bool IsMatch(string pattern, string relativePath)
     {
-        if (Problem(pattern) is not null) return false;
-        var p = Normalize(pattern);
+        if (string.IsNullOrWhiteSpace(pattern) || Compile(pattern).Regex is not { } regex)
+            return false;
         var path = Normalize(relativePath).TrimStart('/');
-        if (!p.Contains('/'))
+        if (!Normalize(pattern).Contains('/'))
             path = path[(path.LastIndexOf('/') + 1)..];
-        return Regex.IsMatch(path, ToRegex(p),
-            IgnoreCase ? RegexOptions.IgnoreCase | RegexOptions.CultureInvariant : RegexOptions.CultureInvariant);
+        return regex.IsMatch(path);
     }
 
     private static string Normalize(string value) => value.Trim().Replace('\\', '/');
 
-    private static string ToRegex(string p)
+    private static (Regex? Regex, string? Problem) Compile(string pattern)
     {
+        if (Compiled.TryGetValue(pattern, out var known))
+            return known;
+        if (Compiled.Count >= CacheLimit)
+            Compiled.Clear();
+        return Compiled[pattern] = Translate(pattern);
+    }
+
+    private static (Regex? Regex, string? Problem) Translate(string pattern)
+    {
+        var p = Normalize(pattern);
+        // A path outside the workspace cannot be what a step changed: every changed path is workspace-relative.
+        if (p.StartsWith('/') || (p.Length >= 2 && p[1] == ':'))
+            return (null, $"'{pattern}' is not relative to the workspace");
+        if (p.Split('/').Any(segment => segment == ".."))
+            return (null, $"'{pattern}' leaves the workspace with '..'");
+
         var sb = new StringBuilder("^");
-        for (var i = 0; i < p.Length; i++)
+        var i = 0;
+        if (Sequence(p, ref i, inBraces: false, sb) is { } wrong)
+            return (null, $"'{pattern}' {wrong}");
+        sb.Append('$');
+
+        try
+        {
+            return (new Regex(sb.ToString(), Options), null);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            // What the parser lets through and a regex still refuses - a range written backwards, [z-a].
+            return (null, $"'{pattern}' is not a glob that can be matched ({ex.Message})");
+        }
+    }
+
+    /// <summary>
+    /// Translates up to the end - or, inside {alternatives}, up to the ',' or '}' that ends this alternative, which is
+    /// left for the caller. Returns what is wrong, or null.
+    /// </summary>
+    private static string? Sequence(string p, ref int i, bool inBraces, StringBuilder sb)
+    {
+        while (i < p.Length)
         {
             var c = p[i];
             switch (c)
             {
-                case '*' when i + 1 < p.Length && p[i + 1] == '*':
-                    // "**/" is any number of whole folders, none included; "/**" at the end is everything below.
-                    var slashAfter = i + 2 < p.Length && p[i + 2] == '/';
-                    sb.Append(slashAfter ? "(?:[^/]*/)*" : ".*");
-                    i += slashAfter ? 2 : 1;
+                case ',' or '}' when inBraces:
+                    return null;
+                case '}':
+                    return "closes {alternatives} it never opened";
+                case ']':
+                    return "closes a [set] it never opened";
+                case '*':
+                    var stars = i;
+                    while (i < p.Length && p[i] == '*') i++;
+                    if (i - stars == 1)
+                    {
+                        sb.Append("[^/]*");
+                        break;
+                    }
+                    if (i < p.Length && p[i] == '/')
+                    {
+                        // "**/" is any number of whole folders, none included - and "**/**/" is the same, said twice.
+                        i++;
+                        while (p.AsSpan(i).StartsWith("**/")) i += 3;
+                        sb.Append("(?:[^/]*/)*");
+                    }
+                    else
+                        sb.Append(".*");
                     break;
-                case '*': sb.Append("[^/]*"); break;
-                case '?': sb.Append("[^/]"); break;
+                case '?':
+                    sb.Append("[^/]");
+                    i++;
+                    break;
                 case '[':
-                    var close = p.IndexOf(']', i + 2);
-                    var body = p[(i + 1)..close];
-                    sb.Append('[').Append(body.StartsWith('!') ? "^" + Regex.Escape(body[1..]) : Regex.Escape(body)).Append(']');
-                    i = close;
+                    if (Set(p, ref i, sb) is { } badSet) return badSet;
                     break;
                 case '{':
-                    var end = p.IndexOf('}', i);
-                    sb.Append("(?:").Append(string.Join('|', p[(i + 1)..end].Split(',').Select(ToRegexPart))).Append(')');
-                    i = end;
+                    if (inBraces) return "nests {alternatives}, which is not supported";
+                    i++;
+                    sb.Append("(?:");
+                    while (true)
+                    {
+                        if (Sequence(p, ref i, inBraces: true, sb) is { } inner) return inner;
+                        if (i >= p.Length) return "opens {alternatives} it never closes";
+                        if (p[i] == ',')
+                        {
+                            sb.Append('|');
+                            i++;
+                            continue;
+                        }
+                        i++; // the '}'
+                        break;
+                    }
+                    sb.Append(')');
                     break;
-                default: sb.Append(Regex.Escape(c.ToString())); break;
+                default:
+                    sb.Append(Regex.Escape(c.ToString()));
+                    i++;
+                    break;
             }
         }
-        return sb.Append('$').ToString();
+        return null;
     }
 
-    private static string ToRegexPart(string alternative) => ToRegex(alternative)[1..^1];
+    /// <summary>
+    /// A [set] from its '[' to its ']'. A ']' first in it (after the '!', if any) is one of its characters, as in a shell;
+    /// everything in it is literal except a range's '-'.
+    /// </summary>
+    private static string? Set(string p, ref int i, StringBuilder sb)
+    {
+        var j = i + 1;
+        var negated = j < p.Length && p[j] == '!';
+        if (negated) j++;
+        var first = j;
+        if (j < p.Length && p[j] == ']') j++;
+        var close = p.IndexOf(']', j);
+        if (close < 0) return "opens a [set] it never closes";
+
+        sb.Append('[');
+        if (negated) sb.Append('^');
+        foreach (var ch in p.AsSpan(first, close - first))
+        {
+            if (ch is '\\' or ']' or '[' or '^') sb.Append('\\');
+            sb.Append(ch);
+        }
+        sb.Append(']');
+        i = close + 1;
+        return null;
+    }
 }

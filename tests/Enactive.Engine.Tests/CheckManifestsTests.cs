@@ -368,6 +368,162 @@ public sealed class CheckManifestsTests : IDisposable
     [InlineData("data/file[0-9].csv", "data/file7.csv", true)]
     [InlineData("data/file[!0-9].csv", "data/file7.csv", false)]
     [InlineData("src\\**\\*.cs", "src/x/y.cs", true)]
+    [InlineData("src/{a,[b,c]}/x", "src/c/x", true)]
+    [InlineData("src/{a,[b,c]}/x", "src/,/x", true)]
+    [InlineData("src/{a,[b,c]}/x", "src/d/x", false)]
+    [InlineData("{a,[}]}", "}", true)]
+    [InlineData("[]x]", "]", true)]
+    [InlineData("[!]x]", "y", true)]
+    [InlineData("[!]x]", "]", false)]
+    [InlineData("**/**/**/*.cs", "a/b/c.cs", true)]
+    [InlineData("**/**/**/*.cs", "c.cs", true)]
     public void A_glob_names_the_paths_it_says(string glob, string path, bool matches)
         => Assert.Equal(matches, CheckGlob.IsMatch(glob, path));
+
+    /// <summary>
+    /// The one parser behind both questions: whatever Problem passes, IsMatch can match - it threw on a comma in a set in
+    /// alternatives - and whatever IsMatch could not translate, Problem names.
+    /// </summary>
+    [Theory]
+    [InlineData("src/{a,[b,c]}")]
+    [InlineData("{a,[}]}")]
+    [InlineData("{[,]}")]
+    [InlineData("[{]")]
+    [InlineData("a,b")]
+    [InlineData("{a,b}{c,d}")]
+    [InlineData("data/[z-a].csv")]
+    [InlineData("{a,{b,c}}")]
+    [InlineData("{a,[b}")]
+    [InlineData("[!")]
+    [InlineData("{")]
+    [InlineData("a}")]
+    public void A_pattern_with_no_problem_never_throws_and_one_that_cannot_be_matched_has_one(string glob)
+    {
+        var problem = CheckGlob.Problem(glob);
+        var matched = Record.Exception(() => CheckGlob.IsMatch(glob, "src/a/b/c.txt"));
+
+        Assert.Null(matched);
+        if (problem is not null)
+            Assert.False(CheckGlob.IsMatch(glob, glob));
+    }
+
+    [Theory]
+    [InlineData("data/[z-a].csv")]
+    [InlineData("{a,{b,c}}")]
+    [InlineData("{a,[b}")]
+    public void A_glob_a_regex_would_refuse_is_a_problem(string glob) => Assert.NotNull(CheckGlob.Problem(glob));
+
+    /// <summary>
+    /// A manifest's glob is matched against every path a step changed, inside the step: a pattern a backtracking engine
+    /// takes exponential time over must still answer at once.
+    /// </summary>
+    [Fact]
+    public void A_pathological_glob_on_a_deep_path_answers_at_once()
+    {
+        var deep = string.Join('/', Enumerable.Repeat("a", 400)) + "/" + new string('a', 2000);
+        var patterns = new[]
+        {
+            string.Concat(Enumerable.Repeat("**/", 40)) + "b",
+            string.Concat(Enumerable.Repeat("*a", 40)) + "*b",
+            "**/" + string.Concat(Enumerable.Repeat("*a", 30)) + "b/**"
+        };
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        foreach (var pattern in patterns)
+            Assert.False(CheckGlob.IsMatch(pattern, deep));
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"took {clock.Elapsed}");
+    }
+
+    // ── a file named otherwise than its id ──────────────────────────────────
+
+    [Fact]
+    public void Save_writes_to_the_hand_named_file_that_declares_the_id()
+    {
+        WriteLocal("my-linter.json", Lint);
+        var store = Store();
+
+        store.Save(new CheckDefinition("lint", null, "eslint .", ["**/*.js"], CheckFire.Step, CheckSeverity.Advisory, 30, null), CheckScope.Workspace);
+
+        Assert.Equal(["my-linter.json"], Directory.GetFiles(Path.GetDirectoryName(Local("x"))!).Select(Path.GetFileName));
+        var inventory = store.Inventory();
+        Assert.Empty(inventory.Problems);
+        Assert.Equal("eslint .", Assert.Single(inventory.Checks).Definition.Command);
+    }
+
+    [Fact]
+    public void Save_settles_two_files_of_one_id_into_one()
+    {
+        WriteLocal("my-linter.json", Lint);
+        WriteLocal("other-linter.json", Lint);
+        var store = Store();
+
+        store.Save(new CheckDefinition("lint", null, "eslint .", ["**/*.js"], CheckFire.Step, CheckSeverity.Advisory, 30, null), CheckScope.Workspace);
+
+        Assert.Equal(["lint.json"], Directory.GetFiles(Path.GetDirectoryName(Local("x"))!).Select(Path.GetFileName));
+        Assert.Equal("eslint .", Assert.Single(store.Inventory().Checks).Definition.Command);
+    }
+
+    [Fact]
+    public void Save_never_overwrites_a_file_named_for_the_id_that_holds_another_check()
+    {
+        WriteLocal("lint.json", """{"id":"format","command":"prettier --check .","fireOn":"Run"}""");
+        var store = Store();
+        var lint = new CheckDefinition("lint", null, "eslint .", ["**/*.js"], CheckFire.Step, CheckSeverity.Advisory, 30, null);
+
+        Assert.NotEmpty(store.Validate(lint, CheckScope.Workspace));
+        Assert.Throws<ArgumentException>(() => store.Save(lint, CheckScope.Workspace));
+        Assert.Contains("format", File.ReadAllText(Local("lint.json")), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Delete_never_removes_a_file_that_declares_another_id()
+    {
+        WriteLocal("lint.json", """{"id":"format","command":"prettier --check .","fireOn":"Run"}""");
+        WriteLocal("my-linter.json", Lint);
+
+        Store().Delete("lint", CheckScope.Workspace);
+
+        Assert.True(File.Exists(Local("lint.json")));
+        Assert.False(File.Exists(Local("my-linter.json")));
+        Assert.Equal("format", Assert.Single(Store().Inventory().Checks).Id);
+    }
+
+    // ── notes, not problems ─────────────────────────────────────────────────
+
+    [Fact]
+    public void A_write_check_asked_to_block_is_read_as_advisory_and_noted()
+    {
+        WriteLocal("lint.json", """{"id":"lint","command":"lint","matches":["**"],"fireOn":"Write","severity":"Blocking"}""");
+
+        var inventory = Store().Inventory();
+
+        var lint = Assert.Single(inventory.Checks);
+        Assert.Equal(CheckSeverity.Advisory, lint.Definition.Severity);
+        Assert.Equal(CheckFire.Write, lint.Definition.FireOn);
+        Assert.Empty(inventory.Problems);
+        var note = Assert.Single(inventory.Notes);
+        Assert.Equal(Local("lint.json"), note.File);
+        Assert.Contains("advisory", note.Message, StringComparison.Ordinal);
+        Assert.Single(Store().Snapshot().Notes);
+    }
+
+    [Fact]
+    public void A_global_raise_of_build_where_no_ecosystem_applies_is_a_note_not_a_problem()
+    {
+        File.WriteAllText(Path.Combine(_root, "package.json"), "{}");
+        WriteGlobal("build.json", """{"severity":"Blocking","fireOn":"Step"}""");
+
+        var inventory = Store().Inventory();
+
+        Assert.Empty(inventory.Checks);
+        Assert.Empty(inventory.Problems);
+        var note = Assert.Single(inventory.Notes);
+        Assert.Equal(CheckScope.Global, note.Scope);
+        Assert.Contains("does not apply here", note.Message, StringComparison.Ordinal);
+
+        // In a .NET workspace the same file raises build.
+        MakeDotnet();
+        Assert.Equal(CheckSeverity.Blocking, Store().Inventory().Checks.Single(c => c.Id == "build").Definition.Severity);
+    }
 }

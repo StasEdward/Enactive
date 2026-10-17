@@ -341,14 +341,14 @@ public sealed partial class Orchestrator : IOrchestrator
         {
             await events.DisposeAsync();
             if (!settled)
-                guard.Restore();
+                guard.Restore(last?.RunId);
         }
         failed?.Throw();
     }
 
     /// <summary>The run's sentence about manifests it changed and that were put back, or null when it changed none.</summary>
     private static WorkEvent? Restored(CheckManifestGuard guard, WorkEvent? of)
-        => guard.Restore().Describe() is { } said && of is not null
+        => guard.Restore(of?.RunId).Describe() is { } said && of is not null
             ? new WorkEvent(Guid.NewGuid(), of.TaskId, of.RunId, DateTimeOffset.UtcNow, EventKind.ErrorObserved, said, null)
             : null;
 
@@ -1080,6 +1080,15 @@ public sealed partial class Orchestrator : IOrchestrator
             Checks = resume is null ? _checks : resume.CheckSnapshot,
             PendingChecks = resume?.PendingChecks?.ToList() ?? []
         };
+
+        // The manifests as they are now against what the checkpoint's snapshot hashed: a person may have edited them
+        // while the run was interrupted. The resumed run is judged by its snapshot all the same, so this is only SAID -
+        // nothing is put back (the checkpoint keeps hashes, not bytes, and the change is a person's) - but a run judged
+        // by checks that no longer match the files must not look as if they did.
+        if (resume?.CheckSnapshot is { } startedWith
+            && CheckManifestGuard.DescribeChangedSince(
+                CheckManifestGuard.ChangedSince(startedWith.Manifests, _workspace.RootPath)) is { } changedMeanwhile)
+            yield return scope.Ev(EventKind.ErrorObserved, changedMeanwhile);
 
         // A step the interrupted run was in the middle of is done again from its beginning - so what it had already changed
         // is put back first, as it was before that step. Left in place, it was the ground the step began again on: on

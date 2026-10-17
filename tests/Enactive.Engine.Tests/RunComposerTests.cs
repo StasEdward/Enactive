@@ -55,7 +55,9 @@ public sealed class RunComposerTests
             new SessionApprovals())
         {
             Planner = new Planner(checksAuditEnabled: false),
-            Approvals = approvals
+            Approvals = approvals,
+            // Never the machine's own %APPDATA% checks: a run here must not depend on who runs the suite.
+            GlobalChecks = Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-global-checks")
         };
     }
 

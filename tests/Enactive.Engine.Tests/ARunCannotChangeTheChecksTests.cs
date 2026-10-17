@@ -71,6 +71,69 @@ public sealed class ARunCannotChangeTheChecksTests
         // Said before the run's ending, so a host that stops reading at the end still hears it.
         Assert.True(events.IndexOf(said) < events.FindIndex(e => e.Kind is EventKind.TaskCompleted or EventKind.TaskFailed));
         Assert.Contains("more", fx.Read(Checks(Path.Combine("runs", "keep.txt"))), StringComparison.Ordinal);
+
+        // What the run wrote is kept, below the folder where it judges nothing, and the run says where.
+        var kept = Path.Combine("runs", events.Last().RunId.ToString(), "reverted");
+        Assert.Contains($".enactive/checks/runs/{events.Last().RunId}/reverted/", said.Summary, StringComparison.Ordinal);
+        Assert.Equal("{}", fx.Read(Checks(Path.Combine(kept, "added.json"))).Trim());
+        Assert.Equal("loosened", fx.Read(Checks(Path.Combine(kept, "lint.json"))).Trim());
+        Assert.False(fx.Exists(Checks(Path.Combine(kept, "audit.json"))));                 // deleted: nothing to keep
+    }
+
+    /// <summary>
+    /// A resumed run is judged by its checkpoint's checks; manifests a person changed while it was interrupted are said -
+    /// named - and left as the person left them: the snapshot keeps hashes, not bytes, and the change is theirs.
+    /// </summary>
+    [Fact]
+    public async Task A_resumed_run_says_which_manifests_changed_while_it_was_interrupted_and_leaves_them()
+    {
+        using var fx = WithManifests();
+        fx.Checks = new Enactive.Workspace.CheckStore(fx.Root, fx.Root + "-no-global").Snapshot();
+        fx.Pause = new RunPause();
+        fx.Pause.Request();
+        var store = new MemoryCheckpoints();
+        var paused = await fx.RunAsync(fx.Build(new FakeChatProvider(Turn.Says(TwoStepPlan)) { WhenExhausted = Turn.Says("step done") },
+            EngineFixture.Role("developer"), reviewRetries: 0, checkpoints: store), "two things");
+        Assert.Equal(RunOutcomeKind.Paused, paused.Last().Outcome());
+        Assert.Null(Restored(paused));
+        var checkpoint = Assert.Single(await store.LoadAllAsync(default));
+
+        // While it waits, a person loosens one check, removes another and adds a third.
+        fx.Write(Checks("lint.json"), Lint.Replace("Blocking", "Advisory"));
+        File.Delete(fx.PathOf(Checks("audit.json")));
+        fx.Write(Checks("spell.json"), """{"id":"spell","command":"cspell .","fireOn":"Run"}""");
+        fx.Pause = null;
+
+        var resumed = await fx.ResumeAsync(fx.Build(new FakeChatProvider { WhenExhausted = Turn.Says("step done") },
+            EngineFixture.Role("developer"), reviewRetries: 0, checkpoints: store), checkpoint);
+
+        var said = Assert.Single(resumed, e => e.Kind == EventKind.ErrorObserved
+                                               && e.Summary.Contains("changed while the run was interrupted", StringComparison.Ordinal));
+        Assert.Contains("changed lint.json", said.Summary, StringComparison.Ordinal);
+        Assert.Contains("deleted audit.json", said.Summary, StringComparison.Ordinal);
+        Assert.Contains("added spell.json", said.Summary, StringComparison.Ordinal);
+        Assert.Null(Restored(resumed));                                                    // nothing put back
+        Assert.Contains("Advisory", fx.Read(Checks("lint.json")), StringComparison.Ordinal);
+        Assert.False(fx.Exists(Checks("audit.json")));
+        Assert.True(fx.Exists(Checks("spell.json")));
+    }
+
+    [Fact]
+    public async Task A_resumed_run_whose_manifests_did_not_change_says_nothing_about_them()
+    {
+        using var fx = WithManifests();
+        fx.Checks = new Enactive.Workspace.CheckStore(fx.Root, fx.Root + "-no-global").Snapshot();
+        fx.Pause = new RunPause();
+        fx.Pause.Request();
+        var store = new MemoryCheckpoints();
+        await fx.RunAsync(fx.Build(new FakeChatProvider(Turn.Says(TwoStepPlan)) { WhenExhausted = Turn.Says("step done") },
+            EngineFixture.Role("developer"), reviewRetries: 0, checkpoints: store), "two things");
+        fx.Pause = null;
+
+        var resumed = await fx.ResumeAsync(fx.Build(new FakeChatProvider { WhenExhausted = Turn.Says("step done") },
+            EngineFixture.Role("developer"), reviewRetries: 0, checkpoints: store), Assert.Single(await store.LoadAllAsync(default)));
+
+        Assert.DoesNotContain(resumed, e => e.Summary.Contains("changed while the run was interrupted", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -225,6 +288,49 @@ public sealed class CheckManifestGuardTests : IDisposable
         Assert.Empty(once.Failures);
         Assert.Empty(guard.Restore().Changes);
         Assert.Equal("{}", File.ReadAllText(Path.Combine(Folder, "lint.json")));
+    }
+
+    /// <summary>
+    /// The state folder replaced by a junction that leads OUT of the workspace: restoring would delete and write files
+    /// somewhere else entirely. Nothing is touched there; the change is still found and said, as not restored.
+    /// </summary>
+    [Fact]
+    public void A_state_folder_that_leads_outside_the_workspace_is_never_written_through()
+    {
+        if (!OperatingSystem.IsWindows()) return;           // a junction is how a shell command would make one here
+        var outside = _root + "-outside";
+        var state = Path.Combine(_root, ".enactive");
+        Directory.Delete(state, recursive: true);
+        Directory.CreateDirectory(Path.Combine(outside, "checks"));
+        File.WriteAllText(Path.Combine(outside, "checks", "lint.json"), "{}");
+        try
+        {
+            Junction(state, outside);
+            var guard = CheckManifestGuard.Take(_root);
+            File.WriteAllText(Path.Combine(outside, "checks", "theirs.json"), "{}");
+
+            var restore = guard.Restore(Guid.NewGuid());
+
+            Assert.False(restore.Restored);
+            Assert.Equal([new CheckManifestChange("theirs.json", CheckManifestChangeKind.Added)], restore.Changes);
+            Assert.True(File.Exists(Path.Combine(outside, "checks", "theirs.json")));     // not deleted out there
+            Assert.False(Directory.Exists(Path.Combine(outside, "checks", "runs")));     // nothing kept out there either
+            Assert.Contains("NOT restored", restore.Describe(), StringComparison.Ordinal);
+            Assert.Contains("outside the workspace", restore.Describe(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(state); } catch { }                              // the junction, not what it points at
+            try { Directory.Delete(outside, recursive: true); } catch { }
+        }
+    }
+
+    private static void Junction(string link, string target)
+    {
+        using var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+            "cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true })!;
+        mklink.WaitForExit();
+        Assert.Equal(0, mklink.ExitCode);
     }
 
     [Fact]
