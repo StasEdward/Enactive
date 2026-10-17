@@ -388,13 +388,16 @@ public sealed class CheckStore
         var origin = scope == CheckScope.Workspace ? CheckOrigin.Workspace : CheckOrigin.Global;
 
         if (!string.IsNullOrWhiteSpace(said.Command))
+        {
+            var fires = said.FireOn ?? DefaultFire;
             return new ResolvedCheck(
                 new CheckDefinition(manifest.Id, said.Description?.Trim(), said.Command.Trim(), said.Matches?.ToArray() ?? [],
-                    said.FireOn ?? DefaultFire, said.Severity ?? CheckSeverity.Advisory,
-                    said.TimeoutSeconds ?? CheckLimits.DefaultTimeoutSeconds, said.Protects?.ToArray())
+                    fires, said.Severity ?? CheckSeverity.Advisory,
+                    said.TimeoutSeconds ?? CheckLimits.DefaultTimeoutFor(fires), said.Protects?.ToArray())
                 { Enabled = said.Enabled ?? true },
                 origin, below?.Origin)
-            { File = manifest.File };
+            { File = manifest.File, TimeoutSaid = said.TimeoutSeconds is not null };
+        }
 
         // No command: it changes how the check below runs and keeps that check's command - or, for the implicit build
         // and test, its ecosystem. What it does not say is the check below's.
@@ -420,13 +423,17 @@ public sealed class CheckStore
                 Matches = matches,
                 FireOn = fire,
                 Severity = severity,
-                TimeoutSeconds = said.TimeoutSeconds ?? was.TimeoutSeconds,
+                // Said here, said below, or the default for when it fires NOW: a step check raised to fire on write
+                // without a timeout gets the write default, not the two minutes it had as a step check (which is over
+                // the write-time limit, and the raise would have done nothing).
+                TimeoutSeconds = said.TimeoutSeconds ?? (below.TimeoutSaid ? was.TimeoutSeconds : CheckLimits.DefaultTimeoutFor(fire)),
                 Protects = said.Protects?.ToArray() ?? was.Protects,
                 Enabled = said.Enabled ?? was.Enabled
             },
             Origin = origin,
             Shadows = below.Origin,
-            File = manifest.File
+            File = manifest.File,
+            TimeoutSaid = said.TimeoutSeconds is not null || below.TimeoutSaid
         };
     }
 

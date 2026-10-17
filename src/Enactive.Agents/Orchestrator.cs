@@ -4833,7 +4833,7 @@ public sealed partial class Orchestrator : IOrchestrator
             // the result of the last write each covers - before the worker is asked again (WriteChecks). The engine's own
             // commands, under the run's policy, as the final checks are run.
             if (writeChecks is { Owed: true })
-                foreach (var said in await writeChecks.RunOwedAsync(BuildRegression.WhyNotAllowed(_tools, _permissions, _policy),
+                foreach (var said in await writeChecks.RunOwedAsync(WriteChecks.WhyNotRun(_tools, _permissions, _policy),
                              async (criterion, token) => (await CheckSuccessAsync([criterion], taskId, runId, context, token)).Results[0], ct))
                     yield return Ev(EventKind.ContextAssembled, said);
 

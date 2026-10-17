@@ -132,6 +132,15 @@ public sealed record ResolvedCheck(CheckDefinition Definition, CheckOrigin Origi
     /// <summary>The manifest it was read from, as a full path; null for an implicit check nobody overrode.</summary>
     public string? File { get; init; }
 
+    /// <summary>
+    /// Whether a manifest of this check SAID its timeout, here or in a check it shadows - false when the timeout is the
+    /// default for when it fires (<see cref="CheckLimits.DefaultTimeoutFor"/>). Kept so a manifest that raises a check
+    /// to fire at another time without saying a timeout gets that time's default, not the default of the time the check
+    /// below fired at. Only resolving reads it, so it is not stored with a run's snapshot.
+    /// </summary>
+    [JsonIgnore]
+    public bool TimeoutSaid { get; init; }
+
     /// <summary>Runs through the ecosystem as the engine's build or test check does today, not through a command of its own.</summary>
     [JsonIgnore]
     public bool RunsThroughEcosystem => string.IsNullOrWhiteSpace(Definition.Command) && Ecosystems is { Count: > 0 };
@@ -253,6 +262,26 @@ public static class CheckLimits
 
     /// <summary>Whether a timeout is one a check may have.</summary>
     public static bool IsSane(int seconds) => seconds is >= MinTimeoutSeconds and <= MaxTimeoutSeconds;
+
+    /// <summary>
+    /// The longest a check may take to be run at write time, in seconds. A write-time check runs INSIDE the worker's
+    /// turn: the worker waits for it, and it can run every turn of an edit loop. Thirty seconds is a linter, a formatter
+    /// check or a schema validation over a few files with room to spare, and caps what a turn can be held up per check;
+    /// a build or a test run takes longer and belongs at the step, where it runs once. It is under the command tool's own
+    /// limit (run_command stops a command at 60s), so a check's own timeout is what stops it. A write check declared
+    /// with more is not run at write time - said once a run - rather than run and cut short: a check stopped half-way
+    /// says nothing, every turn.
+    /// </summary>
+    public const int WriteTimeoutLimitSeconds = 30;
+
+    /// <summary>
+    /// What a check whose manifest says no timeout gets, by when it fires. A write check gets no more than
+    /// <see cref="WriteTimeoutLimitSeconds"/>: given the general default (two minutes) it was over the write-time limit and
+    /// never ran at write time, so a write check declared the obvious way - a command and the paths it is about - did
+    /// nothing at all. A timeout a manifest DOES say is kept as said, and one over the limit is reported where it is skipped.
+    /// </summary>
+    public static int DefaultTimeoutFor(CheckFire fire)
+        => fire == CheckFire.Write ? Math.Min(DefaultTimeoutSeconds, WriteTimeoutLimitSeconds) : DefaultTimeoutSeconds;
 }
 
 /// <summary>

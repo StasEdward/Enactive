@@ -224,6 +224,31 @@ public sealed class ExecutionJournal
     }
 
     /// <summary>
+    /// An observation of the engine's that supersedes one it recorded earlier: written IN PLACE of
+    /// <paramref name="earlier"/> while this journal still holds it, else added at the end. Returns the entry, to be
+    /// superseded in its turn.
+    ///
+    /// <para>For an observation repeated as the step goes on - a write-time check, run every turn of an edit loop - of
+    /// which only the latest says anything about the work. The engine's entries are the ones kept longest when the
+    /// evidence is shortened (<see cref="KeptLongest"/>), so twenty of them crowded the step's own calls out of the
+    /// reviewer's evidence to say nineteen times what the twentieth corrects. In place, and not removed and added:
+    /// positions in this journal are marks the loop and the review hold (<see cref="Mark"/>), and the calls after it
+    /// keep their numbers.</para>
+    /// </summary>
+    public ExecutedAction Supersede(ExecutedAction? earlier, int? step, string tool, string arguments, ActionOutcome outcome,
+        string? output, WorkspaceEffect workspaceEffect = WorkspaceEffect.None, ToolCallOrigin origin = ToolCallOrigin.Engine)
+    {
+        var action = new ExecutedAction(DateTimeOffset.UtcNow, step, tool, arguments, outcome, output, workspaceEffect, Origin: origin);
+        lock (_gate)
+        {
+            var at = earlier is null ? -1 : _actions.FindIndex(a => ReferenceEquals(a, earlier));
+            if (at >= 0) _actions[at] = action;
+            else _actions.Add(action);
+        }
+        return action;
+    }
+
+    /// <summary>
     /// Forget everything from <paramref name="from"/> on, because the conversation just did.
     ///
     /// <para>A CONTENT review that rejects an attempt DISCARDS it: the draft comes out of the

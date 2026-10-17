@@ -200,6 +200,36 @@ public sealed class CheckManifestsTests : IDisposable
 
     // ── the store ───────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// A write check that says no timeout gets the write-time limit, not the general two minutes - given those it was
+    /// over the limit and never ran at write time. A timeout a manifest SAYS - here or in the check it raises - is kept,
+    /// and a check raised to fire at another time without one gets that time's default.
+    /// </summary>
+    [Fact]
+    public void A_write_check_that_says_no_timeout_gets_the_write_time_limit_and_one_that_says_one_keeps_it()
+    {
+        MakeDotnet();
+        WriteLocal("spell.json", """{"id":"spell","command":"cspell","matches":["**/*.md"],"fireOn":"Write"}""");
+        WriteLocal("slow.json", """{"id":"slow","command":"slow","matches":["**/*.md"],"fireOn":"Write","timeoutSeconds":90}""");
+        WriteGlobal("lint.json", """{"id":"lint","command":"eslint .","matches":["**/*.js"]}""");
+        WriteLocal("lint.json", """{"id":"lint","fireOn":"Write"}""");
+        WriteGlobal("fmt.json", """{"id":"fmt","command":"fmt","matches":["**/*.js"],"timeoutSeconds":90}""");
+        WriteLocal("fmt.json", """{"id":"fmt","fireOn":"Write"}""");
+        WriteLocal("build.json", """{"id":"build","fireOn":"Write"}""");
+        WriteGlobal("audit.json", """{"id":"audit","command":"npm audit","matches":["**"],"fireOn":"Write"}""");
+        WriteLocal("audit.json", """{"id":"audit","fireOn":"Step"}""");
+
+        var checks = Store().Inventory().Checks.ToDictionary(c => c.Id, c => c.Definition.TimeoutSeconds);
+
+        Assert.Equal(CheckLimits.WriteTimeoutLimitSeconds, checks["spell"]);
+        Assert.Equal(90, checks["slow"]);
+        Assert.Equal(CheckLimits.WriteTimeoutLimitSeconds, checks["lint"]);
+        Assert.Equal(90, checks["fmt"]);
+        Assert.Equal(CheckLimits.WriteTimeoutLimitSeconds, checks["build"]);
+        Assert.Equal(CheckLimits.DefaultTimeoutSeconds, checks["audit"]);
+        Assert.Equal(CheckLimits.DefaultTimeoutSeconds, checks["test"]);
+    }
+
     [Fact]
     public void A_workspace_check_shadows_a_global_one_of_the_same_id_and_says_so()
     {

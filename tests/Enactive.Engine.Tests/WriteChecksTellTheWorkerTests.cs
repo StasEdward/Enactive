@@ -4,6 +4,10 @@ using System.Text.Json;
 using Enactive.Agents;
 using Enactive.Core.Chat;
 using Enactive.Core.Checks;
+using Enactive.Core.Context;
+using Enactive.Core.Execution;
+using Enactive.Core.Intents;
+using Enactive.Core.Templates;
 using Enactive.Core.Events;
 using Enactive.Core.History;
 using Enactive.Core.Permissions;
@@ -29,11 +33,15 @@ public sealed class WriteChecksTellTheWorkerTests
         """;
 
     /// <summary>The checks' command tool: records each command and whether the written files were there when it ran.</summary>
-    private sealed class Checker(int exitCode = 0, string output = "", bool hangs = false) : ITool
+    /// <param name="numbered">Ends the output with which run this is (#1, #2...), to tell the runs apart.</param>
+    /// <param name="noExitCode">Reports no exit code, so the check is NOT CHECKED with its output in the reason.</param>
+    private sealed class Checker(int exitCode = 0, string output = "", bool hangs = false, bool numbered = false, bool noExitCode = false) : ITool
     {
         public List<string> Seen { get; } = [];
         public List<string[]> FilesThen { get; } = [];
-        public string? Root { get; set; }
+        public bool Cancelled { get; private set; }
+        /// <summary>Called as each run starts - a test's way to stop the run while a check is running.</summary>
+        public Action? OnRun { get; set; }
         public ToolDefinition Definition => new("run_command", "run", "{\"type\":\"object\"}", Kind: ToolKind.Command, RunsSuccessChecks: true);
         public PermissionLevel RequiredLevel => PermissionLevel.Observe;
         public async Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct)
@@ -42,9 +50,15 @@ public sealed class WriteChecksTellTheWorkerTests
                 Seen.Add(doc.RootElement.GetProperty("command").GetString()!);
             var notes = Path.Combine(ctx.WorkspaceRoot, "notes");
             FilesThen.Add(Directory.Exists(notes) ? Directory.GetFiles(notes).Select(Path.GetFileName).OfType<string>().Order().ToArray() : []);
-            if (hangs) await Task.Delay(Timeout.Infinite, ct);
-            return new ToolResult(exitCode == 0, output, exitCode == 0 ? null : $"exit code {exitCode}", [],
-                new Dictionary<string, object?> { ["exitCode"] = exitCode });
+            OnRun?.Invoke();
+            if (hangs)
+            {
+                try { await Task.Delay(Timeout.Infinite, ct); }
+                catch (OperationCanceledException) { Cancelled = true; throw; }
+            }
+            var said = numbered ? $"{output} #{Seen.Count}" : output;
+            return new ToolResult(exitCode == 0, said, exitCode == 0 ? null : $"exit code {exitCode}", [],
+                noExitCode ? new Dictionary<string, object?>() : new Dictionary<string, object?> { ["exitCode"] = exitCode });
         }
     }
 
@@ -146,7 +160,7 @@ public sealed class WriteChecksTellTheWorkerTests
         Assert.Single(checker.Seen);
         Assert.Equal(["a.md", "b.md"], checker.FilesThen.Single());
         Assert.DoesNotContain("Write-time check", ResultOf(worker, "w1")!, StringComparison.Ordinal);
-        Assert.Contains("Write-time check 'spell': PASS", ResultOf(worker, "w2")!, StringComparison.Ordinal);
+        Assert.Contains("Write-time check 'spell': PASS (exit 0) - run after writing notes/a.md, notes/b.md", ResultOf(worker, "w2")!, StringComparison.Ordinal);
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
     }
 
@@ -167,7 +181,7 @@ public sealed class WriteChecksTellTheWorkerTests
     [Fact]
     public async Task A_check_too_long_for_a_turn_is_not_run_at_write_time_and_said_once()
     {
-        var (fx, checker) = Fixture(new Checker(), Snapshot(Spell(timeout: WriteChecks.TimeoutLimitSeconds + 1)));
+        var (fx, checker) = Fixture(new Checker(), Snapshot(Spell(timeout: CheckLimits.WriteTimeoutLimitSeconds + 1)));
         using var _ = fx;
         var worker = new FakeChatProvider(Turn.Says(TwoSteps), Writes(("w1", "notes/a.md")), Turn.Says("Edited."),
             Writes(("w2", "notes/b.md")), Turn.Says("Edited again."));
@@ -229,29 +243,215 @@ public sealed class WriteChecksTellTheWorkerTests
     }
 
     /// <summary>
-    /// The regression guard: a run whose checks hold no ENABLED write check - none at all, a step check over the same
-    /// files, a write check turned off - shows the worker exactly what it showed before write checks existed.
+    /// The regression guard: a run whose checks hold no enabled write check - none at all, a step check, a write check
+    /// turned off - and one whose write check covers nothing the step writes show the worker, and the feed, exactly what
+    /// they showed before write checks existed.
     /// </summary>
     [Fact]
-    public async Task Without_write_checks_the_worker_sees_byte_for_byte_what_it_saw_before()
+    public async Task Without_a_write_check_that_applies_the_worker_and_the_feed_see_byte_for_byte_what_they_saw_before()
     {
-        async Task<string[]> ResultsWith(CheckSnapshot? checks)
+        async Task<(string[] Results, string[] Events)> RunWith(CheckSnapshot? checks)
         {
             var (fx, checker) = Fixture(new Checker(1, "bad"), checks);
             using var _ = fx;
             var worker = new FakeChatProvider(Turn.Says(OneStep), Writes(("w1", "notes/a.md"), ("w2", "notes/b.md")),
                 Writes(("w3", "notes/a.md")), Turn.Says("Edited."));
-            await fx.RunAsync(fx.Build(worker), "edit the notes");
+            var events = await fx.RunAsync(fx.Build(worker), "edit the notes");
             Assert.Empty(checker.Seen);
-            return ToolResults(worker).ToArray();
+            return (ToolResults(worker).ToArray(),
+                // The fixture's folder is a new one per run, and the workspace is named after it.
+                events.Select(e => $"{e.Kind}: {e.Summary.Replace(fx.Root, "<root>", StringComparison.OrdinalIgnoreCase)
+                    .Replace(fx.Workspace.Name, "<workspace>", StringComparison.OrdinalIgnoreCase)}").ToArray());
         }
 
-        var without = await ResultsWith(null);
+        var without = await RunWith(null);
         // The step check covers other files, so whatever runs step checks leaves this run alone too.
-        var withOthers = await ResultsWith(Snapshot(Spell(matches: "elsewhere/**", fire: CheckFire.Step),
+        var withOthers = await RunWith(Snapshot(Spell(matches: "elsewhere/**", fire: CheckFire.Step),
             Spell(timeout: 5) with { Id = "off", Enabled = false }));
+        // A write check that IS armed for the step, and covers nothing it writes.
+        var coveringNothing = await RunWith(Snapshot(Spell(matches: "elsewhere/**")));
 
-        Assert.Equal(3, without.Length);
-        Assert.Equal(without, withOthers);
+        Assert.Equal(3, without.Results.Length);
+        Assert.Equal(without.Results, withOthers.Results);
+        Assert.Equal(without.Results, coveringNothing.Results);
+        Assert.Equal(without.Events, withOthers.Events);
+        Assert.Equal(without.Events, coveringNothing.Events);
+    }
+
+    /// <summary>
+    /// A write check declared the obvious way - a command and the paths it is about, no timeout - runs at write time.
+    /// Given the general two-minute default it was over the write-time limit, and the feature did nothing by default.
+    /// </summary>
+    [Fact]
+    public async Task A_write_check_declared_without_a_timeout_runs_at_write_time()
+    {
+        var (fx, checker) = Fixture(new Checker(0, "all spelled"), null);
+        using var _ = fx;
+        fx.Write(Path.Combine(".enactive", "checks", "spell.json"),
+            """{"id":"spell","command":"spell notes","matches":["notes/**"],"fireOn":"Write"}""");
+        fx.Checks = new Enactive.Workspace.CheckStore(fx.Root, fx.Root + "-no-global").Snapshot();
+        var worker = new FakeChatProvider(Turn.Says(OneStep), Writes(("w1", "notes/a.md")), Turn.Says("Edited."));
+
+        var events = await fx.RunAsync(fx.Build(worker), "edit the notes");
+
+        Assert.Equal(["spell notes"], checker.Seen);
+        Assert.Contains("Write-time check 'spell': PASS", ResultOf(worker, "w1")!, StringComparison.Ordinal);
+        Assert.DoesNotContain(events, e => e.Summary.Contains("not run at write time", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// One journal entry per check per step, the latest run's: the engine's entries are kept longest when the evidence is
+    /// shortened, and one per turn of an edit loop crowded the step's own calls out of what the reviewer reads.
+    /// </summary>
+    [Fact]
+    public async Task The_reviewer_is_shown_the_latest_run_of_a_check_once_not_every_turn()
+    {
+        var (fx, checker) = Fixture(new Checker(1, "'teh' is not a word", numbered: true), Snapshot(Spell()));
+        using var _ = fx;
+        var worker = new FakeChatProvider(Turn.Says(OneStep), Writes(("w1", "notes/a.md")), Writes(("w2", "notes/a.md")),
+            Writes(("w3", "notes/b.md")), Turn.Says("Edited."));
+        var reviewer = new FakeChatProvider(Verdicts.Pass());
+
+        await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "edit the notes");
+
+        Assert.Equal(3, checker.Seen.Count);
+        var reviewed = string.Join("\n", reviewer.Requests.SelectMany(r => r.Messages).Select(m => m.Content));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(reviewed, "Run by the engine after writing"));
+        Assert.Contains("'teh' is not a word #3", reviewed, StringComparison.Ordinal);
+        Assert.Contains("the latest of 3 times", reviewed, StringComparison.Ordinal);
+        Assert.DoesNotContain("'teh' is not a word #1", reviewed, StringComparison.Ordinal);
+    }
+
+    /// <summary>WriteChecks.WorkerOutputChars holds for a check that checked nothing too: its reason can carry the output.</summary>
+    [Fact]
+    public async Task A_check_that_checked_nothing_is_told_within_the_same_cap()
+    {
+        var output = string.Join("\n", Enumerable.Range(1, 200).Select(i => $"line {i} of what the checker printed"));
+        var (fx, _) = Fixture(new Checker(output: output, noExitCode: true), Snapshot(Spell()));
+        using var __ = fx;
+        var worker = new FakeChatProvider(Turn.Says(OneStep), Writes(("w1", "notes/a.md")), Turn.Says("Edited."));
+
+        await fx.RunAsync(fx.Build(worker), "edit the notes");
+
+        var told = ResultOf(worker, "w1")!;
+        var line = told[told.IndexOf("[Write-time check", StringComparison.Ordinal)..];
+        Assert.StartsWith("[Write-time check 'spell': NOT CHECKED", line, StringComparison.Ordinal);
+        Assert.Contains("not shown here", line, StringComparison.Ordinal);
+        Assert.True(line.Length < WriteChecks.WorkerOutputChars + 300, $"{line.Length} characters told: {line}");
+    }
+
+    /// <summary>A write that failed, or was refused, changed nothing a check could be owed for.</summary>
+    [Fact]
+    public async Task A_failed_or_refused_write_runs_no_check()
+    {
+        var (fx, checker) = Fixture(new Checker(), Snapshot(Spell(matches: "**")));
+        using (fx)
+        {
+            var worker = new FakeChatProvider(Turn.Says(OneStep),
+                Turn.Calls1("edit_file", """{"path":"notes/missing.md","old_string":"a","new_string":"b"}""", "e1"),
+                Writes(("w1", "../outside/notes/a.md")), Turn.Says("Could not edit."));
+            await fx.RunAsync(fx.Build(worker), "edit the notes");
+            Assert.DoesNotContain(ToolResults(worker), r => r.Contains("Write-time check", StringComparison.Ordinal));
+        }
+        Assert.Empty(checker.Seen);
+
+        var (denied, deniedChecker) = Fixture(new Checker(), Snapshot(Spell(matches: "**")));
+        using (denied)
+        {
+            var worker = new FakeChatProvider(Turn.Says(OneStep), Writes(("w1", "notes/a.md")), Turn.Says("Could not edit."));
+            await denied.RunAsync(denied.Build(worker, policy: PermissionPolicy.PermissiveDefault with { Deny = ["write_file"] }), "edit the notes");
+            Assert.False(denied.Exists("notes/a.md"));
+        }
+        Assert.Empty(deniedChecker.Seen);
+    }
+
+    /// <summary>
+    /// Stopping the run while a write check runs stops the check and the run: the cancellation is not caught as the
+    /// check's own timeout and told to the worker as "did not finish", with the step going on as if nothing were asked.
+    /// </summary>
+    [Fact]
+    public async Task Stopping_the_run_during_a_write_check_stops_it_and_is_not_told_as_the_checks_result()
+    {
+        var (fx, checker) = Fixture(new Checker(hangs: true), Snapshot(Spell(timeout: CheckLimits.WriteTimeoutLimitSeconds)));
+        using var _ = fx;
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        checker.OnRun = () => stop.CancelAfter(TimeSpan.FromMilliseconds(50));
+        var worker = new FakeChatProvider(Turn.Says(OneStep), Writes(("w1", "notes/a.md")), Turn.Says("Edited."));
+        var context = new WorkContext(fx.Workspace.Id, fx.Workspace.Name, null, null, null, [], []);
+        var intent = new Intent(Guid.NewGuid(), "edit the notes", IntentSource.CommandBar, context, DateTimeOffset.UtcNow);
+
+        var events = new List<WorkEvent>();
+        var stopped = false;
+        try
+        {
+            await foreach (var ev in fx.Build(worker).SubmitIntentAsync(intent, stop.Token))
+                events.Add(ev);
+        }
+        catch (OperationCanceledException) { stopped = true; }
+
+        Assert.True(checker.Cancelled);
+        Assert.True(stopped || events.Last().Outcome() == RunOutcomeKind.Cancelled, events.Text());
+        Assert.DoesNotContain(events, e => e.Summary.Contains("Write-time check", StringComparison.Ordinal));
+        Assert.Equal(2, worker.Requests.Count);
+    }
+
+    /// <summary>A command the policy denies is said to be denied - not to need an approval nobody can give.</summary>
+    [Fact]
+    public async Task A_check_the_policy_denies_is_not_run_and_the_worker_is_told_it_is_denied()
+    {
+        var (fx, checker) = Fixture(new Checker(), Snapshot(Spell()));
+        using var _ = fx;
+        var worker = new FakeChatProvider(Turn.Says(OneStep), Writes(("w1", "notes/a.md")), Turn.Says("Edited."));
+
+        await fx.RunAsync(fx.Build(worker, policy: PermissionPolicy.PermissiveDefault with { Deny = ["run_command"] }), "edit the notes");
+
+        Assert.Empty(checker.Seen);
+        var told = ResultOf(worker, "w1")!;
+        Assert.Contains("Write-time check 'spell': not run: the policy denies this command", told, StringComparison.Ordinal);
+        Assert.DoesNotContain("approval", told, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>A clock a test moves itself.</summary>
+    private sealed class Clock : TimeProvider
+    {
+        private long _ticks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => _ticks;
+        public void Advance(TimeSpan by) => _ticks += by.Ticks;
+    }
+
+    /// <summary>
+    /// WriteChecks.TurnBudgetSeconds: one turn's write checks together hold the worker's turn for no longer than the
+    /// budget. A check runs only while its own timeout still fits in what is left; the rest wait for the next turn, and
+    /// the worker is told so once.
+    /// </summary>
+    [Fact]
+    public async Task One_turns_write_checks_keep_to_the_turns_budget_and_say_which_waited()
+    {
+        using var fx = new EngineFixture();
+        var tools = new Enactive.Tools.ToolRegistry(EngineFixture.ShippedTools());
+        List<ChatMessage> messages = [ChatMessage.Tool("w1", "Wrote notes/a.md")];
+        var frame = new StepFrame(Guid.NewGuid(), Guid.NewGuid(), 1, fx.Workspace, tools.Definitions, messages, new ExecutionJournal(),
+            new(), fx.Artifacts.BeginStep());
+        var each = WriteChecks.TurnBudgetSeconds * 2 / 5;
+        var checks = WriteChecks.ForStep(Snapshot(Spell(each) with { Id = "c1" }, Spell(each) with { Id = "c2" }, Spell(each) with { Id = "c3" }),
+            staged: false, frame, out _)!;
+        var clock = new Clock();
+        checks.Time = clock;
+        checks.Wrote(new ToolCall("w1", "write_file", "{}"),
+            new ToolResult(true, "ok", null, [], new Dictionary<string, object?>(), ChangedPaths: ["notes/a.md"]));
+        var ran = new List<string>();
+
+        var said = await checks.RunOwedAsync(null, (criterion, _) =>
+        {
+            ran.Add(criterion.Name);
+            clock.Advance(TimeSpan.FromSeconds(each));
+            return Task.FromResult(new CriterionResult(criterion.Name, criterion.Command, false, CriterionOutcome.Passed, 0, null));
+        }, CancellationToken.None);
+
+        Assert.Equal(["c1", "c2"], ran);
+        Assert.Contains("[Write-time check(s) 'c3': not run this turn", messages[0].Content, StringComparison.Ordinal);
+        Assert.Single(said, s => s.Contains("not run this turn", StringComparison.Ordinal));
+        Assert.False(checks.Owed);
     }
 }

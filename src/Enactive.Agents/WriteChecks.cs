@@ -5,6 +5,7 @@ using Enactive.Core.Chat;
 using Enactive.Core.Checks;
 using Enactive.Core.Context;
 using Enactive.Core.Execution;
+using Enactive.Core.Permissions;
 using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 
@@ -27,30 +28,29 @@ using Enactive.Core.Tools;
 /// gathered and each owed check runs once, when the turn's calls are all answered and before the worker is asked
 /// again.</para>
 ///
-/// <para>Per tool loop, which is per attempt of a step: a note that a check is not run (it needs permission) is said
-/// once in it, not at every write. A new attempt is told again - it may be a conversation that never read it.</para>
+/// <para>Per tool loop, which is per attempt of a step: a note that a check is not run (the policy would ask) is said
+/// once in it, not at every write, and the journal keeps one entry per check. A new attempt is told again - it may be a
+/// conversation that never read it.</para>
 /// </summary>
 internal sealed class WriteChecks
 {
     /// <summary>
-    /// The longest a check may take to be run at write time, in seconds. A write-time check runs INSIDE the worker's
-    /// turn: the worker waits for it, and it can run every turn of an edit loop. Thirty seconds is a linter, a formatter
-    /// check or a schema validation over a few files with room to spare, and caps what a turn can be held up per check;
-    /// a build or a test run takes longer and belongs at the step, where it runs once. It is under the command tool's own
-    /// limit (run_command stops a command at 60s), so a check's own timeout is what stops it. A check declared with more
-    /// is not run at write time at all - said once a run (<see cref="ForStep"/>) - rather than run and cut short: a
-    /// check stopped half-way says nothing, every turn.
-    /// </summary>
-    internal const int TimeoutLimitSeconds = 30;
-
-    /// <summary>
-    /// How much of a check's output the WORKER is shown: its start and its end, about ten lines of a linter's or a
+    /// How much of what a check said the WORKER is shown: its start and its end, about ten lines of a linter's or a
     /// compiler's output - the first finding and the summary line. It is added to the result of a write, every turn the
     /// check runs, in the conversation of a worker that is often a small local model with a small window; a check's
     /// whole output there at each write would fill the window with old findings. The reviewer's copy in the journal is
     /// cut at the evaluator's own, larger limit (SuccessEvaluator.Trim).
     /// </summary>
     internal const int WorkerOutputChars = 600;
+
+    /// <summary>
+    /// What all of one turn's write checks together may hold the worker's turn for, in seconds. Each check is held to
+    /// <see cref="CheckLimits.WriteTimeoutLimitSeconds"/>, but a turn that covered five checks' globs would otherwise wait
+    /// five times that, every turn of an edit loop. A minute is two checks at the per-check limit, or many fast ones: a
+    /// check runs only while its own timeout still fits in what is left, so the turn is never held past it; the ones that
+    /// do not fit wait for the next turn's writes and the worker is told so once that turn.
+    /// </summary>
+    internal const int TurnBudgetSeconds = 60;
 
     /// <summary>The engine's journal entry for a write-time check: what the worker was told, for the reviewer.</summary>
     internal const string JournalTool = "engine_write_check";
@@ -77,11 +77,17 @@ internal sealed class WriteChecks
     /// <summary>Checks this loop has already said are not run, so the worker is told once and not at every write.</summary>
     private readonly HashSet<string> _toldNotRun = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Each check's journal entry in this loop, and how many times it ran: the next run supersedes the entry.</summary>
+    private readonly Dictionary<string, (ExecutedAction Entry, int Runs)> _recorded = new(StringComparer.OrdinalIgnoreCase);
+
     private WriteChecks(IReadOnlyList<ResolvedCheck> checks, StepFrame frame)
     {
         _checks = checks;
         _frame = frame;
     }
+
+    /// <summary>The clock the turn's budget is kept by; a test's own, to spend it without waiting.</summary>
+    internal TimeProvider Time { get; set; } = TimeProvider.System;
 
     /// <summary>Whether a write of this turn covered a check that has not run for it yet.</summary>
     public bool Owed => _owed.Count > 0;
@@ -116,15 +122,37 @@ internal sealed class WriteChecks
                 // the files written - and running them is the step's and the run's business; here there is no command.
                 said.Add($"The check '{check.Id}' fires on write, but it has no command of its own: it is the workspace's "
                          + "build or test, run through its ecosystem, which is not run at write time. Give it a command, or fire it on step.");
-            else if (check.Definition.TimeoutSeconds > TimeoutLimitSeconds)
+            else if (check.Definition.TimeoutSeconds > CheckLimits.WriteTimeoutLimitSeconds)
                 said.Add($"The check '{check.Id}' fires on write, but its timeout ({check.Definition.TimeoutSeconds}s) is over the "
-                         + $"{TimeoutLimitSeconds}s a write-time check may take - it would run inside the worker's turn - so it is "
-                         + $"not run at write time. Give it a timeoutSeconds of {TimeoutLimitSeconds} or less, or fire it on step.");
+                         + $"{CheckLimits.WriteTimeoutLimitSeconds}s a write-time check may take - it would run inside the worker's turn - so it is "
+                         + $"not run at write time. Give it a timeoutSeconds of {CheckLimits.WriteTimeoutLimitSeconds} or less, or fire it on step.");
             else
                 runnable.Add(check);
         }
         sayOnce = said;
         return runnable.Count == 0 ? null : new WriteChecks(runnable, frame);
+    }
+
+    /// <summary>
+    /// Why the engine may not run a write check's command now, as the worker is told it - or null when it may. Only a
+    /// command the policy allows outright runs: the worker is mid-turn, and the engine does not stop a person with a
+    /// question about a check nobody asked to run now. Its own words, not BuildRegression's: those are about the engine's
+    /// baseline build, and "needs an approval" was what they said of a command the policy denies.
+    /// </summary>
+    public static string? WhyNotRun(IToolRegistry tools, IPermissionEngine permissions, PermissionPolicy policy)
+    {
+        var candidates = tools.Definitions.Where(d => d.Kind == ToolKind.Command && d.RunsSuccessChecks).ToArray();
+        if (candidates.Length != 1) return "not run: this workspace has no single command tool that runs checks";
+        try
+        {
+            return permissions.Evaluate(policy, candidates[0].Name, tools.RequiredLevelOf(candidates[0].Name)) switch
+            {
+                PermissionDecision.Allow => null,
+                PermissionDecision.Deny => "not run: the policy denies this command",
+                _ => "not run: needs permission - the policy does not allow this command without asking"
+            };
+        }
+        catch (Exception ex) { return "not run: the command tool is not available: " + ex.Message; }
     }
 
     /// <summary>
@@ -151,35 +179,43 @@ internal sealed class WriteChecks
 
     /// <summary>
     /// Runs what this turn's writes owe, each check once, and adds what each said to the result of the last write it
-    /// covered. Returns a line per check for the run's feed. Never throws for a check: one that cannot be run says so.
+    /// covered. Returns a line per check for the run's feed. Never throws for a check: one that cannot be run says so -
+    /// except that the run being stopped stops it, and is not reported as something the check said.
     /// </summary>
-    /// <param name="whyNotAllowed">Why the engine may not run a command of its own without asking, or null when it may
-    /// (BuildRegression.WhyNotAllowed). A check that would need an approval is not run - the worker is mid-turn and the
-    /// engine does not stop a person for a check nobody asked to run now - and the worker is told so once.</param>
+    /// <param name="whyNotRun">Why the engine may not run a command of its own now (<see cref="WhyNotRun"/>), or null.
+    /// A check that may not run is not run, and the worker is told so once.</param>
     /// <param name="run">Runs one check as a criterion through the run's SuccessEvaluator: the same permission gate, the
     /// same "the exit code decides", the same reading of a test command that ran no tests.</param>
-    public async Task<IReadOnlyList<string>> RunOwedAsync(string? whyNotAllowed,
+    public async Task<IReadOnlyList<string>> RunOwedAsync(string? whyNotRun,
         Func<SuccessCriterionDefinition, CancellationToken, Task<CriterionResult>> run, CancellationToken ct)
     {
         var said = new List<string>();
+        var started = Time.GetTimestamp();
+        var overBudget = new List<(ResolvedCheck Check, string CallId)>();
         foreach (var check in _checks)
         {
             if (!_owed.Remove(check.Id, out var owed))
                 continue;
-            var on = On(owed.Paths);
+            var after = After(owed.Paths);
 
-            if (whyNotAllowed is not null)
+            if (whyNotRun is not null)
             {
                 if (!_toldNotRun.Add(check.Id))
                     continue;
-                Tell(owed.CallId, $"[Write-time check '{check.Id}': not run: needs permission - {whyNotAllowed}. It is not run "
-                    + "at write time in this step; nothing about your write follows from that.]");
-                said.Add(Record(check, on, $"not run: needs permission ({whyNotAllowed})", null));
+                Tell(owed.CallId, $"[Write-time check '{check.Id}': {whyNotRun}. It is not run at write time in this step; "
+                    + "nothing about your write follows from that.]");
+                said.Add(Record(check, after, whyNotRun, null));
+                continue;
+            }
+
+            var seconds = check.Definition.TimeoutSeconds;
+            if (TurnBudgetSeconds - Time.GetElapsedTime(started).TotalSeconds < seconds)
+            {
+                overBudget.Add((check, owed.CallId));
                 continue;
             }
 
             var criterion = new SuccessCriterionDefinition(check.Id, check.Definition.Command!, 0, Required: false);
-            var seconds = check.Definition.TimeoutSeconds;
             CriterionResult? result;
             using (var limit = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
@@ -190,6 +226,8 @@ internal sealed class WriteChecks
                 {
                     result = await run(criterion, limit.Token);
                 }
+                // Only the check's own timeout is the check's to report. The run being stopped propagates: told as "did not
+                // finish", it would read as a slow check, and the stop would be swallowed in the middle of the step.
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
                     result = null;
@@ -206,15 +244,30 @@ internal sealed class WriteChecks
                 {
                     CriterionOutcome.Passed => $"PASS (exit {result.ExitCode})",
                     CriterionOutcome.Failed => $"FAIL (exit {result.ExitCode})",
-                    _ => "NOT CHECKED - " + SuccessEvaluator.Trim(result.Detail)
+                    _ => "NOT CHECKED"
                 };
-            var output = result?.Outcome == CriterionOutcome.Failed ? result.Output ?? result.Detail : null;
-            Tell(owed.CallId, $"[Write-time check '{check.Id}': {verdict} - {on}"
+            // What it said: a failure's output, or why it checked nothing - which can carry the command's own output (a
+            // test command that ran no tests, a shell that would not start it), so it is held to the same cap.
+            var output = result?.Outcome switch
+            {
+                CriterionOutcome.Failed => result.Output ?? result.Detail,
+                CriterionOutcome.Unknown => result.Detail,
+                _ => null
+            };
+            Tell(owed.CallId, $"[Write-time check '{check.Id}': {verdict} - run {after}"
                 + (string.IsNullOrWhiteSpace(output) ? "" : "\n" + Shortening.HeadAndTail(output!.Trim(), WorkerOutputChars))
                 + (result?.Outcome == CriterionOutcome.Failed
                     ? "\nAdvisory: it does not undo your write or end the step. If what it says is about your change, fix it.]"
                     : "]"));
-            said.Add(Record(check, on, verdict, output is null ? null : SuccessEvaluator.Trim(output)));
+            said.Add(Record(check, after, verdict, string.IsNullOrWhiteSpace(output) ? null : SuccessEvaluator.Trim(output)));
+        }
+
+        if (overBudget.Count > 0)
+        {
+            var names = string.Join(", ", overBudget.Select(o => $"'{o.Check.Id}'"));
+            Tell(overBudget[^1].CallId, $"[Write-time check(s) {names}: not run this turn - the checks before them used the "
+                + $"{TurnBudgetSeconds}s this turn's write-time checks may take. They run again after your next write they cover.]");
+            said.Add($"Write-time check(s) {names}: not run this turn - the turn's {TurnBudgetSeconds}s for write-time checks was used.");
         }
         _owed.Clear();
         return said;
@@ -235,19 +288,30 @@ internal sealed class WriteChecks
             }
     }
 
-    /// <summary>The engine's journal entry for what the worker was told, and the feed's line for it.</summary>
-    private string Record(ResolvedCheck check, string on, string verdict, string? output)
+    /// <summary>
+    /// The engine's journal entry for what the worker was told - ONE per check in this loop, the latest run's in place of
+    /// the one before (ExecutionJournal.Supersede) - and the feed's line for it.
+    /// </summary>
+    private string Record(ResolvedCheck check, string after, string verdict, string? output)
     {
-        _frame.Journal.Record(_frame.StepNo, JournalTool, JsonSerializer.Serialize(new { check = check.Id }), ActionOutcome.Succeeded,
-            $"Run by the engine after this step's write(s), and told to the worker with the write's result - a write-time "
-            + $"check, advisory: it decides nothing on its own. '{check.Id}' ({check.Definition.Command}) {on}: {verdict}"
-            + (string.IsNullOrWhiteSpace(output) ? "" : "\n" + output),
-            WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
-        return $"Write-time check '{check.Id}': {verdict} - {on}.";
+        var known = _recorded.TryGetValue(check.Id, out var recorded);
+        var runs = known ? recorded.Runs + 1 : 1;
+        var entry = _frame.Journal.Supersede(known ? recorded.Entry : null, _frame.StepNo, JournalTool,
+            JsonSerializer.Serialize(new { check = check.Id }), ActionOutcome.Succeeded,
+            $"Run by the engine {after}, and told to the worker with that write's result - a write-time check, advisory: it "
+            + $"decides nothing on its own. '{check.Id}' ({check.Definition.Command}): {verdict}"
+            + (runs > 1 ? $" - the latest of {runs} times it was run at write time in this step; the earlier ones are not kept." : "")
+            + (string.IsNullOrWhiteSpace(output) ? "" : "\n" + output));
+        _recorded[check.Id] = (entry, runs);
+        return $"Write-time check '{check.Id}': {verdict} - run {after}.";
     }
 
-    private static string On(IReadOnlyList<string> paths)
-        => "on " + string.Join(", ", paths.Take(NamedPaths))
+    /// <summary>
+    /// When the check ran, by the writes that made it owed. Not "on" them: the check's command judges whatever it
+    /// covers, which may be more than - or other than - the files just written.
+    /// </summary>
+    private static string After(IReadOnlyList<string> paths)
+        => "after writing " + string.Join(", ", paths.Take(NamedPaths))
            + (paths.Count > NamedPaths ? $" and {paths.Count - NamedPaths} more" : "");
 
     /// <summary>
