@@ -191,6 +191,16 @@ public sealed record CheckSnapshot(IReadOnlyList<ResolvedCheck> Checks, IReadOnl
         => Checks.FirstOrDefault(c => string.Equals(c.Id, id, StringComparison.OrdinalIgnoreCase));
 }
 
+/// <summary>Where a workspace keeps its check manifests - one place, for the store that reads them and the guard that keeps them.</summary>
+public static class CheckFolders
+{
+    /// <summary>&lt;workspace&gt;/.enactive/checks. Only its own <c>*.json</c> are manifests; what is kept below it is not.</summary>
+    public static string WorkspaceFolderOf(string workspaceRoot) => Path.Combine(workspaceRoot, ".enactive", "checks");
+
+    /// <summary>Whether a file in that folder is a manifest: a <c>.json</c> directly in it.</summary>
+    public static bool IsManifest(string fileName) => fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
+}
+
 /// <summary>The limits a check is read within.</summary>
 public static class CheckLimits
 {

@@ -273,7 +273,7 @@ public sealed partial class Orchestrator : IOrchestrator
     }
 
     public IAsyncEnumerable<WorkEvent> SubmitIntentAsync(Intent intent, CancellationToken ct)
-        => StopsAtQuestions(RunAsync(intent, null, ct), intent.Id, ct);
+        => KeepsTheChecks(StopsAtQuestions(RunAsync(intent, null, ct), intent.Id, ct), ct);
 
     /// <summary>
     /// Picks an interrupted run up at its last step boundary. A NEW run under the SAME task - see
@@ -281,14 +281,76 @@ public sealed partial class Orchestrator : IOrchestrator
     /// </summary>
     public IAsyncEnumerable<WorkEvent> ResumeRunAsync(
         RunCheckpoint checkpoint, WorkContext context, CancellationToken ct)
-        => StopsAtQuestions(RunAsync(
+        => KeepsTheChecks(StopsAtQuestions(RunAsync(
             // The task id comes from the checkpoint, never from a caller: a resumed run that landed
             // under a different task would show in the history as unrelated work, and everything
             // built on "attempts at one task" would quietly stop being true.
             new Intent(checkpoint.TaskId, checkpoint.Request, IntentSource.CommandBar, context,
                        DateTimeOffset.UtcNow, checkpoint.WorkerId),
             checkpoint,
-            ct), checkpoint.TaskId, ct);
+            ct), checkpoint.TaskId, ct), ct);
+
+    /// <summary>
+    /// Where every run ends, for the check manifests (Plan Phase 3.1, anti-tamper): what the run added, changed or deleted
+    /// in <c>.enactive/checks</c> is put back, and said - see <see cref="CheckManifestGuard"/>. The outermost layer, so
+    /// every ending passes it: completed, failed, paused, blocked, waiting for an answer, stopped, crashed.
+    ///
+    /// <para>Said BEFORE the run's terminal event, not after it: a host may stop reading at the ending, and the sentence
+    /// belongs to the run whose record says how it ended. Checked again once the stream has ended, for anything done after
+    /// the terminal event; and in the finally, silently, when the consumer stopped listening first - there is nobody left
+    /// to tell, but the next run must still not be judged by what this one wrote.</para>
+    /// </summary>
+    private async IAsyncEnumerable<WorkEvent> KeepsTheChecks(IAsyncEnumerable<WorkEvent> run,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        // Taken when the run STARTS - the first MoveNext - so whatever a person had edited before it is what is kept.
+        var guard = CheckManifestGuard.Take(_workspace.RootPath);
+        var events = run.GetAsyncEnumerator(ct);
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? failed = null;
+        WorkEvent? last = null;
+        var settled = false;
+        try
+        {
+            while (true)
+            {
+                try
+                {
+                    if (!await events.MoveNextAsync()) break;
+                }
+                catch (Exception ex)
+                {
+                    // Held, not thrown yet: the manifests are put back and the run says so first.
+                    failed = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
+                    break;
+                }
+
+                var current = events.Current;
+                last = current;
+                if (current.Kind is EventKind.TaskCompleted or EventKind.TaskFailed && Restored(guard, current) is { } said)
+                    yield return said;
+                yield return current;
+            }
+
+            // Also when no event ever arrived: nothing to say it with, and still something to put back.
+            var late = Restored(guard, last);
+            settled = true;
+            if (late is not null)
+                yield return late;
+        }
+        finally
+        {
+            await events.DisposeAsync();
+            if (!settled)
+                guard.Restore();
+        }
+        failed?.Throw();
+    }
+
+    /// <summary>The run's sentence about manifests it changed and that were put back, or null when it changed none.</summary>
+    private static WorkEvent? Restored(CheckManifestGuard guard, WorkEvent? of)
+        => guard.Restore().Describe() is { } said && of is not null
+            ? new WorkEvent(Guid.NewGuid(), of.TaskId, of.RunId, DateTimeOffset.UtcNow, EventKind.ErrorObserved, said, null)
+            : null;
 
     /// <summary>
     /// Where a run that stopped at a question ends: with the question, not with an error.

@@ -79,7 +79,7 @@ public sealed class CheckStore
     public string? WorkspaceFolder => _workspaceRoot is null ? null : WorkspaceFolderOf(_workspaceRoot);
 
     /// <summary>Where a workspace keeps its checks.</summary>
-    public static string WorkspaceFolderOf(string workspaceRoot) => Path.Combine(workspaceRoot, ".enactive", "checks");
+    public static string WorkspaceFolderOf(string workspaceRoot) => CheckFolders.WorkspaceFolderOf(workspaceRoot);
 
     /// <summary>Every check visible here, and every manifest that was skipped and why.</summary>
     public CheckInventory Inventory()
