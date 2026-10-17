@@ -475,6 +475,47 @@ tool catalog in `Docs/TOOL_CATALOG_PLAN.md`).
 - Deleted test under `Protects` -> blocking finding; `CompareTests` reports the disappearance.
 - `Unknown` on a blocking check never yields `Succeeded`.
 
+### Decisions taken while building it
+
+Where the sections above left a choice open, or the build showed them wrong, this is what was built and why.
+
+- **Manifests (3.1).** One JSON file per check; the file that declares an id is the one saved. Unknown field names are a
+  reported problem and the file is skipped. A write check asked to block is read as advisory, with a note. A timeout
+  outside 1-3600 s is refused, not clamped; an omitted timeout is 120 s, and 30 s for a write check (the write-time
+  limit), so a write check without one still runs. A command-less manifest raises the check of that id below it
+  (implicit `build`/`test` or a global one); a global raise of `build` where no ecosystem applies is a note, not a
+  problem. Globs use one linear-time parser (no backtracking); a pattern that validates never throws, and a negated
+  set never matches `/`. The service reads global checks from `<dataFolder>/checks`; the desktop from
+  `%APPDATA%/Enactive/checks`.
+- **Anti-tamper (3.1).** The run uses only its snapshot. The workspace manifests are hashed when the run starts (not at
+  compose: a person may edit between the two); at every ending, a manifest a run added, changed or deleted is put back
+  and the run's bytes are kept under `.enactive/checks/runs/<runId>/reverted/`. Nothing is written through a link
+  leading outside the workspace, and a failure to put back is reported, never thrown. A resume compares the
+  checkpoint's compose-time hashes and says so if the checks changed while the run was interrupted. "Run checks now"
+  is guarded the same way. Edits from the UI are refused while the workspace lease is held by any run.
+- **Execution (3.2).** One runner for every boundary. Engine-run checks get their own timeout (the worker's
+  `run_command` stays at 60 s and cannot ask for more). Only a person's blocking check holds a run back; the engine's
+  own checks never do. A `Run` check runs at the run's end whatever changed; its `matches` are reported as unused.
+  Changed paths come from the measurement plus the tool-recorded paths; a step whose changes were not measured owes
+  every step check. Blocking results that hold a run back at a wave's end are kept in the checkpoint, so a pause or
+  a crash cannot turn them green. Write checks: one run per check per turn, at most 60 s of checks per turn, output
+  capped for the worker, latest result kept as evidence.
+- **"Run checks now" (3.2).** Runs every enabled check of the run's snapshot under the stricter of the current policy
+  and the run's own template ceiling. One press at a time per workspace; a run cannot start during a press (it is
+  refused with the reason) and a schedule due during a press stays due. The git fingerprint is taken from the
+  repository's top and limited to the workspace (a workspace may be a subfolder). No fingerprint cache: a cache could
+  call a just-changed state current.
+- **Records (3.3).** `CriterionEvaluated` carries `checkId`, `firedOn`, the boundary, deferral, `detailPath`, and for a
+  check that did not run its `reason`, for a retried step its `attempt`. Write-check results are criterion events,
+  folded to the latest per check and step; their detail file is overwritten each turn. A run's folder is removed with
+  the run and when an unfinished run without a record is forgotten; folders of killed runs still need an age-based
+  sweep.
+- **Protected files (3.4).** Judged against the step's start, not the run's; a planner-marked `changesProtected` step
+  (and its fan-out items) may remove protected files, and what it released survives a resume; staged runs show a
+  protected edit's proposed diff.
+- **Deferred.** Binding a check to a step through a plan catalog; an age-based sweep of killed runs' folders; a viewer
+  for detail files (they are a link/tooltip); MySQL paths are written but have not run against a database here.
+
 ### Measurement
 
 `build-error` and `test-coverage` with `build`/`test` raised to blocking at step level.
