@@ -52,7 +52,8 @@ public sealed class CheckStore
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true,
-        Converters = { new JsonStringEnumConverter() }
+        // Names only: a number would be read as whatever member has that position, and "fireOn": 7 is no member at all.
+        Converters = { new JsonStringEnumConverter(allowIntegerValues: false) }
     };
 
     private readonly string? _workspaceRoot;

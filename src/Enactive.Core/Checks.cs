@@ -108,7 +108,8 @@ public sealed record CheckDefinition(
            && Id == other.Id && Description == other.Description && Command == other.Command
            && FireOn == other.FireOn && Severity == other.Severity && TimeoutSeconds == other.TimeoutSeconds
            && Enabled == other.Enabled
-           && Matches.SequenceEqual(other.Matches)
+           // Null-safe: a definition read from JSON that left a list out has null there, whatever the type says.
+           && (Matches ?? []).SequenceEqual(other.Matches ?? [])
            && (Protects ?? []).SequenceEqual(other.Protects ?? []);
 
     public override int GetHashCode() => HashCode.Combine(Id, Command, FireOn, Severity, TimeoutSeconds, Enabled);
@@ -135,6 +136,7 @@ public sealed record ResolvedCheck(CheckDefinition Definition, CheckOrigin Origi
     [JsonIgnore]
     public bool RunsThroughEcosystem => string.IsNullOrWhiteSpace(Definition.Command) && Ecosystems is { Count: > 0 };
 
+    [JsonIgnore]
     public string Id => Definition.Id;
 
     public bool Equals(ResolvedCheck? other)

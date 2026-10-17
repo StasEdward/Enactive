@@ -150,6 +150,7 @@ public sealed class CheckManifestsTests : IDisposable
     [InlineData("null")]
     [InlineData("""{"id":"Has Spaces","command":"x","fireOn":"Run"}""")]
     [InlineData("""{"id":"lint","command":"x","fireOn":"Sometimes"}""")]
+    [InlineData("""{"id":"lint","command":"x","fireOn":"Run","severity":7}""")]
     public void An_unreadable_manifest_is_reported_and_the_others_still_load(string json)
     {
         WriteLocal("broken.json", json);
