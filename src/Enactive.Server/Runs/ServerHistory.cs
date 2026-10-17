@@ -263,9 +263,17 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
     {
         if (Workspace(user, root) is not { } known)
             return ([], false, false, Unknown(user));
-        var records = await CheckRecordViews.ForRunAsync(known.RootPath, runId, ct);
         var offered = ChecksNow.Refusal(await RecordAsync(known.RootPath, runId, ct)) is null;
-        return (records, offered, offered && ServerAuth.StillValid(users, user) is { } account && ServerStaging.MayDecide(account.Role), null);
+        var canRun = offered && ServerAuth.StillValid(users, user) is { } account && ServerStaging.MayDecide(account.Role);
+        try
+        {
+            return (await CheckRecordViews.ForRunAsync(known.RootPath, runId, ct), offered, canRun, null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Records that cannot be read are said to be so - never shown as none, which reads as "never checked".
+            return ([], offered, canRun, "This run's check records cannot be read: " + ex.Message);
+        }
     }
 
     /// <summary>
@@ -295,8 +303,19 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         if (runs.List(user).Any(r => !r.Ended.IsCompleted && SameFolder(r.Workspace, known.RootPath)))
             return "A run is going in this workspace; run the checks when it has ended, so they see the files as you left them.";
 
-        var (record, problem) = await ChecksNow.RunAsync(composed, WorkspaceInfo.For(known.RootPath), runId, account.Name,
-            known.Autonomy, ct);
+        Core.Checks.CheckRecord? record;
+        string? problem;
+        try
+        {
+            (record, problem) = await ChecksNow.RunAsync(composed, WorkspaceInfo.For(known.RootPath), runId, account.Name,
+                known.Autonomy, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Said on the page, not thrown into it: a history that cannot be written (a locked database, a full disk) is
+            // this press's failure, and a page that dies of it takes the person's other work on it along.
+            return "The checks could not be run or their record kept: " + ex.Message;
+        }
         if (record is null)
             return problem ?? "The checks were not run.";
         users.Audit(account.Name, "staged run checked now", $"{known.RootPath}: {title}: {CheckRecordViews.Counts(record.Results)}");

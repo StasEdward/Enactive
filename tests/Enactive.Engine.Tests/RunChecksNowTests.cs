@@ -252,6 +252,25 @@ public sealed class RunChecksNowTests
         Enactive.Tests.SqlitePools.ClearUnder(fx.Root);
     }
 
+    /// <summary>
+    /// StateFingerprints.MaxFiles: a glob over more files than a fingerprint hashes takes the first of them and says the
+    /// rest were not hashed - a record that looked current while an unhashed file changed would claim more than it holds.
+    /// </summary>
+    [Fact]
+    public async Task A_fingerprint_past_the_most_files_it_hashes_says_so()
+    {
+        using var fx = new EngineFixture();
+        Directory.CreateDirectory(fx.PathOf("src"));
+        for (var i = 0; i <= StateFingerprints.MaxFiles; i++)
+            File.WriteAllText(fx.PathOf($"src/f{i:D5}.txt"), "x");
+
+        var fingerprint = await StateFingerprints.TakeAsync(fx.Root, [], ["src/**"], [], CancellationToken.None);
+
+        Assert.Equal(FingerprintKind.Files, fingerprint.Kind);
+        Assert.Equal(StateFingerprints.MaxFiles, fingerprint.Files);
+        Assert.Contains($"1 past the first {StateFingerprints.MaxFiles} were not hashed", fingerprint.Caveat);
+    }
+
     /// <summary>Only a staged run is checked this way; a run that wrote to disk was checked as it ran.</summary>
     [Fact]
     public async Task A_run_that_was_not_staged_is_refused()
