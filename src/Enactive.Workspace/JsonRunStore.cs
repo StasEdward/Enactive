@@ -1,8 +1,10 @@
 namespace Enactive.Workspace;
 
 using System.Text.Json;
+using Enactive.Core.Checks;
 using Enactive.Core.Context;
 using Enactive.Core.History;
+using Enactive.Core.Storage;
 
 /// <summary>
 /// File-backed run store: one JSON file per run under &lt;workspace&gt;/.enactive/runs. No external
@@ -45,7 +47,11 @@ public sealed class JsonRunStore : IRunStore
     /// </summary>
     public Task DeleteAsync(Guid runId, CancellationToken ct)
     {
-        Enactive.Core.Checks.CheckRecords.RemoveRun(_root, runId);
+        CheckRecords.RemoveRun(_root, runId);
+        // Its "Run checks now" records go with it: they are about this run, and records no run lists are read by nobody.
+        var checks = ChecksFileOf(runId);
+        if (File.Exists(checks))
+            File.Delete(checks);
         if (Directory.Exists(_directory))
             foreach (var file in Directory.EnumerateFiles(_directory, $"*_{runId:N}.json"))
                 try { File.Delete(file); }
@@ -133,5 +139,37 @@ public sealed class JsonRunStore : IRunStore
 
         records.Sort((a, b) => b.StartedAt.CompareTo(a.StartedAt));
         return records;
+    }
+
+    /// <summary>
+    /// Where a run's "Run checks now" records are kept: one file a run, in a folder of their own below the runs - never
+    /// beside them, where every listing (<c>*.json</c>, top folder only) would read the file as a run.
+    /// </summary>
+    private string ChecksFileOf(Guid runId) => Path.Combine(_directory, "checks", $"{runId:N}.json");
+
+    /// <summary>
+    /// Adds a record to the run's file, read and written again under the file's lock: two presses at once - two pages of
+    /// the service - must both be kept, not the second written over the first.
+    /// </summary>
+    public async Task AddCheckRecordAsync(CheckRecord record, CancellationToken ct)
+    {
+        var file = ChecksFileOf(record.RunId);
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        using var hold = await FileLock.TakeAsync(file, ct);
+        var records = (await ReadChecksAsync(file, ct)).ToList();
+        records.Add(record);
+        AtomicWrite.Replace(file, JsonSerializer.Serialize(records, Options));
+    }
+
+    public async Task<IReadOnlyList<CheckRecord>> LoadCheckRecordsAsync(Guid runId, CancellationToken ct)
+        => await ReadChecksAsync(ChecksFileOf(runId), ct);
+
+    private static async Task<IReadOnlyList<CheckRecord>> ReadChecksAsync(string file, CancellationToken ct)
+    {
+        if (!File.Exists(file))
+            return [];
+        await using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        return (await JsonSerializer.DeserializeAsync<List<CheckRecord>>(stream, Options, ct) ?? [])
+            .OrderBy(r => r.At).ToArray();
     }
 }

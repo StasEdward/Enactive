@@ -33,7 +33,30 @@ public sealed partial class Orchestrator
     /// <param name="firing">Where it fires, for its record (Plan Phase 3.3): said in its event, and where its output is kept.</param>
     private async Task<CriterionResult> RunDeclaredCheckAsync(ResolvedCheck check, string at, RunScope scope,
         WorkContext context, CheckFiring firing, CancellationToken ct)
-        => Recorded(await RunDeclaredCheckAsync(check, at, scope, context, ct), firing, scope.RunId);
+        => Recorded(await RunDeclaredCheckAsync(check, at, scope.TaskId, scope.RunId, context, ct), firing, scope.RunId);
+
+    /// <summary>
+    /// "Run checks now" on a staged run (Plan Phase 3.2), after a person has decided its proposals: the run's SNAPSHOTTED
+    /// checks, each through the one runner every declared check goes through (RunDeclaredCheckAsync) - the same permission
+    /// gate, the same tool, its own timeout - against the workspace as it is now. Nothing is published and nothing of the
+    /// run is changed: the results are for a check record beside the run, and each one's whole output is kept in the run's
+    /// folder under <paramref name="stem"/>, a name of this press's own, so a later press does not take its files.
+    ///
+    /// <para>The engine this is called on must be composed for it: the policy of the moment, and NOT staged - a staged
+    /// engine reports every check "staged: needs the applied files", which is exactly what this is run after.</para>
+    /// </summary>
+    /// <param name="runId">The staged run whose checks these are - its folder keeps the output.</param>
+    /// <param name="checks">The checks to run, from the run's snapshot (WorkspaceChecks.Runnable).</param>
+    /// <param name="stem">The start of each detail file's name - "now-20261017-140212" - distinct per record.</param>
+    public async Task<IReadOnlyList<CriterionResult>> RunChecksNowAsync(Guid runId, Guid taskId, IReadOnlyList<ResolvedCheck> checks,
+        string stem, WorkContext context, CancellationToken ct)
+    {
+        var results = new List<CriterionResult>(checks.Count);
+        foreach (var check in checks)
+            results.Add(Recorded(await RunDeclaredCheckAsync(check, "run now", taskId, runId, context, ct),
+                new CheckFiring(check.Id, CheckBoundary.Apply), runId, stem: stem));
+        return results;
+    }
 
     /// <summary>
     /// A declared check's result with its record (Plan Phase 3.3): where it fired, and its whole output kept in the run's
@@ -41,13 +64,14 @@ public sealed partial class Orchestrator
     /// result is made and before it is published, because the output is not in the event and is gone with the result.
     /// </summary>
     /// <param name="replace">Write over the last file of this check here, rather than beside it - see CheckRecords.WriteDetail.</param>
-    private CriterionResult Recorded(CriterionResult result, CheckFiring firing, Guid runId, bool replace = false)
+    /// <param name="stem">The detail file's name before the check's id, when not the firing's own (DetailStem) - "Run checks now" names its press.</param>
+    private CriterionResult Recorded(CriterionResult result, CheckFiring firing, Guid runId, bool replace = false, string? stem = null)
         => result with
         {
             Check = firing with
             {
                 DetailPath = string.IsNullOrEmpty(result.Output) ? null
-                    : CheckRecords.WriteDetail(_workspace.RootPath, runId, DetailStem(firing), firing.CheckId, result.Output!, replace)
+                    : CheckRecords.WriteDetail(_workspace.RootPath, runId, stem ?? DetailStem(firing), firing.CheckId, result.Output!, replace)
             }
         };
 
@@ -61,7 +85,7 @@ public sealed partial class Orchestrator
     };
 
     /// <summary>The check run, before its record is put on it - see the overload above, which every caller goes through.</summary>
-    private async Task<CriterionResult> RunDeclaredCheckAsync(ResolvedCheck check, string at, RunScope scope,
+    private async Task<CriterionResult> RunDeclaredCheckAsync(ResolvedCheck check, string at, Guid taskId, Guid runId,
         WorkContext context, CancellationToken ct)
     {
         var definition = check.Definition;
@@ -89,7 +113,7 @@ public sealed partial class Orchestrator
         limit.CancelAfter(TimeSpan.FromSeconds(definition.TimeoutSeconds));
         try
         {
-            var report = await CheckSuccessAsync(criteria, scope.TaskId, scope.RunId, context, limit.Token,
+            var report = await CheckSuccessAsync(criteria, taskId, runId, context, limit.Token,
                 commandTimeoutSeconds: definition.TimeoutSeconds);
             return WorkspaceChecks.Combine(name, command, blocking, report.Results);
         }

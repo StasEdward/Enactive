@@ -192,6 +192,21 @@ public static class ProtectedFiles
             .ToArray();
     }
 
+    /// <summary>
+    /// The files in the workspace that <paramref name="globs"/> cover - or that <paramref name="also"/> claims, for a check
+    /// that runs through an ecosystem with no globs of its own - workspace-relative with '/', in a stable order. Walked as the
+    /// protected files are (skipped folders and links left out, only below the globs' literal folders unless
+    /// <paramref name="also"/> needs the whole tree). For a fingerprint of the state "Run checks now" checked, outside git.
+    /// </summary>
+    public static IEnumerable<string> Covered(string root, IReadOnlyCollection<string> globs, Func<string, bool>? also = null)
+    {
+        var usable = globs.Where(g => !string.IsNullOrWhiteSpace(g)).ToArray();
+        if (usable.Length == 0 && also is null) yield break;
+        foreach (var relative in Walk(root, also is not null ? [""] : Starts(usable)))
+            if (usable.Any(g => CheckGlob.IsMatch(g, relative)) || also?.Invoke(relative) == true)
+                yield return relative;
+    }
+
     /// <summary>A file's SHA-256 now, lower-case hex - null when it cannot be read (or is not there).</summary>
     public static string? HashOf(string fullPath)
     {

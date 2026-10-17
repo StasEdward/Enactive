@@ -100,7 +100,9 @@ public sealed class MySqlRunStore : IRunStore
         await connection.OpenAsync(ct);
 
         using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM runs WHERE run_id = @run_id AND workspace_id = @workspace_id;";
+        // Its "Run checks now" records with it (see SqliteRunStore), scoped to this workspace like the run.
+        command.CommandText = "DELETE FROM check_records WHERE run_id = @run_id AND workspace_id = @workspace_id; "
+                              + "DELETE FROM runs WHERE run_id = @run_id AND workspace_id = @workspace_id;";
         command.Parameters.AddWithValue("@run_id", runId.ToString());
         command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
         await command.ExecuteNonQueryAsync(ct);
@@ -213,6 +215,44 @@ public sealed class MySqlRunStore : IRunStore
             CheckSnapshot = reader.IsDBNull(13) ? null : JsonSerializer.Deserialize<CheckSnapshot>(reader.GetString(13), Json)
         };
 
+    public async Task AddCheckRecordAsync(CheckRecord record, CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+
+        await using var connection = new MySqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "INSERT INTO check_records (id, run_id, workspace_id, at, record_json) VALUES (@id, @run_id, @workspace_id, @at, @record);";
+        command.Parameters.AddWithValue("@id", record.Id.ToString());
+        command.Parameters.AddWithValue("@run_id", record.RunId.ToString());
+        command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
+        command.Parameters.AddWithValue("@at", record.At.ToString("o"));
+        command.Parameters.AddWithValue("@record", JsonSerializer.Serialize(record, Json));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<CheckRecord>> LoadCheckRecordsAsync(Guid runId, CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+
+        await using var connection = new MySqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT record_json FROM check_records WHERE run_id = @run_id AND workspace_id = @workspace_id;";
+        command.Parameters.AddWithValue("@run_id", runId.ToString());
+        command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
+
+        var records = new List<CheckRecord>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            if (JsonSerializer.Deserialize<CheckRecord>(reader.GetString(0), Json) is { } record)
+                records.Add(record);
+        return records.OrderBy(r => r.At).ToArray();
+    }
+
     private async Task EnsureSchemaAsync(CancellationToken ct)
     {
         if (_initialized)
@@ -263,6 +303,22 @@ public sealed class MySqlRunStore : IRunStore
             // reassign them with a deliberate UPDATE.
             await MySqlColumns.AddIfMissingAsync(connection, "runs", "workspace_id", "CHAR(36)", ct);
             await MySqlColumns.IndexIfMissingAsync(connection, "runs", "ix_runs_workspace", "workspace_id, started_at", ct);
+
+            // "Run checks now" records (Plan Phase 3.2) - a table of their own beside the runs, as in SqliteRunStore, and
+            // scoped by workspace like every run here. IF NOT EXISTS: a database made before them gains it, its runs have none.
+            using var checks = connection.CreateCommand();
+            checks.CommandText =
+                """
+                CREATE TABLE IF NOT EXISTS check_records (
+                  id           CHAR(36) PRIMARY KEY,
+                  run_id       CHAR(36) NOT NULL,
+                  workspace_id CHAR(36),
+                  at           VARCHAR(40),
+                  record_json  LONGTEXT
+                );
+                """;
+            await checks.ExecuteNonQueryAsync(ct);
+            await MySqlColumns.IndexIfMissingAsync(connection, "check_records", "ix_check_records_run", "workspace_id, run_id", ct);
 
             _initialized = true;
         }

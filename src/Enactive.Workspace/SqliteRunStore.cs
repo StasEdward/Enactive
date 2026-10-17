@@ -83,7 +83,8 @@ public sealed class SqliteRunStore : IRunStore
         await connection.OpenAsync(ct);
 
         using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM runs WHERE run_id = $run_id;";
+        // Its "Run checks now" records with it, in the same statement: records no run lists are read by nobody.
+        command.CommandText = "DELETE FROM check_records WHERE run_id = $run_id; DELETE FROM runs WHERE run_id = $run_id;";
         command.Parameters.AddWithValue("$run_id", runId.ToString());
         await command.ExecuteNonQueryAsync(ct);
     }
@@ -189,6 +190,42 @@ public sealed class SqliteRunStore : IRunStore
             CheckSnapshot = reader.IsDBNull(13) ? null : JsonSerializer.Deserialize<CheckSnapshot>(reader.GetString(13), Json)
         };
 
+    public async Task AddCheckRecordAsync(CheckRecord record, CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO check_records (id, run_id, at, record_json) VALUES ($id, $run_id, $at, $record);";
+        command.Parameters.AddWithValue("$id", record.Id.ToString());
+        command.Parameters.AddWithValue("$run_id", record.RunId.ToString());
+        command.Parameters.AddWithValue("$at", record.At.ToString("o"));
+        command.Parameters.AddWithValue("$record", JsonSerializer.Serialize(record, Json));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<CheckRecord>> LoadCheckRecordsAsync(Guid runId, CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT record_json FROM check_records WHERE run_id = $run_id;";
+        command.Parameters.AddWithValue("$run_id", runId.ToString());
+
+        var records = new List<CheckRecord>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            if (JsonSerializer.Deserialize<CheckRecord>(reader.GetString(0), Json) is { } record)
+                records.Add(record);
+        // Ordered here, by the time each was taken, not by the text of the column: an offset in it would sort wrong.
+        return records.OrderBy(r => r.At).ToArray();
+    }
+
     private async Task EnsureSchemaAsync(CancellationToken ct)
     {
         if (_initialized)
@@ -230,6 +267,22 @@ public sealed class SqliteRunStore : IRunStore
             await SqliteColumns.AddIfMissingAsync(connection, "runs", "usage_json", "TEXT", ct);
             await SqliteColumns.AddIfMissingAsync(connection, "runs", "spec_json", "TEXT", ct);
             await SqliteColumns.AddIfMissingAsync(connection, "runs", "checks_json", "TEXT", ct);
+
+            // "Run checks now" records (Plan Phase 3.2): a table of their own beside the runs, not a column of the run's
+            // row - a run has several, added one per press after it ended, and its row says what the run did and is not
+            // written again for them. IF NOT EXISTS, so a database made before them gains it and its runs simply have none.
+            using var checks = connection.CreateCommand();
+            checks.CommandText =
+                """
+                CREATE TABLE IF NOT EXISTS check_records (
+                  id          TEXT PRIMARY KEY,
+                  run_id      TEXT NOT NULL,
+                  at          TEXT,
+                  record_json TEXT
+                );
+                CREATE INDEX IF NOT EXISTS ix_check_records_run ON check_records (run_id);
+                """;
+            await checks.ExecuteNonQueryAsync(ct);
 
             _initialized = true;
         }
