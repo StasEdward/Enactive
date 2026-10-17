@@ -51,17 +51,20 @@ public sealed partial class Orchestrator
         if (none is not null)
             return Unknown(none);
 
-        // The check's own time, on top of what the command tool allows any command. Its process is stopped with it.
+        // The check's own time, given to the command tool for each of its commands (ToolContext.CommandTimeoutSeconds) -
+        // the tool's own limit is a worker's, and a check declared with more was cut at it - and held over the whole check
+        // too, for one that runs several commands (an ecosystem's targets). Either way its process is stopped with it.
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
         limit.CancelAfter(TimeSpan.FromSeconds(definition.TimeoutSeconds));
         try
         {
-            var report = await CheckSuccessAsync(criteria, scope.TaskId, scope.RunId, context, limit.Token);
+            var report = await CheckSuccessAsync(criteria, scope.TaskId, scope.RunId, context, limit.Token,
+                commandTimeoutSeconds: definition.TimeoutSeconds);
             return WorkspaceChecks.Combine(name, command, blocking, report.Results);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return Unknown($"not run to its end: it did not finish within its {definition.TimeoutSeconds} second(s)");
+            return Unknown(SuccessEvaluator.DidNotFinish(definition.TimeoutSeconds));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -184,10 +187,11 @@ public sealed partial class Orchestrator
     /// builds on it starts - and put on the WAVE, never on one of its steps: they ran side by side in one workspace, and
     /// what a check found there is all of theirs until something tells them apart. A blocking one that failed stops the
     /// run as a wave the engine could not put back does (the dispatcher's boundary): nothing more is started on a
-    /// workspace a blocking check failed, and what was waiting is accounted for as skipped. Every owed check is discharged
-    /// here, run or not - an obligation left behind would hold the dispatcher for good. Null when the run goes on.
+    /// workspace a blocking check failed, and what was waiting is accounted for as skipped. Every owed check is run here -
+    /// one left owed would hold the dispatcher for good - and each is discharged once it has run, so a run stopped in the
+    /// middle keeps the ones it did not reach. Null when the run goes on.
     /// </summary>
-    private async Task<string?> WaveChecksAsync(RunSession session, int wave, string? span, WorkContext context,
+    internal async Task<string?> WaveChecksAsync(RunSession session, int wave, string? span, WorkContext context,
         Func<WorkEvent, ValueTask> publish, CancellationToken ct)
     {
         PendingCheck[] owed;
@@ -197,19 +201,23 @@ public sealed partial class Orchestrator
 
         var at = span is null ? $"wave {wave}" : $"wave {wave}: {span}";
         var results = new List<CriterionResult>();
+        var ran = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
             foreach (var id in owed.Select(p => p.CheckId).Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 var result = await OwedCheckAsync(session, id, at, context, ct);
                 results.Add(result);
+                ran.Add(id);
                 await publish(session.Scope.Criterion(result));
             }
         }
         finally
         {
+            // Only what ran is discharged. A run stopped in the middle of them leaves the rest owed - a check that never
+            // ran is not a pass, and an obligation dropped on the way out is one a resume could not know to run.
             lock (session.PendingChecks)
-                session.PendingChecks.RemoveAll(owed.Contains);
+                session.PendingChecks.RemoveAll(p => owed.Contains(p) && ran.Contains(p.CheckId));
             lock (session.BoundaryChecks)
                 session.BoundaryChecks.AddRange(results);
         }

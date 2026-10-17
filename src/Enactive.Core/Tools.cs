@@ -61,6 +61,19 @@ public enum ProgressIdentity { Observation, Action }
 public sealed record ToolCall(string Id, string Name, string ArgumentsJson);
 
 /// <summary>
+/// Result metadata of a command tool that the ENGINE reads too - here for the reason ToolArguments is: Core is the only
+/// layer both sides share, and a name spelled twice is a name that drifts.
+/// </summary>
+public static class CommandResultKeys
+{
+    /// <summary>Set (true) on a command the tool stopped at its time limit - told apart from one that ran and exited.</summary>
+    public const string TimedOut = "timedOut";
+
+    /// <summary>The limit it was stopped at, in seconds.</summary>
+    public const string TimeoutSeconds = "timeoutSeconds";
+}
+
+/// <summary>
 /// Argument names the ENGINE has to know about as well as the tool that reads them. Kept here
 /// because Core is the only layer both sides share, and a name spelled twice is a name that drifts.
 /// </summary>
@@ -313,7 +326,16 @@ public sealed record ToolContext(
     WorkContext Context,
     PermissionPolicy PermissionPolicy,
     string WorkspaceRoot,
-    IArtifactStore Artifacts);
+    IArtifactStore Artifacts)
+{
+    /// <summary>
+    /// How long a command the ENGINE runs for itself may take - a declared check's own timeout (Plan Phase 3.2) - or null
+    /// for the command tool's own limit. Set only by the engine on the context of its own check runs; never an argument,
+    /// so a model cannot give its commands more time than a worker's call has. Without it a check declared with two
+    /// minutes was cut at the tool's 60 seconds, and a blocking build or test longer than that could never pass.
+    /// </summary>
+    public int? CommandTimeoutSeconds { get; init; }
+}
 
 /// <summary>A capability the agent can invoke.</summary>
 public interface ITool

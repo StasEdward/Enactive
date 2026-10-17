@@ -122,7 +122,7 @@ internal static class RunOutcomeDecision
         // that nothing it checks is broken, which is no proof the request was carried out. Left as a System check, as the
         // engine's own checks are, a blocking check that failed would only have said "but", and a run Completed on it.
         if (outcome is RunOutcomeKind.Completed or RunOutcomeKind.Incomplete
-            && finalChecks.Where(c => c.Blocking).ToArray() is { Length: > 0 } holding)
+            && finalChecks.Where(c => c.Blocking && c.Origin != CriterionOrigin.System).ToArray() is { Length: > 0 } holding)
         {
             var held = holding.Any(c => c.Outcome == CriterionOutcome.Failed) ? RunOutcomeKind.Failed : RunOutcomeKind.Incomplete;
             if (held != outcome)
@@ -271,7 +271,7 @@ internal static class RunOutcomeDecision
         }
         if (verification?.IncompleteReason is { } unverified) lines.Add(Clip(unverified, 300));
         // A blocking declared check that did not run is named too: it is what keeps the run short of Completed.
-        foreach (var check in (verification?.Report.Blocking ?? []).Concat(finalChecks.Where(c => c.Outcome == CriterionOutcome.Failed || c.Blocking)))
+        foreach (var check in (verification?.Report.Blocking ?? []).Concat(finalChecks.Where(c => c.Outcome == CriterionOutcome.Failed || (c.Blocking && c.Origin != CriterionOrigin.System))))
             lines.Add(CheckLine(check));
         return lines.Distinct().ToArray();
     }

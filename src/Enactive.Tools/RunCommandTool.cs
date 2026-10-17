@@ -9,9 +9,21 @@ using Enactive.Core.Tools;
 /// Runs a shell command in the workspace directory (Execute level — and policy keeps it behind an
 /// approval by default). Captures stdout/stderr and the exit code.
 /// </summary>
-public sealed class RunCommandTool : ITool
+/// <param name="workerTimeoutSeconds">How long a model's command may run - 60 seconds as shipped; a test sets less so it
+/// need not wait a minute to see the limit.</param>
+public sealed class RunCommandTool(int workerTimeoutSeconds = RunCommandTool.WorkerTimeoutSeconds) : ITool
 {
-    private const int TimeoutSeconds = 60;
+    /// <summary>A model's command: long enough for a build or a test project, short enough that a hang costs a minute.</summary>
+    public const int WorkerTimeoutSeconds = 60;
+
+    /// <summary>
+    /// The limit for this call: the engine's own, for a command it runs for itself (ToolContext.CommandTimeoutSeconds, a
+    /// declared check's timeout - within the range a check may declare), else the worker's. Never from the arguments.
+    /// </summary>
+    private int LimitFor(ToolContext ctx)
+        => ctx.CommandTimeoutSeconds is { } engine
+            ? Math.Clamp(engine, Enactive.Core.Checks.CheckLimits.MinTimeoutSeconds, Enactive.Core.Checks.CheckLimits.MaxTimeoutSeconds)
+            : Math.Max(1, workerTimeoutSeconds);
 
     public ToolDefinition Definition { get; } = new(
         Name: "run_command",
@@ -122,10 +134,14 @@ public sealed class RunCommandTool : ITool
             // Contained: if this call is CANCELLED, the command and everything it started dies with
             // it. A command that finishes normally leaves what it started running - `start "" app`
             // is a thing people ask a shell to do. See ProcessJob for both halves of that.
-            outcome = await ProcessExec.RunContainedAsync(process, TimeoutSeconds, ct);
+            var limit = LimitFor(ctx);
+            outcome = await ProcessExec.RunContainedAsync(process, limit, ct);
             ct.ThrowIfCancellationRequested();
+            // Marked, not only said: whoever runs a check through this reads the mark and says the check did not finish
+            // in its time, rather than "it reported no exit code".
             if (!outcome.Completed)
-                return ToolResults.Fail($"Command timed out after {TimeoutSeconds}s or was cancelled.");
+                return ToolResults.Fail($"Command timed out after {limit}s or was cancelled.",
+                    metadata: new Dictionary<string, object?> { [CommandResultKeys.TimedOut] = true, [CommandResultKeys.TimeoutSeconds] = limit });
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

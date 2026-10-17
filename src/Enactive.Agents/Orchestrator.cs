@@ -1205,7 +1205,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // as a plan's (RunOutcomeDecision).
         var quickWork = new RunWork(
             [new SettledStep(null, plan.Title, quickResult.Kind, quickResult.Reason,
-                BlockedBecause: quickResult.Kind == StepOutcomeKind.Blocked ? quickResult.Reason : null)],
+                BlockedBecause: quickResult.Kind == StepOutcomeKind.Blocked ? quickResult.Reason : null,
+                // What tells an engine check's rejection from a reviewer's in the run's line, as a plan's steps carry it.
+                Cause: quickResult.Cause)],
             Resumable: false);
         var quickDecision = RunOutcomeDecision.BeforeChecks(quickWork);
 
@@ -3564,7 +3566,9 @@ public sealed partial class Orchestrator : IOrchestrator
         IReadOnlyList<SuccessCriterionDefinition> criteria,
         Guid taskId, Guid runId, WorkContext context, CancellationToken ct,
         // What this run's steps handed on: a coverage criterion is decided from it and from nothing else.
-        IEnumerable<StepOutput>? outputs = null)
+        IEnumerable<StepOutput>? outputs = null,
+        // A declared check's own time for each command (ToolContext.CommandTimeoutSeconds); null: the tool's own limit.
+        int? commandTimeoutSeconds = null)
     {
         // A semantic criterion is judged with its step, by its reviewer, and by nothing else (Phase 1.4): it is not a
         // command, and there is nothing here that could decide it.
@@ -3577,7 +3581,7 @@ public sealed partial class Orchestrator : IOrchestrator
         {
             var handed = outputs?.ToArray() ?? [];
             var rest = criteria.Where(c => c.Typed is not { FromRun: true }).ToArray();
-            var others = await CheckSuccessAsync(rest, taskId, runId, context, ct);
+            var others = await CheckSuccessAsync(rest, taskId, runId, context, ct, commandTimeoutSeconds: commandTimeoutSeconds);
             var results = new List<CriterionResult>(criteria.Count);
             var next = 0;
             foreach (var c in criteria)
@@ -3594,7 +3598,7 @@ public sealed partial class Orchestrator : IOrchestrator
             Context: context,
             PermissionPolicy: _policy,
             WorkspaceRoot: _workspace.RootPath,
-            Artifacts: _artifacts);
+            Artifacts: _artifacts) { CommandTimeoutSeconds = commandTimeoutSeconds };
 
         return await _successEvaluator.EvaluateAsync(
             criteria, _tools, _permissions, _policy, _decisions, toolContext, taskId, ct);
