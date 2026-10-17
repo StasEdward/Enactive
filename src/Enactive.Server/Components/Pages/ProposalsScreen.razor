@@ -69,6 +69,13 @@
                 <p class="hint">The run is still going; its proposals can be applied or rejected when it has ended.</p>
             }
             <StagedChanges Files="state.Files" CanDecide="state.CanDecide" Busy="state.Busy" OpenDiffs="true" OnAct="ActAsync" />
+            @* The run's "Run checks now", once it has ended and said which run it is (ServerStaging writes its id into the set):
+               the checks see the files as decided so far. Its records are the run's and stay on its history page after this
+               set is gone. *@
+            @if (!set.Running && set.RunId is { } run)
+            {
+                <CheckRecordsPanel Root="@set.Workspace" RunId="run" />
+            }
         }
     }
 </div>

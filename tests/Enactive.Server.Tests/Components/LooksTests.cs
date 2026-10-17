@@ -47,6 +47,8 @@ public sealed class LooksTests
         classes.Add(Looks.Change(applied: false, rejected: false));
         classes.Add(Looks.Change(applied: true, rejected: false));
         classes.Add(Looks.Change(applied: false, rejected: true));
+        classes.AddRange(Enum.GetValues<CheckLineTone>().Select(Looks.CheckLine));
+        classes.AddRange(new[] { true, false }.Select(Looks.CheckRecord));
 
         Assert.All(classes, c => Assert.Matches(@"^(tone|tier|edge)-[\w-]+$", c));
         // A class Looks hands out that the stylesheet does not define draws as no colour at all.

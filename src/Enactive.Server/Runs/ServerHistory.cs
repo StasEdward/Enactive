@@ -249,6 +249,60 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         return (refused ?? $"{gone.Count} run{(gone.Count == 1 ? "" : "s")} deleted; the files they wrote are where they were.", gone.Count);
     }
 
+    // ── "Run checks now" on a staged run (Plan Phase 3.2) ───────────────────
+    // A staged run's checks could not run while it ran: its writes were proposals. Once a person has decided them, the run's
+    // snapshotted checks run against the workspace as it is now (ChecksNow) - commands, run from a page, so by the roles that
+    // may apply proposals (ServerStaging.MayDecide) and in the audit trail next to apply and reject, refusals included.
+
+    /// <summary>
+    /// A run's "Run checks now" records, newest first, each current or outdated - for anybody who may read the history -
+    /// and whether the action is offered on this run (a staged run with checks to run) and to this person.
+    /// </summary>
+    public async Task<(IReadOnlyList<CheckRecordView> Records, bool Offered, bool CanRun, string? Problem)> ChecksAsync(
+        ClaimsPrincipal user, string root, Guid runId, CancellationToken ct)
+    {
+        if (Workspace(user, root) is not { } known)
+            return ([], false, false, Unknown(user));
+        var records = await CheckRecordViews.ForRunAsync(known.RootPath, runId, ct);
+        var offered = ChecksNow.Refusal(await RecordAsync(known.RootPath, runId, ct)) is null;
+        return (records, offered, offered && ServerAuth.StillValid(users, user) is { } account && ServerStaging.MayDecide(account.Role), null);
+    }
+
+    /// <summary>
+    /// Runs a staged run's checks now and keeps the record in its history; what to tell the person. A role that may not
+    /// apply proposals is refused, and the refusal is audited: somebody asking a page to run commands they may not run is
+    /// what an audit trail is for.
+    /// </summary>
+    public async Task<string> RunChecksNowAsync(ClaimsPrincipal user, string root, Guid runId, CancellationToken ct)
+    {
+        if (ServerAuth.StillValid(users, user) is not { } account)
+            return "Your session has ended. Sign in again.";
+        if (Workspace(user, root) is not { } known)
+            return Unknown(user);
+        var run = await RecordAsync(known.RootPath, runId, ct);
+        var title = run is null ? runId.ToString() : RunTitle.For(run);
+        if (!ServerStaging.MayDecide(account.Role))
+        {
+            users.Audit(account.Name, "staged run checks refused", $"{known.RootPath}: {title} (role {account.Role})");
+            return "Your role does not include running checks on proposed changes - the roles that apply them do.";
+        }
+        if (ChecksNow.Refusal(run) is { } refused)
+            return refused;
+        if (engine.Current is not { } composed)
+            return engine.Problem ?? "There is no engine to run on.";
+        // Not while a run of the service is going in the folder: the lease that keeps another process out does not keep out
+        // this one's own runs, and the checks would read files a run is in the middle of changing.
+        if (runs.List(user).Any(r => !r.Ended.IsCompleted && SameFolder(r.Workspace, known.RootPath)))
+            return "A run is going in this workspace; run the checks when it has ended, so they see the files as you left them.";
+
+        var (record, problem) = await ChecksNow.RunAsync(composed, WorkspaceInfo.For(known.RootPath), runId, account.Name,
+            known.Autonomy, ct);
+        if (record is null)
+            return problem ?? "The checks were not run.";
+        users.Audit(account.Name, "staged run checked now", $"{known.RootPath}: {title}: {CheckRecordViews.Counts(record.Results)}");
+        return $"Checked: {CheckRecordViews.Counts(record.Results)}. The record is kept with the run; it does not change how the run ended.";
+    }
+
     /// <summary>
     /// Which of <paramref name="deleted"/> the history read <paramref name="after"/> no longer has - or null when it could not
     /// be read. An unreadable history lists no runs, and every run asked for read as gone and was audited as deleted.

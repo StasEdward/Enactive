@@ -548,6 +548,15 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .past-run .run-view { padding-right: 10px; }
 .past-decisions { list-style: none; margin: 6px 0 12px; padding: 0; }
 .past-decisions .card { border-left-width: 2px; padding: 10px; font-size: 12px; color: var(--text-body); }
+/* "Run checks now" on a staged run and its records: a card each, its edge amber while current and muted once outdated -
+   never green, a record is "checked at its time". The lines wrap: a command and a reason are read, not glanced at. */
+.check-records { display: grid; gap: 6px; margin: 0 0 12px; }
+.check-records .run-checks-now { justify-self: start; }
+.check-record-list { list-style: none; margin: 0; padding: 0; }
+.card.check-record { display: grid; gap: 3px; border-left-width: 2px; padding: 10px; }
+.card.check-record .card-title { white-space: normal; }
+.check-record-lines { list-style: none; margin: 2px 0 0; padding: 0; display: grid; gap: 2px; }
+.check-line { font-family: var(--font-mono); font-size: 11px; color: var(--tone); overflow-wrap: anywhere; }
 .past-timeline { display: grid; gap: 2px; margin-top: 6px; }
 .timeline-row { display: grid; grid-template-columns: auto 130px minmax(0, 1fr); gap: 10px; align-items: baseline; }
 .timeline-when { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }

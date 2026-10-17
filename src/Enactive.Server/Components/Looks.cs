@@ -184,6 +184,21 @@ internal static class Looks
         _ => throw Unknown((applied, rejected))
     };
 
+    /// <summary>One check's line in a "Run checks now" record: what it came to.</summary>
+    public static string CheckLine(CheckLineTone tone) => tone switch
+    {
+        CheckLineTone.Passed => "tone-done",
+        CheckLineTone.Failed => "tone-failed",
+        CheckLineTone.NotRun => "tone-warning",
+        _ => throw Unknown(tone)
+    };
+
+    /// <summary>
+    /// A "Run checks now" record's edge: amber while the workspace still matches it - checked at its time, never a standing
+    /// green - and muted once it is outdated.
+    /// </summary>
+    public static string CheckRecord(bool outdated) => outdated ? "tone-idle" : "tone-open";
+
     /// <summary>A tier, 0 Observe to 3 Autonomous: a risk scale, green through blue and yellow to red.</summary>
     public static string Autonomy(int level) => level switch
     {

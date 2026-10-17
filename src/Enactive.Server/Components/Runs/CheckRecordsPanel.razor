@@ -1,0 +1,109 @@
+@using Enactive.Application.Projections
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerHistory History
+
+@* "Run checks now" for a staged run (Plan Phase 3.2), and the records it kept - on the run's page in the history and on its
+   proposals' page while they are kept. The records are the run's, in its history: they outlive the proposal set, which the
+   service deletes once every file in it is decided. Each record says when it was checked and whether the workspace still
+   matches it - never a standing green. Whether the action is offered, and to whom, is the service's to decide
+   (ServerHistory.ChecksAsync: a staged run, the roles that may apply proposals); a press is audited. *@
+
+@if (_offered || _records.Count > 0)
+{
+    <section class="check-records" aria-label="Checks run now">
+        <PanelHeader Text="CHECKS RUN NOW" />
+        @if (_offered)
+        {
+            <p class="hint">@CheckRecordViews.Explanation</p>
+        }
+        @if (_canRun)
+        {
+            <button type="button" class="btn go-soft run-checks-now" disabled="@_busy" @onclick="RunAsync">
+                @(_busy ? "Running checks…" : "Run checks now")
+            </button>
+        }
+        @if (_said is { Length: > 0 } said)
+        {
+            <p class="said" role="alert">@said</p>
+        }
+        @if (_records.Count > 0)
+        {
+            <ul class="check-record-list">
+                @foreach (var record in _records)
+                {
+                    <li class="@("card check-record " + Looks.CheckRecord(record.Outdated) + (record.Outdated ? " outdated" : " checked"))">
+                        <span class="card-title">@record.Headline</span>
+                        <span class="hint check-record-state">@record.State</span>
+                        <ul class="check-record-lines">
+                            @foreach (var line in record.Lines)
+                            {
+                                <li class="@("check-line " + Looks.CheckLine(line.Tone))" title="@line.DetailPath">@line.Text</li>
+                            }
+                        </ul>
+                        @if (record.Note is { Length: > 0 } note)
+                        {
+                            <span class="hint check-record-note">@note</span>
+                        }
+                        @if (record.Caveat is { Length: > 0 } caveat)
+                        {
+                            <span class="hint check-record-caveat">@caveat</span>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The run's workspace, a known one.</summary>
+    [Parameter, EditorRequired] public string Root { get; set; } = "";
+
+    /// <summary>The run, by its id in the workspace's history.</summary>
+    [Parameter] public Guid RunId { get; set; }
+
+    private (string, Guid)? _shown;
+    private IReadOnlyList<CheckRecordView> _records = [];
+    private bool _offered;
+    private bool _canRun;
+    private bool _busy;
+    private string? _said;
+
+    // Read per address, not once (Pages/_Imports.razor): the page keeps this part when another run is opened.
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_shown == (Root, RunId))
+            return;
+        _shown = (Root, RunId);
+        _said = null;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var (records, offered, canRun, problem) = await History.ChecksAsync((await Auth).User, Root, RunId, CancellationToken.None);
+        (_records, _offered, _canRun) = (records, offered, canRun);
+        _said ??= problem;
+    }
+
+    private async Task RunAsync()
+    {
+        if (_busy)
+            return;
+        // Busy while they run: a second press is not a second set of commands.
+        _busy = true;
+        try
+        {
+            _said = await History.RunChecksNowAsync((await Auth).User, Root, RunId, CancellationToken.None);
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}
