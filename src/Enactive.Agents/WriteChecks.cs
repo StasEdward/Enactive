@@ -317,14 +317,14 @@ internal sealed class WriteChecks
         return $"Write-time check '{check.Id}': {verdict} - run {after}.";
     }
 
-    /// <summary>
-    /// When the check ran, by the writes that made it owed. Not "on" them: the check's command judges whatever it
-    /// covers, which may be more than - or other than - the files just written.
-    /// </summary>
     /// <summary>A write check's result's name, as a step check's is named by where it was owed: "spell (after a write in step 2)".</summary>
     private string Name(ResolvedCheck check)
         => WorkspaceChecks.Label(check.Id, _frame.StepNo is { } step ? $"after a write in step {step}" : "after a write");
 
+    /// <summary>
+    /// When the check ran, by the writes that made it owed. Not "on" them: the check's command judges whatever it
+    /// covers, which may be more than - or other than - the files just written.
+    /// </summary>
     private static string After(IReadOnlyList<string> paths)
         => "after writing " + string.Join(", ", paths.Take(NamedPaths))
            + (paths.Count > NamedPaths ? $" and {paths.Count - NamedPaths} more" : "");

@@ -60,6 +60,7 @@ public sealed partial class Orchestrator
         _ => CheckRecords.NameOf(firing.FiredOn)
     };
 
+    /// <summary>The check run, before its record is put on it - see the overload above, which every caller goes through.</summary>
     private async Task<CriterionResult> RunDeclaredCheckAsync(ResolvedCheck check, string at, RunScope scope,
         WorkContext context, CancellationToken ct)
     {
