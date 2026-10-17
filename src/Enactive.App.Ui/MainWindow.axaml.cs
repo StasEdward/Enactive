@@ -2069,7 +2069,9 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     /// folder ran its checks at whatever level an unrelated folder sat at. Saved for neither: the slider, as a run's start.
     /// </summary>
     internal static int ChecksAutonomy(string root, string onScreen, int slider, Func<string, int?> saved)
-        => string.Equals(WorkspaceRegistry.Normalise(root), onScreen, StringComparison.OrdinalIgnoreCase)
+        // One folder by WorkspaceActivity's rule - the one the checks are kept apart by: a trailing separator or a case
+        // difference on Windows must not send the folder on screen to its saved level instead of the slider.
+        => onScreen.Length > 0 && Enactive.Core.Storage.WorkspaceActivity.SameFolder(root, onScreen)
             ? slider
             : saved(root) ?? slider;
 

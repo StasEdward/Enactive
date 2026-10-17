@@ -120,6 +120,12 @@ public static class WorkspaceActivity
 
     private static string Key(string root) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
 
+    /// <summary>
+    /// Whether two paths are one workspace folder, by the rule this registry keys folders by: full paths, a trailing
+    /// separator ignored, case ignored where the file system ignores it (Windows, macOS) and kept where it does not.
+    /// </summary>
+    public static bool SameFolder(string a, string b) => Now.Comparer.Equals(Key(a), Key(b));
+
     private sealed class Hold(Action release) : IDisposable
     {
         private int _released;

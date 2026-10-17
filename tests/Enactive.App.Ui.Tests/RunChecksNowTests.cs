@@ -118,6 +118,13 @@ public sealed class RunChecksNowTests
         Assert.Equal(3, MainWindow.ChecksAutonomy(shown, Enactive.Workspace.WorkspaceRegistry.Normalise(shown), 3, Saved));
         Assert.Equal(0, MainWindow.ChecksAutonomy(other, Enactive.Workspace.WorkspaceRegistry.Normalise(shown), 3, Saved));
         Assert.Equal(3, MainWindow.ChecksAutonomy(Path.Combine(Path.GetTempPath(), "unknown"), shown, 3, Saved));
+
+        // The folder on screen, however it is written: a trailing separator, and - where the file system ignores case -
+        // another case. Not the saved level of a folder that only looks different.
+        int? Never(string _) => 0;
+        Assert.Equal(3, MainWindow.ChecksAutonomy(shown + Path.DirectorySeparatorChar, shown, 3, Never));
+        var ignoresCase = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS();
+        Assert.Equal(ignoresCase ? 3 : 0, MainWindow.ChecksAutonomy(shown.ToUpperInvariant(), shown, 3, Never));
     }
 
     /// <summary>
