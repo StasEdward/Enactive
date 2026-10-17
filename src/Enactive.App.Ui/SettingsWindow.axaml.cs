@@ -35,7 +35,8 @@ internal sealed partial class SettingsWindow : Window
         string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null,
         Func<CancellationToken, Task<string>>? remoteCheck = null,
         Func<ConnectionCode, Func<string, Task<bool>>, Task<(bool Connected, string Detail)>>? remoteConnect = null,
-        RemoteDevices? remoteDevices = null)
+        RemoteDevices? remoteDevices = null,
+        ChecksViewModel? checks = null)
     {
         // Remote access is this window's own pane, over the copy the shared settings edit (IHostSettingsPane).
         RemoteSettingsViewModel remote = null!;
@@ -61,6 +62,10 @@ internal sealed partial class SettingsWindow : Window
                 "What it already read stays on it. To use it again, add it again from this computer.",
                 "Remove", "Keep");
         }
+        // The global checks (Plan Phase 3.5): files, written at once, as the templates are.
+        viewModel.Checks = checks;
+        if (checks is not null)
+            checks.ConfirmRequested += (headline, detail) => ConfirmWindow.AskAsync(this, headline, detail, "Delete", "Keep");
         viewModel.CloseRequested += () => Close();
         viewModel.ProviderEditRequested += (config, saved) =>
             new ProviderEditWindow(config, saved).Show(this);

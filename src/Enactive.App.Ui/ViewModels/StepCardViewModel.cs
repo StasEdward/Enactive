@@ -60,15 +60,23 @@ internal sealed class StepCardViewModel : ObservableObject
     private string _toggleLabel = string.Empty;
     private bool _isExpanded;
 
-    public StepCardViewModel(FeedCard card)
+    /// <param name="openDetail">Opens a check's detail file by its workspace-relative path (the window's viewer); null, none offered.</param>
+    public StepCardViewModel(FeedCard card, Action<string>? openDetail = null)
     {
         _card = card;
         Title = card.Title;
         ToggleCommand = new RelayCommand(() => IsExpanded = !IsExpanded);
+        Checks = new CheckLinesViewModel(openDetail);
         Sync();
     }
 
     public string Title { get; }
+
+    /// <summary>
+    /// The declared checks that fired for this step (Plan Phase 3.5), shown under its activity and not folded behind the
+    /// tally: a check's verdict is what a person opens the card for, not one of its tool calls.
+    /// </summary>
+    public CheckLinesViewModel Checks { get; }
 
     public ObservableCollection<StepEntry> Entries { get; } = new();
 
@@ -109,6 +117,7 @@ internal sealed class StepCardViewModel : ObservableObject
         Tone = ToneOf(_card);
         Activity = _card.Activity;
         ToggleLabel = _card.Tally;
+        Checks.Show(CheckLines.Of(_card.Checks));
 
         // Lines are only ever added, and only the newest one's result can still arrive - so the rows from the last
         // drawn one on are all that can have changed.
@@ -165,4 +174,64 @@ internal sealed class StepCardViewModel : ObservableObject
         row.Detail = entry.Detail;
         return row;
     }
+}
+
+/// <summary>
+/// One declared check's result on a card (CheckLines' words), with Open for the file that holds its whole output. Open is
+/// offered only where there is a file: a check that did not run kept none.
+/// </summary>
+internal sealed class CheckLineRow
+{
+    public CheckLineRow(CheckLine line, Action<string>? openDetail)
+    {
+        Line = line;
+        OpenDetailCommand = new RelayCommand(() =>
+        {
+            if (line.DetailPath is { } path)
+                openDetail?.Invoke(path);
+        });
+        CanOpen = line.HasDetail && openDetail is not null;
+    }
+
+    public CheckLine Line { get; }
+    public CheckVerdict Verdict => Line.Verdict;
+    public string Word => Line.Word;
+    public string CheckId => Line.CheckId;
+    public string Where => Line.Where;
+    public string Reason => Line.Reason ?? string.Empty;
+    public bool HasReason => Line.Reason is { Length: > 0 };
+    public string DetailPath => Line.DetailPath ?? string.Empty;
+    public bool CanOpen { get; }
+    public RelayCommand OpenDetailCommand { get; }
+}
+
+/// <summary>
+/// The checks that fired - a step's on its card, the run's under the steps (Plan Phase 3.5) - kept in step with the fold:
+/// drawn again only when what CheckLines says of them changed, which is when one came or a write check's latest replaced
+/// its earlier one.
+/// </summary>
+internal sealed class CheckLinesViewModel : ObservableObject
+{
+    private readonly Action<string>? _openDetail;
+    private IReadOnlyList<CheckLine> _shown = [];
+
+    /// <param name="openDetail">Opens a check's detail file by its workspace-relative path; null where there is no workspace to open it in.</param>
+    public CheckLinesViewModel(Action<string>? openDetail = null) => _openDetail = openDetail;
+
+    public ObservableCollection<CheckLineRow> Lines { get; } = new();
+
+    public bool HasLines => Lines.Count > 0;
+
+    public void Show(IReadOnlyList<CheckLine> lines)
+    {
+        if (lines.SequenceEqual(_shown))
+            return;
+        _shown = lines;
+        Lines.Clear();
+        foreach (var line in lines)
+            Lines.Add(new CheckLineRow(line, _openDetail));
+        OnPropertyChanged(nameof(HasLines));
+    }
+
+    public void Clear() => Show([]);
 }

@@ -1,0 +1,34 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Enactive.App.Ui.ViewModels"
+             xmlns:local="using:Enactive.App.Ui"
+             x:Class="Enactive.App.Ui.CheckLinesView"
+             x:DataType="vm:CheckLinesViewModel">
+
+    <!-- The checks a person declared that fired (Plan Phase 3.5): one line each - the verdict in its colour
+         (Palette.CheckVerdict), the check, where it fired, why - and Open for the file that holds its whole output.
+         The same control on a step card and under the run's steps. -->
+    <ItemsControl ItemsSource="{Binding Lines}" IsVisible="{Binding HasLines}" Margin="0,4,0,0">
+        <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:CheckLineRow">
+                <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,3,0,0">
+                    <TextBlock Grid.Column="0" Text="{Binding Word}" FontSize="11" FontWeight="SemiBold"
+                               Foreground="{Binding Verdict, Converter={x:Static local:Palette.CheckVerdict}}"
+                               MinWidth="56" VerticalAlignment="Top" Margin="0,1,6,0" />
+                    <StackPanel Grid.Column="1">
+                        <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Brand.TextBody}">
+                            <Run Text="{Binding CheckId}" FontWeight="SemiBold" />
+                            <Run Text=" — " />
+                            <Run Text="{Binding Where}" />
+                        </TextBlock>
+                        <TextBlock Text="{Binding Reason}" IsVisible="{Binding HasReason}" FontSize="11"
+                                   Foreground="{DynamicResource Brand.TextMuted}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Button Grid.Column="2" Classes="disclosure" Content="Open" FontSize="11"
+                            Command="{Binding OpenDetailCommand}" IsVisible="{Binding CanOpen}"
+                            ToolTip.Tip="{Binding DetailPath}" VerticalAlignment="Top" Margin="6,0,0,0" />
+                </Grid>
+            </DataTemplate>
+        </ItemsControl.ItemTemplate>
+    </ItemsControl>
+</UserControl>

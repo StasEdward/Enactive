@@ -501,8 +501,26 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     public RelayCommand SettingsCommand { get; }
 
+    /// <summary>The workspace's own checks (Plan Phase 3.5), from its card: the window opens their list.</summary>
+    public RelayCommand ChecksCommand => _checksCommand ??= new RelayCommand(() => ChecksRequested?.Invoke());
+
+    private RelayCommand? _checksCommand;
+
+    public event Action? ChecksRequested;
+
     // ── Centre: the plan-step feed ────────────────────────────────────────────
     public ObservableCollection<StepCardViewModel> Steps { get; } = new();
+
+    /// <summary>
+    /// The declared checks that fired for the live run as a whole (Plan Phase 3.5) - at a wave's end, at its end, owed at
+    /// apply - under its steps. Open asks the window (<see cref="CheckDetailRequested"/>), which knows the run's workspace.
+    /// </summary>
+    public CheckLinesViewModel RunChecks => _runChecks ??= new CheckLinesViewModel(path => CheckDetailRequested?.Invoke(path));
+
+    private CheckLinesViewModel? _runChecks;
+
+    /// <summary>Open on one of <see cref="RunChecks"/>: its detail file, by its workspace-relative path.</summary>
+    public event Action<string>? CheckDetailRequested;
 
     // ── Right: status, decision, artifacts ────────────────────────────────────
     /// <summary>

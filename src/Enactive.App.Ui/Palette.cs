@@ -42,6 +42,18 @@ internal static class Palette
         _ => throw Unknown(tone)
     });
 
+    /// <summary>
+    /// A declared check's verdict on a card (CheckLines): green passed, red failed, amber did not run - not red, nothing it
+    /// checks was found wrong; not grey either, because a check that could not run verified nothing and must be seen.
+    /// </summary>
+    public static readonly IValueConverter CheckVerdict = Map<CheckVerdict>(verdict => verdict switch
+    {
+        Enactive.Application.Projections.CheckVerdict.Pass => Brand.Success,
+        Enactive.Application.Projections.CheckVerdict.Fail => Brand.Danger,
+        Enactive.Application.Projections.CheckVerdict.NotRun => Brand.Warning,
+        _ => throw new ArgumentOutOfRangeException(nameof(verdict), verdict, "A check's verdict with no colour.")
+    });
+
     public static readonly IValueConverter EntryIcon = Map<FeedEntryKind>(kind => kind switch
     {
         FeedEntryKind.Command => Brand.Info,

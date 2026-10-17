@@ -99,6 +99,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     private readonly List<StepCardViewModel> _cardViews = new();
     private string? _shownPhase;
     private (int Done, int Total) _shownProgress;
+    /// <summary>How many of the run's own checks (RunFeed.RunChecks) the run's list shows: they are only ever added.</summary>
+    private int _shownRunChecks;
     private readonly Stopwatch _runStopwatch = new();
     private DispatcherTimer? _elapsedTimer;
 
@@ -211,6 +213,16 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         _vm.RunRequested += () => _ = RunAsync(background: false);
         _vm.BackgroundRunRequested += () => _ = RunAsync(background: true);
         _vm.StopRequested += () => _foreground.Stop();
+        _vm.CheckDetailRequested += path => ShowCheckDetail(_liveWorkspace, path);
+        // A workspace's checks, from its card - over the folder on screen, refused while this window's run works in it.
+        // Modal: a list left open behind the window would go on describing a workspace the card no longer shows.
+        _vm.ChecksRequested += () =>
+        {
+            if (WorkspaceRootOrNull() is not { } root)
+                return;
+            _ = new ChecksWindow(DesktopChecks.For(root, Enactive.Core.Checks.CheckScope.Workspace, _foreground), _vm.WorkspaceName)
+                .ShowDialog(this);
+        };
         _vm.TimelineRequested += () => _ = ShowTimelineAsync();
         _vm.LogRequested += ShowLogWindow;
         _vm.EnvironmentRequested += () => _ = ShowEnvironmentAsync();
@@ -706,7 +718,9 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                     remoteCheck: CheckRemoteAsync,
                     remoteConnect: ConnectRemoteAsync,
                     remoteDevices: RemoteDeviceAccess,
-                    onSaved: SaveSettings);
+                    onSaved: SaveSettings,
+                    // The global checks, listed over the workspace open here so the list says which of them it shadows.
+                    checks: DesktopChecks.For(WorkspaceRootOrNull(), Enactive.Core.Checks.CheckScope.Global, _foreground));
                 window.Closed += (_, _) => _settingsWindow.Closed(window);
                 window.Show(this);
                 return window;
@@ -853,7 +867,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         // Everything the previous run left on screen goes first, through the one method that knows
         // what "on screen" is made of. Reading history is fine; watching it while a new run of your
         // own starts is not.
-        using var runCancellation = _foreground.TryStart();
+        using var runCancellation = _foreground.TryStart(Path.GetFullPath(workspacePath));
         if (runCancellation is null) return;
         try
         {
@@ -1029,9 +1043,10 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
                 // The cards, the title, the phase and the step count: folded by RunFeed, exactly as a run reopened
                 // from the history is, so the two cannot disagree. New cards are shown where the feed put them.
+                var liveRoot = _liveWorkspace;
                 foreach (var (card, at) in _feed.Apply(ev))
                 {
-                    var view = new StepCardViewModel(card);
+                    var view = new StepCardViewModel(card, path => ShowCheckDetail(liveRoot, path));
                     _cardViews.Add(view);
                     Live(() => _vm.Steps.Insert(Math.Min(at, _vm.Steps.Count), view));
                 }
@@ -1114,6 +1129,28 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 _shownProgress = (_feed.StepsDone, _feed.StepsTotal);
                 UpdateProgress();
             }
+
+            // The checks that fired for the run as a whole, under its steps - journalled like the cards, so a run watched
+            // again from another workspace shows them too.
+            if (_feed.RunChecks.Count != _shownRunChecks)
+            {
+                _shownRunChecks = _feed.RunChecks.Count;
+                var lines = CheckLines.Of(_feed.RunChecks);
+                Live(() => _vm.RunChecks.Show(lines));
+            }
+        }
+
+        /// <summary>
+        /// A check's detail file (Plan Phase 3.3), in the viewer: only a file under the workspace, and never through a link -
+        /// the checks' folder is the engine's, and a run's command could have put one there (WorkspaceFiles).
+        /// </summary>
+        private void ShowCheckDetail(string root, string relative)
+        {
+            var (text, problem) = WorkspaceFiles.Read(root, relative);
+            if (text is null)
+                ShowViewer(relative, problem ?? "The file cannot be shown.");
+            else
+                ViewerWindow.Show(this, relative, text, relative);
         }
 
         /// <summary>
@@ -1363,6 +1400,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             _cardViews.Clear();
             _shownPhase = null;
             _shownProgress = default;
+            _shownRunChecks = 0;
             _liveTitle = string.Empty;
             _liveJournal.Clear();
             _activity = new RunActivity();
@@ -1378,6 +1416,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             _vm.TaskTitle = string.Empty;
 
             _vm.Steps.Clear();
+            _vm.RunChecks.Clear();
             _vm.Artifacts.Clear();
 
             _vm.ToolCalls = 0;
@@ -2037,7 +2076,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 ? null
                 : ResolvedTaskSpec.Parse(record.Spec) is { } s
                     ? new TemplateStore(root).Find(s.TemplateId)
-                    : null);
+                    : null,
+            path => ShowCheckDetail(root, path));
 
         past.RetryRequested += Retry;
         past.RunAgainRequested += RunAgain;

@@ -1,0 +1,104 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:app="using:Enactive.Application"
+             x:Class="Enactive.App.Ui.ChecksView"
+             x:DataType="app:ChecksViewModel">
+
+    <!-- A Checks list (Plan Phase 3.5): the global one in Settings, a workspace's from its card. Every check this
+         workspace would run, where it comes from and what it shadows; the files the store skipped, beside their
+         names; the form for one being added, edited or raised. They are files, saved at once. -->
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,10">
+            <TextBlock Classes="label" Text="{Binding Heading}" />
+            <TextBlock Classes="hint" Text="A check is a command the engine runs after a write, at a step's end or at the run's end; advisory ones inform, blocking ones send the step back." />
+            <TextBlock Classes="hint" Text="Checks are FILES, written as soon as you press Save on one. A workspace check replaces a global one of the same id; one without a command changes how the check below it runs." />
+            <TextBlock Classes="hint" Text="{Binding Folder}" />
+            <TextBlock Classes="hint" TextWrapping="Wrap" IsVisible="{Binding HasNoImplicit}" Text="{Binding NoImplicit}" />
+            <TextBlock Classes="hint" TextWrapping="Wrap" Foreground="{DynamicResource Brand.Warning}"
+                       IsVisible="{Binding HasNotNow}" Text="{Binding NotNow}" />
+        </StackPanel>
+
+        <StackPanel DockPanel.Dock="Bottom" Spacing="6">
+            <ItemsControl ItemsSource="{Binding Files}" IsVisible="{Binding HasFiles}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="app:CheckFileNote">
+                        <TextBlock Classes="hint" TextWrapping="Wrap" Text="{Binding Text}" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock Classes="hint" TextWrapping="Wrap" IsVisible="{Binding HasSaid}" Text="{Binding Said}" />
+
+            <!-- The form, under the list: a check being added, edited, or raised (no command - it keeps the one below). -->
+            <Border Classes="card" IsVisible="{Binding IsEditing}">
+                <StackPanel Spacing="6" DataContext="{Binding Draft}" x:DataType="app:CheckDraft">
+                    <TextBlock Classes="cardTitle" Text="{Binding Title}" />
+                    <TextBlock Classes="label" Text="Id" />
+                    <TextBox Text="{Binding Id}" IsEnabled="{Binding IdEditable}" />
+                    <TextBlock Classes="label" Text="Description" />
+                    <TextBox Text="{Binding Description}" />
+                    <StackPanel Spacing="6" IsVisible="{Binding HasCommand}">
+                        <TextBlock Classes="label" Text="Command" />
+                        <TextBox Text="{Binding Command}" FontFamily="Consolas, Menlo, monospace" />
+                    </StackPanel>
+                    <Grid ColumnDefinitions="*,*,*" >
+                        <StackPanel Grid.Column="0" Spacing="4" Margin="0,0,8,0">
+                            <TextBlock Classes="label" Text="Fires on" />
+                            <ComboBox ItemsSource="{x:Static app:CheckDraft.FireChoices}" SelectedItem="{Binding FireOn}" HorizontalAlignment="Stretch" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="4" Margin="0,0,8,0">
+                            <TextBlock Classes="label" Text="Severity" />
+                            <ComboBox ItemsSource="{x:Static app:CheckDraft.SeverityChoices}" SelectedItem="{Binding Severity}" HorizontalAlignment="Stretch" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Spacing="4">
+                            <TextBlock Classes="label" Text="Timeout (s)" />
+                            <TextBox Text="{Binding Timeout}" />
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock Classes="label" Text="Matches - the paths it is about, one a line" />
+                    <TextBox Text="{Binding Matches}" AcceptsReturn="True" MinHeight="48" FontFamily="Consolas, Menlo, monospace" />
+                    <TextBlock Classes="label" Text="Protects - files a step may not remove, one a line" />
+                    <TextBox Text="{Binding Protects}" AcceptsReturn="True" MinHeight="48" FontFamily="Consolas, Menlo, monospace" />
+                    <CheckBox Content="On" IsChecked="{Binding Enabled}" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap" Foreground="{DynamicResource Brand.Danger}"
+                               IsVisible="{Binding HasProblems}" Text="{Binding Problems}" />
+                    <StackPanel Orientation="Horizontal" Classes="actions">
+                        <Button Classes="primary" Content="Save" Command="{Binding SaveCommand}" />
+                        <Button Content="Cancel" Command="{Binding CancelCommand}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <StackPanel Classes="actions" IsVisible="{Binding CanChange}">
+                <Button Content="Add check" Command="{Binding AddCommand}" />
+            </StackPanel>
+        </StackPanel>
+
+        <ListBox Classes="cards gutter" ItemsSource="{Binding Checks}">
+            <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="app:CheckRow">
+                    <Border Classes="card">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Margin="0,0,10,0">
+                                <TextBlock Classes="cardTitle" Text="{Binding Id}" />
+                                <TextBlock Classes="cardMeta" TextWrapping="Wrap">
+                                    <Run Text="{Binding Origin}" />
+                                    <Run Text="{Binding Shadows}" />
+                                </TextBlock>
+                                <TextBlock Classes="cardMeta" Text="{Binding Meta}" TextWrapping="Wrap" />
+                                <TextBlock Classes="cardMeta" Text="{Binding Command}" FontFamily="Consolas, Menlo, monospace" TextWrapping="Wrap" />
+                                <TextBlock Classes="cardMeta" Text="{Binding Description}" IsVisible="{Binding HasDescription}" TextWrapping="Wrap" />
+                                <TextBlock Classes="cardMeta" Text="{Binding Notes}" IsVisible="{Binding HasNotes}" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource Brand.Warning}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="4">
+                                <Button Content="{Binding EditText}" Command="{Binding EditCommand}" IsVisible="{Binding CanEditOrRaise}" FontSize="11" />
+                                <Button Content="{Binding ToggleText}" Command="{Binding ToggleCommand}" IsVisible="{Binding CanToggle}" FontSize="11" />
+                                <Button Classes="destructive" Content="{Binding RemoveText}" Command="{Binding RemoveCommand}" IsVisible="{Binding CanDelete}" FontSize="11" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+    </DockPanel>
+</UserControl>
