@@ -106,11 +106,15 @@ internal sealed class CheckRow
         IsRaise = raise;
         Notes = string.Join(" ", notes);
         var own = OriginOf(scope) == check.Origin;
-        // Above this list's scope - a workspace check in the global list - is another list's to change.
+        // The layers in the order they shadow (CheckOrigin: Implicit, Global, Workspace). Above this list's scope - a
+        // workspace check in the global list - is another list's to change.
         var below = check.Origin < OriginOf(scope);
         CanEdit = canChange && own;
         CanDelete = canChange && own;
-        CanToggle = canChange && (own || below);
+        // A check from below is turned on or off HERE by a manifest of this scope. Not the implicit build and test nobody
+        // raised: they are the engine's own build and test checks, which run whatever a manifest says (WorkspaceChecks.Firing
+        // leaves them out), so "Turn off" would have turned off nothing.
+        CanToggle = canChange && (own || (below && check.Origin != CheckOrigin.Implicit));
         // The implicit build and test have no command to edit: what can be changed is how they decide (Plan Phase 3.1).
         CanRaise = canChange && check.Origin == CheckOrigin.Implicit;
         EditCommand = new RelayCommand(() => edit(this), () => CanEdit || CanRaise);

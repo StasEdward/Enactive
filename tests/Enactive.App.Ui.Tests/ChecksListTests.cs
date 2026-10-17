@@ -135,6 +135,8 @@ public sealed class ChecksListTests : IDisposable
         var build = list.Checks.Single(r => r.Id == "build");
         Assert.Equal(("Implicit", "Raise to blocking"), (build.Origin, build.EditText));
         Assert.False(build.CanDelete);
+        // It is the engine's own build check, which runs whatever a manifest says: there is nothing to turn off.
+        Assert.False(build.CanToggle);
 
         build.EditCommand.Execute(null);
         Assert.False(list.Draft!.HasCommand);
