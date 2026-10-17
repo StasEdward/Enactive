@@ -405,6 +405,10 @@ public sealed class CheckManifestsTests : IDisposable
     [InlineData("[]x]", "]", true)]
     [InlineData("[!]x]", "y", true)]
     [InlineData("[!]x]", "]", false)]
+    // A negated set is one character of a NAME, as '?' is: never the '/' between folders.
+    [InlineData("src[!a]x", "src/x", false)]
+    [InlineData("a[!b]c/*.txt", "a/c/d.txt", false)]
+    [InlineData("a[!b]c/*.txt", "axc/d.txt", true)]
     [InlineData("**/**/**/*.cs", "a/b/c.cs", true)]
     [InlineData("**/**/**/*.cs", "c.cs", true)]
     public void A_glob_names_the_paths_it_says(string glob, string path, bool matches)
@@ -519,7 +523,61 @@ public sealed class CheckManifestsTests : IDisposable
         Assert.Equal("format", Assert.Single(Store().Inventory().Checks).Id);
     }
 
+    /// <summary>
+    /// A field the manifest format does not have - a misspelt one above all - is a problem, and the file is skipped like
+    /// any other invalid manifest: read as if it were not there, "fire_on":"Run" made a step check of a run check, and
+    /// "severety":"Blocking" an advisory one, with nothing to say so.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"id":"audit","command":"npm audit","fire_on":"Run"}""", "fire_on")]
+    [InlineData("""{"id":"lint","command":"lint","matches":["**"],"severety":"Blocking"}""", "severety")]
+    [InlineData("""{"id":"lint","command":"lint","matches":["**"],"options":{"x":1}}""", "options")]
+    public void A_manifest_with_a_field_it_does_not_have_is_reported_and_skipped(string json, string field)
+    {
+        WriteLocal("broken.json", json);
+        WriteLocal("other.json", Lint.Replace("\"lint\"", "\"other\""));
+
+        var inventory = Store().Inventory();
+
+        Assert.Equal("other", Assert.Single(inventory.Checks).Id);
+        var problem = Assert.Single(inventory.Problems);
+        Assert.Equal(Local("broken.json"), problem.File);
+        Assert.Contains($"'{field}'", problem.Message, StringComparison.Ordinal);
+        Assert.Contains("fireOn", problem.Message, StringComparison.Ordinal);   // the fields it does have, to correct it by
+    }
+
+    /// <summary>The fields it does have are read in any case, as before: the store reads names case-insensitively.</summary>
+    [Fact]
+    public void A_manifest_field_in_another_case_is_still_read()
+    {
+        WriteLocal("audit.json", """{"ID":"audit","Command":"npm audit","FIREON":"Run"}""");
+
+        var inventory = Store().Inventory();
+
+        Assert.Empty(inventory.Problems);
+        Assert.Equal(CheckFire.Run, Assert.Single(inventory.Checks).Definition.FireOn);
+    }
+
     // ── notes, not problems ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// A run check runs once at the run's end whatever changed, so matches on it are not used: read, and noted, rather
+    /// than shown as if they narrowed it.
+    /// </summary>
+    [Fact]
+    public void A_run_check_with_matches_is_read_and_noted_that_they_are_not_used()
+    {
+        WriteLocal("audit.json", """{"id":"audit","command":"npm audit","fireOn":"Run","matches":["src/**"]}""");
+        WriteLocal("plain.json", """{"id":"plain","command":"true","fireOn":"Run"}""");
+
+        var inventory = Store().Inventory();
+
+        Assert.Equal(["audit", "plain"], inventory.Checks.Select(c => c.Id));
+        Assert.Empty(inventory.Problems);
+        var note = Assert.Single(inventory.Notes);
+        Assert.Equal(Local("audit.json"), note.File);
+        Assert.Contains("a run check runs at the run's end whatever changed; its matches are not used", note.Message, StringComparison.Ordinal);
+    }
 
     [Fact]
     public void A_write_check_asked_to_block_is_read_as_advisory_and_noted()

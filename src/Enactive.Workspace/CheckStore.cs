@@ -115,6 +115,11 @@ public sealed class CheckStore
                             $"'{manifest.Id}' fires on write, and a write check is always advisory - it informs the worker "
                             + "mid-step and never refuses its edit - so it is read as advisory, not blocking."));
                     }
+                    // A run check runs once at the run's end, whatever changed (WorkspaceChecks.Firing): matches on it narrow
+                    // nothing. Read, and said - the lists showed "on <globs>" for it, as if it ran only when they changed.
+                    if (resolved.Definition is { FireOn: CheckFire.Run, Matches.Count: > 0 })
+                        notes.Add(new CheckProblem(scope, manifest.File,
+                            $"'{manifest.Id}' fires on run: a run check runs at the run's end whatever changed; its matches are not used."));
                     byId[manifest.Id] = resolved;
                 }
                 // A GLOBAL raise of the implicit build or test is meant for the workspaces it applies to; in one no
@@ -339,9 +344,12 @@ public sealed class CheckStore
     {
         problem = null;
         ManifestFile? said;
+        IReadOnlyList<string> unknown;
         try
         {
-            said = JsonSerializer.Deserialize<ManifestFile>(File.ReadAllText(file), Json);
+            var text = File.ReadAllText(file);
+            said = JsonSerializer.Deserialize<ManifestFile>(text, Json);
+            unknown = said is null ? [] : FieldsNotInTheFormat(text);
         }
         catch (JsonException ex)
         {
@@ -358,10 +366,37 @@ public sealed class CheckStore
             problem = "It is empty.";
             return null;
         }
+        // A field the format does not have is refused, not ignored: a misspelt one read as absent changed the check with
+        // nothing to say so - "fire_on":"Run" made a step check of a run check, "severety":"Blocking" an advisory one.
+        if (unknown.Count > 0)
+        {
+            problem = string.Join(", ", unknown.Select(n => $"'{n}'")) + (unknown.Count == 1 ? " is not a field" : " are not fields")
+                      + " of a check manifest, whose fields are " + string.Join(", ", ManifestFields)
+                      + " - a field it does not have would be ignored, and the check run as if it were not there.";
+            return null;
+        }
 
         // The id in the file, or the file's name when it says none: one check per file, named by it.
         var id = string.IsNullOrWhiteSpace(said.Id) ? Path.GetFileNameWithoutExtension(file) : said.Id.Trim();
         return new Manifest(id, file, said);
+    }
+
+    /// <summary>The fields a manifest has, as it is written (camelCase) - ManifestFile's own, so a field added there is one here.</summary>
+    private static readonly string[] ManifestFields = typeof(ManifestFile).GetProperties()
+        .Select(p => JsonNamingPolicy.CamelCase.ConvertName(p.Name)).ToArray();
+
+    /// <summary>The top-level names in a manifest's JSON that are none of its fields - in any case, as the store reads them.</summary>
+    private static IReadOnlyList<string> FieldsNotInTheFormat(string json)
+    {
+        using var document = JsonDocument.Parse(json, new JsonDocumentOptions
+        {
+            CommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true
+        });
+        if (document.RootElement.ValueKind != JsonValueKind.Object) return [];
+        return document.RootElement.EnumerateObject().Select(p => p.Name)
+            .Where(n => !ManifestFields.Contains(n, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
     }
 
     /// <summary>What is wrong with a manifest on its own, before what it shadows is known.</summary>

@@ -188,7 +188,9 @@ internal sealed class CheckRow
                 },
                 Definition.Severity == CheckSeverity.Blocking ? "blocking" : "advisory"
             };
-            if (Definition.Matches.Count > 0)
+            // Not for a run check: it runs at the run's end whatever changed, and "on <globs>" said it ran only when they
+            // did. Its matches are not used, and the store's note on its file says so.
+            if (Definition.Matches.Count > 0 && Definition.FireOn != CheckFire.Run)
                 parts.Add("on " + string.Join(", ", Definition.Matches));
             else if (Check.Ecosystems is { Count: > 0 } ecosystems)
                 parts.Add("through " + string.Join(", ", ecosystems));

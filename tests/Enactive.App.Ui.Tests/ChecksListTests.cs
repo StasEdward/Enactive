@@ -57,6 +57,22 @@ public sealed class ChecksListTests : IDisposable
         Assert.True(row.CanEdit && row.CanDelete && row.CanToggle);
     }
 
+    /// <summary>
+    /// A run check runs at the run's end whatever changed: its row does not say "on &lt;globs&gt;" as if they narrowed it,
+    /// and says the store's note that they are not used.
+    /// </summary>
+    [Fact]
+    public void A_run_check_with_matches_is_not_shown_as_on_them()
+    {
+        new CheckStore(Workspace, Global).Save(new CheckDefinition("audit", null, "npm audit", ["src/**"], CheckFire.Run,
+            CheckSeverity.Advisory, 60, null), CheckScope.Workspace);
+
+        var row = Assert.Single(List(CheckScope.Workspace).Checks);
+
+        Assert.Equal("at the run's end · advisory · 60 s", row.Meta);
+        Assert.Contains("its matches are not used", row.Notes);
+    }
+
     [Fact]
     public void What_the_store_refuses_is_said_on_the_form_and_nothing_is_written()
     {
