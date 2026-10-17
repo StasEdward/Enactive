@@ -86,7 +86,22 @@ public enum OutcomeCause
     /// handed on without the evidence it owes (Plan Phase 1.3). Done, not confirmed: never rejected wholesale, so what the
     /// items handed on still goes on. Items whose steps did not finish are ItemsUnfinished. Last, so no stored value moves.
     /// </summary>
-    ItemsNotCovered
+    ItemsNotCovered,
+
+    /// <summary>
+    /// A blocking workspace check (Plan Phase 3.2) owed for what the step changed failed at the step's gate, on every
+    /// attempt the gate's budget allowed: rejected with no reviewer asked, as the coverage check rejects - and told apart
+    /// from it, so nothing says a coverage count or a review rejected a step a declared check did. Last, so no stored
+    /// value moves.
+    /// </summary>
+    CheckGateRejected,
+
+    /// <summary>
+    /// A blocking workspace check owed for what the step changed did not run - the policy would have had to ask, it timed
+    /// out, it ran no tests: done, not confirmed. A check that did not run has verified nothing, and a blocking one is what
+    /// a person said this kind of change is confirmed by. Last, so no stored value moves.
+    /// </summary>
+    CheckNotRun
 }
 
 /// <summary>

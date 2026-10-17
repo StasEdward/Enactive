@@ -39,7 +39,11 @@ public static class RunOutcomeWords
     /// Rejected by the engine's coverage check, which no reviewer saw (the StepCompleted payload says so); a record
     /// without it reads as a reviewer's rejection, as before.
     /// </param>
-    public static string StepActivity(StepOutcomeKind? outcome, string? reason, bool byEngineCheck = false)
+    /// <param name="checkId">
+    /// With <paramref name="byEngineCheck"/>: the declared workspace check that rejected it (Plan Phase 3.2), not the
+    /// coverage count - named, so the card says which check; empty when the record does not say which.
+    /// </param>
+    public static string StepActivity(StepOutcomeKind? outcome, string? reason, bool byEngineCheck = false, string? checkId = null)
     {
         if (outcome == StepOutcomeKind.Skipped)
             return "Skipped — a dependency failed";
@@ -47,6 +51,8 @@ public static class RunOutcomeWords
         var word = outcome switch
         {
             StepOutcomeKind.Succeeded => "Done",
+            StepOutcomeKind.ReviewRejected when byEngineCheck && checkId is { Length: > 0 } id => $"Rejected by the engine's check '{id}'",
+            StepOutcomeKind.ReviewRejected when byEngineCheck && checkId is not null => "Rejected by an engine check",
             StepOutcomeKind.ReviewRejected when byEngineCheck => "Rejected by the engine's coverage check",
             StepOutcomeKind.ReviewRejected => "Rejected by the reviewer",
             StepOutcomeKind.Incomplete => "Incomplete",
@@ -79,7 +85,8 @@ public static class RunOutcomeWords
         IEnumerable<string?> reasons,
         bool cycle,
         string? limit = null,
-        int rejectedByEngineCheck = 0)
+        int rejectedByEngineCheck = 0,
+        int rejectedByDeclaredCheck = 0)
     {
         var counts = new List<string>();
 
@@ -88,7 +95,10 @@ public static class RunOutcomeWords
 
         var failed = steps.Count(s => s == StepOutcomeKind.Failed);
         var byEngine = Math.Clamp(rejectedByEngineCheck, 0, steps.Count(s => s == StepOutcomeKind.ReviewRejected));
-        var rejected = steps.Count(s => s == StepOutcomeKind.ReviewRejected) - byEngine;
+        // A declared workspace check's rejections (Plan Phase 3.2), counted apart from both the reviewer's and the coverage
+        // count's: each says who rejected the step, and none of the three may be read as another.
+        var byCheck = Math.Clamp(rejectedByDeclaredCheck, 0, steps.Count(s => s == StepOutcomeKind.ReviewRejected) - byEngine);
+        var rejected = steps.Count(s => s == StepOutcomeKind.ReviewRejected) - byEngine - byCheck;
         var incomplete = steps.Count(s => s == StepOutcomeKind.Incomplete);
         var skipped = steps.Count(s => s == StepOutcomeKind.Skipped);
         // Counted, or a run held short of Completed by nothing else would explain itself with
@@ -99,6 +109,7 @@ public static class RunOutcomeWords
         if (failed > 0) counts.Add($"{failed} step(s) failed");
         if (rejected > 0) counts.Add($"{rejected} step(s) rejected by the reviewer");
         if (byEngine > 0) counts.Add($"{byEngine} step(s) rejected by the engine's coverage check");
+        if (byCheck > 0) counts.Add($"{byCheck} step(s) rejected by an engine check");
         if (incomplete > 0) counts.Add($"{incomplete} step(s) did not finish");
         if (blocked > 0) counts.Add($"{blocked} step(s) blocked");
         if (unverified > 0) counts.Add($"{unverified} step(s) done but not verified");

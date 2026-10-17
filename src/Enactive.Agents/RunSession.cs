@@ -32,6 +32,13 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     /// </summary>
     public List<Enactive.Core.Checks.PendingCheck> PendingChecks { get; init; } = [];
 
+    /// <summary>
+    /// What the checks owed at a wave's end came to (Plan Phase 3.2) - already said where they ran, and kept for the run's
+    /// outcome: the last wave's blocking check that failed has no step left to stop, and only the run's end can hold the
+    /// run back on it. Guarded by its own lock.
+    /// </summary>
+    public List<Enactive.Core.Templates.CriterionResult> BoundaryChecks { get; } = [];
+
     /// <summary>What the request says may be changed, held against each step's first change to a file the run found. Null when it says nothing.</summary>
     public ChangeLimitGuard? ChangeLimits { get; init; }
 
@@ -135,4 +142,10 @@ internal sealed record StepAttemptState(
     /// a step that consumes none, and for a step done for each item or its join, whose coverage stays at the run's end.
     /// </summary>
     public IReadOnlyList<Enactive.Core.Templates.SuccessCriterionDefinition> Coverage { get; init; } = [];
+
+    /// <summary>When the workspace checks owed for what this step changes run (Plan Phase 3.2) - see StepCheckTiming.</summary>
+    public StepCheckTiming CheckTiming { get; init; } = StepCheckTiming.AtGate;
+
+    /// <summary>The plan step this is, for a check deferred on its account; null for a quick action's one step.</summary>
+    public Guid? StepId { get; init; }
 }

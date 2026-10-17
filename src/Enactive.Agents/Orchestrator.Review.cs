@@ -44,7 +44,14 @@ public sealed partial class Orchestrator
     /// <param name="NotAskedAboutExclusions">Why the review could not judge the items the step left out - null when it
     /// was asked about every one, or there were none. A pass from such a review does not approve them.</param>
     private sealed record AttemptReview(ReviewResult Review, bool ByGate = false, StepCoverageGate.Outcome? Coverage = null,
-        string? NotAskedAboutExclusions = null);
+        string? NotAskedAboutExclusions = null)
+    {
+        /// <summary>The declared check whose failure the gate's verdict is (Plan Phase 3.2); null for the coverage check's.</summary>
+        public string? ByCheck { get; init; }
+
+        /// <summary>Which blocking declared checks did not run at the gate, and why: a pass then makes the step done, not confirmed.</summary>
+        public string? ChecksNotRun { get; init; }
+    }
 
     /// <summary>
     /// Shared review/proof phase of an attempt. Callers own retries, rollback, checkpoints and

@@ -44,8 +44,8 @@ public sealed record CheckInventory(
 public sealed class CheckStore
 {
     /// <summary>The implicit ids, in the order they are listed.</summary>
-    public const string BuildId = "build";
-    public const string TestId = "test";
+    public const string BuildId = ImplicitCheckIds.Build;
+    public const string TestId = ImplicitCheckIds.Test;
 
     /// <summary>The workspace's checks folder, relative to its root.</summary>
     public const string WorkspaceRelativeFolder = ".enactive/checks";

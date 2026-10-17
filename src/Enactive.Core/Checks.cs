@@ -205,6 +205,16 @@ public sealed record CheckSnapshot(IReadOnlyList<ResolvedCheck> Checks, IReadOnl
         => Checks.FirstOrDefault(c => string.Equals(c.Id, id, StringComparison.OrdinalIgnoreCase));
 }
 
+/// <summary>
+/// The ids of the engine's own build and test of a workspace, as checks (Plan Phase 3.1) - here, beside the model, so the
+/// store that lists them and the engine that runs them name them the same way.
+/// </summary>
+public static class ImplicitCheckIds
+{
+    public const string Build = "build";
+    public const string Test = "test";
+}
+
 /// <summary>Where a workspace keeps its check manifests - one place, for the store that reads them and the guard that keeps them.</summary>
 public static class CheckFolders
 {

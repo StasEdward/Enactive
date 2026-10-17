@@ -1163,7 +1163,11 @@ public sealed partial class Orchestrator : IOrchestrator
             try
             {
                 var store = _artifacts.BeginStep();
-                var attemptState = session.BeginStep(messages, store);
+                // One step, nothing beside it: its declared checks run at its gate - never against the disk when staged.
+                var attemptState = session.BeginStep(messages, store) with
+                {
+                    CheckTiming = _settings?.Staged == true ? StepCheckTiming.Staged : StepCheckTiming.AtGate
+                };
                 await RunAttemptsAsync(session, attemptState, models, models.Provider, models.Model,
                     intent.Context, quickResult, plan.Title, intent.RawText, null, quickChanges, quickBefore,
                     PublishQuick, quickLifetime.Token);
@@ -1220,8 +1224,11 @@ public sealed partial class Orchestrator : IOrchestrator
 
         IReadOnlyList<CriterionResult> quickChecks = [.. await ProducedFilesNowAsync(scope, session, ct), .. await BuildRegressionNowAsync(scope, session,
                 intent.Context, ct, session.Builds.Count > 0 ? await NetChangedAsync(quickChanges, quickBefore, ct) : null)];
-        foreach (var check in quickChecks)
+        // The declared checks at the run's end (Plan Phase 3.2), as a plan's: a quick action is a run of one step.
+        var declaredQuick = await RunEndChecksAsync(session, intent.Context, ct);
+        foreach (var check in (IEnumerable<CriterionResult>)[.. quickChecks, .. declaredQuick.Said])
             yield return scope.Criterion(check);
+        quickChecks = [.. quickChecks, .. declaredQuick.Decide];
 
         var (quickOutcome, quickReason) = RunOutcomeDecision.Settle(quickWork, quickDecision, quickVerification, quickChecks);
 
@@ -1867,7 +1874,14 @@ public sealed partial class Orchestrator : IOrchestrator
                 // join (JoinCoverage) - which leaves the join unconfirmed and never sends anything back.
                 Coverage = step.ExpandedFrom is null && step.ForEach is null
                     ? StepCoverageGate.For(CriteriaFor(plan), stepNumber - 1)
-                    : []
+                    : [],
+                // Where the declared checks owed for what it changes run (Plan Phase 3.2). At its own gate only when what
+                // they find is this step's: steps one at a time, or this one critical - the scheduler starts a critical step
+                // alone and nothing beside it (DagScheduler.NextReadyBatch). Never against the disk in a staged run.
+                CheckTiming = _settings?.Staged == true ? StepCheckTiming.Staged
+                    : maxParallel == 1 || step.Critical ? StepCheckTiming.AtGate
+                    : StepCheckTiming.Deferred,
+                StepId = step.Id
             };
 
             // The workspace as this step found it. Taken once, before the first attempt: a retry
@@ -1938,9 +1952,10 @@ public sealed partial class Orchestrator : IOrchestrator
             // The card's colour comes from this payload, not from the wording of the summary - and
             // so does the LINE UNDER IT. The reason used to be glued into the summary only, so a
             // replayed step said "Incomplete" and stopped there.
-            ValueTask EmitStepDone(string summary, int? no, StepOutcomeKind kind, string? why = null, bool engineCheck = false)
+            ValueTask EmitStepDone(string summary, int? no, StepOutcomeKind kind, string? why = null, bool engineCheck = false,
+                string? checkId = null)
                 => Publish(scope.Event(
-                    EventKind.StepCompleted, summary, WorkEventPayload.StepPayload(no, kind, why, engineCheck)));
+                    EventKind.StepCompleted, summary, WorkEventPayload.StepPayload(no, kind, why, engineCheck, checkId)));
 
             // A step that is done - Succeeded, or DoneUnverified (below) - unblocks what comes after it,
             // and MarkDone is what does the unblocking, so it goes LAST. (A failure releases too, but only
@@ -2013,9 +2028,13 @@ public sealed partial class Orchestrator : IOrchestrator
             // Rejected by the engine's coverage check, which no reviewer saw: said so on the line and in the payload,
             // which the card reads (WorkEventPayload.StepPayload).
             var byGate = outcome == StepOutcomeKind.ReviewRejected && outcome == stepResult.Kind
-                         && stepResult.Cause == OutcomeCause.CoverageGateRejected;
+                         && stepResult.Cause is OutcomeCause.CoverageGateRejected or OutcomeCause.CheckGateRejected;
+            // Rejected by a blocking declared check (Plan Phase 3.2): which one, in the payload the card reads.
+            var byCheck = byGate && stepResult.Cause == OutcomeCause.CheckGateRejected ? stepResult.RejectedByCheck ?? "" : null;
             var label = outcome switch
             {
+                StepOutcomeKind.ReviewRejected when byCheck is { Length: > 0 } => $"REJECTED BY THE ENGINE'S CHECK '{byCheck}'",
+                StepOutcomeKind.ReviewRejected when byCheck is not null => "REJECTED BY AN ENGINE CHECK",
                 StepOutcomeKind.ReviewRejected when byGate => "REJECTED BY THE ENGINE'S COVERAGE CHECK",
                 StepOutcomeKind.ReviewRejected => "REVIEW REJECTED",
                 StepOutcomeKind.Incomplete => "INCOMPLETE",
@@ -2030,7 +2049,7 @@ public sealed partial class Orchestrator : IOrchestrator
             // The skipped steps are MarkFailed's cascade, so they still follow this step's own event.
             await EmitStepDone(
                 $"[{stepNumber}/{total}] {step.Title} — {label}{(string.IsNullOrWhiteSpace(outcomeReason) ? "" : ": " + outcomeReason)}",
-                stepNumber, outcome, outcomeReason, engineCheck: byGate);
+                stepNumber, outcome, outcomeReason, engineCheck: byGate, checkId: byCheck);
             var skippedSteps = scheduler.MarkFailed(step.Id);
 
             foreach (var sk in skippedSteps)
@@ -2372,7 +2391,9 @@ public sealed partial class Orchestrator : IOrchestrator
                     EventKind.StepCompleted,
                     $"[{(no > 0 ? no : 0)}/{total}] {step.Title} — {RunOutcomeDecision.Word(kind, session.Records.GetValueOrDefault(step.Id)?.Cause)} before this run",
                     WorkEventPayload.StepPayload(no > 0 ? no : null, kind,
-                        engineCheck: session.Records.GetValueOrDefault(step.Id)?.Cause == OutcomeCause.CoverageGateRejected));
+                        engineCheck: session.Records.GetValueOrDefault(step.Id)?.Cause is OutcomeCause.CoverageGateRejected or OutcomeCause.CheckGateRejected,
+                        // A declared check's rejection: the record keeps the cause, not which check - its reason says that.
+                        checkId: session.Records.GetValueOrDefault(step.Id)?.Cause == OutcomeCause.CheckGateRejected ? "" : null));
             }
         }
 
@@ -2391,10 +2412,28 @@ public sealed partial class Orchestrator : IOrchestrator
                 scope.TaskId, scope.RunId, intent.Context, wct)).Results.ToArray();
 
         // Why the run cannot go on after a wave, or null: a workspace the engine's own trial builds changed
-        // and could not put back is not one any further step may build on.
+        // and could not put back is not one any further step may build on - nor one a blocking check owed at this wave's
+        // end failed on (Plan Phase 3.2), run after the wave's builds are validated, on the workspace as the wave left it.
+        // The owed checks are run even with no step in the wave: a resumed run carries them over from a checkpoint whose
+        // open wave may be empty, and an obligation left owed would hold the dispatcher (OwesAtWave) for good.
         async Task<string?> WaveBoundaryAsync()
         {
-            if (waves is null || waves.Steps is not { Count: > 0 } steps) return null;
+            if (waves is null) return null;
+            var no = waves.Closed + 1;
+            var steps = waves.Steps;
+            var stop = steps.Count > 0 ? await ValidateWaveAsync(steps) : null;
+            var owed = OwesAtWave(session);
+            var stopForChecks = await WaveChecksAsync(session, no, steps.Count > 0 ? WaveLedger.Span(steps) : null, intent.Context,
+                Publish, stepLifetime.Token);
+            // What is still owed is what a resume must pick up: discharged here, it is not owed again.
+            if (owed)
+                await CheckpointAsync();
+            return stop ?? stopForChecks;
+        }
+
+        async Task<string?> ValidateWaveAsync(IReadOnlyList<WaveStep> steps)
+        {
+            if (waves is null) return null;
             string? stop = null;
             var wct = stepLifetime.Token;
             var root = _workspace.RootPath;
@@ -2559,7 +2598,10 @@ public sealed partial class Orchestrator : IOrchestrator
                 // 4.2). Held, the dispatcher lets what is running finish - a pause cancels nothing, unlike Stop - and a
                 // wave that ends meanwhile is still validated at its boundary, before the run ends. Null when neither
                 // can hold, so a run nobody can pause is dispatched exactly as before.
-                waves is null && pause is null ? null : () => pause?.IsRequested == true || waves?.Waiting == true);
+                // A check owed at the wave's end (Plan Phase 3.2) holds the dispatcher too: the boundary it is owed at is the
+                // moment nothing is running, and a steady stream of new steps would never let that moment come.
+                waves is null && pause is null ? null
+                    : () => pause?.IsRequested == true || waves?.Waiting == true || (waves is not null && OwesAtWave(session)));
         }, CancellationToken.None);
 
         try
@@ -2709,8 +2751,12 @@ public sealed partial class Orchestrator : IOrchestrator
         // have had their turn to change it.
         IReadOnlyList<CriterionResult> finalChecks = [.. await ProducedFilesNowAsync(scope, session, ct), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct,
                 session.Builds.Count > 0 ? await NetChangedAsync(workspaceChanges, beforeRun, ct) : null)];
-        foreach (var check in finalChecks)
+        // The declared checks owed at the run's end, and those that fire on it (Plan Phase 3.2) - with the run's own final
+        // checks, as a person's and not the engine's: a blocking one keeps the run from Completed (RunOutcomeDecision.Settle).
+        var declared = await RunEndChecksAsync(session, intent.Context, ct);
+        foreach (var check in (IEnumerable<CriterionResult>)[.. finalChecks, .. declared.Said])
             yield return scope.Criterion(check);
+        finalChecks = [.. finalChecks, .. declared.Decide];
 
         var (runOutcome, runReason) = RunOutcomeDecision.Settle(work, decision, verification, finalChecks, plan.CoverageObligations);
 
@@ -3073,6 +3119,9 @@ public sealed partial class Orchestrator : IOrchestrator
         /// when none were. Carried out of the loop for the review, which judges what the step says it could not do.
         /// </summary>
         public string? KeptBack { get; set; }
+
+        /// <summary>The declared check whose failure rejected the step at its gate (OutcomeCause.CheckGateRejected), for its card.</summary>
+        public string? RejectedByCheck { get; set; }
 
         /// <summary>Why, as a code: what was recorded, or what the outcome implies.</summary>
         public OutcomeCause Cause => _cause ?? StepRecord.CauseOf(Kind);

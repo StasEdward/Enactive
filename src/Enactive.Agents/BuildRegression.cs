@@ -122,7 +122,11 @@ internal static class BuildRegression
     /// Whether the engine may run a command of its own without asking anybody. The success-check
     /// command tool, allowed outright by the policy; anything short of that is a no.
     /// </summary>
-    internal static string? WhyNotAllowed(IToolRegistry tools, IPermissionEngine permissions, PermissionPolicy policy)
+    /// <param name="refusal">What is said when the policy would ask or refuses: why the engine does not ask for this kind of
+    /// check. Its own build is a check nobody asked for; a declared workspace check (Plan Phase 3.2) is one a person did ask
+    /// for, and is not run on a question in the middle of a step either.</param>
+    internal static string? WhyNotAllowed(IToolRegistry tools, IPermissionEngine permissions, PermissionPolicy policy,
+        string refusal = "running it would need an approval, and the engine does not interrupt anybody for a check nobody asked for")
     {
         var candidates = tools.Definitions.Where(d => d.Kind == ToolKind.Command && d.RunsSuccessChecks).ToArray();
         if (candidates.Length != 1) return "no single command tool runs checks in this workspace";
@@ -130,7 +134,7 @@ internal static class BuildRegression
         {
             return permissions.Evaluate(policy, candidates[0].Name, tools.RequiredLevelOf(candidates[0].Name)) == PermissionDecision.Allow
                 ? null
-                : "running it would need an approval, and the engine does not interrupt anybody for a check nobody asked for";
+                : refusal;
         }
         catch (Exception ex) { return "the command tool is not available: " + ex.Message; }
     }

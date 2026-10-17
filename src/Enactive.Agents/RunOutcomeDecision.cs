@@ -65,7 +65,7 @@ internal static class RunOutcomeDecision
 
         var reason = outcome == RunOutcomeKind.Blocked
             ? Blocked(work, settled)
-            : RunOutcomeWords.Explain(settled, Reasons(work), work.Cycle, work.Limit, ByEngineCheck(work));
+            : RunOutcomeWords.Explain(settled, Reasons(work), work.Cycle, work.Limit, ByEngineCheck(work), ByDeclaredCheck(work));
 
         // Failed and Cancelled are not asked: their outcome was decided by something that actually
         // went wrong, or by the person, and a green build on top would bury it. Incomplete is asked,
@@ -113,6 +113,22 @@ internal static class RunOutcomeDecision
                     ? verification.Report.Overruling(reason)
                     : verification.IncompleteReason ?? verification.Report.Explain();
                 outcome = adjusted;
+            }
+        }
+
+        // A declared workspace check a person made blocking (Plan Phase 3.2) - the run's own, or one owed at a boundary - is
+        // among the final checks with an origin that is not the engine's, and it holds the run back as a required criterion
+        // does: failed, the work is wrong; not run, nothing confirmed it. It never promotes a run - passing, it says only
+        // that nothing it checks is broken, which is no proof the request was carried out. Left as a System check, as the
+        // engine's own checks are, a blocking check that failed would only have said "but", and a run Completed on it.
+        if (outcome is RunOutcomeKind.Completed or RunOutcomeKind.Incomplete
+            && finalChecks.Where(c => c.Blocking).ToArray() is { Length: > 0 } holding)
+        {
+            var held = holding.Any(c => c.Outcome == CriterionOutcome.Failed) ? RunOutcomeKind.Failed : RunOutcomeKind.Incomplete;
+            if (held != outcome)
+            {
+                outcome = held;
+                reason = string.Join("; ", holding.Select(CheckLine));
             }
         }
 
@@ -236,7 +252,7 @@ internal static class RunOutcomeDecision
         if (!work.Resumable)
             return what + ". Put that right and run it again.";
 
-        var tally = RunOutcomeWords.Explain(settled, [], work.Cycle, work.Limit, ByEngineCheck(work));
+        var tally = RunOutcomeWords.Explain(settled, [], work.Cycle, work.Limit, ByEngineCheck(work), ByDeclaredCheck(work));
         return what + ". Put that right and resume this run: it carries on from the blocked step(s)"
                + (tally is { } t ? $" ({t})." : ".");
     }
@@ -254,7 +270,8 @@ internal static class RunOutcomeDecision
             lines.Add($"{Label(step)}{parts} - {said}{why}");
         }
         if (verification?.IncompleteReason is { } unverified) lines.Add(Clip(unverified, 300));
-        foreach (var check in (verification?.Report.Blocking ?? []).Concat(finalChecks.Where(c => c.Outcome == CriterionOutcome.Failed)))
+        // A blocking declared check that did not run is named too: it is what keeps the run short of Completed.
+        foreach (var check in (verification?.Report.Blocking ?? []).Concat(finalChecks.Where(c => c.Outcome == CriterionOutcome.Failed || c.Blocking)))
             lines.Add(CheckLine(check));
         return lines.Distinct().ToArray();
     }
@@ -290,12 +307,18 @@ internal static class RunOutcomeDecision
     private static int ByEngineCheck(RunWork work)
         => work.Steps.Count(s => s.Outcome == StepOutcomeKind.ReviewRejected && s.Cause == Enactive.Core.Tasks.OutcomeCause.CoverageGateRejected);
 
+    /// <summary>The steps a blocking declared check rejected at their gate (Plan Phase 3.2), with no reviewer asked.</summary>
+    private static int ByDeclaredCheck(RunWork work)
+        => work.Steps.Count(s => s.Outcome == StepOutcomeKind.ReviewRejected && s.Cause == Enactive.Core.Tasks.OutcomeCause.CheckGateRejected);
+
     /// <summary>A step's outcome as one word in a line about the run.</summary>
     /// <param name="cause">What the engine recorded; a rejection by its coverage check is not called a review's.</param>
     internal static string Word(StepOutcomeKind kind, Enactive.Core.Tasks.OutcomeCause? cause = null) => kind switch
     {
         StepOutcomeKind.Succeeded => "done",
         StepOutcomeKind.ReviewRejected when cause == Enactive.Core.Tasks.OutcomeCause.CoverageGateRejected => "rejected by the engine's coverage check",
+        // The reason that follows names the check: "the engine's check 'lint' failed ...".
+        StepOutcomeKind.ReviewRejected when cause == Enactive.Core.Tasks.OutcomeCause.CheckGateRejected => "rejected by an engine check",
         StepOutcomeKind.ReviewRejected => "review rejected",
         StepOutcomeKind.Incomplete => "incomplete",
         StepOutcomeKind.Skipped => "skipped",

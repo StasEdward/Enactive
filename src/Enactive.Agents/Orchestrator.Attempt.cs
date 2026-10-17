@@ -51,7 +51,28 @@ public sealed partial class Orchestrator
             }
             await publish(scope.Ev(EventKind.ContextAssembled, $"[{checkedNo}] The engine's coverage check passed: "
                 + string.Join("; ", coverage.Checks.Select(c => $"{c.Typed.SourceField} of step {c.Typed.SourceStep + 1}, {c.Line()}")), checkedNo));
+        }
 
+        // The workspace checks a person declared for what this step changed (Plan Phase 3.2), after the coverage count and
+        // before any review: a blocking one that failed sends the step back on the gate's own budget with the check's
+        // output, and the reviewer is not asked - an exit code is not an opinion, and a reviewer shown a failing build
+        // would only be asked to agree with it. An advisory one is evidence for the review. Run on a step that ended as done
+        // (or only said it could not go on, which a review is about to judge as done); any other end is already not done.
+        var checks = gated ? await StepChecksAsync(session, step, stepNumber, context, changes, before, publish, ct) : null;
+        if (checks?.Failed is { } failedCheck)
+        {
+            var advice = WorkspaceChecks.RepairAdvice(failedCheck.Check.Id, failedCheck.Result);
+            var notes = $"the engine's check '{failedCheck.Check.Id}' failed"
+                        + (failedCheck.Result.ExitCode is { } exit ? $" (exit {exit})" : "")
+                        + (string.IsNullOrWhiteSpace(failedCheck.Result.Detail) ? "" : ": " + Gist(failedCheck.Result.Detail!, 300));
+            await publish(scope.Event(EventKind.ReviewFailed,
+                $"{(stepNumber is { } failedNo ? $"[{failedNo}] " : "")}FAIL (the engine's check '{failedCheck.Check.Id}' - no reviewer was asked): {notes}",
+                WorkEventPayload.EngineCheckPayload(stepNumber, failedCheck.Check.Id)));
+            return new(new ReviewResult(new ReviewVerdict.Fail(notes, advice, [])), ByGate: true) { ByCheck = failedCheck.Check.Id };
+        }
+
+        if (coverage is not null && stepNumber is not null)
+        {
             // Covered, but some items only mentioned (StepCoverageGate.Outcome.OnlyMentioned): one call naming every path
             // covers every item, so the count says nothing was done with them. With no review there is no verdict to
             // approve them, and the step is done but not confirmed - never Succeeded on a count a single call can make.
@@ -65,9 +86,20 @@ public sealed partial class Orchestrator
             // says so below (RunAttemptsAsync). The same decision as the join's (StepCoverageGate.Outcome.Unconfirmed).
             if (!models.ReviewOn && coverage.Unconfirmed(StepCoverageGate.Approval.None) is { } unconfirmed)
             {
-                result.Set(StepOutcomeKind.DoneUnverified, unconfirmed.Reason, unconfirmed.Cause);
+                result.Set(StepOutcomeKind.DoneUnverified,
+                    unconfirmed.Reason + (checks?.NotRun is { } alsoNotRun ? " " + alsoNotRun + "." : ""), unconfirmed.Cause);
                 return null;
             }
+        }
+
+        // A blocking check that did not run - the policy would have asked, it ran out of time, it ran no tests - has verified
+        // nothing, and it is what a person said this kind of change is confirmed by: with no review, the step is done and
+        // not confirmed; with one, a pass makes it no more than that either (RunAttemptsAsync).
+        if (!models.ReviewOn && result.Succeeded && checks?.NotRun is { } notRun)
+        {
+            result.Set(StepOutcomeKind.DoneUnverified, notRun, OutcomeCause.CheckNotRun);
+            await publish(scope.Ev(EventKind.ErrorObserved, (stepNumber is { } unverifiedNo ? $"[{unverifiedNo}] " : "") + notRun, stepNumber));
+            return null;
         }
 
         // The step's own word that it cannot go on, with nothing the engine found behind it, is reviewed as a finished step
@@ -79,7 +111,10 @@ public sealed partial class Orchestrator
                 ? at with { ScopeNote = session.ScopeNotes.GetValueOrDefault(number) } : null,
             step.OutputSlot.Values is { } handed ? CitedPlaces.TextOf(handed) : null, step.Criteria, step.OutputSlot.Values,
             session.Builds, step.Reads, context.Restrictions, result.KeptBack,
-            saidBlocked: SaidBlockedOnly(result) ? result.Reason : null, coverage: coverage)) with { Coverage = coverage };
+            saidBlocked: SaidBlockedOnly(result) ? result.Reason : null, coverage: coverage)) with
+            {
+                Coverage = coverage, ChecksNotRun = checks?.NotRun
+            };
     }
 
     /// <summary>
@@ -166,16 +201,24 @@ public sealed partial class Orchestrator
             // file right.
             if (assessed.ByGate && verdict is ReviewVerdict.Fail shortOf)
             {
+                // One budget for the engine's gate, whichever of its checks sent the step back - the coverage count or a
+                // blocking declared check (Plan Phase 3.2): both are the engine's, not a review's, and neither uses up a
+                // review attempt.
                 if (++gateFailures < gates)
                 {
                     // A step that said it cannot go on is told, as after a review that failed it, that nothing stops it.
-                    RetryAfterCoverageCheck(step.Messages, shortOf.RepairAdvice + (SaidBlockedOnly(result) ? " " + NotABlock : ""),
-                        stepNumber is null ? "the work" : "this step");
+                    var repair = shortOf.RepairAdvice + (SaidBlockedOnly(result) ? " " + NotABlock : "");
+                    if (assessed.ByCheck is not null)
+                        RetryAfterDeclaredCheck(step.Messages, repair, stepNumber is null ? "the work" : "this step");
+                    else
+                        RetryAfterCoverageCheck(step.Messages, repair, stepNumber is null ? "the work" : "this step");
                     continue;
                 }
                 // ReviewRejected, as a reviewer's last rejection is - the same consequences - with a cause of its own:
                 // the report says the engine's check rejected it, not a review nobody gave.
-                result.Set(StepOutcomeKind.ReviewRejected, shortOf.Notes, OutcomeCause.CoverageGateRejected);
+                result.Set(StepOutcomeKind.ReviewRejected, shortOf.Notes,
+                    assessed.ByCheck is not null ? OutcomeCause.CheckGateRejected : OutcomeCause.CoverageGateRejected);
+                result.RejectedByCheck = assessed.ByCheck;
                 result.Keep = [];
                 return;
             }
@@ -220,8 +263,9 @@ public sealed partial class Orchestrator
             // too (StepCoverageGate.Outcome.Unconfirmed, with nothing approved).
             if (verdict.Missing is { } missing)
             {
-                result.Set(missing.Kind, assessed.Coverage?.Unconfirmed(StepCoverageGate.Approval.None) is { } unconfirmed
-                    ? verdict.Notes + " " + unconfirmed.Reason : verdict.Notes, missing.Cause);
+                result.Set(missing.Kind, (assessed.Coverage?.Unconfirmed(StepCoverageGate.Approval.None) is { } unconfirmed
+                    ? verdict.Notes + " " + unconfirmed.Reason : verdict.Notes)
+                    + (assessed.ChecksNotRun is { } alsoNotRun ? " " + alsoNotRun + "." : ""), missing.Cause);
                 await publish(scope.Ev(EventKind.ErrorObserved, prefix + verdict.Notes, stepNumber));
                 return;
             }
@@ -232,8 +276,17 @@ public sealed partial class Orchestrator
             if (verdict is ReviewVerdict.Pass && assessed.NotAskedAboutExclusions is { } notAsked
                 && assessed.Coverage?.Unconfirmed(StepCoverageGate.Approval.WorkOnly) is { } leftOut)
             {
-                result.Set(StepOutcomeKind.DoneUnverified, $"{leftOut.Reason} ({notAsked}.)", leftOut.Cause);
+                result.Set(StepOutcomeKind.DoneUnverified, $"{leftOut.Reason} ({notAsked}.)"
+                    + (assessed.ChecksNotRun is { } alsoNotRun ? " " + alsoNotRun + "." : ""), leftOut.Cause);
                 await publish(scope.Ev(EventKind.ErrorObserved, prefix + leftOut.Reason, stepNumber));
+                return;
+            }
+            // A pass with a blocking check that did not run (Plan Phase 3.2): the review approved the work as it read it,
+            // and the check a person said this kind of change is confirmed by verified nothing - done, never Succeeded.
+            if (verdict is ReviewVerdict.Pass && assessed.ChecksNotRun is { } notRun)
+            {
+                result.Set(StepOutcomeKind.DoneUnverified, notRun, OutcomeCause.CheckNotRun);
+                await publish(scope.Ev(EventKind.ErrorObserved, prefix + notRun, stepNumber));
                 return;
             }
             if (verdict is not ReviewVerdict.Fail fail) return;   // a pass: the step stands

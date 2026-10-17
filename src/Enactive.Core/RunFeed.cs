@@ -333,9 +333,12 @@ public sealed class RunFeed
             case EventKind.ReviewFailed:
                 var reviewed = CardFor(step) ?? EnsureCurrent(added);
                 reviewed.AddNote(ev.Summary);
-                // The engine's own coverage check gives its verdict as a ReviewFailed too - and no reviewer saw the step.
+                // The engine's own coverage check gives its verdict as a ReviewFailed too - and no reviewer saw the step. So
+                // does a declared workspace check (Plan Phase 3.2), named by its id.
                 reviewed.SetActivity(ev.Kind == EventKind.ReviewRequested ? "Reviewing…"
                     : ev.Kind == EventKind.ReviewPassed ? "Review passed"
+                    : ev.EngineCheckId() is { Length: > 0 } checkId ? $"The engine's check '{checkId}' sent it back…"
+                    : ev.EngineCheckId() is not null ? "An engine check sent it back…"
                     : ev.ByEngineCheck() ? "The engine's coverage check sent it back…" : "Review flagged an issue…");
                 break;
 
@@ -482,7 +485,7 @@ public sealed class RunFeed
             : ev.OutcomeReason() ?? TailOf(ev.Summary);
 
         if (card is not null)
-            Finish(card, outcome, reason, ev.ByEngineCheck());
+            Finish(card, outcome, reason, ev.ByEngineCheck(), ev.EngineCheckId());
         if (card is not null)
             _running.Remove(card);
         _current = _running.Count == 1 ? _running[0] : null;
@@ -494,7 +497,8 @@ public sealed class RunFeed
     /// outcome word alone otherwise. Never an enum's name, and never the word twice.
     /// </summary>
     /// <param name="byEngineCheck">The step was rejected by the engine's coverage check, not a reviewer (its payload says so).</param>
-    private static void Finish(FeedCard card, StepOutcomeKind outcome, string? reason, bool byEngineCheck = false)
+    /// <param name="checkId">The declared check that rejected it, when one did (Plan Phase 3.2) - see RunOutcomeWords.StepActivity.</param>
+    private static void Finish(FeedCard card, StepOutcomeKind outcome, string? reason, bool byEngineCheck = false, string? checkId = null)
     {
         card.SetStatus(outcome switch
         {
@@ -511,7 +515,7 @@ public sealed class RunFeed
         });
         card.SetActivity(outcome == StepOutcomeKind.Succeeded
             ? string.IsNullOrWhiteSpace(reason) ? "Done" : reason
-            : RunOutcomeWords.StepActivity(outcome, reason, byEngineCheck));
+            : RunOutcomeWords.StepActivity(outcome, reason, byEngineCheck, checkId));
     }
 
     /// <summary>The tail of "[1/2] Title — INCOMPLETE: &lt;reason&gt;", for records written before the reason was a value.</summary>

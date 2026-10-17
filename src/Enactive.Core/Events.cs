@@ -620,8 +620,25 @@ public static class WorkEventPayload
     /// The payload of a verdict the ENGINE's own check gave (StepCoverageGate) - a ReviewFailed no reviewer gave. Said in
     /// the payload, not only in the words, so the log, a step's card and the activity pill can tell it from a review.
     /// </summary>
-    public static string EngineCheckPayload(int? stepNo)
-        => stepNo is { } n ? $"{{\"step\":{n},\"engineCheck\":true}}" : "{\"engineCheck\":true}";
+    /// <param name="checkId">
+    /// The declared workspace check whose failure this is (Plan Phase 3.2), when it is one and not the coverage count -
+    /// so a card says which check sent the step back. Empty when it is a check whose id is not known any more.
+    /// </param>
+    public static string EngineCheckPayload(int? stepNo, string? checkId = null)
+    {
+        var parts = new List<string>(3);
+        if (stepNo is { } n) parts.Add($"\"step\":{n}");
+        parts.Add("\"engineCheck\":true");
+        if (checkId is not null) parts.Add($"\"checkId\":{Quote(checkId)}");
+        return "{" + string.Join(',', parts) + "}";
+    }
+
+    /// <summary>
+    /// The declared check the engine's verdict came from (Plan Phase 3.2), or null when it was the coverage check or no
+    /// engine check at all. Empty when the event says it was a declared check and not which.
+    /// </summary>
+    public static string? EngineCheckId(this WorkEvent ev)
+        => ev.ByEngineCheck() ? StringField(ev, "checkId") : null;
 
     /// <summary>
     /// Whether the event is the engine's own check's verdict, not a reviewer's: a ReviewFailed of the coverage check, or
@@ -651,13 +668,17 @@ public static class WorkEventPayload
     /// The step was rejected by the engine's coverage check, not by a reviewer (OutcomeCause.CoverageGateRejected): its
     /// card says so. Only written when true, so every other payload is as it was.
     /// </param>
-    public static string StepPayload(int? stepNo, StepOutcomeKind outcome, string? reason = null, bool engineCheck = false)
+    /// <param name="checkId">The declared check that rejected it (Plan Phase 3.2), with <paramref name="engineCheck"/>; see
+    /// <see cref="EngineCheckPayload"/>.</param>
+    public static string StepPayload(int? stepNo, StepOutcomeKind outcome, string? reason = null, bool engineCheck = false,
+        string? checkId = null)
     {
-        var parts = new List<string>(4);
+        var parts = new List<string>(5);
         if (stepNo is { } n) parts.Add($"\"step\":{n}");
         parts.Add($"\"stepOutcome\":\"{outcome}\"");
         if (!string.IsNullOrWhiteSpace(reason)) parts.Add($"\"reason\":{Quote(reason)}");
         if (engineCheck) parts.Add("\"engineCheck\":true");
+        if (engineCheck && checkId is not null) parts.Add($"\"checkId\":{Quote(checkId)}");
         return "{" + string.Join(',', parts) + "}";
     }
 
