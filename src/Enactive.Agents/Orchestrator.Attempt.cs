@@ -187,6 +187,7 @@ public sealed partial class Orchestrator
             }
 
             AttemptReview? assessed;
+            step.Attempt = attempt;
             try
             {
                 assessed = await ExecuteAttemptAsync(session, step, models, provider, model, context,

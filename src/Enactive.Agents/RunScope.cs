@@ -154,6 +154,5 @@ public sealed class RunScope
     public WorkEvent Criterion(CriterionResult r)
         => new(Guid.NewGuid(), TaskId, RunId, DateTimeOffset.UtcNow, EventKind.CriterionEvaluated,
                r.Describe(),
-               WorkEventPayload.CriterionPayload(r.Name, r.Outcome.ToString(), r.Required, r.ExitCode,
-                   r.Origin.ToString(), r.Check));
+               WorkEventPayload.CriterionPayload(r));
 }

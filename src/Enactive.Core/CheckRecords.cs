@@ -22,6 +22,13 @@ public sealed record CheckFiring(string CheckId, CheckBoundary FiredOn)
     /// <summary>The wave it was owed at, for one that fired on a wave.</summary>
     public int? Wave { get; init; }
 
+    /// <summary>
+    /// Which attempt at its step it judged, for a step check on an attempt after the first - null on the first. A step sent
+    /// back runs its checks again at its next gate; without the number, its card showed two results of one check with
+    /// nothing to say which was the later.
+    /// </summary>
+    public int? Attempt { get; init; }
+
     /// <summary>Why it fired here and not where it was first owed - the reason a person was told when it was put off.</summary>
     public string? Deferred { get; init; }
 

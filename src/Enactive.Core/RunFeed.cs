@@ -27,7 +27,11 @@ public sealed class FeedEntry(FeedEntryKind kind, string label)
 /// </summary>
 /// <param name="Outcome">The criterion's outcome by name: Passed, Failed or Unknown.</param>
 /// <param name="Times">How many results this one stands for: a write check is folded to its latest.</param>
-public sealed record FeedCheck(CheckFiring Firing, string Outcome, int? ExitCode, string Summary, int Times = 1);
+public sealed record FeedCheck(CheckFiring Firing, string Outcome, int? ExitCode, string Summary, int Times = 1)
+{
+    /// <summary>Why it did not run, as the payload says it (<c>reason</c>); null when it ran, and for one recorded before it was kept.</summary>
+    public string? Reason { get; init; }
+}
 
 /// <summary>
 /// One step card as the events have made it: what the step is, where it stands, what it is doing now and
@@ -424,7 +428,10 @@ public sealed class RunFeed
             // criterion without a check's values - the engine's own, a template's, or one recorded before checks had them -
             // is not drawn on a card, as it never was.
             case EventKind.CriterionEvaluated when ev.CriterionCheck() is { } firing:
-                var result = new FeedCheck(firing, ev.CriterionOutcomeName() ?? "Unknown", ev.CriterionExitCode(), ev.Summary);
+                var result = new FeedCheck(firing, ev.CriterionOutcomeName() ?? "Unknown", ev.CriterionExitCode(), ev.Summary)
+                {
+                    Reason = ev.CriterionReason()
+                };
                 switch (firing.FiredOn)
                 {
                     case CheckBoundary.Write:

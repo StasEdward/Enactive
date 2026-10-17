@@ -167,6 +167,15 @@ internal sealed record StepAttemptState(
     /// </summary>
     public bool ChangesProtected { get; init; }
 
+    /// <summary>
+    /// Which attempt at the step is running (1 first), set by the attempt loop. Recorded on the step's check results so a
+    /// card that shows a check twice - the step was sent back and gated again - can say which attempt each judged.
+    /// </summary>
+    public int Attempt { get; set; } = 1;
+
+    /// <summary>The attempt for a check result's record: null on the first, which is what every run without retries has.</summary>
+    public int? LaterAttempt => Attempt > 1 ? Attempt : null;
+
     /// <summary>The protected files as this step found them, before its first attempt (Orchestrator.ProtectedAtStepStart); null when none are protected.</summary>
     public IReadOnlyDictionary<string, string?>? ProtectedAtStart { get; init; }
 }

@@ -150,7 +150,7 @@ public sealed partial class Orchestrator
                         + string.Join(", ", removed.Select(r => $"{r.File.Path} {Gone(r)}")) + "): " + string.Join("; ", removed.Select(r => ProtectedAdvice(r.File.Path, r.File.CheckId)));
             await publish(scope.Criterion(new CriterionResult(ProtectedLabel(first, at), ProtectedCommand(first, removed.Select(r => r.File.Path)),
                 Required: true, CriterionOutcome.Failed, null, advice, CriterionOrigin.Declared)
-                { Check = new CheckFiring(first, CheckBoundary.Step) { Step = stepNumber } }));
+                { Check = new CheckFiring(first, CheckBoundary.Step) { Step = stepNumber, Attempt = step.LaterAttempt } }));
             verdict = new ProtectedVerdict(first, notes,
                 $"The engine's check '{first}' protects files a person said a run must not lose, and this step took them from where "
                 + "the run found them - not a reviewer's judgement:\n" + advice);

@@ -812,9 +812,15 @@ public static class WorkEventPayload
     /// other criterion's payload is byte for byte what it was, and an event recorded before reads as it did
     /// (<see cref="CheckIn"/> is null for it).
     /// </param>
+    /// <param name="reason">
+    /// For a declared check that did not run only: why, as the engine said it (CriterionResult.Detail) - "not run: needs
+    /// permission - ...", "staged: needs the applied files - ...". A value, so a reader does not take the sentence apart: a
+    /// command with a line break in it moved the reason the sentence put on its second line. Not kept for one that ran:
+    /// what it printed is in its detail file, and a copy in every event would only make the record bigger.
+    /// </param>
     public static string CriterionPayload(
         string name, string outcome, bool required, int? exitCode, string origin = "Declared",
-        Enactive.Core.Checks.CheckFiring? check = null)
+        Enactive.Core.Checks.CheckFiring? check = null, string? reason = null)
     {
         var values = new Dictionary<string, object?>
         {
@@ -833,11 +839,21 @@ public static class WorkEventPayload
             // "step" as every other event names it, so a step's card places the check on it.
             if (check.Step is { } step) values["step"] = step;
             if (check.Wave is { } wave) values["wave"] = wave;
+            if (check.Attempt is { } attempt) values["attempt"] = attempt;
             if (check.Deferred is { Length: > 0 } deferred) values["deferred"] = deferred;
-            if (check.DetailPath is { Length: > 0 } detail) values["detailPath"] = detail;
+            if (check.DetailPath is { Length: > 0 } detailPath) values["detailPath"] = detailPath;
+            if (reason is { Length: > 0 }) values["reason"] = reason;
         }
         return System.Text.Json.JsonSerializer.Serialize(values, PayloadJson);
     }
+
+    /// <summary>A criterion's result as its event's payload: the one way the engine publishes one (RunScope, write checks).</summary>
+    public static string CriterionPayload(Enactive.Core.Templates.CriterionResult result)
+        => CriterionPayload(result.Name, result.Outcome.ToString(), result.Required, result.ExitCode, result.Origin.ToString(),
+            result.Check, result.Check is null || result.Outcome != Enactive.Core.Templates.CriterionOutcome.Unknown ? null : result.Detail);
+
+    /// <summary>Why a declared check did not run (the payload's <c>reason</c>); null for any other, and for one recorded before it was kept.</summary>
+    public static string? CriterionReason(this WorkEvent ev) => StringField(ev, "reason");
 
     /// <summary>The declared check a criterion event is the result of (Plan Phase 3.3), or null when it is none.</summary>
     public static Enactive.Core.Checks.CheckFiring? CriterionCheck(this WorkEvent ev) => CheckIn(ev.PayloadJson);
@@ -868,7 +884,8 @@ public static class WorkEventPayload
 
             return new Enactive.Core.Checks.CheckFiring(id.GetString()!, boundary)
             {
-                Step = Number("step"), Wave = Number("wave"), Deferred = Text("deferred"), DetailPath = Text("detailPath")
+                Step = Number("step"), Wave = Number("wave"), Attempt = Number("attempt"), Deferred = Text("deferred"),
+                DetailPath = Text("detailPath")
             };
         }
         catch

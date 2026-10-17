@@ -1,17 +1,19 @@
 namespace Enactive.Engine.Tests;
 
+using Enactive.Agents;
 using Enactive.Application.Projections;
 using Enactive.Core.Checks;
 using Enactive.Core.Events;
-using Enactive.Core.Templates;
 using Enactive.Core.History;
+using Enactive.Core.Templates;
 using Xunit;
 
 /// <summary>
 /// The checks a person declared, on the cards that show a run (Plan Phase 3.5): the ones that fired for a step on its card,
 /// with PASS / FAIL / NOT RUN, why, and the file that holds the whole output - and the ones that fired at a wave, at the run's
 /// end or are owed at apply on the run's own list. One fold (RunFeed) and one projection (CheckLines) for the window and the
-/// service, live and reopened.
+/// service, live and reopened. Results are made as the engine makes them: a CriterionResult, its sentence
+/// (CriterionResult.Describe) and its payload (WorkEventPayload.CriterionPayload).
 /// </summary>
 public sealed class CheckLinesTests
 {
@@ -23,10 +25,13 @@ public sealed class CheckLinesTests
     private static WorkEvent Step(EventKind kind, int step, string summary, string? payload = null)
         => Ev(kind, summary, payload ?? $"{{\"step\":{step}}}");
 
-    /// <summary>A declared check's result, as the engine publishes it (RunScope.Criterion over CriterionResult.Describe).</summary>
-    private static WorkEvent Checked(CheckFiring firing, CriterionOutcome outcome, int? exit, string summary, bool required = true)
-        => Ev(EventKind.CriterionEvaluated, summary,
-            WorkEventPayload.CriterionPayload($"{firing.CheckId} (somewhere)", outcome.ToString(), required, exit, "Declared", firing));
+    /// <summary>A declared check's result as RunScope.Criterion publishes it: its sentence and its payload, from the result.</summary>
+    private static WorkEvent Checked(CheckFiring firing, CriterionOutcome outcome, int? exit, string command = "npm run lint",
+        string? detail = null, bool required = true, string? summary = null)
+    {
+        var result = new CriterionResult($"{firing.CheckId} (somewhere)", command, required, outcome, exit, detail) { Check = firing };
+        return Ev(EventKind.CriterionEvaluated, summary ?? result.Describe(), WorkEventPayload.CriterionPayload(result));
+    }
 
     private static readonly WorkEvent[] TwoSteps =
     [
@@ -47,7 +52,7 @@ public sealed class CheckLinesTests
     {
         var feed = Fold([.. TwoSteps,
             Checked(new CheckFiring("lint", CheckBoundary.Step) { Step = 1, DetailPath = ".enactive/checks/runs/x/step-1-lint.txt" },
-                CriterionOutcome.Failed, 2, "FAIL (exit 2) — lint (step 1): npm run lint\n    3 problems")]);
+                CriterionOutcome.Failed, 2, detail: "3 problems")]);
 
         var line = Assert.Single(CheckLines.Of(feed.Cards[0].Checks));
         Assert.Empty(feed.Cards[1].Checks);
@@ -64,13 +69,50 @@ public sealed class CheckLinesTests
     {
         var feed = Fold([.. TwoSteps,
             Checked(new CheckFiring("lint", CheckBoundary.Step) { Step = 1 }, CriterionOutcome.Unknown, null,
-                "NOT CHECKED — lint (step 1): npm run lint\n    not run: needs permission - the policy does not let the engine run "
-                + "the check command without asking")]);
+                detail: WorkspaceChecks.NeedsPermission + " - " + WorkspaceChecks.NotAsked)]);
 
         var line = Assert.Single(CheckLines.Of(feed.Cards[0].Checks));
         Assert.Equal((CheckVerdict.NotRun, "NOT RUN"), (line.Verdict, line.Word));
         Assert.Equal("not run: needs permission", line.Reason);
         Assert.Null(line.DetailPath);
+    }
+
+    /// <summary>
+    /// The reason is the payload's, not a line of the sentence: a command with a line break in it put the command's second
+    /// line where the reason was read from.
+    /// </summary>
+    [Fact]
+    public void A_command_with_a_line_break_does_not_move_the_reason()
+    {
+        var feed = Fold([.. TwoSteps,
+            Checked(new CheckFiring("lint", CheckBoundary.Step) { Step = 1 }, CriterionOutcome.Unknown, null, command: "npm run lint\n--fix",
+                detail: WorkspaceChecks.NeedsPermission + " - " + WorkspaceChecks.NotAsked)]);
+
+        Assert.Equal("not run: needs permission", Assert.Single(CheckLines.Of(feed.Cards[0].Checks)).Reason);
+    }
+
+    /// <summary>A result recorded before the payload kept its reason is read from its sentence, as it was then.</summary>
+    [Fact]
+    public void A_result_recorded_before_the_reason_was_kept_reads_it_from_the_sentence()
+    {
+        var firing = new CheckFiring("lint", CheckBoundary.Step) { Step = 1 };
+        var old = new CriterionResult("lint (step 1)", "npm run lint", true, CriterionOutcome.Unknown, null,
+            WorkspaceChecks.NeedsPermission + " - " + WorkspaceChecks.NotAsked);
+        var feed = Fold([.. TwoSteps,
+            Ev(EventKind.CriterionEvaluated, old.Describe(), WorkEventPayload.CriterionPayload(old.Name, "Unknown", true, null, "Declared", firing))]);
+
+        Assert.Equal("not run: needs permission", Assert.Single(CheckLines.Of(feed.Cards[0].Checks)).Reason);
+    }
+
+    /// <summary>A step sent back runs its checks again at its next gate: each result says which attempt it judged.</summary>
+    [Fact]
+    public void A_check_run_again_on_a_later_attempt_says_which()
+    {
+        var feed = Fold([.. TwoSteps,
+            Checked(new CheckFiring("lint", CheckBoundary.Step) { Step = 1 }, CriterionOutcome.Failed, 1),
+            Checked(new CheckFiring("lint", CheckBoundary.Step) { Step = 1, Attempt = 2 }, CriterionOutcome.Passed, 0)]);
+
+        Assert.Equal(["at the step's end", "at the step's end (attempt 2)"], CheckLines.Of(feed.Cards[0].Checks).Select(l => l.Where));
     }
 
     /// <summary>
@@ -81,9 +123,9 @@ public sealed class CheckLinesTests
     public void Write_checks_are_folded_to_the_latest_on_the_step_they_fired_in()
     {
         WorkEvent Wrote(CriterionOutcome outcome, int exit, string path)
-            => Checked(new CheckFiring("spell", CheckBoundary.Write) { Step = 1, DetailPath = path }, outcome, exit,
-                $"Write-time check 'spell': {(outcome == CriterionOutcome.Passed ? "PASS" : "FAIL")} (exit {exit}) - run after writing a.md.",
-                required: false);
+            => Checked(new CheckFiring("spell", CheckBoundary.Write) { Step = 1, DetailPath = path }, outcome, exit, "cspell .",
+                required: false,
+                summary: $"Write-time check 'spell': {(outcome == CriterionOutcome.Passed ? "PASS" : "FAIL")} (exit {exit}) - run after writing a.md.");
 
         var feed = Fold([.. TwoSteps,
             Wrote(CriterionOutcome.Failed, 1, "w1.txt"), Wrote(CriterionOutcome.Failed, 1, "w2.txt"), Wrote(CriterionOutcome.Passed, 0, "w3.txt")]);
@@ -98,9 +140,9 @@ public sealed class CheckLinesTests
     public void A_write_check_that_was_not_run_says_why()
     {
         var feed = Fold([.. TwoSteps,
-            Checked(new CheckFiring("spell", CheckBoundary.Write) { Step = 1 }, CriterionOutcome.Unknown, null,
-                "Write-time check 'spell': not run: needs permission - the policy does not allow this command without asking - "
-                + "run after writing a.md.", required: false)]);
+            Checked(new CheckFiring("spell", CheckBoundary.Write) { Step = 1 }, CriterionOutcome.Unknown, null, "cspell .",
+                detail: "not run: needs permission - the policy does not allow this command without asking", required: false,
+                summary: "Write-time check 'spell': NOT CHECKED - run after writing a.md.")]);
 
         Assert.Equal("not run: needs permission", Assert.Single(CheckLines.Of(feed.Cards[0].Checks)).Reason);
     }
@@ -110,21 +152,19 @@ public sealed class CheckLinesTests
     {
         var feed = Fold([.. TwoSteps,
             Checked(new CheckFiring("lint", CheckBoundary.Wave) { Wave = 2, Step = 1, Deferred = "steps ran side by side" },
-                CriterionOutcome.Failed, 1, "FAIL (exit 1) — lint (wave 2: steps 1 and 2): npm run lint"),
-            Checked(new CheckFiring("audit", CheckBoundary.Run), CriterionOutcome.Passed, 0, "PASS (exit 0) — audit (the run): npm audit"),
-            Checked(new CheckFiring("types", CheckBoundary.Run) { Deferred = "steps ran side by side" }, CriterionOutcome.Passed, 0,
-                "PASS (exit 0) — types (the run): tsc"),
-            Checked(new CheckFiring("tests", CheckBoundary.Apply) { Deferred = "staged: needs the applied files" },
-                CriterionOutcome.Unknown, null,
-                "NOT CHECKED — tests (staged, owed when its files are applied): npm test\n    staged: needs the applied files - the "
-                + "run's writes are proposals until a person applies them")]);
+                CriterionOutcome.Failed, 1),
+            Checked(new CheckFiring("audit", CheckBoundary.Run), CriterionOutcome.Passed, 0, "npm audit"),
+            Checked(new CheckFiring("types", CheckBoundary.Run) { Deferred = "steps ran side by side" }, CriterionOutcome.Passed, 0, "tsc"),
+            Checked(new CheckFiring("tests", CheckBoundary.Apply) { Deferred = WorkspaceChecks.Staged }, CriterionOutcome.Unknown, null,
+                "npm test", detail: WorkspaceChecks.StagedDetail)]);
 
         Assert.All(feed.Cards, c => Assert.Empty(c.Checks));
         var lines = CheckLines.Of(feed.RunChecks);
         Assert.Equal(["lint", "audit", "types", "tests"], lines.Select(l => l.CheckId));
-        Assert.Equal("FAIL lint — wave 2 — deferred to wave 2; exit 1", lines[0].Text);
+        // Where it was deferred to, said once: "wave 2 — deferred to wave 2" said it twice.
+        Assert.Equal("FAIL lint — deferred to wave 2 — exit 1", lines[0].Text);
         Assert.Equal("PASS audit — at the run's end", lines[1].Text);
-        Assert.Equal("PASS types — at the run's end — deferred to the run's end", lines[2].Text);
+        Assert.Equal("PASS types — deferred to the run's end", lines[2].Text);
         Assert.Equal("NOT RUN tests — on apply — staged: needs the applied files", lines[3].Text);
     }
 
@@ -135,7 +175,7 @@ public sealed class CheckLinesTests
         var feed = Fold([
             Ev(EventKind.Routed, "Quick action: tidy", WorkEventPayload.QuickActionPayload("tidy")),
             Ev(EventKind.ToolInvoked, "write_file", WorkEventPayload.ToolPayload("write_file")),
-            Checked(new CheckFiring("lint", CheckBoundary.Step), CriterionOutcome.Passed, 0, "PASS (exit 0) — lint (the step): lint")]);
+            Checked(new CheckFiring("lint", CheckBoundary.Step), CriterionOutcome.Passed, 0)]);
 
         Assert.Equal("lint", Assert.Single(Assert.Single(feed.Cards).Checks).Firing.CheckId);
     }
@@ -147,8 +187,8 @@ public sealed class CheckLinesTests
     [Fact]
     public void A_criterion_without_a_check_s_values_draws_as_before()
     {
-        var legacy = Ev(EventKind.CriterionEvaluated, "PASS (exit 0) — tests: dotnet test",
-            WorkEventPayload.CriterionPayload("tests", "Passed", true, 0));
+        var tests = new CriterionResult("tests", "dotnet test", true, CriterionOutcome.Passed, 0, null);
+        var legacy = Ev(EventKind.CriterionEvaluated, tests.Describe(), WorkEventPayload.CriterionPayload(tests));
         var without = Fold(TwoSteps);
         var with = Fold([.. TwoSteps, legacy]);
 
@@ -162,9 +202,9 @@ public sealed class CheckLinesTests
     public void A_run_reopened_shows_the_checks_it_showed_live()
     {
         WorkEvent[] events = [.. TwoSteps,
-            Checked(new CheckFiring("lint", CheckBoundary.Step) { Step = 1, DetailPath = "d.txt" }, CriterionOutcome.Passed, 0,
-                "PASS (exit 0) — lint (step 1): lint"),
-            Checked(new CheckFiring("audit", CheckBoundary.Run), CriterionOutcome.Passed, 0, "PASS (exit 0) — audit (the run): audit"),
+            Checked(new CheckFiring("lint", CheckBoundary.Step) { Step = 1, DetailPath = "d.txt" }, CriterionOutcome.Passed, 0),
+            Checked(new CheckFiring("audit", CheckBoundary.Run), CriterionOutcome.Unknown, null, "npm audit",
+                detail: WorkspaceChecks.NeedsPermission + " - " + WorkspaceChecks.NotAsked),
             Ev(EventKind.TaskCompleted, "done", WorkEventPayload.OutcomePayload(RunOutcomeKind.Completed))];
         var live = Fold(events);
         var record = new RunRecord(Run, Guid.NewGuid(), "docs", "qwen", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "Completed",
@@ -174,6 +214,6 @@ public sealed class CheckLinesTests
 
         Assert.Equal(CheckLines.Of(live.Cards[0].Checks), CheckLines.Of(reopened.Cards[0].Checks));
         Assert.Equal(CheckLines.Of(live.RunChecks), CheckLines.Of(reopened.RunChecks));
-        Assert.Single(reopened.RunChecks);
+        Assert.Equal("not run: needs permission", Assert.Single(CheckLines.Of(reopened.RunChecks)).Reason);
     }
 }

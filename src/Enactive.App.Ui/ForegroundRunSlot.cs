@@ -21,26 +21,13 @@ internal sealed class ForegroundRunSlot
         get { lock (_gate) return _pause; }
     }
 
-    private string? _workspace;
-
-    /// <summary>
-    /// The folder the foreground run works in, while one holds the slot; null otherwise. The checks list refuses to change
-    /// that folder's checks meanwhile: the run puts them back as they were when it started (Plan Phase 3.1, 3.5).
-    /// </summary>
-    public string? Workspace
-    {
-        get { lock (_gate) return _current is null ? null : _workspace; }
-    }
-
-    /// <param name="workspace">The folder the run works in, for <see cref="Workspace"/>.</param>
-    public CancellationTokenSource? TryStart(string? workspace = null)
+    public CancellationTokenSource? TryStart()
     {
         lock (_gate)
         {
             if (_closing || _current is not null) return null;
             _finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
             _pause = new RunPause();
-            _workspace = workspace;
             return _current = new CancellationTokenSource();
         }
     }
@@ -81,7 +68,6 @@ internal sealed class ForegroundRunSlot
             if (!ReferenceEquals(_current, owner)) return false;
             _current = null;
             _pause = null;
-            _workspace = null;
             _finished?.TrySetResult();
             return true;
         }

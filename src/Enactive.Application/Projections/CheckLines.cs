@@ -42,45 +42,52 @@ internal static class CheckLines
         };
         var word = verdict switch { CheckVerdict.Pass => "PASS", CheckVerdict.Fail => "FAIL", _ => "NOT RUN" };
 
-        var why = new List<string>();
-        if (Deferral(firing) is { } deferred)
-            why.Add(deferred);
-        if (verdict == CheckVerdict.NotRun)
-            why.Add(NotRunReason(check.Summary) ?? "it did not run");
-        else if (verdict == CheckVerdict.Fail && check.ExitCode is { } code)
-            why.Add($"exit {code}");
+        string? why = verdict switch
+        {
+            // The payload's reason; for a result recorded before it was kept, read from the sentence as it was then.
+            CheckVerdict.NotRun => (check.Reason is { Length: > 0 } reason ? Head(reason) : NotRunReason(check.Summary)) ?? "it did not run",
+            CheckVerdict.Fail when check.ExitCode is { } code => $"exit {code}",
+            _ => null
+        };
 
-        return new CheckLine(firing.CheckId, verdict, word, Where(check), why.Count == 0 ? null : string.Join("; ", why),
+        return new CheckLine(firing.CheckId, verdict, word, Where(check), why,
             // A check with no output kept no file; a link that opened nothing would be worse than none.
             string.IsNullOrWhiteSpace(firing.DetailPath) ? null : firing.DetailPath);
     }
 
-    private static string Where(FeedCheck check) => check.Firing.FiredOn switch
+    /// <summary>
+    /// Where it fired. One owed elsewhere says where it was put off to - said by where, not by the engine's longer reason,
+    /// which the timeline keeps - and in place of where it ran, which is the same place: "wave 2 — deferred to wave 2" said
+    /// it twice.
+    /// </summary>
+    private static string Where(FeedCheck check)
     {
-        CheckBoundary.Write => check.Times > 1 ? $"after a write (the latest of {check.Times})" : "after a write",
-        CheckBoundary.Step => "at the step's end",
-        CheckBoundary.Wave => check.Firing.Wave is { } wave ? $"wave {wave}" : "at a wave's end",
-        CheckBoundary.Apply => "on apply",
-        _ => "at the run's end"
-    };
+        var firing = check.Firing;
+        var deferred = firing.Deferred is { Length: > 0 };
+        return firing.FiredOn switch
+        {
+            CheckBoundary.Write => check.Times > 1 ? $"after a write (the latest of {check.Times})" : "after a write",
+            CheckBoundary.Step => firing.Attempt is { } attempt ? $"at the step's end (attempt {attempt})" : "at the step's end",
+            CheckBoundary.Wave => firing.Wave is { } wave ? (deferred ? $"deferred to wave {wave}" : $"wave {wave}")
+                : deferred ? "deferred to a wave's end" : "at a wave's end",
+            CheckBoundary.Apply => "on apply",
+            _ => deferred ? "deferred to the run's end" : "at the run's end"
+        };
+    }
 
-    /// <summary>Where a check owed elsewhere was run - said by where, not by the engine's longer reason, which the timeline keeps.</summary>
-    private static string? Deferral(CheckFiring firing)
-        => firing.Deferred is not { Length: > 0 } ? null
-            : firing.FiredOn switch
-            {
-                CheckBoundary.Wave => firing.Wave is { } wave ? $"deferred to wave {wave}" : "deferred to a wave's end",
-                CheckBoundary.Run => "deferred to the run's end",
-                // Owed at apply: the reason it was not run says it ("staged: needs the applied files").
-                _ => null
-            };
+    /// <summary>The head of the engine's reason, before the " - " it puts the longer explanation after.</summary>
+    private static string? Head(string said)
+    {
+        var head = said.IndexOf(" - ", StringComparison.Ordinal) is var dash and > 0 ? said[..dash] : said;
+        head = head.Split('\n')[0].Trim().TrimEnd('.');
+        return head.Length == 0 ? null : head.Length <= ReasonChars ? head : head[..ReasonChars] + "…";
+    }
 
     /// <summary>
-    /// Why a check did not run, as the engine said it: the head of its detail - "not run: needs permission", "staged: needs the
-    /// applied files", "not run to its end: ..." - before the " - " the engine puts the longer explanation after. The payload
-    /// has no reason of its own, so it is read from the sentence: a step's or the run's check gives it on the line under its
-    /// verdict (CriterionResult.Describe), a write check after its id ("Write-time check 'x': &lt;why&gt; - run after ...").
-    /// Null when the sentence names none - a write check that said only "NOT CHECKED".
+    /// Why a check did not run, for a result recorded before its payload kept the reason: read from the sentence, where a
+    /// step's or the run's check gave it on the line under its verdict (CriterionResult.Describe) and a write check after its
+    /// id ("Write-time check 'x': &lt;why&gt; - run after ..."). Only for those: a command with a line break in it moves the
+    /// line. Null when the sentence names none - a write check that said only "NOT CHECKED".
     /// </summary>
     internal static string? NotRunReason(string summary)
     {
@@ -93,11 +100,7 @@ internal static class CheckLines
         else
             return null;
 
-        var head = said.IndexOf(" - ", StringComparison.Ordinal) is var dash and > 0 ? said[..dash] : said;
-        head = head.Split('\n')[0].Trim().TrimEnd('.');
         // A verdict word, not a reason.
-        if (head.Length == 0 || head.StartsWith("NOT CHECKED", StringComparison.Ordinal))
-            return null;
-        return head.Length <= ReasonChars ? head : head[..ReasonChars] + "…";
+        return Head(said) is { } head && !head.StartsWith("NOT CHECKED", StringComparison.Ordinal) ? head : null;
     }
 }

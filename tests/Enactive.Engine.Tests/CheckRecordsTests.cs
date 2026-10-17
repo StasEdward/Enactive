@@ -7,6 +7,7 @@ using Enactive.Core.Checks;
 using Enactive.Core.Events;
 using Enactive.Core.History;
 using Enactive.Core.Permissions;
+using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Remote.Host;
 using Enactive.Workspace;
@@ -96,6 +97,30 @@ public sealed class CheckRecordsTests
         Assert.Equal(2, paths.Length);
         Assert.Equal(2, paths.Distinct().Count());
         Assert.All(paths, p => Assert.Contains("RUN-OUTPUT", fx.Read(p), StringComparison.Ordinal));
+        // Which attempt each judged, so the card can tell the two apart: none said on the first, 2 on the second.
+        var attempts = events.Where(e => e.Kind == EventKind.CriterionEvaluated && e.Summary.Contains("lint (step 1)", StringComparison.Ordinal))
+            .Select(e => e.CriterionCheck()!.Attempt).ToArray();
+        Assert.Equal([null, 2], attempts);
+    }
+
+    /// <summary>
+    /// A check that did not run carries why as a value (the payload's reason), not only in its sentence: a reader that took the
+    /// sentence apart lost the reason to a command with a line break in it. One that ran carries none - its output is in its file.
+    /// </summary>
+    [Fact]
+    public void A_check_that_did_not_run_says_why_in_its_payload()
+    {
+        var notRun = new CriterionResult("lint (step 1)", "npm run lint\n--fix", true, CriterionOutcome.Unknown, null,
+            WorkspaceChecks.NeedsPermission + " - " + WorkspaceChecks.NotAsked)
+        { Check = new CheckFiring("lint", CheckBoundary.Step) { Step = 1 } };
+        var ran = notRun with { Outcome = CriterionOutcome.Failed, ExitCode = 1, Detail = "3 problems" };
+        var other = new CriterionResult("tests", "dotnet test", true, CriterionOutcome.Unknown, null, "the tool is not there");
+
+        using var said = JsonDocument.Parse(WorkEventPayload.CriterionPayload(notRun));
+        Assert.Equal(WorkspaceChecks.NeedsPermission + " - " + WorkspaceChecks.NotAsked, said.RootElement.GetProperty("reason").GetString());
+        Assert.DoesNotContain("\"reason\"", WorkEventPayload.CriterionPayload(ran), StringComparison.Ordinal);
+        // Any other criterion's payload is what it was.
+        Assert.Equal(WorkEventPayload.CriterionPayload("tests", "Unknown", true, null, "Declared"), WorkEventPayload.CriterionPayload(other));
     }
 
     /// <summary>A check owed at a wave's end says it fired on the wave, which wave, and why it waited for it.</summary>

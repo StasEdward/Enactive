@@ -4945,7 +4945,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
             WorkEvent WriteCheckEvent(string line, CriterionResult r)
                 => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.CriterionEvaluated, line,
-                       WorkEventPayload.CriterionPayload(r.Name, r.Outcome.ToString(), r.Required, r.ExitCode, r.Origin.ToString(), r.Check));
+                       WorkEventPayload.CriterionPayload(r));
 
             // A step that said it cannot go on ends blocked now that its turn's calls are answered (StepEnding).
             if (admission.ReportedBlocked is { } reportedBlocked)

@@ -183,7 +183,7 @@ public sealed partial class Orchestrator
         foreach (var check in now)
         {
             var result = await RunDeclaredCheckAsync(check, at, scope, context,
-                new CheckFiring(check.Id, CheckBoundary.Step) { Step = stepNumber }, ct);
+                new CheckFiring(check.Id, CheckBoundary.Step) { Step = stepNumber, Attempt = step.LaterAttempt }, ct);
             ran.Add((check, result));
             await publish(scope.Criterion(result));
         }
