@@ -175,7 +175,19 @@ public sealed record RunRecord(
     /// TODAY answers the wrong question. Parse it with <c>ResolvedTaskSpec.Parse</c>, which gives
     /// values back rather than leaving anyone to pick at the text.</para>
     /// </summary>
-    string? Spec = null) : IRunHeader;
+    string? Spec = null) : IRunHeader
+{
+    /// <summary>
+    /// The declared checks the run was judged by (Plan Phase 3.1), whole - as it was composed with them, or, for a
+    /// resumed run, as its checkpoint carried them. Kept with the run because the manifests are files anybody can edit
+    /// or delete, and a past run read against today's would be judged by checks it never had. Null for runs recorded
+    /// before check manifests, and for runs composed without them.
+    ///
+    /// <para>An init property rather than a parameter, as <see cref="RunUsage.ByModel"/> is: every
+    /// <c>new RunRecord(...)</c> already written still compiles and every row already stored still loads.</para>
+    /// </summary>
+    public Enactive.Core.Checks.CheckSnapshot? CheckSnapshot { get; init; }
+}
 
 /// <summary>
 /// A run without its EVENTS: everything a list, a timeline or a grouping needs, and nothing that

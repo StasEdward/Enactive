@@ -20,6 +20,18 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     /// <summary>What the workspace's build reported before any work. See BuildRegression.</summary>
     public IReadOnlyList<BuildBaseline> Builds { get; init; } = [];
 
+    /// <summary>
+    /// The declared checks this run is judged by (Plan Phase 3.1): the composed snapshot, or a resumed run's checkpoint's.
+    /// Null when there are none. What every checkpoint the run writes carries.
+    /// </summary>
+    public Enactive.Core.Checks.CheckSnapshot? Checks { get; init; }
+
+    /// <summary>
+    /// The checks owed and not yet run (Plan Phase 3.2) - carried over from a resumed checkpoint, added to where a check
+    /// is deferred. Written into every checkpoint, so a pause cannot lose one. Guarded by its own lock.
+    /// </summary>
+    public List<Enactive.Core.Checks.PendingCheck> PendingChecks { get; init; } = [];
+
     /// <summary>What the request says may be changed, held against each step's first change to a file the run found. Null when it says nothing.</summary>
     public ChangeLimitGuard? ChangeLimits { get; init; }
 

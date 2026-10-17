@@ -3,6 +3,7 @@ namespace Enactive.Workspace;
 using System.Globalization;
 using System.Text.Json;
 using MySqlConnector;
+using Enactive.Core.Checks;
 using Enactive.Core.History;
 
 /// <summary>
@@ -40,14 +41,14 @@ public sealed class MySqlRunStore : IRunStore
         command.CommandText =
             """
             INSERT INTO runs
-              (run_id, workspace_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json)
+              (run_id, workspace_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json, checks_json)
             VALUES
-              (@run_id, @workspace_id, @task_id, @title, @model, @started_at, @finished_at, @status, @events, @artifacts, @decisions, @settings, @usage, @spec)
+              (@run_id, @workspace_id, @task_id, @title, @model, @started_at, @finished_at, @status, @events, @artifacts, @decisions, @settings, @usage, @spec, @checks)
             ON DUPLICATE KEY UPDATE
               workspace_id=@workspace_id, task_id=@task_id, title=@title, model=@model,
               started_at=@started_at, finished_at=@finished_at,
               status=@status, events_json=@events, artifacts_json=@artifacts, decisions_json=@decisions,
-              settings_json=@settings, usage_json=@usage, spec_json=@spec;
+              settings_json=@settings, usage_json=@usage, spec_json=@spec, checks_json=@checks;
             """;
         command.Parameters.AddWithValue("@run_id", record.RunId.ToString());
         command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
@@ -60,6 +61,9 @@ public sealed class MySqlRunStore : IRunStore
         // Verbatim, not re-serialized: the snapshot's value is that it is byte-for-byte what the run
         // started from, so two runs can be compared by comparing their specifications.
         command.Parameters.AddWithValue("@spec", (object?)record.Spec ?? DBNull.Value);
+        // The checks the run was judged by, whole (Plan Phase 3.1) - see SqliteRunStore.
+        command.Parameters.AddWithValue("@checks",
+            record.CheckSnapshot is null ? DBNull.Value : JsonSerializer.Serialize(record.CheckSnapshot, Json));
         command.Parameters.AddWithValue("@events", JsonSerializer.Serialize(record.Events, Json));
         command.Parameters.AddWithValue("@artifacts", JsonSerializer.Serialize(record.Artifacts, Json));
         command.Parameters.AddWithValue("@decisions", JsonSerializer.Serialize(record.Decisions, Json));
@@ -137,7 +141,7 @@ public sealed class MySqlRunStore : IRunStore
     /// expects them. One string, so a query and its reader cannot drift apart.</summary>
     private const string RecordColumns =
         "run_id, task_id, title, model, started_at, finished_at, status, "
-        + "events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json";
+        + "events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json, checks_json";
 
     /// <summary>One run, whole - what opening a row costs, paid only by the row that was opened.</summary>
     public async Task<RunRecord?> LoadAsync(Guid runId, CancellationToken ct)
@@ -192,7 +196,10 @@ public sealed class MySqlRunStore : IRunStore
             JsonSerializer.Deserialize<List<string>>(reader.GetString(9), Json) ?? new(),
             reader.IsDBNull(10) ? null : JsonSerializer.Deserialize<RunSettings>(reader.GetString(10), Json),
             reader.IsDBNull(11) ? null : JsonSerializer.Deserialize<RunUsage>(reader.GetString(11), Json),
-            reader.IsDBNull(12) ? null : reader.GetString(12));
+            reader.IsDBNull(12) ? null : reader.GetString(12))
+        {
+            CheckSnapshot = reader.IsDBNull(13) ? null : JsonSerializer.Deserialize<CheckSnapshot>(reader.GetString(13), Json)
+        };
 
     private async Task EnsureSchemaAsync(CancellationToken ct)
     {
@@ -225,7 +232,8 @@ public sealed class MySqlRunStore : IRunStore
                   decisions_json LONGTEXT,
                   settings_json  LONGTEXT,
                   usage_json     LONGTEXT,
-                  spec_json      LONGTEXT
+                  spec_json      LONGTEXT,
+                  checks_json    LONGTEXT
                 );
                 """;
             await command.ExecuteNonQueryAsync(ct);
@@ -234,6 +242,7 @@ public sealed class MySqlRunStore : IRunStore
             await MySqlColumns.AddIfMissingAsync(connection, "runs", "settings_json", "LONGTEXT", ct);
             await MySqlColumns.AddIfMissingAsync(connection, "runs", "usage_json", "LONGTEXT", ct);
             await MySqlColumns.AddIfMissingAsync(connection, "runs", "spec_json", "LONGTEXT", ct);
+            await MySqlColumns.AddIfMissingAsync(connection, "runs", "checks_json", "LONGTEXT", ct);
 
             // Rows written before this column existed keep workspace_id NULL and are therefore not
             // listed by any workspace. They are NOT backfilled to whichever folder happens to be open:

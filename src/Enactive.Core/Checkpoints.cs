@@ -193,6 +193,20 @@ public sealed record RunCheckpoint(
     /// pausing existed. Resumed through the same path as any other (<see cref="IsResumable"/>).
     /// </summary>
     public bool Paused { get; init; }
+
+    /// <summary>
+    /// The declared checks the run was composed with (Plan Phase 3.1), whole. A resumed run is judged by THESE, not by
+    /// the manifests as they are when it is resumed: they may have been edited or deleted since, and a run carried on
+    /// under checks it was never given is not the run that was started. Null: a checkpoint from before check manifests,
+    /// whose run had none - its resume has none either.
+    /// </summary>
+    public Enactive.Core.Checks.CheckSnapshot? CheckSnapshot { get; init; }
+
+    /// <summary>
+    /// The checks the run owes and has not run yet - deferred to a wave or to apply (Plan Phase 3.2) - so a pause or an
+    /// interruption cannot lose one: a deferred blocking check is not a pass. Null when none is owed.
+    /// </summary>
+    public IReadOnlyList<Enactive.Core.Checks.PendingCheck>? PendingChecks { get; init; }
 }
 
 /// <summary>

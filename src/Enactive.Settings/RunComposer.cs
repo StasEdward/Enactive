@@ -119,6 +119,12 @@ public sealed record ComposedRun(
             : Engine.ResumeRunAsync(Resume, Intent.Context, ct);
 
     public ValueTask DisposeAsync() => Resources.DisposeAsync();
+
+    /// <summary>
+    /// The declared checks this run is judged by (Plan Phase 3.1), as the engine was given them: read from the manifests
+    /// when it was composed, or a resumed run's checkpoint's. Null when there are none.
+    /// </summary>
+    public Enactive.Core.Checks.CheckSnapshot? Checks { get; init; }
 }
 
 /// <summary>
@@ -257,6 +263,13 @@ public static class RunComposer
             if (request.Source == IntentSource.Remote)
                 policy = RemotePolicy.ForRemoteRun(policy);
 
+            // The declared checks, read ONCE, here (Plan Phase 3.1): the run uses this snapshot and reads no manifest
+            // itself, so a manifest edited or deleted while it runs cannot change what judges it. A resumed run is judged
+            // by the checks it was started with, from its checkpoint - for the same reason it keeps its permissions.
+            var checks = request.Resume is { } resuming
+                ? resuming.CheckSnapshot
+                : new CheckStore(workspace.RootPath, engine.GlobalChecks, KnownEcosystems.All).Snapshot();
+
             var orchestrator = new Orchestrator(new RunEngineResources
             {
                 Providers = engine.Providers,
@@ -275,6 +288,7 @@ public static class RunComposer
                 // A new kind is a new IEcosystem here; nothing in the orchestrator changes.
                 Ecosystems = KnownEcosystems.All,
                 SuccessCriteria = spec?.SuccessCriteria ?? [],
+                Checks = checks,
                 Limits = spec?.Limits ?? ExecutionLimits.None,
                 Checkpoints = new JsonCheckpointStore(workspace),
                 Settings = runSettings,
@@ -292,13 +306,16 @@ public static class RunComposer
                     orchestrator,
                     // The specification is recorded WITH the run, so reading it back later shows the
                     // template as it was rather than as it has since been edited.
-                    new RunRecorder(RunStoreFactory.Create(workspace), memory, workspace.Id, runSettings, spec?.Snapshot()),
+                    new RunRecorder(RunStoreFactory.Create(workspace), memory, workspace.Id, runSettings, spec?.Snapshot(), checks),
                     engine.Log),
                 new Intent(request.Resume?.TaskId ?? request.TaskId ?? Guid.NewGuid(), request.Prompt, request.Source,
                     context, DateTimeOffset.UtcNow, workerId),
                 artifacts,
                 request.Resume,
-                new Holding(tools, lease));
+                new Holding(tools, lease))
+            {
+                Checks = checks
+            };
         }
         catch
         {

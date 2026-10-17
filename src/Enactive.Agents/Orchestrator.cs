@@ -215,6 +215,9 @@ public sealed partial class Orchestrator : IOrchestrator
     /// <summary>The host's "pause after this step" (Plan Phase 4.2); null for a run nobody can pause.</summary>
     private readonly RunPause? _pause;
 
+    /// <summary>The declared checks a NEW run is judged by (RunEngineResources.Checks); a resumed one uses its checkpoint's.</summary>
+    private readonly Enactive.Core.Checks.CheckSnapshot? _checks;
+
     /// <summary>
     /// An orchestrator for one run: what the run is given, and the engine's switches - two values, both said.
     /// The switches used to default to EngineOptions.Default when left out, so a host could forget the
@@ -230,6 +233,7 @@ public sealed partial class Orchestrator : IOrchestrator
         _settings = resources.Settings;
         _unattended = resources.Unattended;
         _pause = resources.Pause;
+        _checks = resources.Checks;
         _successCriteria = resources.SuccessCriteria;
         _limits = resources.Limits;
         _workspaceChanges = resources.WorkspaceChanges;
@@ -1004,7 +1008,16 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
-        var session = new RunSession(scope, messages) { Builds = builds, ChangeLimits = ChangeLimitsFor(intent, models, scope) };
+        var session = new RunSession(scope, messages)
+        {
+            Builds = builds, ChangeLimits = ChangeLimitsFor(intent, models, scope),
+            // A resumed run is judged by the checks it was STARTED with, as its checkpoint carried them - never by the
+            // manifests as they are now, which may have been edited or deleted since (Plan Phase 3.1). The checkpoint is
+            // the precedent's place too (PlanContractVersion, CoverageObligations): resume does not compose again. A
+            // checkpoint from before check manifests had none, and its resume has none.
+            Checks = resume is null ? _checks : resume.CheckSnapshot,
+            PendingChecks = resume?.PendingChecks?.ToList() ?? []
+        };
 
         // A step the interrupted run was in the middle of is done again from its beginning - so what it had already changed
         // is put back first, as it was before that step. Left in place, it was the ground the step began again on: on
@@ -1520,7 +1533,10 @@ public sealed partial class Orchestrator : IOrchestrator
                     Waves = waves?.ToCheckpoint(waveBeforeKept),
                     // The contract it was planned under, if any (planContractVersion): a plan from before it is not one after.
                     PlanContractVersion = planContractVersion,
-                    CoverageObligations = plan.CoverageObligations.Count > 0 ? plan.CoverageObligations : null };
+                    CoverageObligations = plan.CoverageObligations.Count > 0 ? plan.CoverageObligations : null,
+                    // The checks whole, and what is still owed of them (Plan Phase 3.1): a resume reads both from here.
+                    CheckSnapshot = session.Checks,
+                    PendingChecks = PendingChecksNow(session) };
         }
 
         // Whether a step boundary of this task is in the store to carry on from - this run's own, or on a resume the one
@@ -2722,6 +2738,13 @@ public sealed partial class Orchestrator : IOrchestrator
            + "and the run cannot end as completed until each item is shown covered. \"after\":[0] says the step only waits for "
            + "that step: an order, not data, and it is handed none of that step's results. Steps are numbered from 1 in this "
            + "message and from 0 in the plan.";
+
+    /// <summary>The checks still owed, for a checkpoint - null rather than empty when none is, as the checkpoint's other lists are.</summary>
+    private static IReadOnlyList<Enactive.Core.Checks.PendingCheck>? PendingChecksNow(RunSession session)
+    {
+        lock (session.PendingChecks)
+            return session.PendingChecks.Count > 0 ? session.PendingChecks.ToArray() : null;
+    }
 
     /// <summary>The plan a checkpoint is carrying, rebuilt with the step ids it was written with.</summary>
     private static PlanResult PlanOf(RunCheckpoint checkpoint)

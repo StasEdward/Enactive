@@ -3,6 +3,7 @@ namespace Enactive.Workspace;
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Enactive.Core.Checks;
 using Enactive.Core.Context;
 using Enactive.Core.History;
 
@@ -37,9 +38,9 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText =
             """
             INSERT OR REPLACE INTO runs
-              (run_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json)
+              (run_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json, checks_json)
             VALUES
-              ($run_id, $task_id, $title, $model, $started_at, $finished_at, $status, $events, $artifacts, $decisions, $settings, $usage, $spec);
+              ($run_id, $task_id, $title, $model, $started_at, $finished_at, $status, $events, $artifacts, $decisions, $settings, $usage, $spec, $checks);
             """;
         command.Parameters.AddWithValue("$run_id", record.RunId.ToString());
         command.Parameters.AddWithValue("$task_id", record.TaskId.ToString());
@@ -58,6 +59,10 @@ public sealed class SqliteRunStore : IRunStore
         // Stored verbatim, not re-serialized: the snapshot's whole value is that it is byte-for-byte
         // what the run started from, so two runs can be compared by comparing their specifications.
         command.Parameters.AddWithValue("$spec", (object?)record.Spec ?? DBNull.Value);
+        // The checks the run was judged by, whole (Plan Phase 3.1) - a column of its own, so whatever reads them later (a
+        // "Run checks now", Plan Phase 3.2) does not have to read the run's whole transcript to find them.
+        command.Parameters.AddWithValue("$checks",
+            record.CheckSnapshot is null ? DBNull.Value : JsonSerializer.Serialize(record.CheckSnapshot, Json));
 
         await command.ExecuteNonQueryAsync(ct);
     }
@@ -120,7 +125,7 @@ public sealed class SqliteRunStore : IRunStore
     /// expects them. One string, so a query and its reader cannot drift apart.</summary>
     private const string RecordColumns =
         "run_id, task_id, title, model, started_at, finished_at, status, "
-        + "events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json";
+        + "events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json, checks_json";
 
     /// <summary>One run, whole - what opening a row costs, paid only by the row that was opened.</summary>
     public async Task<RunRecord?> LoadAsync(Guid runId, CancellationToken ct)
@@ -171,7 +176,10 @@ public sealed class SqliteRunStore : IRunStore
             JsonSerializer.Deserialize<List<string>>(reader.GetString(9), Json) ?? new(),
             reader.IsDBNull(10) ? null : JsonSerializer.Deserialize<RunSettings>(reader.GetString(10), Json),
             reader.IsDBNull(11) ? null : JsonSerializer.Deserialize<RunUsage>(reader.GetString(11), Json),
-            reader.IsDBNull(12) ? null : reader.GetString(12));
+            reader.IsDBNull(12) ? null : reader.GetString(12))
+        {
+            CheckSnapshot = reader.IsDBNull(13) ? null : JsonSerializer.Deserialize<CheckSnapshot>(reader.GetString(13), Json)
+        };
 
     private async Task EnsureSchemaAsync(CancellationToken ct)
     {
@@ -203,7 +211,8 @@ public sealed class SqliteRunStore : IRunStore
                   decisions_json TEXT,
                   settings_json  TEXT,
                   usage_json     TEXT,
-                  spec_json      TEXT
+                  spec_json      TEXT,
+                  checks_json    TEXT
                 );
                 """;
             await command.ExecuteNonQueryAsync(ct);
@@ -212,6 +221,7 @@ public sealed class SqliteRunStore : IRunStore
             await SqliteColumns.AddIfMissingAsync(connection, "runs", "settings_json", "TEXT", ct);
             await SqliteColumns.AddIfMissingAsync(connection, "runs", "usage_json", "TEXT", ct);
             await SqliteColumns.AddIfMissingAsync(connection, "runs", "spec_json", "TEXT", ct);
+            await SqliteColumns.AddIfMissingAsync(connection, "runs", "checks_json", "TEXT", ct);
 
             _initialized = true;
         }

@@ -70,6 +70,13 @@ public sealed record RunEngineResources
     /// <summary>The checks that decide whether the run did what was asked - a template's; none for a typed request.</summary>
     public IReadOnlyList<SuccessCriterionDefinition> SuccessCriteria { get; init; } = [];
 
+    /// <summary>
+    /// The declared checks this run is judged by (Plan Phase 3.1), resolved once when it was composed (CheckStore) - the
+    /// run reads no manifest itself, so a manifest edited or deleted while it runs changes nothing about it. A resumed run
+    /// uses its checkpoint's instead, whatever this says. Null: none, which is every run before check manifests.
+    /// </summary>
+    public Enactive.Core.Checks.CheckSnapshot? Checks { get; init; }
+
     /// <summary>How far the run may go - a template's; none for a typed request.</summary>
     public ExecutionLimits Limits { get; init; } = ExecutionLimits.None;
 

@@ -399,6 +399,9 @@ public sealed class EngineFixture : IDisposable
     /// <summary>The host's "pause after this step" for the runs built here (Plan Phase 4.2); none unless a test is about it.</summary>
     public RunPause? Pause { get; set; }
 
+    /// <summary>The declared checks the runs built here are composed with (Plan Phase 3.1); none unless a test is about them.</summary>
+    public Enactive.Core.Checks.CheckSnapshot? Checks { get; set; }
+
     /// <summary>Where wave captures are kept: beside this fixture's folder, never in the machine's own store.</summary>
     public string WaveStore => Root + "-waves";
 
@@ -587,7 +590,8 @@ public sealed class EngineFixture : IDisposable
             Limits = limits ?? ExecutionLimits.None,
             Checkpoints = checkpoints,
             Settings = settings,
-            Pause = Pause
+            Pause = Pause,
+            Checks = Checks
         },
         EngineOptions.Default with
         {
