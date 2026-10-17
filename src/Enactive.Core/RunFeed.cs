@@ -1,6 +1,7 @@
 namespace Enactive.Core.History;
 
 using System.Text;
+using Enactive.Core.Checks;
 using Enactive.Core.Events;
 
 /// <summary>Where a step card stands.</summary>
@@ -20,6 +21,15 @@ public sealed class FeedEntry(FeedEntryKind kind, string label)
 }
 
 /// <summary>
+/// One result of a check a person declared (Plan Phase 3.5), as its criterion event says it in values: which check, where
+/// it fired, how it came out, and the event's sentence - the reason a check that did not run gives is in it, and nowhere
+/// else. Words for it are the hosts' projection's (Enactive.Application CheckLines), one for the window and the service.
+/// </summary>
+/// <param name="Outcome">The criterion's outcome by name: Passed, Failed or Unknown.</param>
+/// <param name="Times">How many results this one stands for: a write check is folded to its latest.</param>
+public sealed record FeedCheck(CheckFiring Firing, string Outcome, int? ExitCode, string Summary, int Times = 1);
+
+/// <summary>
 /// One step card as the events have made it: what the step is, where it stands, what it is doing now and
 /// what it has done. A view draws it; nothing here knows how.
 /// </summary>
@@ -27,6 +37,7 @@ public sealed class FeedCard
 {
     private readonly StringBuilder _noteBuffer = new();
     private readonly List<FeedEntry> _entries = new();
+    private readonly List<FeedCheck> _checks = new();
     private int _tools, _commands, _files, _notes, _refused;
 
     internal FeedCard(string title, FeedCard? parent = null)
@@ -48,6 +59,34 @@ public sealed class FeedCard
     public string Activity { get; private set; } = "Waiting…";
 
     public IReadOnlyList<FeedEntry> Entries => _entries;
+
+    /// <summary>
+    /// The declared checks that fired for this step - after its writes and at its end - in the order they first came. Kept
+    /// apart from <see cref="Entries"/>: they are not something the step did, and its tally does not count them.
+    /// </summary>
+    public IReadOnlyList<FeedCheck> Checks => _checks;
+
+    internal void AddCheck(FeedCheck check)
+    {
+        _checks.Add(check);
+        Version++;
+    }
+
+    /// <summary>
+    /// A write check's latest result in place of its earlier one on this card. A write check runs after every turn that
+    /// writes what it covers: listed whole, an edit loop of thirty turns put thirty lines about one linter on the card. And
+    /// its detail file is written over each turn, so only the latest result's link opens what that result said.
+    /// </summary>
+    internal void FoldWriteCheck(FeedCheck check)
+    {
+        var at = _checks.FindIndex(c => c.Firing.FiredOn == CheckBoundary.Write
+                                        && string.Equals(c.Firing.CheckId, check.Firing.CheckId, StringComparison.OrdinalIgnoreCase));
+        if (at < 0)
+            _checks.Add(check);
+        else
+            _checks[at] = check with { Times = _checks[at].Times + 1 };
+        Version++;
+    }
 
     /// <summary>What the card holds, in words - the line a person reads to decide whether to open it.</summary>
     public string Tally => new StepTally(_tools, _commands, _files, _refused, _notes).Words();
@@ -235,6 +274,16 @@ public sealed class RunFeed
     /// <summary>The cards in the order they are shown.</summary>
     public IReadOnlyList<FeedCard> Cards => _shown;
 
+    private readonly List<FeedCheck> _runChecks = new();
+
+    /// <summary>
+    /// The declared checks that fired for the run as a whole (Plan Phase 3.5): at a wave's end, at the run's end, and those
+    /// owed when a staged run's files are applied - in the order they came. Not on a step's card: a check deferred to a
+    /// wave judges what the wave's steps made together, and putting its failure on one of them blamed a step it may not be
+    /// about.
+    /// </summary>
+    public IReadOnlyList<FeedCheck> RunChecks => _runChecks;
+
     /// <summary>
     /// Folds one event in. Returns the cards it added, each with the position it was shown at - in the order a
     /// view must insert them to show what this feed shows.
@@ -369,6 +418,26 @@ public sealed class RunFeed
             case EventKind.ContextTrimmed:
             case EventKind.ArtifactReverted:
                 (CardFor(step) ?? EnsureCurrent(added)).AddNote(ev.Summary);
+                break;
+
+            // A check a person declared (Plan Phase 3.5): on the card of the step it fired for, or on the run's own list. A
+            // criterion without a check's values - the engine's own, a template's, or one recorded before checks had them -
+            // is not drawn on a card, as it never was.
+            case EventKind.CriterionEvaluated when ev.CriterionCheck() is { } firing:
+                var result = new FeedCheck(firing, ev.CriterionOutcomeName() ?? "Unknown", ev.CriterionExitCode(), ev.Summary);
+                switch (firing.FiredOn)
+                {
+                    case CheckBoundary.Write:
+                        (CardFor(firing.Step ?? step) ?? EnsureCurrent(added)).FoldWriteCheck(result);
+                        break;
+                    // A quick action's step check has no step number: it is its one card's.
+                    case CheckBoundary.Step:
+                        (CardFor(firing.Step ?? step) ?? EnsureCurrent(added)).AddCheck(result);
+                        break;
+                    default:
+                        _runChecks.Add(result);
+                        break;
+                }
                 break;
 
             // What the engine DECIDED, from the typed outcome rather than from which of the two kinds arrived.

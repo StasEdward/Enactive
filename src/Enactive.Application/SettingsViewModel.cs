@@ -201,6 +201,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
             OnPropertyChanged(nameof(IsAiPhases));
             OnPropertyChanged(nameof(IsMcp));
             OnPropertyChanged(nameof(IsTemplates));
+            OnPropertyChanged(nameof(IsChecks));
             OnPropertyChanged(nameof(IsRemote));
             OnPropertyChanged(nameof(IsWritableRoots));
             OnPropertyChanged(nameof(IsSmtp));

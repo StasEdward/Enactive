@@ -885,6 +885,26 @@ public static class WorkEventPayload
     public static string? CriterionName(this WorkEvent ev)
         => StringField(ev, "criterion");
 
+    /// <summary>The exit code a criterion's command gave, or null when it gave none (it did not run) or the event has none.</summary>
+    public static int? CriterionExitCode(this WorkEvent ev)
+    {
+        if (string.IsNullOrEmpty(ev.PayloadJson))
+            return null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(ev.PayloadJson);
+            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("exitCode", out var value)
+                   && value.ValueKind == System.Text.Json.JsonValueKind.Number && value.TryGetInt32(out var code)
+                ? code
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static string? StringField(WorkEvent ev, string field)
     {
         if (string.IsNullOrEmpty(ev.PayloadJson))
