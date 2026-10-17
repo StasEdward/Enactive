@@ -25,18 +25,24 @@ public sealed record CheckManifestRestore(
     /// <summary>
     /// The sentence the run says it with: which files, whether they were put back, and why. Null when nothing changed.
     /// </summary>
-    public string? Describe()
+    /// <param name="who">Who changed them - "This run", or "These checks" for a press of "Run checks now".</param>
+    /// <param name="since">When the baseline was taken - "the run started".</param>
+    public string? Describe(string who = "This run", string since = "the run started")
     {
+        // A failure with no change found is still said: the restore stopped before it could look (a link it could not
+        // remove, an error it did not expect) - silent, the next run could be judged by what this one wrote.
         if (Changes.Count == 0)
-            return null;
+            return Failures.Count == 0 ? null
+                : $"The workspace's check manifests in {CheckFolder} may not be as they were when {since}: "
+                  + string.Join("; ", Failures) + ". A run may not change the checks that judge runs - check them by hand.";
 
         var named = Named(Changes);
         if (!Restored)
-            return $"This run changed the workspace's check manifests in {CheckFolder} ({named}). They were NOT restored: "
+            return $"{who} changed the workspace's check manifests in {CheckFolder} ({named}). They were NOT restored: "
                    + string.Join("; ", Failures) + ". A run may not change the checks that judge runs - check these by hand.";
 
-        var said = $"This run changed the workspace's check manifests in {CheckFolder} ({named}). They were restored "
-                   + "as they were when the run started, because a run may not change the checks that judge runs."
+        var said = $"{who} changed the workspace's check manifests in {CheckFolder} ({named}). They were restored "
+                   + $"as they were when {since}, because a run may not change the checks that judge runs."
                    + (KeptIn is null ? "" : $" What the run wrote is kept in {KeptIn}, if it was wanted.");
         return Failures.Count == 0
             ? said
@@ -83,17 +89,25 @@ public sealed class CheckManifestGuard
     private readonly string _folder;
     private readonly Dictionary<string, byte[]> _kept;
     private readonly bool _wasLink;
+    private readonly Action<string> _resolveInside;
 
-    private CheckManifestGuard(string root, string folder, Dictionary<string, byte[]> kept, bool wasLink)
+    private CheckManifestGuard(string root, string folder, Dictionary<string, byte[]> kept, bool wasLink, Action<string>? resolveInside)
     {
         _root = root;
         _folder = folder;
         _kept = kept;
         _wasLink = wasLink;
+        _resolveInside = resolveInside ?? (relative => WorkspaceGuard.ResolveInside(root, relative, allowReserved: true));
     }
 
     /// <summary>The manifests as they are now - the run's baseline. Never throws: a manifest that cannot be read is not kept.</summary>
-    public static CheckManifestGuard Take(string workspaceRoot)
+    public static CheckManifestGuard Take(string workspaceRoot) => Take(workspaceRoot, resolveInside: null);
+
+    /// <param name="resolveInside">
+    /// How a workspace-relative folder is followed to where it leads, throwing when outside - WorkspaceGuard.ResolveInside;
+    /// a test passes one that fails, to see a failure there said and never thrown out of a run's ending.
+    /// </param>
+    internal static CheckManifestGuard Take(string workspaceRoot, Action<string>? resolveInside)
     {
         var folder = CheckFolders.WorkspaceFolderOf(workspaceRoot);
         var kept = new Dictionary<string, byte[]>(Names);
@@ -102,7 +116,7 @@ public sealed class CheckManifestGuard
             try { kept[Path.GetFileName(file)] = File.ReadAllBytes(file); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* unreadable: nothing to restore it to */ }
         }
-        return new CheckManifestGuard(workspaceRoot, folder, kept, IsLink(folder));
+        return new CheckManifestGuard(workspaceRoot, folder, kept, IsLink(folder), resolveInside);
     }
 
     /// <summary>
@@ -135,7 +149,26 @@ public sealed class CheckManifestGuard
     /// <c>runs/&lt;runId&gt;/reverted/</c>, and says what. Idempotent: called again with nothing changed since, it finds nothing.
     /// </summary>
     /// <param name="runId">The run whose writes are kept; null when no event named one.</param>
+    /// <remarks>
+    /// Never throws: it is called where a run ends, its finally included, and an exception from here replaced the run's
+    /// own - the reason the run failed was lost to a reason the checks could not be put back. A failure is said instead.
+    /// </remarks>
     public CheckManifestRestore Restore(Guid? runId = null)
+    {
+        try
+        {
+            return RestoreOrThrow(runId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new CheckManifestRestore([], [CouldNotPutBack + ex.Message], Restored: false);
+        }
+    }
+
+    /// <summary>How a failure that stopped the restore itself is said - the run's ErrorObserved begins with it.</summary>
+    internal const string CouldNotPutBack = "the checks could not be put back: ";
+
+    private CheckManifestRestore RestoreOrThrow(Guid? runId)
     {
         var changes = new List<CheckManifestChange>();
         var failures = new List<string>();
@@ -268,12 +301,19 @@ public sealed class CheckManifestGuard
     {
         try
         {
-            WorkspaceGuard.ResolveInside(_root, relative, allowReserved: true);
+            _resolveInside(relative);
             return null;
         }
         catch (ArgumentException ex)
         {
             return $"{relative.Replace('\\', '/')} leads outside the workspace ({ex.Message})";
+        }
+        // Where it leads could not be found out (a link that cannot be followed, a share that went away): nothing says it
+        // stays inside, so it is not written through - the same answer as outside. Uncaught, this escaped Restore inside the
+        // run's ending and could hide the run's own exception.
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"where {relative.Replace('\\', '/')} leads could not be found out, so nothing was written through it ({ex.Message})";
         }
     }
 

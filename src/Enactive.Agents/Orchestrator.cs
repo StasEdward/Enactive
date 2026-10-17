@@ -347,6 +347,8 @@ public sealed partial class Orchestrator : IOrchestrator
         finally
         {
             await events.DisposeAsync();
+            // Restore never throws (an IO error there replaced the run's own exception); what it could not do is lost
+            // here, with nobody left listening, rather than thrown over why the run ended.
             if (!settled)
                 guard.Restore(last?.RunId);
         }

@@ -333,6 +333,38 @@ public sealed class CheckManifestGuardTests : IDisposable
         Assert.Equal(0, mklink.ExitCode);
     }
 
+    /// <summary>
+    /// Looking at where the folder leads fails with an IO error - nothing can say it stays inside the workspace: nothing is
+    /// written through it, and the restore says so rather than throwing out of the run's ending.
+    /// </summary>
+    [Fact]
+    public void An_io_error_finding_where_the_folder_leads_is_said_and_never_thrown()
+    {
+        File.WriteAllText(Path.Combine(Folder, "lint.json"), "{}");
+        var guard = CheckManifestGuard.Take(_root, resolveInside: _ => throw new IOException("the share went away"));
+        File.WriteAllText(Path.Combine(Folder, "theirs.json"), "{}");
+
+        var restore = guard.Restore(Guid.NewGuid());
+
+        Assert.False(restore.Restored);
+        Assert.True(File.Exists(Path.Combine(Folder, "theirs.json")));
+        Assert.Contains("NOT restored", restore.Describe(), StringComparison.Ordinal);
+        Assert.Contains("the share went away", restore.Describe(), StringComparison.Ordinal);
+    }
+
+    /// <summary>Any other failure in the middle of putting back: never thrown, and said even when no change was found yet.</summary>
+    [Fact]
+    public void A_failure_putting_the_checks_back_is_said_and_never_thrown()
+    {
+        var guard = CheckManifestGuard.Take(_root, resolveInside: _ => throw new InvalidOperationException("broken"));
+
+        var restore = guard.Restore(Guid.NewGuid());
+
+        Assert.False(restore.Restored);
+        Assert.StartsWith("the checks could not be put back: broken", Assert.Single(restore.Failures), StringComparison.Ordinal);
+        Assert.Contains("the checks could not be put back: broken", restore.Describe(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void A_whole_folder_deleted_is_made_again()
     {

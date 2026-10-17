@@ -369,6 +369,32 @@ public sealed class RunChecksNowTests
         Enactive.Tests.SqlitePools.ClearUnder(fx.Root);
     }
 
+    /// <summary>
+    /// A check command that writes the checks folder - adds a manifest - is put back as a run's would be, and the record
+    /// says so: a press of "Run checks now" may no more change the checks that judge the next run than a run may.
+    /// </summary>
+    [Fact]
+    public async Task A_check_that_changes_the_manifests_is_put_back_and_the_record_says_so()
+    {
+        using var fx = new EngineFixture();
+        Manifest(fx, "notes.json", """{"id":"notes","command":"echo planted > .enactive/checks/planted.json","fireOn":"Run"}""");
+        var (runId, kept, engine) = await StagedRunAsync(fx, ("notes.md", "applied\n"));
+        Apply(fx, kept, "notes.md");
+        var manifest = File.ReadAllText(fx.PathOf(Path.Combine(".enactive", "checks", "notes.json")));
+
+        var (record, problem) = await RunNowAsync(engine, fx, runId);
+
+        Assert.Null(problem);
+        Assert.Equal(CriterionOutcome.Passed, Assert.Single(record!.Results).Outcome);
+        Assert.False(fx.Exists(Path.Combine(".enactive", "checks", "planted.json")));
+        Assert.Equal(manifest, File.ReadAllText(fx.PathOf(Path.Combine(".enactive", "checks", "notes.json"))));
+        Assert.Contains("added planted.json", record.Note, StringComparison.Ordinal);
+        Assert.Contains("restored", record.Note, StringComparison.Ordinal);
+        Assert.Contains("added planted.json", Assert.Single(await RunStoreFactory.Create(fx.Workspace).LoadCheckRecordsAsync(runId, CancellationToken.None)).Note,
+            StringComparison.Ordinal);
+        Enactive.Tests.SqlitePools.ClearUnder(fx.Root);
+    }
+
     /// <summary>Only a staged run is checked this way; a run that wrote to disk was checked as it ran.</summary>
     [Fact]
     public async Task A_run_that_was_not_staged_is_refused()

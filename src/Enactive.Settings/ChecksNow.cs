@@ -109,12 +109,32 @@ public static class ChecksNow
             var (proposed, matches, ecosystems) = FingerprintInputs(run, checks);
             var before = await StateFingerprints.TakeAsync(workspace.RootPath, proposed, matches, ecosystems, ct);
             var at = DateTimeOffset.Now;
-            var results = await orchestrator.RunChecksNowAsync(run.RunId, run.TaskId, checks,
-                $"now-{at:yyyyMMdd-HHmmss}", new WorkContext(workspace.Id, workspace.Name, null, null, null, [], []), ct);
+            // The check manifests, kept as a run keeps them (CheckManifestGuard): a check's command is a shell command, and
+            // one that rewrote .enactive/checks here changed the checks that judge the next run with nothing put back.
+            var guard = CheckManifestGuard.Take(workspace.RootPath);
+            IReadOnlyList<Core.Templates.CriterionResult> results;
+            CheckManifestRestore putBack;
+            try
+            {
+                results = await orchestrator.RunChecksNowAsync(run.RunId, run.TaskId, checks,
+                    $"now-{at:yyyyMMdd-HHmmss}", new WorkContext(workspace.Id, workspace.Name, null, null, null, [], []), ct);
+            }
+            finally
+            {
+                putBack = guard.Restore(run.RunId);
+            }
             // Taken again after: a check that writes (a formatter, a build into a folder git does not ignore) leaves a
             // different state than it found, and a record fingerprinted as it found it would read outdated at once. The
             // record is of the state as the checks left it, and says when that is not the state they found.
             var after = await StateFingerprints.TakeAsync(workspace.RootPath, proposed, matches, ecosystems, ct);
+            string?[] notes =
+            [
+                before.Kind != after.Kind || before.Digest != after.Digest
+                    ? "The workspace changed while the checks ran - by the checks themselves or by something else - so this "
+                      + "record is of the workspace as they left it, not as they found it."
+                    : null,
+                putBack.Describe("These checks", "they started")
+            ];
 
             var record = new CheckRecord(Guid.NewGuid(), run.RunId, who, at,
                 checks.Select(c => c.Definition).ToArray(),
@@ -125,10 +145,7 @@ public static class ChecksNow
                 }).ToArray(),
                 after)
             {
-                Note = before.Kind != after.Kind || before.Digest != after.Digest
-                    ? "The workspace changed while the checks ran - by the checks themselves or by something else - so this "
-                      + "record is of the workspace as they left it, not as they found it."
-                    : null
+                Note = notes.OfType<string>().ToArray() is { Length: > 0 } said ? string.Join(" ", said) : null
             };
             await store.AddCheckRecordAsync(record, ct);
             return new(record, null);
