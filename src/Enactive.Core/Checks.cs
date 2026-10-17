@@ -518,7 +518,9 @@ public static class CheckGlob
         if (close < 0) return "opens a [set] it never closes";
 
         sb.Append('[');
-        if (negated) sb.Append('^');
+        // Negated, it still names one character of a name, as '?' does - never the '/' between folders: "[^x]" alone let
+        // "a[!b]c/*.txt" match a/c/d.txt, a file one folder up from where the glob says.
+        if (negated) sb.Append("^/");
         foreach (var ch in p.AsSpan(first, close - first))
         {
             if (ch is '\\' or ']' or '[' or '^') sb.Append('\\');
