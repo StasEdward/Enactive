@@ -454,4 +454,32 @@ public sealed class WriteChecksTellTheWorkerTests
         Assert.Single(said, s => s.Contains("not run this turn", StringComparison.Ordinal));
         Assert.False(checks.Owed);
     }
+
+    /// <summary>
+    /// The run being stopped while a check runs is the run's, not the check's: it propagates out of the write checks, and
+    /// the worker is told nothing - caught as the check's own timeout, it read as a slow check and the stop was swallowed.
+    /// </summary>
+    [Fact]
+    public async Task Stopping_the_run_while_a_check_runs_propagates_and_tells_the_worker_nothing()
+    {
+        using var fx = new EngineFixture();
+        var tools = new Enactive.Tools.ToolRegistry(EngineFixture.ShippedTools());
+        List<ChatMessage> messages = [ChatMessage.Tool("w1", "Wrote notes/a.md")];
+        var frame = new StepFrame(Guid.NewGuid(), Guid.NewGuid(), 1, fx.Workspace, tools.Definitions, messages, new ExecutionJournal(),
+            new(), fx.Artifacts.BeginStep());
+        var checks = WriteChecks.ForStep(Snapshot(Spell(CheckLimits.WriteTimeoutLimitSeconds)), staged: false, frame, out _)!;
+        checks.Wrote(new ToolCall("w1", "write_file", "{}"),
+            new ToolResult(true, "ok", null, [], new Dictionary<string, object?>(), ChangedPaths: ["notes/a.md"]));
+        using var stop = new CancellationTokenSource();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => checks.RunOwedAsync(null, async (criterion, token) =>
+        {
+            stop.Cancel();
+            await Task.Delay(Timeout.Infinite, token);
+            return new CriterionResult(criterion.Name, criterion.Command, false, CriterionOutcome.Passed, 0, null);
+        }, stop.Token));
+
+        Assert.Equal("Wrote notes/a.md", messages[0].Content);
+        Assert.Empty(frame.Journal.Actions);
+    }
 }
