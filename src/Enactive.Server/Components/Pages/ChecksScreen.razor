@@ -1,0 +1,65 @@
+@page "/checks"
+@using System.Security.Claims
+@using Enactive.Application
+@using Enactive.Server.Components.Runs
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerChecks Checks
+@inject ServerHistory History
+@inject WorkspaceIds Ids
+@inject ChosenWorkspace Chosen
+
+<PageTitle>Checks - Enactive</PageTitle>
+
+@* A workspace's checks (Plan Phase 3.5), as the window opens them from its workspace card (ChecksWindow): the list every run
+   here is judged by - this workspace's own manifests in its .enactive/checks, the service's global ones, the engine's
+   implicit build and test - for anybody signed in to read, and for an Operator to change (ServerChecks, as the person,
+   audited). Not while a run works in the workspace: it puts its checks back at its end. The workspace is chosen in the
+   switcher, as on the Templates screen. *@
+
+<div class="checks-screen">
+    <div class="templates-top">
+        <PanelHeader Text="WORKSPACE" />
+        <WorkspaceSwitcher Rows="_switcher" Current="_switcher.FirstOrDefault(r => r.IsCurrent)" Href="@(row => Links.Checks(row.Id))" />
+    </div>
+
+    @if (_problem is { } problem)
+    {
+        <p class="said">@problem</p>
+    }
+    else if (_list is { } list)
+    {
+        <CascadingValue Value="list"><ChecksEditor /></CascadingValue>
+    }
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The workspace, by its id (WorkspaceIds); none, the one used last. Read as text, as the Templates screen does.</summary>
+    [SupplyParameterFromQuery(Name = "ws")] private string? Ws { get; set; }
+
+    private IReadOnlyList<SwitcherRow> _switcher = [];
+    private ChecksViewModel? _list;
+    private string? _problem;
+
+    // Read per address (Pages/_Imports.razor): choosing another workspace is a link to this same page.
+    protected override async Task OnParametersSetAsync()
+    {
+        var user = (await Auth).User;
+        var known = History.Workspaces(user);
+        Guid? wanted = Chosen.Wanted(Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null, known, Ids, user);
+        var selected = WorkspaceColumnState.Choose(known, wanted, Ids);
+        Chosen.Shown(selected, Ids, user);
+        _switcher = WorkspaceColumnState.Switcher(known, selected, Ids);
+        if (selected is null)
+        {
+            (_list, _problem) = (null, wanted is null
+                ? "The service knows no workspace yet. An Operator adds one on the Runs screen."
+                : "The service does not know that workspace.");
+            return;
+        }
+        (_list, _problem) = Checks.Workspace(user, selected.RootPath);
+    }
+}

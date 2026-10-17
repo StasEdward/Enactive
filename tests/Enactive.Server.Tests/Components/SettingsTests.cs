@@ -169,10 +169,10 @@ public sealed class SettingsTests : ComponentHost
     {
         var screen = Screen("ada");
 
-        Assert.Equal(["General", "Writable folders", "SMTP", "Web", "About", "General", "Providers", "Team", "Phases", "MCP", "Templates"],
+        Assert.Equal(["General", "Writable folders", "SMTP", "Web", "About", "General", "Providers", "Team", "Phases", "MCP", "Templates", "Checks"],
             Sections(screen));
         Assert.Equal(["settings/general", "settings/writable-folders", "settings/smtp", "settings/web", "settings/about",
-                "settings/ai-general", "settings/ai-providers", "settings/ai-team", "settings/ai-phases", "settings/ai-mcp", "settings/ai-templates"],
+                "settings/ai-general", "settings/ai-providers", "settings/ai-team", "settings/ai-phases", "settings/ai-mcp", "settings/ai-templates", "settings/ai-checks"],
             screen.FindAll(".settings-nav a").Select(a => a.GetAttribute("href")));
         Assert.DoesNotContain("Remote access", screen.Markup);
         Assert.DoesNotContain(">Account<", screen.Markup);

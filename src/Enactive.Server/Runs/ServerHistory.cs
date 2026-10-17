@@ -23,7 +23,11 @@ internal sealed record PastRun(
     IReadOnlyList<ModelWorkRow> Work,
     IReadOnlyList<string> Decisions,
     string? Request,
-    RunAgainOffer RunAgain);
+    RunAgainOffer RunAgain)
+{
+    /// <summary>The declared checks that fired for the run as a whole (RunFeed.RunChecks), from the same fold as <see cref="Cards"/>.</summary>
+    public IReadOnlyList<FeedCheck> RunChecks { get; init; } = [];
+}
 
 /// <summary>
 /// Reading the history of the service's workspaces (server plan 1.6), for anybody signed in.
@@ -69,15 +73,19 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         var settings = engine.Settings;
         // Whether the template is still there is a fact about now, read as the window reads it (its library in the folder).
         var spec = Core.Templates.ResolvedTaskSpec.Parse(record.Spec);
+        var feed = RunFeed.Replay(record);
         return (new PastRun(
             RunDigest.Of(record, attempts),
-            RunFeed.Replay(record).Cards,
+            feed.Cards,
             RunTimeline.Fold(record),
             RunRouting.From(record).Rows.ToList(),
             ModelWorkSplit.From(record, id => settings is null ? ModelReach.Unknown : ModelReaches.Of(settings, id)).Rows.ToList(),
             record.Decisions,
             RunHistory.RequestOf(record),
-            RunAgainOffer.Of(spec, spec is null ? null : new TemplateStore(known.RootPath).Find(spec.TemplateId))), null);
+            RunAgainOffer.Of(spec, spec is null ? null : new TemplateStore(known.RootPath).Find(spec.TemplateId)))
+        {
+            RunChecks = feed.RunChecks
+        }, null);
     }
 
     /// <summary>A file of a known workspace, as text, within the limits a page has (WorkspaceFiles).</summary>

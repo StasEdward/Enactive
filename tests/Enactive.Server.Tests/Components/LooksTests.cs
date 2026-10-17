@@ -39,6 +39,7 @@ public sealed class LooksTests
         classes.AddRange(Enum.GetValues<DiffLineKind>().Select(Looks.Diff));
         classes.AddRange(Enum.GetValues<Enactive.Core.Diagnostics.LogLevel>().Select(Looks.Log));
         classes.AddRange(Enum.GetValues<FeedEntryKind>().Select(Looks.Entry));
+        classes.AddRange(Enum.GetValues<CheckVerdict>().Select(Looks.Check));
         classes.AddRange(Enum.GetValues<TemplateEdge>().Select(Looks.Template));
         classes.AddRange(Enum.GetValues<ScheduleState>().Select(Looks.Schedule));
         classes.AddRange(new[] { true, false }.Select(Looks.Local));
@@ -83,6 +84,7 @@ public sealed class LooksTests
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Diff((DiffLineKind)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Log((Enactive.Core.Diagnostics.LogLevel)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Entry((FeedEntryKind)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Check((CheckVerdict)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Template((TemplateEdge)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Schedule((ScheduleState)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Account((Enactive.Server.Accounts.AccountStanding)99));
@@ -176,6 +178,12 @@ public sealed class LooksTests
             [FeedEntryKind.Tool] = "FeedEntryKind.Tool",
             [FeedEntryKind.Note] = "FeedEntryKind.Note",
             [FeedEntryKind.Refusal] = "FeedEntryKind.Refusal"
+        }));
+        rows.AddRange(Rows(Looks.Check, new Dictionary<CheckVerdict, string>
+        {
+            [CheckVerdict.Pass] = "CheckVerdict.Pass",
+            [CheckVerdict.Fail] = "CheckVerdict.Fail",
+            [CheckVerdict.NotRun] = "CheckVerdict.NotRun"
         }));
 
         rows.AddRange(Rows(Looks.Template, new Dictionary<TemplateEdge, string>

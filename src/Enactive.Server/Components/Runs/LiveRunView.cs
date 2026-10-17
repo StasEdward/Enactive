@@ -10,14 +10,27 @@ using Enactive.Core.History;
 /// <summary>One line of a step card: what the step did, and its result once it has one.</summary>
 public sealed record StepLine(FeedEntryKind Kind, string Label, string Detail);
 
+/// <summary>
+/// A declared check's result (Plan Phase 3.5), in the words the window's card shows it in (CheckLines): its verdict and that
+/// verdict's colour (Looks.Check), which check and where it fired, why, and the workspace-relative file of its whole output.
+/// </summary>
+public sealed record CheckView(string Word, string Tone, string CheckId, string Where, string Reason, string? DetailPath)
+{
+    internal static CheckView Of(CheckLine line)
+        => new(line.Word, Looks.Check(line.Verdict), line.CheckId, line.Where, line.Reason ?? "", line.DetailPath);
+
+    internal static IReadOnlyList<CheckView> Of(IEnumerable<FeedCheck> checks) => CheckLines.Of(checks).Select(Of).ToList();
+}
+
 /// <summary>One step card, as the window's StepCardView draws it.</summary>
+/// <param name="Checks">The declared checks that fired for the step: after its writes, at its end.</param>
 public sealed record StepView(string Title, FeedCardStatus Status, bool WaitingForYou, string Activity, string Tally,
-    IReadOnlyList<StepLine> Lines)
+    IReadOnlyList<StepLine> Lines, IReadOnlyList<CheckView> Checks)
 {
     /// <summary>A card of the fold, copied out: the live run's as it goes, a past run's as its record rebuilds it.</summary>
     internal static StepView Of(FeedCard card)
         => new(card.Title, card.Status, card.WaitingForYou, card.Activity, card.Tally,
-            card.Entries.Select(e => new StepLine(e.Kind, e.Label, e.Detail)).ToList());
+            card.Entries.Select(e => new StepLine(e.Kind, e.Label, e.Detail)).ToList(), CheckView.Of(card.Checks));
 }
 
 /// <summary>A ROUTING row: which model served a phase.</summary>
@@ -64,6 +77,9 @@ public sealed record LiveRunView(
 {
     public static readonly LiveRunView Empty = new("", null, 0, 0, [], "", "", false, false, 0, RunFilesView.Empty, 0, 0, [], [], [], 0);
 
+    /// <summary>The declared checks that fired for the run as a whole (Plan Phase 3.5): at a wave's end, its end, owed at apply.</summary>
+    public IReadOnlyList<CheckView> RunChecks { get; init; } = [];
+
     /// <summary>The tile, as the window's (RunFigures).</summary>
     public string TokensText => RunFigures.Tokens(RunFigures.Reported(PromptTokens, CompletionTokens));
 
@@ -103,7 +119,10 @@ internal sealed class LiveRunReader
             panel.Work.Rows.Select(r => new WorkLine(r.Label, r.Detail, Looks.Reach(r.Reach))).ToList(),
             panel.Performance.Rows.Select(r => new SpeedLine(r.Provider, r.Model, r.Speed, r.SpeedLabel, r.Times, r.Tokens,
                 r.Cache, r.First, r.Requests, r.Explanation)).ToList(),
-            seq);
+            seq)
+        {
+            RunChecks = CheckView.Of(feed.RunChecks)
+        };
 
     private StepView Card(FeedCard card)
     {

@@ -78,9 +78,10 @@
                         <ol class="steps">
                             @for (var i = 0; i < view.Steps.Count; i++)
                             {
-                                <StepCard @key="i" Step="view.Steps[i]" />
+                                <StepCard @key="i" Step="view.Steps[i]" Root="@run.Workspace" />
                             }
                         </ol>
+                        <RunChecks Checks="view.RunChecks" Root="@run.Workspace" />
                         break;
                     case 1:
                         <RunArtifacts Root="@run.Workspace" Files="view.Artifacts" RunId="run.Id" Ended="run.Ended.IsCompleted" />

@@ -78,6 +78,18 @@ internal static class Looks
         _ => throw Unknown(level)
     };
 
+    /// <summary>
+    /// A declared check's verdict on a card, as Palette.CheckVerdict: passed green, failed red, not run amber - it verified
+    /// nothing, and must be seen.
+    /// </summary>
+    public static string Check(CheckVerdict verdict) => verdict switch
+    {
+        CheckVerdict.Pass => "tone-done",
+        CheckVerdict.Fail => "tone-failed",
+        CheckVerdict.NotRun => "tone-warning",
+        _ => throw Unknown(verdict)
+    };
+
     /// <summary>The icon of a line on a step card, as Palette.EntryIcon: what the step did, by its kind.</summary>
     public static string Entry(FeedEntryKind kind) => kind switch
     {

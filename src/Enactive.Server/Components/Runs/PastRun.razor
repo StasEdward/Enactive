@@ -92,9 +92,10 @@
                     <ol class="steps">
                         @for (var i = 0; i < _steps.Count; i++)
                         {
-                            <StepCard @key="i" Step="_steps[i]" />
+                            <StepCard @key="i" Step="_steps[i]" Root="@Root" />
                         }
                     </ol>
+                    <RunChecks Checks="_runChecks" Root="@Root" />
                     break;
                 case PastRunTabs.Artifacts:
                     <WrittenFiles Root="@Root" Paths="d.Artifacts" Empty="This run wrote nothing." />
@@ -203,6 +204,7 @@
     private (string Root, Guid Run)? _shown;
     private Enactive.Server.Runs.PastRun? _run;
     private IReadOnlyList<StepView> _steps = [];
+    private IReadOnlyList<CheckView> _runChecks = [];
     private string? _problem;
     private bool _canOperate;
     private bool _busy;
@@ -219,6 +221,7 @@
         _shown = (Root, RunId);
         (_run, _problem) = await History.OpenAsync(user, Root, RunId, CancellationToken.None);
         _steps = _run?.Cards.Select(StepView.Of).ToList() ?? [];
+        _runChecks = _run is null ? [] : CheckView.Of(_run.RunChecks);
         // A record that rebuilds no cards opens on its timeline, which is what it holds (PastRunTabs).
         (_tab, _said) = (PastRunTabs.Opening(_steps.Count), null);
     }

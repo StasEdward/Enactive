@@ -69,7 +69,7 @@ internal sealed class ServerEngine : IDisposable
                     // The machine's check manifests next to the service's settings.json, as the desktop keeps its own next
                     // to its own: the service runs as its account and reads its data folder, never whoever's %APPDATA%
                     // the process happens to resolve to (and a test's service reads its own temporary folder).
-                    GlobalChecks = Path.Combine(Path.GetDirectoryName(SettingsFile)!, "checks")
+                    GlobalChecks = ServerFolders.ChecksOf(Path.GetDirectoryName(SettingsFile)!)
                 };
         lock (_gate)
             _now = (engine, problem, settings);

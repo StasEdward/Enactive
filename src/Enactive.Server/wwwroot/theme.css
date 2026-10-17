@@ -453,6 +453,16 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .step-label.note { font-weight: 600; }
 .step-detail { margin-left: 20px; font-size: 11px; color: var(--text-muted); }
 
+/* The declared checks that fired (CheckList) - a step's on its card, the run's under the steps: the verdict in its colour
+   (Looks.Check), the check and where it fired, why, and Open for the file with its whole output. */
+.check-lines { list-style: none; margin: 4px 0 0; padding: 0; }
+.check-line { display: flex; align-items: flex-start; gap: 6px; margin-top: 3px; font-size: 12px; }
+.check-word { flex: none; min-width: 56px; font-size: 11px; font-weight: 600; color: var(--tone); }
+.check-text { flex: 1; min-width: 0; color: var(--text-body); overflow-wrap: anywhere; }
+.check-id { font-weight: 600; }
+.check-reason { font-size: 11px; color: var(--text-muted); }
+.run-checks { margin-top: 4px; }
+
 /* The Artifacts tab: a written file on a card; a kept proposal with the amber edge of a change waiting for a person. */
 .artifacts .said { margin: 0 0 8px; font-size: 12px; }
 .artifact-list { list-style: none; margin: 0 0 8px; padding: 0; }
@@ -614,6 +624,18 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: normal; }
 .proposal-set { display: grid; gap: 2px; color: inherit; text-decoration: none; }
 .proposal-set .card-meta { white-space: normal; }
 .proposals-screen .artifact-list { list-style: none; margin: 8px 0 0; padding: 0; }
+
+/* ── Checks (Ui/ChecksEditor.razor; ChecksView.axaml): the merged checks as cards, the store's problems and notes beside
+   their files, the form in a dialog - in Settings for the global ones, on Pages/ChecksScreen.razor for a workspace's. */
+.checks-screen { max-width: 900px; }
+.checks-list { display: grid; gap: 6px; }
+.checks-list p { margin: 0; }
+.check-row .card-meta { white-space: normal; overflow-wrap: anywhere; }
+.check-command { font-family: var(--font-mono); }
+.check-notes { color: var(--warning); }
+.check-files { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.check-file.problem { color: var(--danger); }
+.workspace-checks { justify-self: start; text-decoration: none; }
 
 /* ── Templates (Pages/TemplatesScreen.razor; TemplatesWindow.axaml): the workspace over the library, 300 px | what the
    chosen one will be asked to do, the form it asks for, Run. ──────────────────────────────────────────────────────── */

@@ -31,6 +31,12 @@
         {
             <p class="missing-note">This folder is not on disk. Nothing will run here until you pick another one.</p>
         }
+        @if (State.Current is { } shown)
+        {
+            @* The checks that judge runs here, as the window's Checks… under its card (Plan Phase 3.5). *@
+            <a class="btn small workspace-checks" href="@Links.Checks(shown.Id)"
+               title="The checks that judge runs in this workspace: its own, the global ones, and the engine's build and test.">Checks…</a>
+        }
     </div>
 
     <div class="column-rule"></div>

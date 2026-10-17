@@ -1,0 +1,20 @@
+@using Enactive.Server.Components.Ui
+
+@* The declared checks that fired for the run as a whole (Plan Phase 3.5) - at a wave's end, at its end, owed when a staged
+   run's files are applied - under its steps, as the window's RUN CHECKS: not on one step's card, because a check deferred
+   to a wave judges what its steps made together. *@
+
+@if (Checks.Count > 0)
+{
+    <section class="run-checks" aria-label="Run checks">
+        <PanelHeader Text="RUN CHECKS" />
+        <CheckList Checks="Checks" Root="@Root" Label="Run checks" />
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<CheckView> Checks { get; set; } = [];
+
+    /// <summary>The run's workspace, which a check's detail file is opened from.</summary>
+    [Parameter] public string? Root { get; set; }
+}

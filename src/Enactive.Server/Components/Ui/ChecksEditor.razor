@@ -1,0 +1,224 @@
+@using System.Collections.Specialized
+@using System.ComponentModel
+@using Enactive.Application
+@implements IDisposable
+
+@* The window's Checks list (ChecksView.axaml) - the global one in Settings, a workspace's on its Checks screen: every check a
+   run here would have, where it comes from and what it shadows, the manifests the store skipped beside their files, and -
+   for a person the service lets change them - Add, Edit, Turn on/off, Delete (Reset, for one that changes the check below)
+   and Raise to blocking for the engine's implicit build and test, in a form in a dialog. What it shows and decides is the
+   window's view model (ChecksViewModel); every change goes back to ServerChecks as the person. *@
+
+<div class="checks-list">
+    <p class="label">@Vm.Heading</p>
+    <p class="hint">A check is a command the engine runs after a write, at a step's end or at the run's end; advisory ones inform, blocking ones send the step back.</p>
+    <p class="hint">Checks are FILES, written as soon as Save is pressed on one. A workspace check replaces a global one of the same id; one without a command changes how the check below it runs.</p>
+    <p class="hint checks-folder">@Vm.Folder</p>
+    @if (Vm.HasNoImplicit)
+    {
+        <p class="hint checks-no-implicit">@Vm.NoImplicit</p>
+    }
+    @if (Vm.HasNotNow)
+    {
+        <p class="said checks-not-now" role="status">@Vm.NotNow</p>
+    }
+
+    <ul class="cards settings-cards checks-rows" aria-label="Checks">
+        @foreach (var row in Vm.Checks)
+        {
+            <li class="card settings-card check-row">
+                <span class="settings-card-text">
+                    <span class="card-title">@row.Id</span>
+                    <span class="card-meta check-origin">@row.Origin@(row.HasShadows ? " · " + row.Shadows : "")</span>
+                    <span class="card-meta check-meta">@row.Meta</span>
+                    @if (row.Command.Length > 0)
+                    {
+                        <span class="card-meta check-command">@row.Command</span>
+                    }
+                    @if (row.HasDescription)
+                    {
+                        <span class="card-meta settings-wrap">@row.Description</span>
+                    }
+                    @if (row.HasNotes)
+                    {
+                        <span class="card-meta check-notes">@row.Notes</span>
+                    }
+                </span>
+                <span class="row-icons">
+                    @if (row.CanEditOrRaise)
+                    {
+                        <button type="button" class="btn small check-edit" @onclick="() => row.EditCommand.Execute(null)">@row.EditText</button>
+                    }
+                    @if (row.CanToggle)
+                    {
+                        <button type="button" class="btn small check-toggle" @onclick="() => row.ToggleCommand.Execute(null)">@row.ToggleText</button>
+                    }
+                    @if (row.CanDelete)
+                    {
+                        <button type="button" class="btn small destructive check-remove" @onclick="() => row.RemoveCommand.Execute(null)">@row.RemoveText</button>
+                    }
+                </span>
+            </li>
+        }
+    </ul>
+
+    @if (Vm.HasFiles)
+    {
+        <ul class="check-files" aria-label="Check files">
+            @foreach (var file in Vm.Files)
+            {
+                <li class="@(file.IsProblem ? "hint check-file problem" : "hint check-file")">@file.Text</li>
+            }
+        </ul>
+    }
+    @if (Vm.HasSaid)
+    {
+        <p class="hint checks-said" role="status">@Vm.Said</p>
+    }
+    @if (Vm.CanChange)
+    {
+        <div class="settings-section-actions">
+            <button type="button" class="btn checks-add" @onclick="() => Vm.AddCommand.Execute(null)">Add check</button>
+        </div>
+    }
+</div>
+
+@if (Vm.Draft is { } draft)
+{
+    <Dialog Title="@draft.Title" OnClose="() => draft.CancelCommand.Execute(null)">
+        <ChildContent>
+            <div class="settings-editor-column check-form">
+                <label class="label" for="check-id">Id</label>
+                <input id="check-id" @bind="draft.Id" disabled="@(!draft.IdEditable)" />
+                <label class="label" for="check-description">Description</label>
+                <input id="check-description" @bind="draft.Description" />
+                @if (draft.HasCommand)
+                {
+                    <label class="label" for="check-command">Command</label>
+                    <input id="check-command" @bind="draft.Command" />
+                }
+                <label class="label" for="check-fire">Fires on</label>
+                <select id="check-fire" @bind="draft.FireOn">
+                    @foreach (var fire in CheckDraft.FireChoices)
+                    {
+                        <option value="@fire">@fire</option>
+                    }
+                </select>
+                <label class="label" for="check-severity">Severity</label>
+                <select id="check-severity" @bind="draft.Severity">
+                    @foreach (var severity in CheckDraft.SeverityChoices)
+                    {
+                        <option value="@severity">@severity</option>
+                    }
+                </select>
+                <label class="label" for="check-timeout">Timeout (s)</label>
+                <input id="check-timeout" inputmode="numeric" @bind="draft.Timeout" />
+                <label class="label" for="check-matches">Matches - the paths it is about, one a line</label>
+                <textarea id="check-matches" rows="3" @bind="draft.Matches"></textarea>
+                <label class="label" for="check-protects">Protects - files a step may not remove, one a line</label>
+                <textarea id="check-protects" rows="2" @bind="draft.Protects"></textarea>
+                <label class="check"><input id="check-enabled" type="checkbox" @bind="draft.Enabled" /> On</label>
+                @if (draft.HasProblems)
+                {
+                    <p class="said check-problems" role="alert">@draft.Problems</p>
+                }
+            </div>
+        </ChildContent>
+        <Actions>
+            <button type="button" class="btn primary check-save" @onclick="() => draft.SaveCommand.Execute(null)">Save</button>
+            <button type="button" class="btn" @onclick="() => draft.CancelCommand.Execute(null)">Cancel</button>
+        </Actions>
+    </Dialog>
+}
+
+@if (_question is { } question)
+{
+    <Dialog Title="@question.Headline" OnClose="() => Answer(false)">
+        <ChildContent><p class="body">@question.Detail</p></ChildContent>
+        <Actions>
+            <button type="button" class="btn destructive" @onclick="() => Answer(true)">Delete</button>
+            <button type="button" class="btn" @onclick="() => Answer(false)">Keep</button>
+        </Actions>
+    </Dialog>
+}
+
+@code {
+    // Handed down as a cascading value: the view model is internal to the application layer, and a parameter is public.
+    [CascadingParameter] private ChecksViewModel Vm { get; set; } = default!;
+
+    private ChecksViewModel? _shown;
+    private CheckDraft? _draft;
+    private (string Headline, string Detail, TaskCompletionSource<bool> Answer)? _question;
+
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_shown, Vm))
+            return;
+        Show(null);
+        Show(Vm);
+    }
+
+    /// <summary>What changes in the list is drawn again - a row turned off, a form's problem - not only on this page's next event.</summary>
+    private void Show(ChecksViewModel? vm)
+    {
+        if (_shown is { } old)
+        {
+            old.PropertyChanged -= Changed;
+            old.Checks.CollectionChanged -= ListChanged;
+            old.Files.CollectionChanged -= ListChanged;
+            old.ConfirmRequested -= AskAsync;
+            Follow(null);
+        }
+        _shown = vm;
+        if (vm is null)
+            return;
+        vm.PropertyChanged += Changed;
+        vm.Checks.CollectionChanged += ListChanged;
+        vm.Files.CollectionChanged += ListChanged;
+        vm.ConfirmRequested += AskAsync;
+    }
+
+    private void Changed(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ChecksViewModel.Draft))
+            Follow(_shown?.Draft);
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>The form's own changes - its problems after a refused Save - drawn as they come.</summary>
+    private void Follow(CheckDraft? draft)
+    {
+        if (_draft is { } old)
+            old.PropertyChanged -= DraftChanged;
+        _draft = draft;
+        if (draft is not null)
+            draft.PropertyChanged += DraftChanged;
+    }
+
+    private void DraftChanged(object? sender, PropertyChangedEventArgs e) => _ = InvokeAsync(StateHasChanged);
+
+    private void ListChanged(object? sender, NotifyCollectionChangedEventArgs e) => _ = InvokeAsync(StateHasChanged);
+
+    private Task<bool> AskAsync(string headline, string detail)
+    {
+        var answer = new TaskCompletionSource<bool>();
+        _question = (headline, detail, answer);
+        _ = InvokeAsync(StateHasChanged);
+        return answer.Task;
+    }
+
+    private void Answer(bool yes)
+    {
+        if (_question is not { } question)
+            return;
+        _question = null;
+        question.Answer.TrySetResult(yes);
+    }
+
+    public void Dispose()
+    {
+        Show(null);
+        // A question still open is answered no: nothing is deleted by a page that went away.
+        Answer(false);
+    }
+}
