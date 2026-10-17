@@ -24,7 +24,7 @@ public sealed partial class Orchestrator
             models.Worker, step.Messages, scope.Artifacts, context, step.Store, step.Journal, step.Reads,
             stepNumber, result, scope.Budget, scope.Granted, ct, model.ProviderId,
             step.RestartFrom, changes, before, attemptOrigin, step.Output, step.OutputSlot, step.Boundary, step.WithholdUnchecked,
-            step.Criteria, step.SubmitTool, models.ReviewOn, step.LoadedTools, session.ChangeLimits, title))
+            step.Criteria, step.SubmitTool, models.ReviewOn, step.LoadedTools, session.ChangeLimits, title, checks: session.Checks))
             await publish(ev);
 
         // The lists this step consumes, counted by the engine before any review - and with review off, before the step is

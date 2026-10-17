@@ -74,6 +74,8 @@ public sealed class CapsAnnounceThemselvesTests
         ["WorkspaceChanges.MaxDiffCharsKept"] = "A_huge_diff_is_kept_to_a_limit_and_says_so",
         // The user's own request, quoted for the reviewer - see TheReviewerSeesTheRequestTests.
         ["SuccessEvaluator.MaxDetailChars"] = nameof(A_criterions_output_says_how_much_of_it_is_shown),
+        // A write-time check's finding, added to the result of the write the worker reads next.
+        ["WriteChecks.WorkerOutputChars"] = nameof(WriteChecksTellTheWorkerTests.A_long_finding_is_told_to_the_worker_in_part_and_says_so),
         ["ProcessExec.MaxOutputChars"] = nameof(Command_output_past_the_cap_says_it_was_truncated),
         ["ReadFilesTool.MaxFiles"] = nameof(More_paths_than_read_files_takes_says_how_many),
         ["FilePreview.MaxInputChars"] = nameof(BoundedFilePreviewTests.Large_preview_bounds_allocations_and_announces_the_input_limit),

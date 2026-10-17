@@ -9,8 +9,10 @@ using static Enactive.Agents.ToolCallParsing;
 /// <param name="recordNamed">Whether to keep what each call named (ExecutedAction.Named): only the coverage of step
 /// outputs reads it, and with them off it is every call's arguments parsed again for nothing. Left out, kept - the safe
 /// way round: a missing record makes coverage fall back to the compacted arguments, which name less.</param>
+/// <param name="writeChecks">The run's write-time checks for this step (Plan Phase 3.2), told of each successful write;
+/// null when the run has none it can run, and then nothing here changes.</param>
 internal sealed class ToolResultAccounting(StepFrame frame, IToolRegistry tools, RepairAttempts repairAttempts,
-    bool repairEnabled, ToolCallOrigin origin, bool recordNamed = true)
+    bool repairEnabled, ToolCallOrigin origin, bool recordNamed = true, WriteChecks? writeChecks = null)
 {
     internal string? Record(ToolCall call, ToolInvocation.Result invocation)
     {
@@ -62,6 +64,11 @@ internal sealed class ToolResultAccounting(StepFrame frame, IToolRegistry tools,
 
         // What the step may change, told of a change made within it - a result, so here and not in the loop.
         if (result.Success) frame.Boundary?.Succeeded(call);
+
+        // The write checks, told of a write that went through - here, where its result is accounted, and not where the
+        // call is admitted: an admitted call has changed nothing yet. They run when the turn's calls are all answered
+        // (WriteChecks: once per check per turn, after the turn's last write each covers).
+        if (result.Success && !result.DidNotRun) writeChecks?.Wrote(call, result);
 
         return failure;
     }

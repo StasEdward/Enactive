@@ -3657,7 +3657,10 @@ public sealed partial class Orchestrator : IOrchestrator
         // What the step has loaded from its tool catalog so far - the step's, shared by its attempts (ToolBudget).
         List<string>? loadedTools = null,
         // What the request says may be changed, and the step's title for the question (ChangeLimitGuard).
-        ChangeLimitGuard? changeLimits = null, string? stepTitle = null)
+        ChangeLimitGuard? changeLimits = null, string? stepTitle = null,
+        // The run's declared checks (RunSession.Checks): this loop runs their write-time ones (WriteChecks). Null - the
+        // final checks' repair, a run with none - runs none.
+        Enactive.Core.Checks.CheckSnapshot? checks = null)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -3807,6 +3810,13 @@ public sealed partial class Orchestrator : IOrchestrator
         // turns - see StallLimit) included, which a handover starts over (StepFrame.StartOver).
         var frame = new StepFrame(taskId, runId, stepNo, _workspace, _tools.Definitions, messages, journal, reads, store,
             outputSchema, outputSlot, submitTool, boundary, changes, stepStart);
+
+        // The run's write-time checks for this step (Plan Phase 3.2), and what is said once a run about those it does not
+        // run - all of them in a staged run, a check too long for a turn. None declared: null, and nothing below changes.
+        var writeChecks = WriteChecks.ForStep(checks, _settings?.Staged == true, frame, out var aboutWriteChecks);
+        foreach (var sentence in aboutWriteChecks)
+            if (FirstTimeSaid(runId, sentence))
+                yield return Ev(EventKind.ContextAssembled, sentence);
 
         // How many times this step has already started over with a handover, and how many turns
         // the CURRENT conversation has taken. The iteration counter keeps counting the whole step,
@@ -4653,7 +4663,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 : resent ? ToolCallOrigin.Nudged
                 : attemptOrigin;
             var accounting = new ToolResultAccounting(frame, _tools, repairAttempts, _options.RepairConsultation.Enabled, turnOrigin,
-                recordNamed: _options.StepOutputs);
+                recordNamed: _options.StepOutputs, writeChecks: writeChecks);
             var readResults = new Dictionary<int, ToolInvocation.Result>();
             // Calls admitted ahead of the batch of reads they run in, with what each left kept until its turn comes - the
             // feed, the journal and the conversation keep the calls' order (CallAdmission.Held).
@@ -4818,6 +4828,14 @@ public sealed partial class Orchestrator : IOrchestrator
 
                 messages.Add(ChatMessage.Tool(call.Id, reply));
             }
+
+            // The write checks this turn's writes owe, each run once now that the turn's calls are answered, and told with
+            // the result of the last write each covers - before the worker is asked again (WriteChecks). The engine's own
+            // commands, under the run's policy, as the final checks are run.
+            if (writeChecks is { Owed: true })
+                foreach (var said in await writeChecks.RunOwedAsync(BuildRegression.WhyNotAllowed(_tools, _permissions, _policy),
+                             async (criterion, token) => (await CheckSuccessAsync([criterion], taskId, runId, context, token)).Results[0], ct))
+                    yield return Ev(EventKind.ContextAssembled, said);
 
             // A step that said it cannot go on ends blocked now that its turn's calls are answered (StepEnding).
             if (admission.ReportedBlocked is { } reportedBlocked)
