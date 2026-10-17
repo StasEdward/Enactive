@@ -270,6 +270,10 @@ The default obligation and the required declaration are distinct: omission is an
 `wiki-drift` and `test-coverage`, flags on, five runs each before and after. Expect: no run green with uncovered
 items; the cost (model calls, tokens) reported next to it.
 
+Measured 2026-10-17 (`plans/aidlc-adoption-bench.md`, one local model in every role): no green run with uncovered items
+after (one before); +40% tokens on `wiki-drift`; two false failures from a results-key defect at the coverage gate - fix
+it before 1.5 turns the flags on.
+
 ---
 
 ## Phase 2 - an obligation loop that releases on no progress
@@ -342,6 +346,8 @@ The "4 of 6 fields" state does not exist today. A refused submission is not stor
 ### Measurement
 
 `missing-input`, `setup-step`, `disk-report` with limits 1, 2, 3: completed-vs-incomplete counts and tokens.
+
+Measured 2026-10-18 (`plans/aidlc-adoption-bench.md`): 3/3, 3/3, 2/3 completed; no gain from 2 or 3 - keep 1.
 
 ---
 
@@ -519,6 +525,10 @@ Where the sections above left a choice open, or the build showed them wrong, thi
 ### Measurement
 
 `build-error` and `test-coverage` with `build`/`test` raised to blocking at step level.
+
+Measured 2026-10-18 (`plans/aidlc-adoption-bench.md`): right on `test-coverage`; on `build-error` the raised `build`
+fails the step for the error that predates the run and drives the worker to edit forbidden files - the raise stays
+opt-in, and a pre-existing failure needs saying to the worker.
 
 ---
 
