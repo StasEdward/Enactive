@@ -71,6 +71,13 @@ public static class ChecksNow
             return new(null, refused);
         var checks = Runnable(run!.CheckSnapshot);
 
+        // One press at a time in a workspace, and never beside a run of this process (WorkspaceActivity): two people on the
+        // service pressing at once ran the same commands side by side, and a run started meanwhile edited the files being
+        // checked. Held to the end - the record kept - and a run is refused while it is.
+        using var activity = WorkspaceActivity.TryChecks(workspace.RootPath, out var busy);
+        if (activity is null)
+            return new(null, busy);
+
         // Commands run in the workspace, so it is held as a run holds it (WorkspaceLease): another process's run would be
         // editing the very files being checked, and what a check found would be neither state.
         ProcessLease lease;
@@ -94,7 +101,7 @@ public static class ChecksNow
                 // Never asked: a check the policy would ask about is not run (BuildRegression.WhyNotAllowed) - this only
                 // stands behind that, refusing should anything ever reach it.
                 Decisions = new UnattendedDecisionHandler(),
-                Policy = EngineComposition.PolicyFor(engine.Settings, AutonomyTiers.Clamp(autonomy)),
+                Policy = PolicyNow(engine, run, autonomy),
                 Ecosystems = KnownEcosystems.All,
                 Checks = run.CheckSnapshot,
                 // No run settings, so not staged: the checks run against the disk - which is the point of running them now.
@@ -128,6 +135,20 @@ public static class ChecksNow
             await store.AddCheckRecordAsync(record, ct);
             return new(record, null);
         }
+    }
+
+    /// <summary>
+    /// The permissions the checks run under: the workspace's level now, narrowed by the run's own ceiling when it was a
+    /// template's (its specification keeps the template's narrowed policy) - the lower level, and its asks and denials
+    /// added. Without it a command the template denied its run - "this task never runs a shell" - ran here at the slider's
+    /// level, wider than the run it checks was ever allowed.
+    /// </summary>
+    internal static Core.Permissions.PermissionPolicy PolicyNow(ComposedEngine engine, RunRecord run, int autonomy)
+    {
+        var now = EngineComposition.PolicyFor(engine.Settings, AutonomyTiers.Clamp(autonomy));
+        return Core.Templates.ResolvedTaskSpec.Parse(run.Spec) is { Permissions: { } ran }
+            ? Core.Templates.TemplateResolution.Narrow(now, new Core.Templates.PermissionCeiling(ran.Level, ran.AskBefore, ran.Deny))
+            : now;
     }
 
     /// <summary>

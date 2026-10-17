@@ -168,6 +168,9 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     /// <summary>The run id of the live run, while it stages - for its "Run checks now" once it has ended (Plan Phase 3.2).</summary>
     private Guid? _stagedRunId;
 
+    /// <summary>The folder that run ran in - its proposals' and its checks' - whatever folder is on screen when it ends.</summary>
+    private string? _stagedRunRoot;
+
     public MainWindow()
     {
         _log = new LogHub(minLevel: LogLevel.Debug, downstream: new ILogSink[] { _logFile });
@@ -921,6 +924,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 _disk = composed.Artifacts as DiskArtifactStore;
                 _stagedShown = 0;
                 _stagedRunId = null;
+                _stagedRunRoot = fullPath;
                 // The last run's "Run checks now" goes with its proposals: this run's are about to be shown.
                 await Dispatcher.UIThread.InvokeAsync(() => _vm.LiveChecks = null);
                 _files.Stages = _staging is not null;
@@ -981,7 +985,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                     EndLive(endedRow);
                     // A staged run that ended: its checks can be run now, against the files as its proposals are decided
                     // (Plan Phase 3.2). Beside the proposals, as long as they are on screen; its records are in its history too.
-                    if (_staging is not null && _stagedRunId is { } stagedRun && _currentWorkspaceRoot is { Length: > 0 } stagedRoot)
+                    if (_staging is not null && _stagedRunId is { } stagedRun && _stagedRunRoot is { Length: > 0 } stagedRoot)
                         _ = ShowLiveChecksAsync(stagedRoot, stagedRun);
                     // The run that just ended belongs at the top of the history under the workspace.
                     // Only when that workspace is the one on screen - LoadRunsAsync reads whichever is
@@ -2059,6 +2063,16 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         _vm.LiveChecks = checks;
     }
 
+    /// <summary>
+    /// The level the checks of a run in <paramref name="root"/> run under: that FOLDER's - the slider when it is the folder on
+    /// screen, else what is saved against it. The slider is about the folder on screen; a staged run that ended in another
+    /// folder ran its checks at whatever level an unrelated folder sat at. Saved for neither: the slider, as a run's start.
+    /// </summary>
+    internal static int ChecksAutonomy(string root, string onScreen, int slider, Func<string, int?> saved)
+        => string.Equals(WorkspaceRegistry.Normalise(root), onScreen, StringComparison.OrdinalIgnoreCase)
+            ? slider
+            : saved(root) ?? slider;
+
     /// <summary>The window runs what the view asks, and shows the run's records.</summary>
     private void Wire(CheckRecordsViewModel checks, string root, Guid runId)
     {
@@ -2087,7 +2101,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         try
         {
             var engine = CurrentEngine();
-            var autonomy = _vm.AutonomyTier;
+            var autonomy = ChecksAutonomy(root, WorkspaceRegistry.Normalise(_vm.WorkspacePath), _vm.AutonomyTier,
+                folder => _registry.Find(folder)?.Autonomy);
             // Off the window's thread: the commands and the hashing of the files take their time.
             var (record, problem) = await Task.Run(() => ChecksNow.RunAsync(engine, WorkspaceInfo.For(root), runId,
                 Environment.UserName, autonomy, CancellationToken.None));

@@ -298,11 +298,15 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
             return refused;
         if (engine.Current is not { } composed)
             return engine.Problem ?? "There is no engine to run on.";
-        // Not while a run of the service is going in the folder: the lease that keeps another process out does not keep out
-        // this one's own runs, and the checks would read files a run is in the middle of changing.
+        // Not while a run of the service is going in the folder - one waiting its turn in the line too: the checks would read
+        // files a run is in the middle of changing. Said here, early; what holds against a run that starts a moment later
+        // is ChecksNow's own WorkspaceActivity, taken for as long as the checks run.
         if (runs.List(user).Any(r => !r.Ended.IsCompleted && SameFolder(r.Workspace, known.RootPath)))
             return "A run is going in this workspace; run the checks when it has ended, so they see the files as you left them.";
 
+        // Audited as it starts, before any command runs: the commands are what the trail is for, and a record that could not
+        // be kept afterwards (a locked database, a full disk) must not leave commands run from a page that nobody can trace.
+        users.Audit(account.Name, "staged run checks started", $"{known.RootPath}: {title}");
         Core.Checks.CheckRecord? record;
         string? problem;
         try
@@ -312,12 +316,16 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Said on the page, not thrown into it: a history that cannot be written (a locked database, a full disk) is
-            // this press's failure, and a page that dies of it takes the person's other work on it along.
+            users.Audit(account.Name, "staged run checks failed", $"{known.RootPath}: {title}: {ex.Message}");
+            // Said on the page, not thrown into it: a history that cannot be written is this press's failure, and a page
+            // that dies of it takes the person's other work on it along.
             return "The checks could not be run or their record kept: " + ex.Message;
         }
         if (record is null)
+        {
+            users.Audit(account.Name, "staged run checks not run", $"{known.RootPath}: {title}: {problem}");
             return problem ?? "The checks were not run.";
+        }
         users.Audit(account.Name, "staged run checked now", $"{known.RootPath}: {title}: {CheckRecordViews.Counts(record.Results)}");
         return $"Checked: {CheckRecordViews.Counts(record.Results)}. The record is kept with the run; it does not change how the run ended.";
     }

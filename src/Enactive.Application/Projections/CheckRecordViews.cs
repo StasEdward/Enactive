@@ -79,6 +79,10 @@ internal static class CheckRecordViews
     /// A run's records, newest first, each with whether the workspace still matches it. The fingerprint is taken again once
     /// for every set of inputs, not once per record: in git every record of a run is compared with one state, and a page
     /// listing five records ran git twenty times.
+    ///
+    /// <para>Taken again on every load - a few git processes, or a hash of each covered file, per page or panel shown.
+    /// Not cached on purpose: a cached fingerprint shows "current" for a state that changed a moment ago, which is the
+    /// one thing a record must not claim. Measure before adding one.</para>
     /// </summary>
     public static async Task<IReadOnlyList<CheckRecordView>> ForRunAsync(string root, Guid runId, CancellationToken ct)
     {

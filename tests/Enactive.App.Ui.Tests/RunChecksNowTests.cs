@@ -104,6 +104,37 @@ public sealed class RunChecksNowTests
             ((string?)button.Attribute("Command"), (string?)button.Attribute("Content"), (string?)button.Attribute("IsVisible")));
     }
 
+    /// <summary>
+    /// The checks of a run in another folder than the one on screen run at THAT folder's level, not the slider's - the
+    /// slider is about the folder on screen; the folder on screen uses the slider, as a run started from it does.
+    /// </summary>
+    [Fact]
+    public void Checks_run_at_the_level_of_the_folder_the_run_was_in()
+    {
+        var shown = Path.Combine(Path.GetTempPath(), "shown");
+        var other = Path.Combine(Path.GetTempPath(), "other");
+        int? Saved(string folder) => folder == other ? 0 : null;
+
+        Assert.Equal(3, MainWindow.ChecksAutonomy(shown, Enactive.Workspace.WorkspaceRegistry.Normalise(shown), 3, Saved));
+        Assert.Equal(0, MainWindow.ChecksAutonomy(other, Enactive.Workspace.WorkspaceRegistry.Normalise(shown), 3, Saved));
+        Assert.Equal(3, MainWindow.ChecksAutonomy(Path.Combine(Path.GetTempPath(), "unknown"), shown, 3, Saved));
+    }
+
+    /// <summary>
+    /// The live run's action is for the folder the run ran in, kept when it started - not the folder on screen when it ends,
+    /// which a person may have switched in the meantime.
+    /// </summary>
+    [Fact]
+    public void The_live_action_is_for_the_folder_the_run_ran_in()
+    {
+        var code = File.ReadAllText(Path.Combine(Root(), "src", "Enactive.App.Ui", "MainWindow.axaml.cs"));
+
+        Assert.Contains("_stagedRunRoot = fullPath;", code);
+        Assert.Contains("_stagedRunRoot is { Length: > 0 } stagedRoot", code);
+        Assert.Contains("_ = ShowLiveChecksAsync(stagedRoot, stagedRun);", code);
+        Assert.DoesNotContain("_currentWorkspaceRoot is { Length: > 0 } stagedRoot", code);
+    }
+
     private static string Root([CallerFilePath] string here = "")
         => Path.GetFullPath(Path.Combine(Path.GetDirectoryName(here)!, "..", ".."));
 }

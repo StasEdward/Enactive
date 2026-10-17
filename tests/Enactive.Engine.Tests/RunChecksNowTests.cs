@@ -271,6 +271,104 @@ public sealed class RunChecksNowTests
         Assert.Contains($"1 past the first {StateFingerprints.MaxFiles} were not hashed", fingerprint.Caveat);
     }
 
+    /// <summary>
+    /// A workspace that is a FOLDER of a repository: git names changed files from the repository's top, and a fingerprint
+    /// that hashed them as workspace paths found every one "(gone)" - a second edit to a file already changed went
+    /// unnoticed, and the engine's own folder in the workspace was not recognised as its own.
+    /// </summary>
+    [Fact]
+    public async Task In_a_repository_subfolder_a_second_edit_is_caught_and_the_engines_own_output_is_not()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("sub/b.txt", "start\n");
+        fx.Write("top.txt", "top\n");
+        Repository(fx);
+        var root = fx.PathOf("sub");
+        fx.Write("sub/b.txt", "first edit\n");
+
+        var taken = await StateFingerprints.TakeAsync(root, [], [], [], CancellationToken.None);
+        Assert.Equal(FingerprintKind.Git, taken.Kind);
+        Assert.Equal(1, taken.Files);
+        Assert.True(await StateFingerprints.MatchesAsync(root, taken, [], CancellationToken.None));
+
+        // Written after a press, by the engine, under the workspace's own .enactive: not a change of the work.
+        fx.Write("sub/.enactive/checks/runs/x/now-1-notes.txt", "output");
+        Assert.True(await StateFingerprints.MatchesAsync(root, taken, [], CancellationToken.None));
+        // Outside the workspace: another folder's work, not this one's.
+        fx.Write("top.txt", "elsewhere\n");
+        Assert.True(await StateFingerprints.MatchesAsync(root, taken, [], CancellationToken.None));
+
+        fx.Write("sub/b.txt", "second edit\n");
+        Assert.False(await StateFingerprints.MatchesAsync(root, taken, [], CancellationToken.None), "A second edit of a changed file.");
+        fx.Write("sub/b.txt", "first edit\n");
+        Assert.True(await StateFingerprints.MatchesAsync(root, taken, [], CancellationToken.None));
+    }
+
+    /// <summary>
+    /// The run's own ceiling still holds: a template that denied the command tool for its run denies it here too - the
+    /// permissions of now are narrowed by the template's, never wider than what the run was allowed.
+    /// </summary>
+    [Fact]
+    public async Task A_command_the_runs_template_denied_is_not_run_now_either()
+    {
+        using var fx = new EngineFixture();
+        Manifest(fx, "notes.json", """{"id":"notes","command":"echo ran","fireOn":"Run"}""");
+        var spec = new ResolvedTaskSpec("tidy", 1, "Tidy", fx.Workspace.Id, fx.Workspace.Name, fx.Root, "tidy the notes",
+            new Dictionary<string, string>(),
+            Enactive.Core.Permissions.PermissionPolicy.PermissiveDefault with { Deny = ["run_command"] },
+            [], ExecutionLimits.None, null, false);
+        var run = new RunRecord(Guid.NewGuid(), Guid.NewGuid(), "Tidy", null, DateTimeOffset.Now, DateTimeOffset.Now, "Incomplete", [], [], [],
+            new RunSettings(3, "autonomous", null, Staged: true), Spec: spec.Snapshot())
+        {
+            CheckSnapshot = new CheckStore(fx.Root, fx.Root + "-no-global", KnownEcosystems.All).Snapshot()
+        };
+        await RunStoreFactory.Create(fx.Workspace).SaveAsync(run, CancellationToken.None);
+
+        var (record, _) = await RunNowAsync(Engine(), fx, run.RunId, autonomy: 3);
+
+        var line = Assert.Single(record!.Results);
+        Assert.Equal(CriterionOutcome.Unknown, line.Outcome);
+        Assert.StartsWith("not run: needs permission", line.Detail);
+        Enactive.Tests.SqlitePools.ClearUnder(fx.Root);
+    }
+
+    /// <summary>
+    /// One press at a time in a workspace, and never beside a run of this process: the workspace lease keeps out other
+    /// processes only, so two people pressing at once on the service ran the same commands side by side, and a run started
+    /// meanwhile edited the files being checked.
+    /// </summary>
+    [Fact]
+    public async Task Checks_now_run_one_at_a_time_and_never_beside_a_run_of_this_process()
+    {
+        using var fx = new EngineFixture();
+        Manifest(fx, "notes.json", """{"id":"notes","command":"echo ran","fireOn":"Run"}""");
+        var (runId, kept, engine) = await StagedRunAsync(fx, ("notes.md", "applied\n"));
+        Apply(fx, kept, "notes.md");
+
+        using (Enactive.Core.Storage.WorkspaceActivity.TryChecks(fx.Root, out _)!)
+        {
+            var (none, busy) = await RunNowAsync(engine, fx, runId);
+            Assert.Null(none);
+            Assert.Contains("already running", busy);
+            // And a run is not started in the middle of them.
+            var refused = await Assert.ThrowsAsync<Enactive.Core.Storage.WorkspaceInUseException>(() => RunComposer.ComposeAsync(Engine(),
+                new RunRequest(fx.Workspace, "another", IntentSource.CommandBar) { Defaults = new(2) }, fx.Decisions, CancellationToken.None));
+            Assert.Contains("checks are running", refused.Message);
+        }
+
+        // A run composed in the workspace - going - keeps the checks out until it is over.
+        await using (await RunComposer.ComposeAsync(Engine(), new RunRequest(fx.Workspace, "another", IntentSource.CommandBar) { Defaults = new(2) },
+                         fx.Decisions, CancellationToken.None))
+        {
+            var (none, going) = await RunNowAsync(engine, fx, runId);
+            Assert.Null(none);
+            Assert.Contains("A run is going", going);
+        }
+
+        Assert.NotNull((await RunNowAsync(engine, fx, runId)).Record);
+        Enactive.Tests.SqlitePools.ClearUnder(fx.Root);
+    }
+
     /// <summary>Only a staged run is checked this way; a run that wrote to disk was checked as it ran.</summary>
     [Fact]
     public async Task A_run_that_was_not_staged_is_refused()

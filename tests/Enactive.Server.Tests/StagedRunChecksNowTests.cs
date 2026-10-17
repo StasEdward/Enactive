@@ -126,6 +126,33 @@ public sealed class StagedRunChecksNowTests : IDisposable
         Assert.Equal("Incomplete", (await RunStoreFactory.Create(WorkspaceInfo.For(_workspace)).LoadAsync(run.RunId, CancellationToken.None))!.Status);
     }
 
+    /// <summary>
+    /// The press is audited as it starts, before any command runs, and its end after: commands run from a page are in the
+    /// trail even when their record cannot be kept - here the history's table of records is not the one it writes to.
+    /// </summary>
+    [Fact]
+    public async Task A_press_is_audited_when_it_starts_even_if_its_record_cannot_be_kept()
+    {
+        var run = await StagedRunAsync();
+        _engine.Workspaces.SaveSettings(_workspace, 3, null, stageChanges: true);
+        await using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(_workspace, ".enactive", "enactive.db")}"))
+        {
+            await connection.OpenAsync();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DROP TABLE IF EXISTS check_records; CREATE TABLE check_records (id TEXT PRIMARY KEY, run_id TEXT);";
+            await command.ExecuteNonQueryAsync();
+        }
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+        var said = await _history.RunChecksNowAsync(As("alice"), _workspace, run.RunId, CancellationToken.None);
+
+        Assert.StartsWith("The checks could not be run or their record kept", said);
+        var trail = _users.AuditTrail().Where(e => e.Account == "alice").Select(e => e.Action).ToList();
+        Assert.Contains("staged run checks started", trail);
+        Assert.Contains("staged run checks failed", trail);
+        Assert.DoesNotContain("staged run checked now", trail);
+    }
+
     /// <summary>A run that was not staged is not offered the action, and a press is refused - it had its checks as it ran.</summary>
     [Fact]
     public async Task A_run_that_was_not_staged_is_not_offered_it()

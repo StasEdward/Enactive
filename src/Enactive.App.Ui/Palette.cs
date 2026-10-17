@@ -106,7 +106,8 @@ internal static class Palette
     /// <summary>One check's line in a "Run checks now" record: what it came to (the service's Looks.CheckLine).</summary>
     public static readonly IValueConverter CheckLine = Map<CheckLineTone>(tone => tone switch
     {
-        CheckLineTone.Passed => Brand.Success,
+        // Plain, never green: a record is "checked at its time", and a green PASS under it reads as a standing pass.
+        CheckLineTone.Passed => Brand.TextBody,
         CheckLineTone.Failed => Brand.Danger,
         CheckLineTone.NotRun => Brand.Warning,
         _ => throw Unknown(tone)

@@ -217,6 +217,14 @@ public static class RunComposer
         // second host in the same folder is two agents editing the same files (WorkspaceLease). Here, so no
         // host can forget it.
         var lease = WorkspaceLease.Take(workspace.RootPath);
+        // And within this process, never while its "Run checks now" runs there (WorkspaceActivity): the lease above counts
+        // this process's takes, so it does not keep a run out of a folder whose files the checks are reading.
+        var activity = WorkspaceActivity.TryRun(workspace.RootPath, out var checking);
+        if (activity is null)
+        {
+            lease.Dispose();
+            throw new WorkspaceInUseException(workspace.RootPath, null, checking);
+        }
         McpRunTools? tools = null;
         try
         {
@@ -312,7 +320,7 @@ public static class RunComposer
                     context, DateTimeOffset.UtcNow, workerId),
                 artifacts,
                 request.Resume,
-                new Holding(tools, lease))
+                new Holding(tools, lease, activity))
             {
                 Checks = checks
             };
@@ -322,22 +330,30 @@ public static class RunComposer
             // Every preparation step can fail, including choosing the memory store. Until ownership
             // passes to ComposedRun, release the workspace even if closing a tool connection also fails.
             try { if (tools is not null) await tools.DisposeAsync(); }
-            finally { lease.Dispose(); }
+            finally
+            {
+                activity.Dispose();
+                lease.Dispose();
+            }
             throw;
         }
     }
 
     /// <summary>
-    /// What a composed run holds until it is disposed: its tool servers, then the workspace. In one disposable
-    /// because hosts pass <see cref="ComposedRun.Resources"/> on (the remote runner does) and must not have to
-    /// know there are two.
+    /// What a composed run holds until it is disposed: its tool servers, then the workspace - its lease, and its count
+    /// among this process's runs there (WorkspaceActivity). In one disposable because hosts pass
+    /// <see cref="ComposedRun.Resources"/> on (the remote runner does) and must not have to know there are several.
     /// </summary>
-    private sealed class Holding(IAsyncDisposable tools, ProcessLease lease) : IAsyncDisposable
+    private sealed class Holding(IAsyncDisposable tools, ProcessLease lease, IDisposable activity) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {
             try { await tools.DisposeAsync(); }
-            finally { lease.Dispose(); }
+            finally
+            {
+                activity.Dispose();
+                lease.Dispose();
+            }
         }
     }
 

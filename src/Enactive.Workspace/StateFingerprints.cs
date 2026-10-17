@@ -89,15 +89,30 @@ public static class StateFingerprints
     /// <summary>The git fingerprint, or null when this is not a git work tree or git will not answer (AutomaticGit refuses some).</summary>
     private static async Task<StateFingerprint?> GitAsync(string root, CancellationToken ct)
     {
-        var (insideExit, inside) = await AutomaticGit.RunAsync(root, ["rev-parse", "--is-inside-work-tree"], ct);
+        // The repository's top, found on the disk as git finds it - the nearest folder up with a .git - and git held to
+        // it. A workspace is often a FOLDER of a repository; held to the folder (AutomaticGit's default), git read it as
+        // the whole tree and named the repository's files from its top, so every changed file was looked for under the
+        // wrong path - all "(gone)", and a second edit of a file already changed went unseen.
+        if (TopOf(root) is not { } top)
+            return null;
+        var prefix = Path.GetRelativePath(top, root).Replace('\\', '/');
+        prefix = prefix == "." ? "" : prefix.TrimEnd('/') + "/";
+
+        Task<(int Exit, string Output)> Git(params string[] args) => AutomaticGit.RunAsync(root, args, ct, worktree: top);
+        var (insideExit, inside) = await Git("rev-parse", "--is-inside-work-tree");
         if (insideExit != 0 || inside.Trim() != "true")
             return null;
-        var (headExit, head) = await AutomaticGit.RunAsync(root, ["rev-parse", "--verify", "--quiet", "HEAD"], ct);
+        var (headExit, head) = await Git("rev-parse", "--verify", "--quiet", "HEAD");
         // -z: a path with a space or a quote is given as it is, not quoted; --untracked-files=all: each new file, not its
-        // folder - a folder's line says nothing when a second file appears in it.
-        var (statusExit, status) = await AutomaticGit.RunAsync(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], ct);
+        // folder - a folder's line says nothing when a second file appears in it. "-- .": this workspace's folder only,
+        // run from it - another folder of the repository is not this workspace's work.
+        var (statusExit, status) = await Git("status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".");
         if (statusExit != 0)
             return null;
+
+        // Status names paths from the repository's top: made the workspace's own, or left out when outside it.
+        string? Own(string path) => prefix.Length == 0 ? path
+            : path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? path[prefix.Length..] : null;
 
         var entries = new List<string>();
         var paths = new List<string>();
@@ -106,15 +121,18 @@ public static class StateFingerprints
         {
             var entry = parts[i];
             if (entry.Length < 4) continue;
-            var path = entry[3..];
+            var path = Own(entry[3..]);
             // A rename or a copy is followed by the path it came from.
             var from = (entry[0] is 'R' or 'C' || entry[1] is 'R' or 'C') && i + 1 < parts.Length ? parts[++i] : null;
+            var fromOwn = from is null ? null : Own(from);
+            if (path is null && fromOwn is null) continue;
             // The engine's own folder is left out: this record, its output files and the history are written there AFTER
             // the fingerprint is taken, and a workspace whose .gitignore does not name it would read as changed by the act
-            // of keeping the record.
-            if (IsOwn(path) && (from is null || IsOwn(from))) continue;
-            entries.Add(from is null ? entry : entry + "\t" + from);
-            paths.Add(path);
+            // of keeping the record. Decided on the workspace's own path: the folder is the WORKSPACE's .enactive.
+            if ((path is null || IsOwn(path)) && (fromOwn is null || IsOwn(fromOwn))) continue;
+            entries.Add(entry[..3] + (path ?? "") + (from is null ? "" : "\t" + (fromOwn ?? from)));
+            if (path is not null && !IsOwn(path))
+                paths.Add(path);
         }
 
         var text = new StringBuilder("git\n");
@@ -185,6 +203,21 @@ public static class StateFingerprints
             relative.Add(path);
         }
         return relative.ToArray();
+    }
+
+    /// <summary>
+    /// The work tree's top above <paramref name="root"/> - the nearest folder holding a <c>.git</c> folder or file (a linked
+    /// work tree's) - or null outside any repository.
+    /// </summary>
+    private static string? TopOf(string root)
+    {
+        for (var folder = new DirectoryInfo(root); folder is not null; folder = folder.Parent)
+        {
+            var git = Path.Combine(folder.FullName, ".git");
+            if (Directory.Exists(git) || File.Exists(git))
+                return folder.FullName;
+        }
+        return null;
     }
 
     private static bool IsOwn(string path)

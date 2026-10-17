@@ -184,10 +184,11 @@ internal static class Looks
         _ => throw Unknown((applied, rejected))
     };
 
-    /// <summary>One check's line in a "Run checks now" record: what it came to.</summary>
+    /// <summary>One check's line in a "Run checks now" record: what it came to - a failure red, a check not run amber, a pass plain.</summary>
     public static string CheckLine(CheckLineTone tone) => tone switch
     {
-        CheckLineTone.Passed => "tone-done",
+        // Plain, never green: a record is "checked at its time", and a green PASS under it reads as a standing pass.
+        CheckLineTone.Passed => "tone-plain",
         CheckLineTone.Failed => "tone-failed",
         CheckLineTone.NotRun => "tone-warning",
         _ => throw Unknown(tone)

@@ -62,6 +62,10 @@ public sealed class LooksTests
         Assert.Equal("tone-running", Looks.Card(FeedCardStatus.Running));
         Assert.Equal("tone-failed", Looks.Run(RunStandingKind.Failed));
         Assert.Equal("tier-3", Looks.Autonomy(3));
+        // A check record is "checked at its time", never a standing green: a PASS under it is plain, its edge amber or muted.
+        Assert.Equal("tone-plain", Looks.CheckLine(CheckLineTone.Passed));
+        Assert.DoesNotContain("tone-done", new[] { Looks.CheckRecord(true), Looks.CheckRecord(false) }
+            .Concat(Enum.GetValues<CheckLineTone>().Select(Looks.CheckLine)));
     }
 
     [Fact]
