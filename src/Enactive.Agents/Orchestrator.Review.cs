@@ -91,7 +91,11 @@ public sealed partial class Orchestrator
         // result that cited nothing leaves none). What the engine found for an earlier review is history, and said to be.
         // Run f45e14, 2026-09-29: the second review was shown the first review's "NOT in" beside the new ones, and the old
         // place again from the account of the fix, and read them all as the current citations.
-        journal.MarkHistorical(evidenceStart, CitedPlaces.ToolName, CitedPlaces.Historical);
+        //
+        // From the step's own start (stepStart), not where its evidence starts: steps one after the other share one journal
+        // (evidenceStart 0), and from the second step's review on, every earlier step's cited places were rewritten as "an
+        // earlier attempt of this step, since corrected" - the original output lost, the reviewer told something false.
+        journal.MarkHistorical(stepStart,CitedPlaces.ToolName, CitedPlaces.Historical);
         var cited = CitedPlaces.Observe(handedOn ?? LastAssistant(messages), _workspace.RootPath,
             () => CitedPlaces.Sweep(_workspace.RootPath));
         foreach (var (place, observed) in cited)
