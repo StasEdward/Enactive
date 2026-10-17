@@ -517,13 +517,18 @@ public static class CheckGlob
         var close = p.IndexOf(']', j);
         if (close < 0) return "opens a [set] it never closes";
 
-        sb.Append('[');
         // Negated, it still names one character of a name, as '?' does - never the '/' between folders: "[^x]" alone let
-        // "a[!b]c/*.txt" match a/c/d.txt, a file one folder up from where the glob says.
-        if (negated) sb.Append("^/");
-        foreach (var ch in p.AsSpan(first, close - first))
+        // "a[!b]c/*.txt" match a/c/d.txt, a file one folder up from where the glob says. The '/' goes first, and a '-' at
+        // either edge of the set is escaped: it is a literal there, but beside the '/' it became a range - "[!-x]" ("not '-'
+        // and not 'x'") turned into "[^/-x]", every character from '/' to 'x', and "[!-.]" into a backwards range the
+        // manifest was refused for. (Not a look-ahead for the '/': the patterns are compiled for an engine without one.)
+        sb.Append(negated ? "[^\\/" : "[");
+        var content = p.Substring(first, close - first);
+        for (var k = 0; k < content.Length; k++)
         {
-            if (ch is '\\' or ']' or '[' or '^') sb.Append('\\');
+            var ch = content[k];
+            if (ch is '\\' or ']' or '[' or '^' || (negated && ch == '-' && (k == 0 || k == content.Length - 1)))
+                sb.Append('\\');
             sb.Append(ch);
         }
         sb.Append(']');

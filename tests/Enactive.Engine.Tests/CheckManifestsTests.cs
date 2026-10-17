@@ -409,13 +409,37 @@ public sealed class CheckManifestsTests : IDisposable
     [InlineData("src[!a]x", "src/x", false)]
     [InlineData("a[!b]c/*.txt", "a/c/d.txt", false)]
     [InlineData("a[!b]c/*.txt", "axc/d.txt", true)]
+    // A negated set starting (or ending) with '-' means its characters: the "not '/'" must not join it into a range.
+    [InlineData("[!-x]", "a", true)]
+    [InlineData("[!-x]", "-", false)]
+    [InlineData("[!-x]", "x", false)]
+    [InlineData("[!-x]", "/", false)]
+    [InlineData("[!-.]", "a", true)]
+    [InlineData("[!-.]", "-", false)]
+    [InlineData("[!-.]", ".", false)]
+    [InlineData("[!-.]", "/", false)]
+    [InlineData("[!a-]", "b", true)]
+    [InlineData("[!a-]", "-", false)]
+    [InlineData("[!a-]", "a", false)]
+    [InlineData("[!a-]", "/", false)]
+    // Plain sets are as they were.
+    [InlineData("[-x]", "-", true)]
+    [InlineData("[-x]", "/", false)]
+    [InlineData("[+-.]", "/", false)]
     [InlineData("**/**/**/*.cs", "a/b/c.cs", true)]
     [InlineData("**/**/**/*.cs", "c.cs", true)]
     public void A_glob_names_the_paths_it_says(string glob, string path, bool matches)
         => Assert.Equal(matches, CheckGlob.IsMatch(glob, path));
 
+    /// <summary>"Not dash or dot" is a glob a manifest may carry: it was refused as a backwards range.</summary>
+    [Theory]
+    [InlineData("[!-.]")]
+    [InlineData("[!-x]")]
+    [InlineData("[!a-]")]
+    public void A_negated_set_with_a_dash_at_its_edge_is_not_a_problem(string glob) => Assert.Null(CheckGlob.Problem(glob));
+
     /// <summary>
-    /// The one parser behind both questions: whatever Problem passes, IsMatch can match - it threw on a comma in a set in
+    /// The one parser behind both questions:whatever Problem passes, IsMatch can match - it threw on a comma in a set in
     /// alternatives - and whatever IsMatch could not translate, Problem names.
     /// </summary>
     [Theory]
