@@ -556,4 +556,47 @@ public sealed class CheckManifestsTests : IDisposable
         MakeDotnet();
         Assert.Equal(CheckSeverity.Blocking, Store().Inventory().Checks.Single(c => c.Id == "build").Definition.Severity);
     }
+
+    /// <summary>
+    /// Each check says what its own manifest said, apart from what it took from below (Plan Phase 3.5): a workspace manifest
+    /// that writes out the global check's command is a check of its own, and one that says only a severity is a raise - an
+    /// editor told them apart by comparing commands, and saved the first as a raise.
+    /// </summary>
+    [Fact]
+    public void The_inventory_says_what_each_manifest_said_itself()
+    {
+        WriteGlobal("lint.json", Lint);
+        WriteGlobal("audit.json", """{"id":"audit","command":"npm audit","fireOn":"Run"}""");
+        WriteLocal("lint.json", Lint);
+        WriteLocal("audit.json", """{"severity":"Blocking"}""");
+
+        var checks = Store().Inventory().Checks;
+        var lint = checks.Single(c => c.Id == "lint");
+        var audit = checks.Single(c => c.Id == "audit");
+
+        Assert.True(lint.CommandSaid);
+        Assert.Equal("npm run lint", lint.Said!.Command);
+        Assert.False(audit.CommandSaid);
+        Assert.Equal(new CheckManifestSaid(Severity: CheckSeverity.Blocking), audit.Said);
+        Assert.Equal("npm audit", audit.Definition.Command);
+    }
+
+    /// <summary>
+    /// Saved as said, a manifest holds what it says and nothing it took from below: a check turned off from a workspace says
+    /// that alone, and follows the global check when that one changes - a full copy stayed behind, frozen.
+    /// </summary>
+    [Fact]
+    public void A_manifest_saved_as_said_writes_only_what_it_says()
+    {
+        WriteGlobal("audit.json", """{"id":"audit","command":"npm audit","fireOn":"Run"}""");
+        var store = Store();
+
+        store.Save("audit", new CheckManifestSaid(Enabled: false), CheckScope.Workspace);
+
+        using var file = JsonDocument.Parse(File.ReadAllText(Local("audit.json")));
+        Assert.Equal(["id", "enabled"], file.RootElement.EnumerateObject().Select(p => p.Name));
+        WriteGlobal("audit.json", """{"id":"audit","command":"npm audit --omit=dev","fireOn":"Run"}""");
+        var audit = Store().Inventory().Checks.Single();
+        Assert.Equal(("npm audit --omit=dev", false), (audit.Definition.Command, audit.Definition.Enabled));
+    }
 }

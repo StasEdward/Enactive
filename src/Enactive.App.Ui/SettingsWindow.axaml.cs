@@ -63,9 +63,8 @@ internal sealed partial class SettingsWindow : Window
                 "Remove", "Keep");
         }
         // The global checks (Plan Phase 3.5): files, written at once, as the templates are.
-        viewModel.Checks = checks;
-        if (checks is not null)
-            checks.ConfirmRequested += (headline, detail) => ConfirmWindow.AskAsync(this, headline, detail, "Delete", "Keep");
+        _viewModel = viewModel;
+        FollowWorkspace(checks);
         viewModel.CloseRequested += () => Close();
         viewModel.ProviderEditRequested += (config, saved) =>
             new ProviderEditWindow(config, saved).Show(this);
@@ -90,6 +89,19 @@ internal sealed partial class SettingsWindow : Window
         WorkerList.DoubleTapped += (_, e) => OpenTapped<WorkerRow>(e, row => row.EditCommand);
         McpList.DoubleTapped += (_, e) => OpenTapped<McpServerRow>(e, row => row.EditCommand);
         TemplateList.DoubleTapped += (_, e) => OpenTapped<TemplateRow>(e, row => row.EditCommand);
+    }
+
+    private readonly SettingsViewModel _viewModel = null!;
+
+    /// <summary>
+    /// The global Checks list, read over the workspace now open in the main window: set when the window opens, and again
+    /// when the main window's workspace changes, so the list never describes a folder that is no longer open.
+    /// </summary>
+    internal void FollowWorkspace(ChecksViewModel? checks)
+    {
+        _viewModel.Checks = checks;
+        if (checks is not null)
+            checks.ConfirmRequested += (headline, detail, confirm) => ConfirmWindow.AskAsync(this, headline, detail, confirm, "Keep");
     }
 
     /// <summary>

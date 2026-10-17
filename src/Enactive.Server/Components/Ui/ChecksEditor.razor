@@ -111,7 +111,7 @@
                         <option value="@severity">@severity</option>
                     }
                 </select>
-                <label class="label" for="check-timeout">Timeout (s)</label>
+                <label class="label" for="check-timeout">Timeout (s) - empty, the default</label>
                 <input id="check-timeout" inputmode="numeric" @bind="draft.Timeout" />
                 <label class="label" for="check-matches">Matches - the paths it is about, one a line</label>
                 <textarea id="check-matches" rows="3" @bind="draft.Matches"></textarea>
@@ -136,7 +136,7 @@
     <Dialog Title="@question.Headline" OnClose="() => Answer(false)">
         <ChildContent><p class="body">@question.Detail</p></ChildContent>
         <Actions>
-            <button type="button" class="btn destructive" @onclick="() => Answer(true)">Delete</button>
+            <button type="button" class="btn destructive check-confirm" @onclick="() => Answer(true)">@question.Confirm</button>
             <button type="button" class="btn" @onclick="() => Answer(false)">Keep</button>
         </Actions>
     </Dialog>
@@ -148,7 +148,7 @@
 
     private ChecksViewModel? _shown;
     private CheckDraft? _draft;
-    private (string Headline, string Detail, TaskCompletionSource<bool> Answer)? _question;
+    private (string Headline, string Detail, string Confirm, TaskCompletionSource<bool> Answer)? _question;
 
     protected override void OnParametersSet()
     {
@@ -199,10 +199,10 @@
 
     private void ListChanged(object? sender, NotifyCollectionChangedEventArgs e) => _ = InvokeAsync(StateHasChanged);
 
-    private Task<bool> AskAsync(string headline, string detail)
+    private Task<bool> AskAsync(string headline, string detail, string confirm)
     {
         var answer = new TaskCompletionSource<bool>();
-        _question = (headline, detail, answer);
+        _question = (headline, detail, confirm, answer);
         _ = InvokeAsync(StateHasChanged);
         return answer.Task;
     }

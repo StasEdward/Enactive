@@ -17,6 +17,16 @@ internal sealed partial class SettingsViewModel
 
     private RelayCommand? _showChecks;
 
-    /// <summary>The global checks list, set by a host that shows it in this view model's window; null, none here.</summary>
-    public ChecksViewModel? Checks { get; set; }
+    /// <summary>
+    /// The global checks list, set by a host that shows it in this view model's window; null, none here. Set again when the
+    /// window's workspace changes: the list is read over it - what that workspace shadows, its implicit build and test - and
+    /// one left on the workspace before said things about a folder no longer open.
+    /// </summary>
+    public ChecksViewModel? Checks
+    {
+        get => _checks;
+        set => Set(ref _checks, value);
+    }
+
+    private ChecksViewModel? _checks;
 }

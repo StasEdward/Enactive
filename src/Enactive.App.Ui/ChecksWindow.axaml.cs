@@ -12,7 +12,7 @@ public sealed partial class ChecksWindow : Window
     {
         Title = $"Checks - {workspaceName}";
         List.DataContext = checks;
-        checks.ConfirmRequested += (headline, detail) => ConfirmWindow.AskAsync(this, headline, detail, "Delete", "Keep");
+        checks.ConfirmRequested += (headline, detail, confirm) => ConfirmWindow.AskAsync(this, headline, detail, confirm, "Keep");
         // Read again when it comes forward: a run that ended while it was behind the main window lets its checks be changed.
         Activated += (_, _) => checks.Refresh();
     }

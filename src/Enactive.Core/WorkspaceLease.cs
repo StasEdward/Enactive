@@ -30,6 +30,14 @@ public static class WorkspaceLease
     /// <summary>Takes the workspace for this process, or returns null and who holds it.</summary>
     public static ProcessLease? TryTake(string workspaceRoot, out LeaseHolder? holder)
         => ProcessLease.TryTake(PathFor(workspaceRoot), out holder);
+
+    /// <summary>
+    /// Whether a run is working in the workspace now - this process's or another's (the window, a console, the service) -
+    /// and who, when it is another. Asked by whatever must not change the workspace under a run: every run holds this from
+    /// the moment it is composed until it is disposed, whoever started it.
+    /// </summary>
+    public static bool IsHeld(string workspaceRoot, out LeaseHolder? elsewhere)
+        => ProcessLease.IsHeld(PathFor(workspaceRoot), out elsewhere);
 }
 
 /// <summary>

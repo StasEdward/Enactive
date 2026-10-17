@@ -19,8 +19,9 @@ using Enactive.Workspace;
 /// (ServerFolders.ChecksOf) - not CheckStore's default %APPDATA%, which a service started with its own data folder never
 /// reads - and it is known without an engine: a service with no model configured yet can have its checks set up.</para>
 ///
-/// <para><b>When.</b> Not while a run works in the workspace: the run puts back its check manifests at its end as they were
-/// when it started (CheckManifestGuard), and a change made meanwhile would be undone without a word.</para>
+/// <para><b>When.</b> Not while a run works in the workspace - the service's own, or any other program's that holds the
+/// workspace's lease: the run puts back its check manifests at its end as they were when it started (CheckManifestGuard), and
+/// a change made meanwhile would be undone without a word.</para>
 /// </summary>
 internal sealed class ServerChecks(UserStore users, ServerFolders folders, IRunControl runs, KnownWorkspaces workspaces)
 {
@@ -65,25 +66,27 @@ internal sealed class ServerChecks(UserStore users, ServerFolders folders, IRunC
             return "Your role does not include changing a workspace's checks.";
         if (root is not { Length: > 0 } || workspaces.Find(root) is not { } known)
             return Unknown;
-        return RunWorksIn(user, known.RootPath) ? CheckChangeWords.RunActive : null;
+        // Any run that holds the workspace (WorkspaceLease) - this service's, or another program's on this machine - and the
+        // service's own runs not yet composed, which hold no lease yet and will at their start.
+        return RunWorksIn(user, known.RootPath) ? CheckChangeWords.RunActive : CheckChangeWords.WhyNotNow(known.RootPath);
     }
 
-    public string? Save(ClaimsPrincipal user, string? root, CheckDefinition check, CheckScope scope)
+    public string? Save(ClaimsPrincipal user, string? root, string id, CheckManifestSaid said, CheckScope scope)
     {
         if (WhyNot(user, root, scope) is { } why)
             return why;
         var store = Store(root);
-        if (store.Validate(check, scope) is { Count: > 0 } problems)
+        if (store.Validate(id, said, scope) is { Count: > 0 } problems)
             return CheckChangeWords.NotSaved(problems);
         try
         {
-            store.Save(check, scope);
+            store.Save(id, said, scope);
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             return "Not saved - " + ex.Message;
         }
-        users.Audit(Who(user), "check saved", $"{check.Id} ({scope}) in {Where(store, scope)}");
+        users.Audit(Who(user), "check saved", $"{id} ({scope}) in {Where(store, scope)}");
         return null;
     }
 
@@ -126,7 +129,7 @@ internal sealed class ServerChecks(UserStore users, ServerFolders folders, IRunC
     {
         public string? WhyNot(CheckScope scope) => checks.WhyNot(user, root, scope);
 
-        public string? Save(CheckDefinition check, CheckScope scope) => checks.Save(user, root, check, scope);
+        public string? Save(string id, CheckManifestSaid said, CheckScope scope) => checks.Save(user, root, id, said, scope);
 
         public string? Delete(string id, CheckScope scope) => checks.Delete(user, root, id, scope);
     }

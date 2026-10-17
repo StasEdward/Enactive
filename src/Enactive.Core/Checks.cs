@@ -141,6 +141,20 @@ public sealed record ResolvedCheck(CheckDefinition Definition, CheckOrigin Origi
     [JsonIgnore]
     public bool TimeoutSaid { get; init; }
 
+    /// <summary>
+    /// What the manifest this entry was read from SAID itself, field by field - null for the implicit build and test
+    /// nobody overrode. The definition is that with what it shadows filled in; an editor needs the difference. Without it
+    /// the UI guessed: a manifest that wrote out the same command as the global check was taken for a raise and saved
+    /// without its command, and stopped running once the global check was deleted; a check turned off from a workspace
+    /// list became a full copy of the global one, frozen. Only resolving reads it, so it is not stored with a snapshot.
+    /// </summary>
+    [JsonIgnore]
+    public CheckManifestSaid? Said { get; init; }
+
+    /// <summary>Its own manifest says a command - it is a check of its own, not a change to the one it shadows.</summary>
+    [JsonIgnore]
+    public bool CommandSaid => !string.IsNullOrWhiteSpace(Said?.Command);
+
     /// <summary>Runs through the ecosystem as the engine's build or test check does today, not through a command of its own.</summary>
     [JsonIgnore]
     public bool RunsThroughEcosystem => string.IsNullOrWhiteSpace(Definition.Command) && Ecosystems is { Count: > 0 };
@@ -153,6 +167,26 @@ public sealed record ResolvedCheck(CheckDefinition Definition, CheckOrigin Origi
            && File == other.File && (Ecosystems ?? []).SequenceEqual(other.Ecosystems ?? []);
 
     public override int GetHashCode() => HashCode.Combine(Definition, Origin, Shadows);
+}
+
+/// <summary>
+/// A check manifest as written: every field optional, null where it says nothing - so a manifest that only changes how the
+/// check below runs says only what it changes, and what it leaves unsaid follows that check (CheckStore.Resolve).
+/// </summary>
+public sealed record CheckManifestSaid(
+    string? Description = null,
+    string? Command = null,
+    IReadOnlyList<string>? Matches = null,
+    CheckFire? FireOn = null,
+    CheckSeverity? Severity = null,
+    int? TimeoutSeconds = null,
+    IReadOnlyList<string>? Protects = null,
+    bool? Enabled = null)
+{
+    /// <summary>A whole definition said in full - what a manifest written from it says.</summary>
+    public static CheckManifestSaid All(CheckDefinition check)
+        => new(check.Description, check.Command, check.Matches, check.FireOn, check.Severity, check.TimeoutSeconds,
+            check.Protects, check.Enabled);
 }
 
 /// <summary>Why a manifest was skipped - its file and what is wrong with it, for the UI to show beside the file.</summary>

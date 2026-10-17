@@ -160,23 +160,31 @@ public sealed class CheckStore
     /// so the UI refuses what the store would skip. Empty when it may be saved.
     /// </summary>
     public IReadOnlyList<string> Validate(CheckDefinition check, CheckScope scope)
+        => Validate(check.Id, CheckManifestSaid.All(check), scope);
+
+    /// <summary>
+    /// What is wrong with a manifest that says only <paramref name="said"/> - the UI's: a person's edit is saved as what they
+    /// set, and what they left unsaid follows the check below (a raise), or the default.
+    /// </summary>
+    public IReadOnlyList<string> Validate(string id, CheckManifestSaid said, CheckScope scope)
     {
-        var problems = Intrinsic(ManifestOf(check, file: PathOrName(check.Id, scope)));
+        var manifest = ManifestOf(id, said, file: PathOrName(id, scope));
+        var problems = Intrinsic(manifest);
         if (problems.Count > 0) return problems;
 
         // <id>.json holding ANOTHER check (a file renamed by hand) is that check's file, and a save of this id must not
         // overwrite it - nor write a second file of this id beside it.
-        var named = PathFor(check.Id, scope);
-        if (File.Exists(named) && DeclaredId(named) is var holds && !string.Equals(holds, check.Id, StringComparison.OrdinalIgnoreCase))
+        var named = PathFor(id, scope);
+        if (File.Exists(named) && DeclaredId(named) is var holds && !string.Equals(holds, id, StringComparison.OrdinalIgnoreCase))
             return [$"{Path.GetFileName(named)} holds the check '{holds}'; rename that file to {holds}.json first"];
 
         // A check without a command changes one below it; there must be one to change.
-        if (string.IsNullOrWhiteSpace(check.Command))
+        if (string.IsNullOrWhiteSpace(said.Command))
         {
             var inventory = Inventory();
-            var below = Below(check.Id, scope, inventory);
-            if (below is null || Resolve(ManifestOf(check, PathOrName(check.Id, scope)), scope, below, inventory.NoImplicitChecks) is null)
-                return [ProblemWithoutCommand(check.Id, below, inventory.NoImplicitChecks)];
+            var below = Below(id, scope, inventory);
+            if (below is null || Resolve(manifest, scope, below, inventory.NoImplicitChecks) is null)
+                return [ProblemWithoutCommand(id, below, inventory.NoImplicitChecks)];
         }
         return [];
     }
@@ -191,16 +199,25 @@ public sealed class CheckStore
     /// save turned the check off. Where several files declare it, this save settles which is in force: it is written to
     /// <c>&lt;id&gt;.json</c> and the others are removed.</para>
     /// </summary>
-    public void Save(CheckDefinition check, CheckScope scope)
-    {
-        if (Validate(check, scope) is { Count: > 0 } problems)
-            throw new ArgumentException("This check cannot be stored: " + string.Join("; ", problems), nameof(check));
+    public void Save(CheckDefinition check, CheckScope scope) => Write(check.Id, CheckManifestSaid.All(check), ToJson(check), scope);
 
-        var named = PathFor(check.Id, scope);
-        var declaring = Declaring(check.Id, Path.GetDirectoryName(named)!);
+    /// <summary>
+    /// Writes a manifest that says only <paramref name="said"/> - the fields a person set - to the file that declares the
+    /// id, as <see cref="Save(CheckDefinition, CheckScope)"/> does. Nothing it leaves unsaid is written: a field copied from
+    /// the check below would stay frozen in this file when that check changes.
+    /// </summary>
+    public void Save(string id, CheckManifestSaid said, CheckScope scope) => Write(id, said, ToJson(id, said), scope);
+
+    private void Write(string id, CheckManifestSaid said, string json, CheckScope scope)
+    {
+        if (Validate(id, said, scope) is { Count: > 0 } problems)
+            throw new ArgumentException("This check cannot be stored: " + string.Join("; ", problems), nameof(said));
+
+        var named = PathFor(id, scope);
+        var declaring = Declaring(id, Path.GetDirectoryName(named)!);
         var target = declaring.Count == 1 ? declaring[0] : named;
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        AtomicWrite.Replace(target, ToJson(check));
+        AtomicWrite.Replace(target, json);
         foreach (var twin in declaring.Where(f => !string.Equals(f, target, StringComparison.OrdinalIgnoreCase)))
             File.Delete(twin);
     }
@@ -249,6 +266,9 @@ public sealed class CheckStore
 
     /// <summary>A check as its file holds it.</summary>
     public static string ToJson(CheckDefinition check) => JsonSerializer.Serialize(check, Json);
+
+    /// <summary>A manifest saying only what is not null in <paramref name="said"/>.</summary>
+    public static string ToJson(string id, CheckManifestSaid said) => JsonSerializer.Serialize(FileOf(id, said), Json);
 
     // ── reading ─────────────────────────────────────────────────────────────
 
@@ -396,7 +416,7 @@ public sealed class CheckStore
                     said.TimeoutSeconds ?? CheckLimits.DefaultTimeoutFor(fires), said.Protects?.ToArray())
                 { Enabled = said.Enabled ?? true },
                 origin, below?.Origin)
-            { File = manifest.File, TimeoutSaid = said.TimeoutSeconds is not null };
+            { File = manifest.File, TimeoutSaid = said.TimeoutSeconds is not null, Said = SaidOf(said) };
         }
 
         // No command: it changes how the check below runs and keeps that check's command - or, for the implicit build
@@ -433,7 +453,8 @@ public sealed class CheckStore
             Origin = origin,
             Shadows = below.Origin,
             File = manifest.File,
-            TimeoutSaid = said.TimeoutSeconds is not null || below.TimeoutSaid
+            TimeoutSaid = said.TimeoutSeconds is not null || below.TimeoutSaid,
+            Said = SaidOf(said)
         };
     }
 
@@ -445,13 +466,19 @@ public sealed class CheckStore
                 ? $"'{id}' has no command, and there is no implicit '{id}' check to raise here: {noImplicit} Declare its command."
                 : $"'{id}' has no command, and there is no check of that id below it to change - declare its command";
 
-    private static Manifest ManifestOf(CheckDefinition check, string file)
-        => new(check.Id, file, new ManifestFile
+    private static Manifest ManifestOf(string id, CheckManifestSaid said, string file) => new(id, file, FileOf(id, said));
+
+    private static ManifestFile FileOf(string id, CheckManifestSaid said)
+        => new()
         {
-            Id = check.Id, Description = check.Description, Command = check.Command, Matches = check.Matches?.ToList(),
-            FireOn = check.FireOn, Severity = check.Severity, TimeoutSeconds = check.TimeoutSeconds,
-            Protects = check.Protects?.ToList(), Enabled = check.Enabled
-        });
+            Id = id, Description = said.Description, Command = said.Command, Matches = said.Matches?.ToList(),
+            FireOn = said.FireOn, Severity = said.Severity, TimeoutSeconds = said.TimeoutSeconds,
+            Protects = said.Protects?.ToList(), Enabled = said.Enabled
+        };
+
+    private static CheckManifestSaid SaidOf(ManifestFile said)
+        => new(said.Description, said.Command, said.Matches?.ToArray(), said.FireOn, said.Severity, said.TimeoutSeconds,
+            said.Protects?.ToArray(), said.Enabled);
 
     private string PathOrName(string id, CheckScope scope)
     {

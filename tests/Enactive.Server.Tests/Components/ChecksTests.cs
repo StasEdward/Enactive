@@ -133,13 +133,13 @@ public sealed class ChecksTests : ComponentHost
     public void An_operator_cannot_change_the_global_checks()
     {
         var checks = Services.GetRequiredService<ServerChecks>();
-        var lint = new CheckDefinition("lint", null, "npm run lint", ["src/**"], CheckFire.Step, CheckSeverity.Advisory, 60, null);
+        var lint = new CheckManifestSaid(Command: "npm run lint", Matches: ["src/**"]);
 
-        Assert.Equal("Your role does not include changing the service's global checks.", checks.Save(As("alice"), _root, lint, CheckScope.Global));
+        Assert.Equal("Your role does not include changing the service's global checks.", checks.Save(As("alice"), _root, "lint", lint, CheckScope.Global));
         Assert.False(Directory.Exists(DataChecks) && Directory.EnumerateFiles(DataChecks).Any());
         var (list, _) = checks.Global(As("alice"), _root);
         Assert.False(list!.CanChange);
-        Assert.Null(checks.Save(As("ada"), _root, lint, CheckScope.Global));
+        Assert.Null(checks.Save(As("ada"), _root, "lint", lint, CheckScope.Global));
     }
 
     /// <summary>
@@ -160,6 +160,48 @@ public sealed class ChecksTests : ComponentHost
         screen.WaitForAssertion(() => Assert.Equal(CheckChangeWords.RunActive, screen.Find(".check-problems").TextContent.Trim()));
         Assert.False(File.Exists(Path.Combine(WorkspaceChecks, "lint.json")));
         Assert.Empty(Audited("check saved"));
+    }
+
+    /// <summary>
+    /// A run the service does not know of - another program's, or one of its own once composed - holds the workspace's lease
+    /// (WorkspaceLease), and its end puts the checks back too: while the lease is held, nothing is changed.
+    /// </summary>
+    [Fact]
+    public void Nothing_is_changed_in_a_workspace_while_its_lease_is_held()
+    {
+        var screen = Screen("alice");
+        Assert.Empty(screen.FindAll(".checks-not-now"));
+
+        using (Enactive.Core.Storage.WorkspaceLease.Take(_root))
+        {
+            var checks = Services.GetRequiredService<ServerChecks>();
+            Assert.Equal(CheckChangeWords.RunActive, checks.Save(As("alice"), _root, "lint",
+                new CheckManifestSaid(Command: "npm run lint", Matches: ["src/**"]), CheckScope.Workspace));
+            Assert.False(File.Exists(Path.Combine(WorkspaceChecks, "lint.json")));
+            Assert.Empty(Audited("check saved"));
+        }
+
+        Assert.Null(Services.GetRequiredService<ServerChecks>().WhyNot(As("alice"), _root, CheckScope.Workspace));
+    }
+
+    /// <summary>The question before a reset - a workspace manifest that changes the global check - says Reset on its button.</summary>
+    [Fact]
+    public void A_reset_is_asked_with_reset()
+    {
+        Directory.CreateDirectory(DataChecks);
+        File.WriteAllText(Path.Combine(DataChecks, "audit.json"), """{"id":"audit","command":"npm audit","fireOn":"Run"}""");
+        Directory.CreateDirectory(WorkspaceChecks);
+        File.WriteAllText(Path.Combine(WorkspaceChecks, "audit.json"), """{"severity":"Blocking"}""");
+        var screen = Screen("alice");
+
+        var reset = screen.Find(".check-row .check-remove");
+        Assert.Equal("Reset", reset.TextContent.Trim());
+        reset.Click();
+
+        Assert.Equal("Reset", screen.Find("[role=dialog] .check-confirm").TextContent.Trim());
+        screen.Find("[role=dialog] .check-confirm").Click();
+        screen.WaitForAssertion(() => Assert.False(File.Exists(Path.Combine(WorkspaceChecks, "audit.json"))));
+        Assert.True(File.Exists(Path.Combine(DataChecks, "audit.json")));
     }
 
     private sealed class Holds(ApprovalStore approvals) : IRunExecutor

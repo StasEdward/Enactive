@@ -50,7 +50,7 @@
                             <ComboBox ItemsSource="{x:Static app:CheckDraft.SeverityChoices}" SelectedItem="{Binding Severity}" HorizontalAlignment="Stretch" />
                         </StackPanel>
                         <StackPanel Grid.Column="2" Spacing="4">
-                            <TextBlock Classes="label" Text="Timeout (s)" />
+                            <TextBlock Classes="label" Text="Timeout (s) - empty, the default" />
                             <TextBox Text="{Binding Timeout}" />
                         </StackPanel>
                     </Grid>

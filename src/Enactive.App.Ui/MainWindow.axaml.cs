@@ -214,13 +214,13 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         _vm.BackgroundRunRequested += () => _ = RunAsync(background: true);
         _vm.StopRequested += () => _foreground.Stop();
         _vm.CheckDetailRequested += path => ShowCheckDetail(_liveWorkspace, path);
-        // A workspace's checks, from its card - over the folder on screen, refused while this window's run works in it.
+        // A workspace's checks, from its card - over the folder on screen, refused while any run holds it.
         // Modal: a list left open behind the window would go on describing a workspace the card no longer shows.
         _vm.ChecksRequested += () =>
         {
             if (WorkspaceRootOrNull() is not { } root)
                 return;
-            _ = new ChecksWindow(DesktopChecks.For(root, Enactive.Core.Checks.CheckScope.Workspace, _foreground), _vm.WorkspaceName)
+            _ = new ChecksWindow(DesktopChecks.For(root, Enactive.Core.Checks.CheckScope.Workspace), _vm.WorkspaceName)
                 .ShowDialog(this);
         };
         _vm.TimelineRequested += () => _ = ShowTimelineAsync();
@@ -720,7 +720,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                     remoteDevices: RemoteDeviceAccess,
                     onSaved: SaveSettings,
                     // The global checks, listed over the workspace open here so the list says which of them it shadows.
-                    checks: DesktopChecks.For(WorkspaceRootOrNull(), Enactive.Core.Checks.CheckScope.Global, _foreground));
+                    checks: DesktopChecks.For(WorkspaceRootOrNull(), Enactive.Core.Checks.CheckScope.Global));
                 window.Closed += (_, _) => _settingsWindow.Closed(window);
                 window.Show(this);
                 return window;
@@ -867,7 +867,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         // Everything the previous run left on screen goes first, through the one method that knows
         // what "on screen" is made of. Reading history is fine; watching it while a new run of your
         // own starts is not.
-        using var runCancellation = _foreground.TryStart(Path.GetFullPath(workspacePath));
+        using var runCancellation = _foreground.TryStart();
         if (runCancellation is null) return;
         try
         {
@@ -1552,6 +1552,9 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             // A library left open across the switch would go on offering the previous project's
             // templates for a project that has never heard of them.
             _templatesWindow?.FollowWorkspace(WorkspaceRootOrNull(), PolicyFor(_vm.AutonomyTier));
+            // Settings' Checks list is read over the open workspace - what it shadows, its implicit build and test - and
+            // left on the previous one it said those things about a folder no longer open.
+            _settingsWindow.Open?.FollowWorkspace(DesktopChecks.For(WorkspaceRootOrNull(), Enactive.Core.Checks.CheckScope.Global));
 
             // And a schedules window left open would offer Delete and Disable for schedules belonging
             // to a project it is no longer looking at.

@@ -13,7 +13,6 @@ using Enactive.Workspace;
 public sealed class ChecksListTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "enactive-checks-list", Guid.NewGuid().ToString("N"));
-    private readonly ForegroundRunSlot _foreground = new();
 
     private string Workspace => Path.Combine(_root, "project");
     private string Global => Path.Combine(_root, "global");
@@ -30,7 +29,7 @@ public sealed class ChecksListTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 
-    private ChecksViewModel List(CheckScope scope) => DesktopChecks.For(Workspace, scope, _foreground, Global);
+    private ChecksViewModel List(CheckScope scope) => DesktopChecks.For(Workspace, scope, Global);
 
     private static void Fill(CheckDraft draft, string id, string command, string matches, string fireOn = "Step", string severity = "Advisory")
     {
@@ -169,14 +168,15 @@ public sealed class ChecksListTests : IDisposable
     }
 
     /// <summary>
-    /// While the window's run works in the workspace, its checks are not changed: the run puts them back at its end as they
-    /// were when it started, and the change would be undone without a word. The list says why; a global check is the next
-    /// run's and may be changed.
+    /// While a run holds the workspace (WorkspaceLease - every run on every host takes it, the window's background runs, a
+    /// schedule's and another program's too), its checks are not changed: the run puts them back at its end as they were
+    /// when it started, and the change would be undone without a word. The list says why; a global check is the next run's
+    /// and may be changed.
     /// </summary>
     [Fact]
-    public void Nothing_is_changed_in_a_workspace_while_its_run_works()
+    public void Nothing_is_changed_in_a_workspace_while_a_run_holds_it()
     {
-        var running = _foreground.TryStart(Workspace)!;
+        var lease = Enactive.Core.Storage.WorkspaceLease.Take(Workspace);
         var list = List(CheckScope.Workspace);
         Assert.Equal(CheckChangeWords.RunActive, list.NotNow);
 
@@ -190,8 +190,113 @@ public sealed class ChecksListTests : IDisposable
         var global = List(CheckScope.Global);
         Assert.False(global.HasNotNow);
 
-        _foreground.Finish(running);
+        lease.Dispose();
         list.Draft!.SaveCommand.Execute(null);
         Assert.True(File.Exists(Path.Combine(WorkspaceChecks, "lint.json")));
+    }
+
+    /// <summary>
+    /// A workspace check that writes out the same command as the global one is a check of its own: edited, it keeps its command,
+    /// and goes on running when the global one is deleted. The list once took it for a raise, saved it without its command, and
+    /// it stopped running with the global check.
+    /// </summary>
+    [Fact]
+    public void A_workspace_check_that_says_the_global_command_keeps_it()
+    {
+        const string lint = """{"id":"lint","command":"npm run lint","matches":["src/**"]}""";
+        File.WriteAllText(Path.Combine(Global, "lint.json"), lint);
+        Directory.CreateDirectory(WorkspaceChecks);
+        File.WriteAllText(Path.Combine(WorkspaceChecks, "lint.json"), lint);
+        var list = List(CheckScope.Workspace);
+        var row = list.Checks.Single();
+        Assert.Equal("replaces the global one", row.Shadows);
+
+        row.EditCommand.Execute(null);
+        Assert.True(list.Draft!.HasCommand);
+        list.Draft.Severity = "Blocking";
+        list.Draft.SaveCommand.Execute(null);
+
+        File.Delete(Path.Combine(Global, "lint.json"));
+        var kept = new CheckStore(Workspace, Global).Inventory().Checks.Single();
+        Assert.Equal(("npm run lint", CheckSeverity.Blocking), (kept.Definition.Command, kept.Definition.Severity));
+    }
+
+    /// <summary>
+    /// A global check turned off from the workspace's list says that, and nothing else: it still follows the global check when
+    /// that one changes. Saved whole, it was a copy that stayed behind.
+    /// </summary>
+    [Fact]
+    public void A_check_from_below_turned_off_here_says_only_that()
+    {
+        File.WriteAllText(Path.Combine(Global, "audit.json"), """{"id":"audit","command":"npm audit","fireOn":"Run"}""");
+        var list = List(CheckScope.Workspace);
+
+        list.Checks.Single().ToggleCommand.Execute(null);
+
+        Assert.Equal("""{"id":"audit","enabled":false}""",
+            System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(Path.Combine(WorkspaceChecks, "audit.json")), @"\s", ""));
+        File.WriteAllText(Path.Combine(Global, "audit.json"), """{"id":"audit","command":"npm audit --omit=dev","fireOn":"Run"}""");
+        list.Refresh();
+        Assert.Equal("npm audit --omit=dev", list.Checks.Single().Command);
+        Assert.Equal("raises the global one", list.Checks.Single().Shadows);
+    }
+
+    /// <summary>
+    /// Only what the person changed is saved: a check whose manifest said no timeout, moved to fire on write, gets the write
+    /// default - the form once carried its two-minute step timeout over, which is past what a write check may take.
+    /// </summary>
+    [Fact]
+    public void A_timeout_left_alone_stays_unsaid_and_follows_when_the_check_fires()
+    {
+        Directory.CreateDirectory(WorkspaceChecks);
+        File.WriteAllText(Path.Combine(WorkspaceChecks, "lint.json"), """{"id":"lint","command":"npm run lint","matches":["src/**"]}""");
+        var list = List(CheckScope.Workspace);
+        Assert.Contains("120 s", list.Checks.Single().Meta);
+
+        list.Checks.Single().EditCommand.Execute(null);
+        Assert.Equal("", list.Draft!.Timeout);
+        list.Draft.FireOn = "Write";
+        list.Draft.SaveCommand.Execute(null);
+
+        var written = File.ReadAllText(Path.Combine(WorkspaceChecks, "lint.json"));
+        Assert.DoesNotContain("timeoutSeconds", written);
+        Assert.DoesNotContain("severity", written);
+        Assert.Equal(CheckLimits.WriteTimeoutLimitSeconds, new CheckStore(Workspace, Global).Inventory().Checks.Single().Definition.TimeoutSeconds);
+    }
+
+    /// <summary>The question before a reset says Reset on its button - what pressing it does - not Delete.</summary>
+    [Fact]
+    public void A_reset_is_asked_with_reset()
+    {
+        File.WriteAllText(Path.Combine(Global, "audit.json"), """{"id":"audit","command":"npm audit","fireOn":"Run"}""");
+        Directory.CreateDirectory(WorkspaceChecks);
+        File.WriteAllText(Path.Combine(WorkspaceChecks, "audit.json"), """{"severity":"Blocking"}""");
+        File.WriteAllText(Path.Combine(WorkspaceChecks, "lint.json"), """{"id":"lint","command":"npm run lint","fireOn":"Run"}""");
+        var list = List(CheckScope.Workspace);
+        var asked = new List<string>();
+        list.ConfirmRequested += (_, _, confirm) =>
+        {
+            asked.Add(confirm);
+            return Task.FromResult(false);
+        };
+
+        list.Checks.Single(r => r.Id == "audit").RemoveCommand.Execute(null);
+        list.Checks.Single(r => r.Id == "lint").RemoveCommand.Execute(null);
+
+        Assert.Equal(["Reset", "Delete"], asked);
+    }
+
+    /// <summary>Settings' global list is replaced when the window's workspace changes, and the window is told to draw the new one.</summary>
+    [Fact]
+    public void Settings_draws_the_checks_list_it_is_given_again()
+    {
+        var settings = new SettingsViewModel(new Enactive.Settings.AppSettings(), _ => { }, new NoStartupEntry(), editsFilesHere: false);
+        var changed = new List<string?>();
+        settings.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        settings.Checks = List(CheckScope.Global);
+        settings.Checks = DesktopChecks.For(null, CheckScope.Global, Global);
+
+        Assert.Equal(2, changed.Count(p => p == nameof(SettingsViewModel.Checks)));
     }
 }
