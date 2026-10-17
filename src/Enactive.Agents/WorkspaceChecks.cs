@@ -65,11 +65,32 @@ internal static class WorkspaceChecks
     /// .NET run would build twice and say so twice. Raised by a manifest, they are the person's, and run as such.
     /// </summary>
     public static IReadOnlyList<ResolvedCheck> Firing(CheckSnapshot? snapshot, CheckFire fire)
-        => snapshot?.Checks.Where(c => c.Definition.Enabled && c.Definition.FireOn == fire
-                                       && !(c.Origin == CheckOrigin.Implicit && c.Shadows is null)
-                                       && (c.RunsThroughEcosystem || !string.IsNullOrWhiteSpace(c.Definition.Command)))
-               .ToArray()
-           ?? [];
+        => Judging(snapshot).Where(c => c.Definition.FireOn == fire).ToArray();
+
+    /// <summary>The declared checks a run runs, whenever each fires - <see cref="Firing"/> over every boundary.</summary>
+    public static IReadOnlyList<ResolvedCheck> Judging(CheckSnapshot? snapshot)
+        => snapshot?.Checks.Where(c => c.CanRun && !(c.Origin == CheckOrigin.Implicit && c.Shadows is null)).ToArray() ?? [];
+
+    /// <summary>
+    /// What a run says at its start about its checks: which judge it (id, when each fires, how much it decides), which
+    /// manifests were skipped and why, and what was noted about the ones read - or null when there are no checks and nothing
+    /// to say, so a workspace without checks runs as before. Without it the problems were only in the run's record, and a
+    /// person whose manifest had a typo learned of it only by noticing its check never ran.
+    /// </summary>
+    public static string? Inventory(CheckSnapshot? snapshot)
+    {
+        if (snapshot is null) return null;
+        var judging = Judging(snapshot);
+        if (judging.Count == 0 && snapshot.Problems.Count == 0 && snapshot.Notes.Count == 0) return null;
+        static string Name(Enum value) => value.ToString().ToLowerInvariant();
+        static string Of(CheckProblem p) => $"{Path.GetFileName(p.File)} ({Name(p.Scope)}): {p.Message}";
+        return "Declared checks judging this run: "
+               + (judging.Count == 0 ? "none" : string.Join(", ", judging.Select(c => $"{c.Id} (fires on {Name(c.Definition.FireOn)}, {Name(c.Definition.Severity)})")))
+               + "."
+               + (snapshot.Problems.Count == 0 ? ""
+                   : " Manifests skipped, so their checks do not judge it: " + string.Join("; ", snapshot.Problems.Select(Of)) + ".")
+               + (snapshot.Notes.Count == 0 ? "" : " Noted: " + string.Join("; ", snapshot.Notes.Select(Of)) + ".");
+    }
 
     /// <summary>Whether a change to any of <paramref name="paths"/> is owed this check - by its globs, or for an ecosystem's
     /// check without any, by the paths that ecosystem owns (IEcosystem.Owns).</summary>

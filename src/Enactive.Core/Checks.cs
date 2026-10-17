@@ -159,6 +159,14 @@ public sealed record ResolvedCheck(CheckDefinition Definition, CheckOrigin Origi
     [JsonIgnore]
     public bool RunsThroughEcosystem => string.IsNullOrWhiteSpace(Definition.Command) && Ecosystems is { Count: > 0 };
 
+    /// <summary>
+    /// Whether it can be run at all: enabled, with a command or an ecosystem to run through. The one rule for "runnable" -
+    /// a run's boundaries (WorkspaceChecks.Firing) and "Run checks now" (ChecksNow.Runnable) each wrote it out, and two
+    /// copies of a rule drift apart.
+    /// </summary>
+    [JsonIgnore]
+    public bool CanRun => Definition.Enabled && (RunsThroughEcosystem || !string.IsNullOrWhiteSpace(Definition.Command));
+
     [JsonIgnore]
     public string Id => Definition.Id;
 

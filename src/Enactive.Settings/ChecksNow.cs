@@ -49,9 +49,7 @@ public static class ChecksNow
     /// read the files as they were before the run, so it verified nothing.
     /// </summary>
     public static IReadOnlyList<ResolvedCheck> Runnable(CheckSnapshot? snapshot)
-        => snapshot?.Checks.Where(c => c.Definition.Enabled && (c.RunsThroughEcosystem || !string.IsNullOrWhiteSpace(c.Definition.Command)))
-               .ToArray()
-           ?? [];
+        => snapshot?.Checks.Where(c => c.CanRun).ToArray() ?? [];
 
     /// <summary>
     /// Runs the staged run's snapshotted checks against the workspace as it is now and keeps the record in the run's

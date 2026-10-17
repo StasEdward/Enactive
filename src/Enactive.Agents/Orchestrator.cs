@@ -1113,6 +1113,11 @@ public sealed partial class Orchestrator : IOrchestrator
         // owed again - and, not carried, a resumed run ended as if that blocking check had passed.
         session.BoundaryChecks.AddRange(resume?.HeldBackBy ?? []);
 
+        // Which declared checks judge this run, and which manifests were skipped (WorkspaceChecks.Inventory) - from the
+        // snapshot the run is judged by, so a resumed run says what IT is judged by. Nothing when there is nothing to say.
+        if (WorkspaceChecks.Inventory(runChecks) is { } inventory)
+            yield return scope.Ev(EventKind.ContextAssembled, inventory);
+
         // The manifests as they are now against what the checkpoint's snapshot hashed: a person may have edited them
         // while the run was interrupted. The resumed run is judged by its snapshot all the same, so this is only SAID -
         // nothing is put back (the checkpoint keeps hashes, not bytes, and the change is a person's) - but a run judged

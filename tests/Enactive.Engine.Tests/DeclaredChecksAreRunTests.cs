@@ -105,6 +105,58 @@ public sealed class DeclaredChecksAreRunTests
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
     }
 
+    // ── what judges the run, said at its start ────────────────────────────────────────────
+
+    private static WorkEvent[] Judging(IEnumerable<WorkEvent> events)
+        => events.Where(e => e.Kind == EventKind.ContextAssembled && e.Summary.StartsWith("Declared checks", StringComparison.Ordinal)).ToArray();
+
+    /// <summary>
+    /// A run says, once at its start - fresh and resumed - which declared checks judge it (id, when each fires, how much it
+    /// decides) and which manifests were skipped, and why: otherwise a person learned of a skipped manifest only by finding
+    /// its check had never run. Said from the run's snapshot, so the resumed run says what IT is judged by.
+    /// </summary>
+    [Fact]
+    public async Task A_run_says_at_its_start_which_checks_judge_it_and_which_manifests_were_skipped()
+    {
+        var snapshot = Snapshot(Check("lint", Passing, CheckFire.Step, CheckSeverity.Blocking, "src/**"),
+                Check("audit", Passing, CheckFire.Run, CheckSeverity.Advisory),
+                new ResolvedCheck(new CheckDefinition("off", null, Passing, ["src/**"], CheckFire.Step, CheckSeverity.Blocking,
+                    CheckLimits.DefaultTimeoutSeconds, null) { Enabled = false }, CheckOrigin.Workspace))
+            with { Problems = [new CheckProblem(CheckScope.Workspace, Path.Combine("ws", ".enactive", "checks", "broken.json"), "not valid JSON")] };
+        using var fx = new EngineFixture { Checks = snapshot, Pause = new RunPause() };
+        fx.Pause.Request();
+        var store = new Store();
+
+        var paused = await fx.RunAsync(fx.Build(new FakeChatProvider(Turn.Says(OneStep)), EngineFixture.Role("developer"), checkpoints: store),
+            "write the app");
+
+        var said = Assert.Single(Judging(paused)).Summary;
+        Assert.Contains("lint (fires on step, blocking)", said, StringComparison.Ordinal);
+        Assert.Contains("audit (fires on run, advisory)", said, StringComparison.Ordinal);
+        Assert.DoesNotContain("off", said, StringComparison.Ordinal);
+        Assert.Contains("broken.json (workspace): not valid JSON", said, StringComparison.Ordinal);
+
+        fx.Pause = null;
+        var worker = new FakeChatProvider(Turn.Says("Nothing to write."));
+        var resumed = await fx.ResumeAsync(fx.Build(worker, EngineFixture.Role("developer"), checkpoints: new Store()), Assert.Single(store.Kept));
+        Assert.Equal(said, Assert.Single(Judging(resumed)).Summary);
+    }
+
+    /// <summary>No checks and no skipped manifest: nothing is said - a workspace without checks runs as it did before them.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_run_with_no_checks_and_no_skipped_manifest_says_nothing_of_checks(bool emptySnapshot)
+    {
+        using var fx = new EngineFixture { Checks = emptySnapshot ? Snapshot() : null };
+        var events = await fx.RunAsync(fx.Build(new FakeChatProvider(Turn.Says(OneStep), Turn.Says("Done.")), EngineFixture.Role("developer")),
+            "write the app");
+
+        Assert.Empty(Judging(events));
+        Assert.DoesNotContain(events, e => e.Summary.Contains("check", StringComparison.OrdinalIgnoreCase)
+                                           && e.Summary.Contains("judg", StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>
     /// Steps one after the other share one journal: the second step's gate makes history only of ITS earlier attempts'
     /// check records, never of the first step's - which its review still reads, as the first step's, not as "an earlier
