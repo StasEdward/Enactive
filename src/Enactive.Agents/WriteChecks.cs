@@ -148,11 +148,12 @@ internal sealed class WriteChecks
     /// </summary>
     public static string? WhyNotRun(IToolRegistry tools, IPermissionEngine permissions, PermissionPolicy policy)
     {
-        var candidates = tools.Definitions.Where(d => d.Kind == ToolKind.Command && d.RunsSuccessChecks).ToArray();
-        if (candidates.Length != 1) return "not run: this workspace has no single command tool that runs checks";
         try
         {
-            return permissions.Evaluate(policy, candidates[0].Name, tools.RequiredLevelOf(candidates[0].Name)) switch
+            var gate = CheckCommandGate.Of(tools, permissions, policy);
+            if (gate.Tool is null) return "not run: this workspace has no single command tool that runs checks";
+            if (gate.Unavailable is { } why) return "not run: the command tool is not available: " + why;
+            return gate.Decision switch
             {
                 PermissionDecision.Allow => null,
                 PermissionDecision.Deny => "not run: the policy denies this command",

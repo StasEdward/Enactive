@@ -108,10 +108,10 @@ internal sealed class ServerChecks(UserStore users, ServerFolders folders, IRunC
     }
 
     /// <summary>Any run of the service still going in that folder, whoever started it.</summary>
+    // One rule for "the same workspace folder" (WorkspaceActivity.SameFolder, the one the activity registry keys by): this
+    // and ServerHistory each wrote their own, one ignoring case everywhere and the other only on Windows.
     private bool RunWorksIn(ClaimsPrincipal user, string root)
-        => runs.List(user).Any(r => !r.Ended.IsCompleted
-                                    && string.Equals(WorkspaceRegistry.Normalise(r.Workspace), WorkspaceRegistry.Normalise(root),
-                                        StringComparison.OrdinalIgnoreCase));
+        => runs.List(user).Any(r => !r.Ended.IsCompleted && Enactive.Core.Storage.WorkspaceActivity.SameFolder(r.Workspace, root));
 
     private CheckStore Store(string? root)
         => new(root is { Length: > 0 } && workspaces.Find(root) is { } known ? known.RootPath : null, GlobalFolder, KnownEcosystems.All);

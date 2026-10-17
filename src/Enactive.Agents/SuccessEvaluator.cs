@@ -124,24 +124,16 @@ public sealed class SuccessEvaluator(IReadOnlyList<Enactive.Core.Builds.IEcosyst
             => new(criterion.Name, criterion.Command, criterion.Required,
                    CriterionOutcome.Unknown, null, why, criterion.Origin, criterion.AlreadyPassing);
 
-        var candidates = tools.Definitions.Where(d => d.Kind == ToolKind.Command && d.RunsSuccessChecks).ToArray();
-        if (candidates.Length != 1)
-            return Unknown("Exactly one tool must declare the success-check command protocol; found " + candidates.Length + ".");
-        var commandTool = candidates[0].Name;
+        var found = CheckCommandGate.Of(tools, permissions, policy);
+        if (found.Tool is not { } commandTool)
+            return Unknown("Exactly one tool must declare the success-check command protocol; found " + found.Found + ".");
 
-        PermissionLevel required;
-        try
-        {
-            required = tools.RequiredLevelOf(commandTool);
-        }
-        catch (Exception ex)
-        {
-            // The declared adapter cannot be resolved. Not a failure of the work - we simply cannot
-            // check it here, and saying so beats reporting a pass nobody verified.
-            return Unknown($"'{commandTool}' is not available in this workspace: {ex.Message}");
-        }
+        // The declared adapter cannot be resolved. Not a failure of the work - we simply cannot
+        // check it here, and saying so beats reporting a pass nobody verified.
+        if (found.Unavailable is { } unavailable)
+            return Unknown($"'{commandTool}' is not available in this workspace: {unavailable}");
 
-        var gate = permissions.Evaluate(policy, commandTool, required);
+        var gate = found.Decision!.Value;
 
         if (gate == PermissionDecision.Deny)
             return Unknown(

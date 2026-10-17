@@ -504,10 +504,9 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
 
     private static string Count(int n, string what) => n == 1 ? $"1 {what}" : $"{n} {what}s";
 
-    // As the registry compares folders: on Windows C:\Repo and c:\repo are one.
-    private static bool SameFolder(string a, string b)
-        => string.Equals(WorkspaceRegistry.Normalise(a), WorkspaceRegistry.Normalise(b),
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    // One rule for "the same workspace folder", ServerChecks' too: full paths, a trailing separator ignored, case ignored
+    // where the file system ignores it - on Windows C:\Repo and c:\repo are one (WorkspaceActivity.SameFolder).
+    private static bool SameFolder(string a, string b) => Enactive.Core.Storage.WorkspaceActivity.SameFolder(a, b);
 
     // ── adding a workspace (Operators) ──────────────────────────────────────
 

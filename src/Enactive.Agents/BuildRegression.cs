@@ -128,13 +128,12 @@ internal static class BuildRegression
     internal static string? WhyNotAllowed(IToolRegistry tools, IPermissionEngine permissions, PermissionPolicy policy,
         string refusal = "running it would need an approval, and the engine does not interrupt anybody for a check nobody asked for")
     {
-        var candidates = tools.Definitions.Where(d => d.Kind == ToolKind.Command && d.RunsSuccessChecks).ToArray();
-        if (candidates.Length != 1) return "no single command tool runs checks in this workspace";
         try
         {
-            return permissions.Evaluate(policy, candidates[0].Name, tools.RequiredLevelOf(candidates[0].Name)) == PermissionDecision.Allow
-                ? null
-                : refusal;
+            var gate = CheckCommandGate.Of(tools, permissions, policy);
+            if (gate.Tool is null) return "no single command tool runs checks in this workspace";
+            if (gate.Unavailable is { } why) return "the command tool is not available: " + why;
+            return gate.Decision == PermissionDecision.Allow ? null : refusal;
         }
         catch (Exception ex) { return "the command tool is not available: " + ex.Message; }
     }
@@ -350,5 +349,31 @@ internal static class BuildRegression
                 + $"from the run could be checked again ({totals}).{newNote}{flakyNote}");
 
         return result(CriterionOutcome.Passed, $"no test that passed before {span} fails now ({totals}).{newNote}{flakyNote}");
+    }
+}
+
+/// <summary>
+/// The one command tool that runs checks (ToolDefinition.RunsSuccessChecks), and what the policy says of running it. One
+/// lookup for every place that runs a check - the success evaluator, the engine's own build, a write-time check - which
+/// each wrote it out; each still says the answer in its own words.
+/// </summary>
+/// <param name="Tool">The tool, or null when there is not exactly one (<paramref name="Found"/> says how many there are).</param>
+/// <param name="Decision">What the policy says of it; null when there is no tool, or it is not available.</param>
+/// <param name="Unavailable">Why the tool could not be resolved (its required level could not be read), or null.</param>
+internal sealed record CheckCommandGate(string? Tool, int Found, PermissionDecision? Decision, string? Unavailable)
+{
+    /// <summary>
+    /// Finds the tool and asks the policy. Only resolving the tool is caught (said as <see cref="Unavailable"/>): what the
+    /// permission engine throws goes to the caller, as it did from each copy.
+    /// </summary>
+    public static CheckCommandGate Of(IToolRegistry tools, IPermissionEngine permissions, PermissionPolicy policy)
+    {
+        var candidates = tools.Definitions.Where(d => d.Kind == ToolKind.Command && d.RunsSuccessChecks).ToArray();
+        if (candidates.Length != 1) return new(null, candidates.Length, null, null);
+        var name = candidates[0].Name;
+        PermissionLevel required;
+        try { required = tools.RequiredLevelOf(name); }
+        catch (Exception ex) { return new(name, 1, null, ex.Message); }
+        return new(name, 1, permissions.Evaluate(policy, name, required), null);
     }
 }
