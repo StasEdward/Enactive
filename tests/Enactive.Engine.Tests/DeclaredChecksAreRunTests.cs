@@ -106,6 +106,32 @@ public sealed class DeclaredChecksAreRunTests
     }
 
     /// <summary>
+    /// Steps one after the other share one journal: the second step's gate makes history only of ITS earlier attempts'
+    /// check records, never of the first step's - which its review still reads, as the first step's, not as "an earlier
+    /// attempt of this step".
+    /// </summary>
+    [Fact]
+    public async Task A_later_steps_gate_leaves_an_earlier_steps_check_record_as_it_was()
+    {
+        const string twoSteps = """
+            {"disposition":"task","title":"app","steps":[{"title":"Write the app","dependsOn":[]},{"title":"Write the docs","dependsOn":[0]}]}
+            """;
+        using var fx = new EngineFixture { Checks = Snapshot(Check("lint", Failing, CheckFire.Step, CheckSeverity.Advisory, "src/**")) };
+        var worker = new FakeChatProvider(Turn.Says(twoSteps), Writes("src/app.txt", "v1", "w1"), Turn.Says("Wrote it."),
+            Writes("src/docs.txt", "d1", "w2"), Turn.Says("Wrote the docs."));
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(),
+            reviewProvider: reviewer), "write the app and its docs");
+
+        Assert.Equal(2, reviewer.Requests.Count);
+        Assert.Single(Checks(events, "lint (step 1)"));
+        Assert.Single(Checks(events, "lint (step 2)"));
+        var second = string.Join("\n", reviewer.Requests[1].Messages.Select(m => m.Content));
+        Assert.DoesNotContain("HISTORICAL - the checks were run on an earlier attempt of this step", second, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A blocking check the policy would ask about is not run on a question: it is NOT CHECKED, said as "not run: needs
     /// permission", and the step is done, never confirmed - however the reviewer found it.
     /// </summary>

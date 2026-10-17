@@ -517,6 +517,32 @@ public sealed class ProtectedFilesTests
     }
 
     /// <summary>
+    /// Steps one after the other share one journal: the second step's gate makes history only of ITS earlier attempts'
+    /// protected-files records - the first step's edit stays on record as the first step's, not "an earlier attempt".
+    /// </summary>
+    [Fact]
+    public async Task A_later_steps_gate_leaves_an_earlier_steps_protected_files_record_as_it_was()
+    {
+        using var fx = Fixture();
+        const string plan = """
+            {"disposition":"task","title":"tidy","steps":[{"title":"Update the test","dependsOn":[]},{"title":"Write the app","dependsOn":[0]}]}
+            """;
+        var worker = new FakeChatProvider(Turn.Says(plan),
+            Turn.Calls1("write_file", JsonSerializer.Serialize(new { path = Protected, content = "keep\nEDITED-LINE\n" }), "w1"),
+            Turn.Says("Updated the test."),
+            Turn.Calls1("write_file", JsonSerializer.Serialize(new { path = "src/app.txt", content = "v1" }), "w2"), Turn.Says("Wrote it."));
+        var reviewer = new FakeChatProvider { WhenExhausted = Verdicts.Pass() };
+
+        await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer),
+            "update the test, then write the app");
+
+        Assert.Equal(2, reviewer.Requests.Count);
+        var second = string.Join("\n", reviewer.Requests[1].Messages.Select(m => m.Content));
+        Assert.DoesNotContain("HISTORICAL - the protected files were looked at on an earlier attempt", second, StringComparison.Ordinal);
+        Assert.Contains("(protected by check 'tests'): EDITED", second, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A step whose changes were not measured is compared with the protected files as IT found them: an edit an earlier
     /// step made (and the review passed) is not shown to its review again as its own.
     /// </summary>
@@ -539,8 +565,10 @@ public sealed class ProtectedFilesTests
 
         Assert.Contains("(protected by check 'tests'): EDITED", string.Join("\n", reviewer.Requests[0].Messages.Select(m => m.Content)),
             StringComparison.Ordinal);
-        Assert.DoesNotContain("(protected by check 'tests'): EDITED", string.Join("\n", reviewer.Requests[^1].Messages.Select(m => m.Content)),
-            StringComparison.Ordinal);
+        // The steps share one journal, so the second review reads the first step's record too - as the first step's. What
+        // matters is that the second step's gate found nothing of its own: the edit is on record once, not twice.
+        var last = string.Join("\n", reviewer.Requests[^1].Messages.Select(m => m.Content));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(last, System.Text.RegularExpressions.Regex.Escape("(protected by check 'tests'): EDITED")));
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
     }
 

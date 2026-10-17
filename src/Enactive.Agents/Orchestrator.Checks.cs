@@ -189,8 +189,10 @@ public sealed partial class Orchestrator
         }
 
         // What the engine ran, for the reviewer - once per attempt, the earlier attempts' marked as history: the step was
-        // changed since, and their failures are not about the work as it is now.
-        step.Journal.MarkHistorical(step.EvidenceStart, StepChecksTool, StepChecksHistorical);
+        // changed since, and their failures are not about the work as it is now. From the step's own start, not from where
+        // its evidence starts: steps one after the other share one journal (EvidenceStart 0), and from there the second
+        // step's gate rewrote the FIRST step's record as "an earlier attempt of this step" in every review after it.
+        step.Journal.MarkHistorical(step.StepStart, StepChecksTool, StepChecksHistorical);
         step.Journal.Record(stepNumber, StepChecksTool, "{}", ActionOutcome.Succeeded,
             "Run by the engine on what this step changed - the workspace checks a person declared for these paths. Each "
             + "passes on its exit code; an advisory one decides nothing on its own, and whether the step is done is yours to "

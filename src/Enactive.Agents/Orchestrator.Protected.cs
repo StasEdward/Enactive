@@ -68,8 +68,9 @@ public sealed partial class Orchestrator
     {
         if (session.Protected.Count == 0) return null;
         // What an earlier attempt of this step was told is history from here, whatever this attempt finds - a file attempt 1
-        // edited and attempt 2 put back must not reach the review as edited.
-        step.Journal.MarkHistorical(step.EvidenceStart, ProtectedFilesTool, ProtectedHistorical);
+        // edited and attempt 2 put back must not reach the review as edited. From the step's own start (StepStart), not its
+        // evidence's: sequential steps share one journal, and from 0 an earlier STEP's record was rewritten as this one's past.
+        step.Journal.MarkHistorical(step.StepStart, ProtectedFilesTool, ProtectedHistorical);
         var root = _workspace.RootPath;
         var scope = session.Scope;
         var unmeasured = measure.Changed.Unmeasured is not null;
