@@ -103,6 +103,21 @@ internal static class Palette
         _ => throw Unknown(state)
     });
 
+    /// <summary>One check's line in a "Run checks now" record: what it came to (the service's Looks.CheckLine).</summary>
+    public static readonly IValueConverter CheckLine = Map<CheckLineTone>(tone => tone switch
+    {
+        CheckLineTone.Passed => Brand.Success,
+        CheckLineTone.Failed => Brand.Danger,
+        CheckLineTone.NotRun => Brand.Warning,
+        _ => throw Unknown(tone)
+    });
+
+    /// <summary>
+    /// A "Run checks now" record's edge: amber while the workspace still matches it - checked at its time, never a standing
+    /// green - and muted once it is outdated (the service's Looks.CheckRecord).
+    /// </summary>
+    public static readonly IValueConverter CheckRecord = Map<bool>(outdated => outdated ? Brand.TextMuted : Brand.Amber);
+
     public static readonly IValueConverter DiffLine = Map<DiffLineKind>(kind => kind switch
     {
         DiffLineKind.Added => Brand.Success,

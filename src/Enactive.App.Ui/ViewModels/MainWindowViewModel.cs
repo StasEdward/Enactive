@@ -558,6 +558,24 @@ internal sealed class MainWindowViewModel : ObservableObject
     /// </summary>
     public PastRunViewModel? PastRun { get => _pastRun; private set => Set(ref _pastRun, value); }
 
+    private CheckRecordsViewModel? _liveChecks;
+
+    /// <summary>
+    /// The live run's "Run checks now" (Plan Phase 3.2), beside its proposals: set when a staged run has ended - its checks
+    /// read the files as a person applies them, which they cannot while it runs - and cleared when the next run starts.
+    /// </summary>
+    public CheckRecordsViewModel? LiveChecks
+    {
+        get => _liveChecks;
+        set
+        {
+            if (Set(ref _liveChecks, value))
+                OnPropertyChanged(nameof(HasLiveChecks));
+        }
+    }
+
+    public bool HasLiveChecks => _liveChecks is not null;
+
     /// <summary>The workspace's repository, at the foot of the window (RepoBar).</summary>
     public RepoBar Repo { get; } = new();
 

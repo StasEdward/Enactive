@@ -201,6 +201,19 @@ public sealed class LooksTests
         rows.Add(("Change.Applied", Looks.Change(true, false), WindowHex("ChangeState.Applied")));
         rows.Add(("Change.Rejected", Looks.Change(false, true), WindowHex("ChangeState.Rejected")));
 
+        // A "Run checks now" record: its lines by what each check came to, its edge by whether it is outdated.
+        rows.AddRange(Rows(Looks.CheckLine, new Dictionary<CheckLineTone, string>
+        {
+            [CheckLineTone.Passed] = "CheckLineTone.Passed",
+            [CheckLineTone.Failed] = "CheckLineTone.Failed",
+            [CheckLineTone.NotRun] = "CheckLineTone.NotRun"
+        }));
+        var record = Regex.Match(File.ReadAllText(RepoRoot.Source("src", "Enactive.App.Ui", "Palette.cs")),
+            @"CheckRecord\s*=\s*Map<bool>\(outdated\s*=>\s*outdated\s*\?\s*Brand\.(?<old>\w+)\s*:\s*Brand\.(?<now>\w+)\)");
+        Assert.True(record.Success, "Palette.CheckRecord is not `Map<bool>(outdated => outdated ? Brand.X : Brand.Y)`, the shape this test reads.");
+        rows.Add(("CheckRecord.outdated", Looks.CheckRecord(true), BrandHex(record.Groups["old"].Value)));
+        rows.Add(("CheckRecord.current", Looks.CheckRecord(false), BrandHex(record.Groups["now"].Value)));
+
         // On this machine or not is a two-way Map in Palette.cs (Local), not an enum's arms: read as its own shape.
         var local = Regex.Match(File.ReadAllText(RepoRoot.Source("src", "Enactive.App.Ui", "Palette.cs")),
             @"Local\s*=\s*Map<bool>\(local\s*=>\s*local\s*\?\s*Brand\.(?<here>\w+)\s*:\s*Brand\.(?<away>\w+)\)");

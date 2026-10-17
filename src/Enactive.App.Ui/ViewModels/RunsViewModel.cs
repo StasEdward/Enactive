@@ -262,7 +262,13 @@ internal sealed class PastRunViewModel : ObservableObject
         // send a person to two different places.
         NoStepsReason = digest.NoStepsReason;
         SelectedTab = PastRunTabs.Opening(Steps.Count);
+
+        // A staged run's "Run checks now" (Plan Phase 3.2): offered by the rule the service's page offers it by.
+        Checks = new CheckRecordsViewModel(Enactive.Settings.ChecksNow.Refusal(record) is null);
     }
+
+    /// <summary>"Run checks now" and the records it kept - for a staged run; shown on any run that has records.</summary>
+    public CheckRecordsViewModel Checks { get; }
 
     public RunRecord Record { get; }
     public string Title { get; }

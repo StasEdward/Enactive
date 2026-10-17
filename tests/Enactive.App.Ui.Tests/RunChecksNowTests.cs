@@ -1,0 +1,109 @@
+namespace Enactive.App.Ui.Tests;
+
+using System.Runtime.CompilerServices;
+using System.Xml.Linq;
+using Enactive.App.Ui.ViewModels;
+using Enactive.Application.Projections;
+using Enactive.Core.Checks;
+using Enactive.Core.History;
+
+/// <summary>
+/// "Run checks now" in the window (Plan Phase 3.2, staged runs): on a staged run's page in the history and beside the live
+/// run's proposals once it has ended - the same action and record list as the service's pages. The window has one person,
+/// so no role is asked; it follows its own staged apply, which asks none either.
+/// </summary>
+public sealed class RunChecksNowTests
+{
+    private static RunRecord Run(bool staged, bool withChecks = true)
+    {
+        var at = DateTimeOffset.Now.AddMinutes(-5);
+        var notes = new CheckDefinition("notes", null, "echo ran", [], CheckFire.Run, CheckSeverity.Advisory, 30, null);
+        return new RunRecord(Guid.NewGuid(), Guid.NewGuid(), "write the notes", null, at, at.AddSeconds(5), "Incomplete", [], ["notes.md"], [],
+            new RunSettings(3, "autonomous", null, staged))
+        {
+            CheckSnapshot = withChecks ? new CheckSnapshot([new ResolvedCheck(notes, CheckOrigin.Workspace)], []) : null
+        };
+    }
+
+    private static PastRunViewModel Past(RunRecord record) => new(record, _ => { }, _ => { });
+
+    [Fact]
+    public void A_staged_runs_page_offers_it_and_asks_the_window_to_run_that_runs_checks()
+    {
+        var past = Past(Run(staged: true));
+        PastRunViewModel? asked = null;
+        past.Checks.RunRequested += _ => asked = past;
+
+        Assert.True(past.Checks.Offered);
+        Assert.Equal(CheckRecordViews.Explanation, past.Checks.Explanation);
+        Assert.True(past.Checks.RunCommand.CanExecute(null));
+        past.Checks.RunCommand.Execute(null);
+        Assert.Same(past, asked);
+
+        // While it runs, a second press is not a second set of commands.
+        past.Checks.Busy = true;
+        Assert.False(past.Checks.RunCommand.CanExecute(null));
+        Assert.Equal("Running checks…", past.Checks.ButtonText);
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void A_run_that_wrote_to_disk_or_had_no_checks_is_not_offered_it(bool staged, bool withChecks)
+    {
+        var past = Past(Run(staged, withChecks));
+
+        Assert.False(past.Checks.Offered);
+        Assert.False(past.Checks.RunCommand.CanExecute(null));
+        Assert.False(past.Checks.IsShown);
+    }
+
+    /// <summary>Each record says when it was checked and whether the workspace still matches it; never a green.</summary>
+    [Fact]
+    public void Records_are_listed_newest_first_as_checked_or_outdated()
+    {
+        var checks = new CheckRecordsViewModel(offered: true);
+        var line = new CheckResultLine("notes", Enactive.Core.Templates.CriterionOutcome.Passed, false, "echo ran", 0, null);
+        var fingerprint = new StateFingerprint(FingerprintKind.Git, new string('a', 64));
+        var newer = CheckRecordViews.Of(new CheckRecord(Guid.NewGuid(), Guid.NewGuid(), "me", DateTimeOffset.Now, [], [line], fingerprint), current: true);
+        var older = CheckRecordViews.Of(new CheckRecord(Guid.NewGuid(), Guid.NewGuid(), "me", DateTimeOffset.Now.AddHours(-1), [], [line], fingerprint), current: false);
+
+        checks.Show([newer, older]);
+
+        Assert.True(checks.IsShown);
+        Assert.Equal([newer.Headline, older.Headline], checks.Records.Select(r => r.Headline));
+        Assert.StartsWith("Checked at ", checks.Records[0].State);
+        Assert.StartsWith("Outdated", checks.Records[1].State);
+        Assert.Equal([false, true], checks.Records.Select(r => r.Outdated));
+        Assert.Equal("PASS notes (echo ran)", Assert.Single(checks.Records[0].Lines).Text);
+    }
+
+    /// <summary>
+    /// The window places it where it shows a staged run's proposals - the live run's Artifacts, once the run has ended - and
+    /// on a past run's page, both through the one view bound to the action and its records.
+    /// </summary>
+    [Fact]
+    public void The_window_shows_it_on_a_past_run_and_beside_the_live_runs_proposals()
+    {
+        var window = XDocument.Load(Path.Combine(Root(), "src", "Enactive.App.Ui", "MainWindow.axaml"));
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        XElement Named(string name) => window.Descendants().Single(e => (string?)e.Attribute(x + "Name") == name);
+
+        var past = Named("PastRunChecks");
+        var live = Named("LiveRunChecks");
+        Assert.Equal(("CheckRecordsView", "{Binding PastRun.Checks}"), (past.Name.LocalName, (string?)past.Attribute("DataContext")));
+        Assert.Equal(("CheckRecordsView", "{Binding LiveChecks}"), (live.Name.LocalName, (string?)live.Attribute("DataContext")));
+        // The live one only once a staged run has ended; it sits with the run's proposals, in its Artifacts tab.
+        Assert.Equal("{Binding HasLiveChecks}", (string?)live.Parent!.Attribute("IsVisible"));
+        Assert.Contains(live.Ancestors(), a => (string?)a.Attribute("IsVisible") == "{Binding IsArtifactsTab}");
+
+        var view = XDocument.Load(Path.Combine(Root(), "src", "Enactive.App.Ui", "CheckRecordsView.axaml"));
+        Assert.Equal("{Binding IsShown}", (string?)view.Root!.Elements().First().Attribute("IsVisible"));
+        var button = view.Descendants().Single(e => (string?)e.Attribute(x + "Name") == "RunChecksNow");
+        Assert.Equal(("{Binding RunCommand}", "{Binding ButtonText}", "{Binding Offered}"),
+            ((string?)button.Attribute("Command"), (string?)button.Attribute("Content"), (string?)button.Attribute("IsVisible")));
+    }
+
+    private static string Root([CallerFilePath] string here = "")
+        => Path.GetFullPath(Path.Combine(Path.GetDirectoryName(here)!, "..", ".."));
+}

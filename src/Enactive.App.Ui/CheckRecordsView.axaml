@@ -1,0 +1,49 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Enactive.App.Ui.ViewModels"
+             xmlns:proj="using:Enactive.Application.Projections"
+             xmlns:local="using:Enactive.App.Ui"
+             x:Class="Enactive.App.Ui.CheckRecordsView"
+             x:DataType="vm:CheckRecordsViewModel">
+
+    <!-- "Run checks now" for a staged run and the records it kept (Plan Phase 3.2) - on a past run's page and beside the
+         live run's proposals, in the same words as the service's pages (CheckRecordViews). A record's edge is amber while
+         the workspace still matches it and muted once it is outdated: never green - a record is "checked at its time". -->
+    <StackPanel Spacing="6" Margin="0,10,0,10" IsVisible="{Binding IsShown}">
+        <TextBlock Classes="hint" Text="CHECKS RUN NOW" FontSize="11" FontWeight="SemiBold" />
+        <TextBlock Classes="hint" Text="{Binding Explanation}" TextWrapping="Wrap" FontSize="11"
+                   IsVisible="{Binding Offered}" />
+        <Button x:Name="RunChecksNow" Classes="go" HorizontalAlignment="Left" Padding="12,4"
+                Command="{Binding RunCommand}" Content="{Binding ButtonText}" IsVisible="{Binding Offered}" />
+        <TextBlock Text="{Binding Said}" TextWrapping="Wrap" FontSize="12" IsVisible="{Binding HasSaid}" />
+
+        <ItemsControl ItemsSource="{Binding Records}" IsVisible="{Binding HasRecords}">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="proj:CheckRecordView">
+                    <Border Background="{DynamicResource Brand.CardFill}"
+                            BorderBrush="{Binding Outdated, Converter={x:Static local:Palette.CheckRecord}}"
+                            BorderThickness="2,0,0,0" CornerRadius="4" Padding="10" Margin="0,0,0,6">
+                        <StackPanel Spacing="3">
+                            <TextBlock Text="{Binding Headline}" FontWeight="SemiBold" FontSize="12" TextWrapping="Wrap" />
+                            <TextBlock Classes="hint" Text="{Binding State}" FontSize="11" TextWrapping="Wrap" />
+                            <ItemsControl ItemsSource="{Binding Lines}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="proj:CheckRecordLine">
+                                        <TextBlock Text="{Binding Text}" TextWrapping="Wrap" FontSize="11"
+                                                   FontFamily="Consolas, Menlo, monospace"
+                                                   Foreground="{Binding Tone, Converter={x:Static local:Palette.CheckLine}}"
+                                                   ToolTip.Tip="{Binding DetailPath}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Classes="hint" Text="{Binding Note}" FontSize="11" TextWrapping="Wrap"
+                                       IsVisible="{Binding Note, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock Classes="hint" Text="{Binding Caveat}" FontSize="11" TextWrapping="Wrap"
+                                       IsVisible="{Binding Caveat, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </StackPanel>
+</UserControl>

@@ -165,6 +165,9 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     private DiskArtifactStore? _disk;
     private int _stagedShown;
 
+    /// <summary>The run id of the live run, while it stages - for its "Run checks now" once it has ended (Plan Phase 3.2).</summary>
+    private Guid? _stagedRunId;
+
     public MainWindow()
     {
         _log = new LogHub(minLevel: LogLevel.Debug, downstream: new ILogSink[] { _logFile });
@@ -917,6 +920,9 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 _staging = composed.Artifacts as StagingArtifactStore;
                 _disk = composed.Artifacts as DiskArtifactStore;
                 _stagedShown = 0;
+                _stagedRunId = null;
+                // The last run's "Run checks now" goes with its proposals: this run's are about to be shown.
+                await Dispatcher.UIThread.InvokeAsync(() => _vm.LiveChecks = null);
                 _files.Stages = _staging is not null;
 
                 var envLine = composed.Intent.Context.Environment?.OneLine();
@@ -973,6 +979,10 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                     // moment it stops being listed as running. RunColumn.Live is the belt to this
                     // brace: if the two ever cross, the run is not shown twice.
                     EndLive(endedRow);
+                    // A staged run that ended: its checks can be run now, against the files as its proposals are decided
+                    // (Plan Phase 3.2). Beside the proposals, as long as they are on screen; its records are in its history too.
+                    if (_staging is not null && _stagedRunId is { } stagedRun && _currentWorkspaceRoot is { Length: > 0 } stagedRoot)
+                        _ = ShowLiveChecksAsync(stagedRoot, stagedRun);
                     // The run that just ended belongs at the top of the history under the workspace.
                     // Only when that workspace is the one on screen - LoadRunsAsync reads whichever is
                     // current, and a run ending elsewhere is not a reason to re-read this one.
@@ -997,6 +1007,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 // event rather than being told in advance. So does the live row, which needs it to be
                 // matched against the history when the run ends.
                 _vm.RunLog?.SetRun(ev.RunId);
+                if (_staging is not null)
+                    _stagedRunId ??= ev.RunId;
                 // The panel of model figures is this run's, and starts again with the next (ModelPerformance).
                 _vm.Performance.ShowRun(ev.RunId);
                 // The header's "Pause after this step": offered once the plan is here, gone with a quick action or the end.
@@ -2025,7 +2037,73 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
         past.RetryRequested += Retry;
         past.RunAgainRequested += RunAgain;
+        Wire(past.Checks, root, record.RunId);
         return past;
+    }
+
+    // ── "Run checks now" on a staged run (Plan Phase 3.2) ──────────────────────
+    // As on the service's pages (ServerHistory), with the window's own rule for who: its one person, as for applying a
+    // proposal. The checks run under the slider of the folder on screen - the permissions of now - against its files now.
+
+    /// <summary>The live run's action, once the staged run that just ended is in the history and has checks to run.</summary>
+    private async Task ShowLiveChecksAsync(string root, Guid runId)
+    {
+        RunRecord? record;
+        try { record = await RunStoreFactory.Create(WorkspaceInfo.For(root)).LoadAsync(runId, CancellationToken.None); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return; }
+        // Another run may have started meanwhile: its proposals are on screen now, not these.
+        if (ChecksNow.Refusal(record) is not null || _stagedRunId != runId)
+            return;
+        var checks = new CheckRecordsViewModel(offered: true);
+        Wire(checks, root, runId);
+        _vm.LiveChecks = checks;
+    }
+
+    /// <summary>The window runs what the view asks, and shows the run's records.</summary>
+    private void Wire(CheckRecordsViewModel checks, string root, Guid runId)
+    {
+        checks.RunRequested += c => _ = RunChecksNowAsync(c, root, runId);
+        _ = LoadChecksAsync(checks, root, runId);
+    }
+
+    private static async Task LoadChecksAsync(CheckRecordsViewModel checks, string root, Guid runId)
+    {
+        try { checks.Show(await Task.Run(() => CheckRecordViews.ForRunAsync(root, runId, CancellationToken.None))); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { checks.Said = "The check records could not be read: " + ex.Message; }
+    }
+
+    private async Task RunChecksNowAsync(CheckRecordsViewModel checks, string root, Guid runId)
+    {
+        if (checks.Busy)
+            return;
+        // Not while a run of this window is going: the workspace lease keeps out other processes, not this one's own run, and
+        // the checks would read files it is in the middle of changing.
+        if (_vm.IsBusy)
+        {
+            checks.Said = "A run is going; run the checks when it has ended, so they see the files as you left them.";
+            return;
+        }
+        checks.Busy = true;
+        try
+        {
+            var engine = CurrentEngine();
+            var autonomy = _vm.AutonomyTier;
+            // Off the window's thread: the commands and the hashing of the files take their time.
+            var (record, problem) = await Task.Run(() => ChecksNow.RunAsync(engine, WorkspaceInfo.For(root), runId,
+                Environment.UserName, autonomy, CancellationToken.None));
+            checks.Said = record is null
+                ? problem ?? "The checks were not run."
+                : $"Checked: {CheckRecordViews.Counts(record.Results)}. The record is kept with the run; it does not change how the run ended.";
+            checks.Show(await Task.Run(() => CheckRecordViews.ForRunAsync(root, runId, CancellationToken.None)));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            checks.Said = "The checks could not be run: " + ex.Message;
+        }
+        finally
+        {
+            checks.Busy = false;
+        }
     }
 
     /// <summary>
