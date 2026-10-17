@@ -159,7 +159,11 @@ public static class FanOut
         => groups.Select(items => new PlanStep(Guid.NewGuid(), Title(forEach.Title, items), StepStatus.Pending, forEach.DependsOn, forEach.Complexity)
         {
             ObligationIds = forEach.ObligationIds, Output = forEach.Output, Items = items, ExpandedFrom = forEach.Id,
-            OrderOnly = forEach.OrderOnly, Consumes = forEach.Consumes
+            OrderOnly = forEach.OrderOnly, Consumes = forEach.Consumes,
+            // The item steps do the step's work: a "remove each obsolete test" step the planner marked as one the request
+            // asks to change protected files (Plan Phase 3.4) has its removals made by them, and without the mark each was
+            // taken as a loss and stopped the run at the wave's end.
+            ChangesProtected = forEach.ChangesProtected
         }).ToArray();
 
     private static string Title(string title, IReadOnlyList<string> items)

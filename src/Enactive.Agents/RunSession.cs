@@ -166,4 +166,7 @@ internal sealed record StepAttemptState(
     /// is shown to the reviewer instead of sending it back.
     /// </summary>
     public bool ChangesProtected { get; init; }
+
+    /// <summary>The protected files as this step found them, before its first attempt (Orchestrator.ProtectedAtStepStart); null when none are protected.</summary>
+    public IReadOnlyDictionary<string, string?>? ProtectedAtStart { get; init; }
 }

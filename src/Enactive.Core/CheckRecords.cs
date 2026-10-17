@@ -176,6 +176,22 @@ public static class ProtectedFiles
         return found.OrderBy(f => f.Path, StringComparer.Ordinal).ToArray();
     }
 
+    /// <summary>
+    /// Of <paramref name="files"/> hashed for an earlier attempt of a task, the ones a check in <paramref name="snapshot"/>
+    /// still protects - each with only those checks. A quick action carried on after a question is composed again, with
+    /// the checks as they are now: a file protected only by a check since deleted, disabled or stripped of its protects
+    /// would otherwise still send its step back, in the name of a check that no longer says so.
+    /// </summary>
+    public static IReadOnlyList<ProtectedFile> StillProtected(IReadOnlyList<ProtectedFile> files, CheckSnapshot? snapshot)
+    {
+        var protecting = (snapshot?.Checks ?? [])
+            .Where(c => c.Definition.Enabled && c.Definition.Protects is { Count: > 0 })
+            .Select(c => c.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return files.Select(f => f with { CheckIds = f.CheckIds.Where(protecting.Contains).ToArray() })
+            .Where(f => f.CheckIds.Count > 0)
+            .ToArray();
+    }
+
     /// <summary>A file's SHA-256 now, lower-case hex - null when it cannot be read (or is not there).</summary>
     public static string? HashOf(string fullPath)
     {

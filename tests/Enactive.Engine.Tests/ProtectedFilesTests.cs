@@ -408,6 +408,199 @@ public sealed class ProtectedFilesTests
         Assert.Empty(ProtectedFiles.Take(fx.Root, null, out _));
     }
 
+    // ── fix round 1 ────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A step done for each item does the marked step's work: "remove each obsolete test in this list" has its removals made
+    /// by the item steps, and they carry the mark - each removal is shown, none is a loss that sends a step back.
+    /// </summary>
+    [Fact]
+    public async Task The_item_steps_of_a_marked_step_for_each_item_carry_its_mark()
+    {
+        using var fx = Fixture();
+        fx.StepOutputs = true;
+        fx.DynamicSteps = true;
+        const string plan = """
+            {"disposition":"task","title":"tidy","steps":[
+             {"title":"find obsolete tests","dependsOn":[],"output":{"tests":{"type":"path[]","description":"the obsolete tests"}}},
+             {"title":"remove test","dependsOn":[0],"forEach":{"step":0,"field":"tests"},"changesProtected":true}]}
+            """;
+        var worker = new FakeChatProvider(Turn.Says(plan),
+            Turn.Calls1(StepOutputContract.ToolName, JsonSerializer.Serialize(new { tests = new[] { Protected } }), "s0"), Turn.Says("Found one."),
+            Deletes(Protected, "d1"), Turn.Says("Removed it."))
+        { WhenExhausted = Turn.Says("Done.") };
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer")), "remove the obsolete tests");
+
+        Assert.Contains(events, e => e.Kind == EventKind.StepCompleted && e.Summary.Contains("remove test: tests/keep.txt", StringComparison.Ordinal));
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.ReviewFailed);
+        Assert.DoesNotContain(events, e => e.Summary.Contains("is protected by check", StringComparison.Ordinal));
+        Assert.False(fx.Exists(Protected));
+    }
+
+    /// <summary>A workspace whose changes cannot be measured: what a step's commands did is not known.</summary>
+    private sealed class NoMeasurement : Enactive.Core.Artifacts.IWorkspaceChangesFactory, Enactive.Core.Artifacts.IWorkspaceChanges
+    {
+        public Enactive.Core.Artifacts.IWorkspaceChanges Create(string root) => this;
+        public Task<Enactive.Core.Artifacts.WorkspaceSnapshot?> TakeAsync(CancellationToken ct) => Task.FromResult<Enactive.Core.Artifacts.WorkspaceSnapshot?>(null);
+        public Task<IReadOnlySet<string>?> PathsAsync(Enactive.Core.Artifacts.WorkspaceSnapshot snapshot, CancellationToken ct) => Task.FromResult<IReadOnlySet<string>?>(null);
+        public Task<IReadOnlyList<Enactive.Core.Artifacts.FileChange>?> CompareAsync(Enactive.Core.Artifacts.WorkspaceSnapshot before,
+            Enactive.Core.Artifacts.WorkspaceSnapshot after, CancellationToken ct) => Task.FromResult<IReadOnlyList<Enactive.Core.Artifacts.FileChange>?>(null);
+        public void Dispose() { }
+    }
+
+    private const string Then = "Then tidy the rest";
+
+    /// <summary>
+    /// A removal the request asked for stays released through a resume: the checkpoint keeps it, so a resumed step whose
+    /// changes were not measured finds nothing, and an obligation for that file owed at the run's end is no loss either.
+    /// </summary>
+    [Fact]
+    public async Task A_removal_the_request_asked_for_stays_released_through_a_resume()
+    {
+        using var fx = Fixture();
+        fx.WorkspaceChangesOverride = new NoMeasurement();
+        var plan = $$"""
+            {"disposition":"task","title":"tidy","steps":[{"title":"{{Remove}}","dependsOn":[],"changesProtected":true},
+             {"title":"{{Then}}","dependsOn":[0]}]}
+            """;
+        var store = new AllSaves();
+        var first = new ByStepChatProvider(plan).Step(Remove, Deletes(Protected, "d1"), Turn.Says("Removed it.")).Step(Then, Turn.Says("Nothing."));
+        await fx.RunAsync(fx.Build(first, EngineFixture.Role("developer"), checkpoints: store), "remove the obsolete test, then tidy");
+        var written = store.Saved.First(c => c.Steps[0].Status == "Done" && c.Steps[1].Status != "Done");
+        var disk = new JsonCheckpointStore(fx.Workspace);
+        await disk.SaveAsync(written, default);
+        var checkpoint = (await disk.LoadAsync(written.RunId, default))!;
+
+        Assert.Equal([Protected], checkpoint.ProtectedReleased);
+
+        var second = new ByStepChatProvider(plan) { Resumed = true }
+            .Step(Then, Turn.Calls1("run_command", """{"command":"echo tidied"}""", "c1"), Turn.Says("Tidied."));
+        var resumed = await fx.ResumeAsync(fx.Build(second, EngineFixture.Role("developer")), checkpoint);
+        Assert.Equal(StepOutcomeKind.Succeeded, StepEnd(resumed, Then).StepOutcome());
+        Assert.DoesNotContain(resumed, e => e.Kind == EventKind.ReviewFailed);
+
+        // An obligation for the file, owed at the run's end by a step beside the one that removed it: looked for again
+        // after the resume, it is released, not lost.
+        var owing = checkpoint with { PendingChecks = [new PendingCheck("tests", CheckBoundary.Run, "owed at the run's end") { Protected = [Protected] }] };
+        var third = new ByStepChatProvider(plan) { Resumed = true }.Step(Then, Turn.Says("Tidied."));
+        var again = await fx.ResumeAsync(fx.Build(third, EngineFixture.Role("developer")), owing);
+        var looked = Assert.Single(again, e => e.Kind == EventKind.CriterionEvaluated && e.Summary.Contains("tests: protected files (the run)", StringComparison.Ordinal));
+        Assert.StartsWith("PASS", looked.Summary, StringComparison.Ordinal);
+        Assert.Equal(RunOutcomeKind.Completed, again.Last().Outcome());
+    }
+
+    /// <summary>
+    /// What an earlier attempt was told about the protected files is history once the step is tried again - even when the
+    /// new attempt put the file back and there is nothing to say about it now.
+    /// </summary>
+    [Fact]
+    public async Task An_edit_an_earlier_attempt_was_told_of_is_history_once_the_file_is_put_back()
+    {
+        using var fx = Fixture();
+        Repository(fx);
+        var worker = new FakeChatProvider(Turn.Says(OneStep),
+            Turn.Calls1("write_file", JsonSerializer.Serialize(new { path = Protected, content = "keep\nEDITED-LINE\n" }), "w1"),
+            Turn.Says("Updated the test."),
+            Turn.Calls1("write_file", JsonSerializer.Serialize(new { path = Protected, content = "keep\n" }), "w2"),
+            Turn.Says("Put the test back."));
+        var reviewer = new FakeChatProvider(Verdicts.Fail("the test must not change"), Verdicts.Pass());
+
+        await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer),
+            "tidy the project");
+
+        Assert.Contains("tests/keep.txt (protected by check 'tests'): EDITED", string.Join("\n", reviewer.Requests[0].Messages.Select(m => m.Content)),
+            StringComparison.Ordinal);
+        var second = string.Join("\n", reviewer.Requests[^1].Messages.Select(m => m.Content));
+        Assert.DoesNotContain("(protected by check 'tests'): EDITED", second, StringComparison.Ordinal);
+        Assert.Contains("HISTORICAL - the protected files were looked at on an earlier attempt", second, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step whose changes were not measured is compared with the protected files as IT found them: an edit an earlier
+    /// step made (and the review passed) is not shown to its review again as its own.
+    /// </summary>
+    [Fact]
+    public async Task A_step_whose_changes_were_not_measured_is_not_shown_an_earlier_steps_edit()
+    {
+        using var fx = Fixture();
+        fx.WorkspaceChangesOverride = new NoMeasurement();
+        const string plan = """
+            {"disposition":"task","title":"tidy","steps":[{"title":"Update the test","dependsOn":[]},{"title":"Run the tidy script","dependsOn":[0]}]}
+            """;
+        var worker = new FakeChatProvider(Turn.Says(plan),
+            Turn.Calls1("write_file", JsonSerializer.Serialize(new { path = Protected, content = "keep\nEDITED-LINE\n" }), "w1"),
+            Turn.Says("Updated the test."),
+            Turn.Calls1("run_command", """{"command":"echo tidied"}""", "c1"), Turn.Says("Ran it."));
+        var reviewer = new FakeChatProvider { WhenExhausted = Verdicts.Pass() };
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer),
+            "update the test, then run the tidy script");
+
+        Assert.Contains("(protected by check 'tests'): EDITED", string.Join("\n", reviewer.Requests[0].Messages.Select(m => m.Content)),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("(protected by check 'tests'): EDITED", string.Join("\n", reviewer.Requests[^1].Messages.Select(m => m.Content)),
+            StringComparison.Ordinal);
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
+    /// <summary>
+    /// A staged step's edit of a protected file is a proposal, not a change on disk - and is shown to the reviewer all the
+    /// same, as the difference between the file on disk and what the run proposes.
+    /// </summary>
+    [Fact]
+    public async Task A_staged_steps_edit_of_a_protected_file_shows_the_reviewer_the_proposed_diff()
+    {
+        using var fx = Fixture();
+        var worker = new FakeChatProvider(Turn.Says(OneStep),
+            Turn.Calls1("write_file", JsonSerializer.Serialize(new { path = Protected, content = "keep\nEDITED-LINE\n" }), "w1"),
+            Turn.Says("Updated the test."));
+        var reviewer = new FakeChatProvider(Verdicts.Pass());
+        // As a host stages a run: its writes go to the proposals, not to the disk.
+        using var proposals = new StagingArtifactStore(fx.Root);
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer,
+            artifacts: proposals, settings: new RunSettings(3, "Autonomous", "developer", Staged: true)), "tidy the project");
+
+        var prompt = PromptOf(reviewer);
+        Assert.Contains("tests/keep.txt (protected by check 'tests'): EDITED (proposed", prompt, StringComparison.Ordinal);
+        Assert.Contains("+ EDITED-LINE", prompt, StringComparison.Ordinal);
+        Assert.Equal("keep\n", fx.Read(Protected));
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.ReviewFailed);
+    }
+
+    /// <summary>
+    /// A quick action carried on after a question is composed with the checks as they are now: a file the earlier attempt
+    /// hashed under a check that no longer protects it is not protected any more.
+    /// </summary>
+    [Fact]
+    public async Task A_carried_on_run_protects_only_what_its_own_checks_still_protect()
+    {
+        using var fx = Fixture();
+        fx.Write("old/kept.txt", "old\n");
+        var task = Guid.NewGuid();
+        new BaselineStore(fx.Root).SaveProtected(task,
+        [
+            new ProtectedFile("old/kept.txt", CheckFolders.HashOf("old\n"u8.ToArray()), ["gone"]),
+            new ProtectedFile(Protected, CheckFolders.HashOf("keep\n"u8.ToArray()), ["gone", "tests"])
+        ]);
+        var narrowed = ProtectedFiles.StillProtected(new BaselineStore(fx.Root).LoadProtected(task)!, Protecting());
+        Assert.Equal(["tests"], Assert.Single(narrowed).CheckIds);
+
+        var worker = new FakeChatProvider(Turn.Says("""{"disposition":"quick_action","title":"tidy"}"""), Deletes("old/kept.txt", "d1"),
+            Turn.Says("Removed the old file."));
+        var orchestrator = fx.Build(worker, EngineFixture.Role("developer"));
+        var intent = new Enactive.Core.Intents.Intent(task, "remove the old file", Enactive.Core.Intents.IntentSource.CommandBar,
+            new WorkContext(fx.Workspace.Id, fx.Workspace.Name, null, null, null, [], []), DateTimeOffset.UtcNow);
+        var events = new List<WorkEvent>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        await foreach (var ev in orchestrator.SubmitIntentAsync(intent, cts.Token)) events.Add(ev);
+
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.ReviewFailed);
+        Assert.False(fx.Exists("old/kept.txt"));
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+    }
+
     /// <summary>
     /// ProtectedFiles.MaxFiles: a glob over a huge tree is hashed only so far - every run reads every file it covers - and
     /// the run is told which part is not protected, rather than left to think all of it is.

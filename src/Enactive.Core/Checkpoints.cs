@@ -221,6 +221,13 @@ public sealed record RunCheckpoint(
     /// check protects anything, and for a checkpoint from before protected files.
     /// </summary>
     public IReadOnlyList<Enactive.Core.Checks.ProtectedFile>? ProtectedFiles { get; init; }
+
+    /// <summary>
+    /// Protected files a step the request asks to change them has removed (Plan Phase 3.4): no longer looked for. Kept, so a
+    /// resumed run does not take a removal it was asked to make for a loss - at a step whose changes were not measured, or
+    /// at the boundary an obligation for that file is owed at. Null when none, and for a checkpoint from before.
+    /// </summary>
+    public IReadOnlyList<string>? ProtectedReleased { get; init; }
 }
 
 /// <summary>

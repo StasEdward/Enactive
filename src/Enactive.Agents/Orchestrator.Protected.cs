@@ -54,8 +54,9 @@ public sealed partial class Orchestrator
     /// The protected files at a step's gate. Which files are looked at: the ones among what the step changed (the same
     /// account the step checks use - measured, recorded by its calls, held by its store); where what it changed is not
     /// known - it ran commands nothing measured - every protected file, as every step check is owed then: unknown
-    /// attribution must not mean "touched none". What is found is decided against the hashes the run's baseline took, and
-    /// the disk now: not there is removed (or renamed), different is edited.
+    /// attribution must not mean "touched none". What is found is decided against the hashes taken when the step began
+    /// (the baseline's, for a file the step's start did not hash) and the disk now: not there is removed (or renamed),
+    /// different is edited. Which files are protected is the baseline's, kept for the whole run.
     ///
     /// <para>Removed, the finding is the gate's - but only where what is on disk is this step's (StepCheckTiming), as for a
     /// blocking check, by the same decision: steps side by side put it off to the wave's end (or the run's), and a staged
@@ -66,6 +67,9 @@ public sealed partial class Orchestrator
         CancellationToken ct)
     {
         if (session.Protected.Count == 0) return null;
+        // What an earlier attempt of this step was told is history from here, whatever this attempt finds - a file attempt 1
+        // edited and attempt 2 put back must not reach the review as edited.
+        step.Journal.MarkHistorical(step.EvidenceStart, ProtectedFilesTool, ProtectedHistorical);
         var root = _workspace.RootPath;
         var scope = session.Scope;
         var unmeasured = measure.Changed.Unmeasured is not null;
@@ -77,27 +81,49 @@ public sealed partial class Orchestrator
         if (candidates.Length == 0) return null;
 
         var removed = new List<(ProtectedFile File, string? RenamedTo)>();
-        var edited = new List<ProtectedFile>();
+        var edited = new List<(ProtectedFile File, string? Diff)>();
         if (step.CheckTiming == StepCheckTiming.Staged)
         {
             // A staged step's writes are proposals: the disk still has every file. What it would remove is what its own calls
-            // proposed to delete - an edit cannot be told from the disk, and is not said.
+            // proposed to delete; what it would change is what the store holds for the file, against the disk it would
+            // replace - shown as a diff, as git would show one on disk.
             var proposed = step.Journal.Actions.Skip(step.StepStart)
                 .Where(a => a.Origin != ToolCallOrigin.Engine && a.Outcome != ActionOutcome.Refused && a.FileDeletion)
                 .SelectMany(a => a.ChangedPaths ?? [])
                 .Select(p => WaveCapture.Relative(p, root)).OfType<string>()
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            removed.AddRange(candidates.Where(c => proposed.Contains(c.Path)).Select(c => (c, (string?)null)));
+            foreach (var file in candidates)
+            {
+                if (proposed.Contains(file.Path))
+                {
+                    removed.Add((file, null));
+                    continue;
+                }
+                string? pending, onDisk;
+                try
+                {
+                    pending = await step.Store.TryReadPendingAsync(file.Path, ct);
+                    onDisk = File.Exists(Path.Combine(root, file.Path)) ? await File.ReadAllTextAsync(Path.Combine(root, file.Path), ct) : null;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+                if (pending is not null && !string.Equals(pending, onDisk, StringComparison.Ordinal))
+                    edited.Add((file, LineDiff.Unified(onDisk, pending, file.Path, "Too large to compare here: read the proposed file.")));
+            }
         }
         else
             foreach (var file in candidates)
             {
+                // Against the file as THIS step found it (StepAttemptState.ProtectedAtStart), so what an earlier step did - an
+                // edit the review passed, a removal the request asked for - is not this step's finding; the run's baseline
+                // where the step's start was not taken.
+                var start = step.ProtectedAtStart is { } atStart ? atStart.GetValueOrDefault(file.Path, file.Sha256) : file.Sha256;
+                if (start is null) continue;   // gone before this step began
                 var full = Path.Combine(root, file.Path);
                 if (!File.Exists(full))
                     removed.Add((file, measure.Measured?.FirstOrDefault(m => m.Kind == FileChangeKind.Renamed
                         && string.Equals(m.OldPath?.Replace('\\', '/'), file.Path, StringComparison.OrdinalIgnoreCase))?.Path.Replace('\\', '/')));
-                else if (ProtectedFiles.HashOf(full) is { } now && !string.Equals(now, file.Sha256, StringComparison.OrdinalIgnoreCase))
-                    edited.Add(file);
+                else if (ProtectedFiles.HashOf(full) is { } now && !string.Equals(now, start, StringComparison.OrdinalIgnoreCase))
+                    edited.Add((file, null));
             }
         if (removed.Count == 0 && edited.Count == 0) return null;
 
@@ -156,30 +182,44 @@ public sealed partial class Orchestrator
 
         if (edited.Count > 0)
         {
-            var diffs = await DiffsAsync(changes, before, measure.After, edited.Select(e => e.Path), ct);
-            lines.AddRange(edited.Select(e => ProtectedLine(e.Path, e.CheckId,
-                "EDITED - a protected file; judge whether the request asks for this change to it."
-                + (diffs.TryGetValue(e.Path, out var diff) ? "" : " (No diff can be made here - the workspace is not a git work tree, "
-                                                                 + "or the file is not text: read it.)"),
-                diffs.GetValueOrDefault(e.Path))));
+            var diffs = edited.All(e => e.Diff is not null)
+                ? new Dictionary<string, string>()
+                : await DiffsAsync(changes, before, measure.After, edited.Where(e => e.Diff is null).Select(e => e.File.Path), ct);
+            lines.AddRange(edited.Select(e => (e.File, Diff: e.Diff ?? diffs.GetValueOrDefault(e.File.Path))).Select(e => ProtectedLine(e.File.Path, e.File.CheckId,
+                (step.CheckTiming == StepCheckTiming.Staged ? "EDITED (proposed - the run is staged)" : "EDITED")
+                + " - a protected file; judge whether the request asks for this change to it."
+                + (e.Diff is not null ? "" : " (No diff can be made here - the workspace is not a git work tree, "
+                                             + "or the file is not text: read it.)"),
+                e.Diff)));
         }
 
         if (lines.Count > 0)
         {
-            // What the engine found, for the reviewer - once per attempt, the earlier attempts' marked as history.
-            step.Journal.MarkHistorical(step.EvidenceStart, ProtectedFilesTool, ProtectedHistorical);
+            // What the engine found, for the reviewer - once per attempt (the earlier attempts' were marked as history above).
             step.Journal.Record(stepNumber, ProtectedFilesTool, "{}", ActionOutcome.Succeeded,
                 "Found by the engine on what this step changed: files a person protected with a workspace check (its protects "
                 + "globs). A protected file is kept as the run found it unless the request asks for the change:\n"
                 + string.Join("\n", lines)
-                + (unmeasured ? "\nWhat this step changed was not measured, so each of these is said as it differs from the run's start - "
-                                + "an earlier step's change among them." : "")
+                + (unmeasured ? "\nWhat this step changed was not measured, so each of these is said as it differs from how it was "
+                                + "when this step began - another step running beside it among the causes." : "")
                 + (step.CheckTiming == StepCheckTiming.Deferred
                     ? "\nOther steps were running at the same time in the same workspace: a change here may be theirs." : ""),
                 WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
         }
         return verdict;
     }
+
+    /// <summary>
+    /// The protected files as a step finds them, by path - their hashes, null for one already gone - for the step's gate to
+    /// compare with (StepAttemptState.ProtectedAtStart). Taken once per step, before its first attempt: compared with the
+    /// run's baseline instead, a step whose changes were not measured was shown an earlier step's edit as its own, and a
+    /// retry compared with its own first attempt would no longer see that attempt's removal. As many files as the run
+    /// protects, which ProtectedFiles.MaxFiles bounds. Null when nothing is protected.
+    /// </summary>
+    private IReadOnlyDictionary<string, string?>? ProtectedAtStepStart(RunSession session)
+        => session.Protected.Count == 0 ? null
+            : session.Protected.GroupBy(p => p.Path, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => ProtectedFiles.HashOf(Path.Combine(_workspace.RootPath, g.Key)), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The diffs of <paramref name="paths"/> between the step's start and its gate, by path - what a git work tree can show;

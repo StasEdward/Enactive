@@ -1091,7 +1091,7 @@ public sealed partial class Orchestrator : IOrchestrator
         if (resume is not null)
             protectedFiles = resume.ProtectedFiles ?? [];
         else if (_baselines.LoadProtected(scope.TaskId) is { } carried)
-            protectedFiles = carried;
+            protectedFiles = Enactive.Core.Checks.ProtectedFiles.StillProtected(carried, runChecks);
         else
         {
             protectedFiles = Enactive.Core.Checks.ProtectedFiles.Take(_workspace.RootPath, runChecks, out var notAll);
@@ -1106,6 +1106,9 @@ public sealed partial class Orchestrator : IOrchestrator
             PendingChecks = resume?.PendingChecks?.ToList() ?? [],
             Protected = protectedFiles
         };
+        // What the interrupted run was asked to remove stays released (RunCheckpoint.ProtectedReleased).
+        foreach (var released in resume?.ProtectedReleased ?? [])
+            session.ProtectedReleased.Add(released);
 
         // The manifests as they are now against what the checkpoint's snapshot hashed: a person may have edited them
         // while the run was interrupted. The resumed run is judged by its snapshot all the same, so this is only SAID -
@@ -1194,7 +1197,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 {
                     CheckTiming = _settings?.Staged == true ? StepCheckTiming.Staged : StepCheckTiming.AtGate,
                     // A quick action has no steps for the planner to mark: it says so beside its disposition (Plan Phase 3.4).
-                    ChangesProtected = plan.ChangesProtected
+                    ChangesProtected = plan.ChangesProtected,
+                    ProtectedAtStart = ProtectedAtStepStart(session)
                 };
                 await RunAttemptsAsync(session, attemptState, models, models.Provider, models.Model,
                     intent.Context, quickResult, plan.Title, intent.RawText, null, quickChanges, quickBefore,
@@ -1646,7 +1650,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     CheckSnapshot = session.Checks,
                     PendingChecks = PendingChecksNow(session),
                     // With the baseline, as it was taken (Plan Phase 3.4): a resume judges removals against these.
-                    ProtectedFiles = session.Protected.Count > 0 ? session.Protected : null };
+                    ProtectedFiles = session.Protected.Count > 0 ? session.Protected : null,
+                    ProtectedReleased = ReleasedNow(session) };
         }
 
         // Whether a step boundary of this task is in the store to carry on from - this run's own, or on a resume the one
@@ -1915,7 +1920,9 @@ public sealed partial class Orchestrator : IOrchestrator
                     : StepCheckTiming.Deferred,
                 StepId = step.Id,
                 // The planner's word that the request asks this step to change protected files (Plan Phase 3.4).
-                ChangesProtected = step.ChangesProtected
+                ChangesProtected = step.ChangesProtected,
+                // How the protected files are as it begins, for its gate to compare with (Plan Phase 3.4).
+                ProtectedAtStart = ProtectedAtStepStart(session)
             };
 
             // The workspace as this step found it. Taken once, before the first attempt: a retry
@@ -2895,6 +2902,13 @@ public sealed partial class Orchestrator : IOrchestrator
     {
         lock (session.PendingChecks)
             return session.PendingChecks.Count > 0 ? session.PendingChecks.ToArray() : null;
+    }
+
+    /// <summary>The protected files released so far, for a checkpoint - null rather than empty when none was.</summary>
+    private static IReadOnlyList<string>? ReleasedNow(RunSession session)
+    {
+        lock (session.ProtectedReleased)
+            return session.ProtectedReleased.Count > 0 ? session.ProtectedReleased.Order(StringComparer.Ordinal).ToArray() : null;
     }
 
     /// <summary>The plan a checkpoint is carrying, rebuilt with the step ids it was written with.</summary>
