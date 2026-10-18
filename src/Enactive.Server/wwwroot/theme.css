@@ -766,7 +766,11 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
 .performance-head { font: inherit; display: flex; justify-content: space-between; align-items: center; padding: 0;
   background: transparent; border: 0; color: inherit; cursor: pointer; text-align: left; border-radius: var(--r-xs); }
 .performance .hint { margin: 0; }
-.speed { margin-top: 2px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+/* The model's name cut short, never its speed: the name shrinks to what the speed leaves of the line. */
+.speed { display: flex; align-items: baseline; min-width: 0; margin-top: 2px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.speed-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.speed-sep { flex: none; margin: 0 6px; color: var(--text-muted); }
+.speed-rate { flex: none; }
 .speeds-open { max-height: 420px; overflow-y: auto; }
 .speed-open { display: grid; gap: 5px; padding: 10px 0 8px; border-top: 1px solid var(--border); }
 .speed-model { font-weight: 600; overflow-wrap: anywhere; }

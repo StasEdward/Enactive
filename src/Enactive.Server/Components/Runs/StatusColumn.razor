@@ -70,7 +70,10 @@
         {
             @foreach (var row in View.Speeds)
             {
-                <div class="speed" title="@row.Provider">@($"{row.Model} · {row.Speed}")</div>
+                @* The model's name and its speed apart: one line cut at its end cut the speed off a long model name
+                   (gemma-4-26B-A4B-it-UD-Q3_K_…), and the speed is what the line is for. The name gives way, whole in
+                   its tooltip. *@
+                <div class="speed" title="@row.Provider"><span class="speed-name" title="@row.Model">@row.Model</span><span class="speed-sep">·</span><span class="speed-rate">@row.Speed</span></div>
             }
         }
         else
