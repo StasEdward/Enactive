@@ -584,7 +584,9 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
 .verbs { display: flex; flex-wrap: wrap; gap: 6px; }
 .btn.chip { font-size: 12px; padding: 2px 11px; line-height: 18px; border-radius: 999px; color: var(--text-body); box-shadow: none; }
 .btn.chip:hover { color: var(--text); border-color: var(--ember-500); }
-.bar-top .hint { margin-left: auto; font-size: 11.5px; color: var(--text-faint); }
+/* The keys right after the chips, a little more than a chip's gap from Refactor: pushed to the bar's far end, they were a
+   line on their own away from what they are about. On a narrow window they wrap under the chips. */
+.bar-top .hint { margin-left: 10px; font-size: 11.5px; color: var(--text-faint); }
 .bar-row { display: flex; align-items: center; }
 .bar-input { flex: 1; min-width: 0; height: 88px; resize: none; font-size: 14px; line-height: 1.5; padding: 10px 12px; background: var(--input-fill);
   border-radius: var(--r-md); }
