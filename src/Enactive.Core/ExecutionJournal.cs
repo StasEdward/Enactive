@@ -401,7 +401,8 @@ public sealed class ExecutionJournal
                    + (slice.Any(Changed)
                        ? " A call that changed a file is shown by WHAT IT CHANGED, not by its arguments: under its result, "
                          + "lines starting '+ ' were added, '- ' removed, and '  ' are unchanged lines around them; each @@ "
-                         + "gives the lines it covers, in the file before and after."
+                         + "gives the lines it covers, in the file before and after. A diff too long to show is not cut "
+                         + "in the middle like a result: it keeps its first changed lines and says how many it leaves out."
                        : "");
 
         // Numbered from 1 WITHIN THIS SLICE, not within the run. The number is a handle for a
@@ -409,6 +410,7 @@ public sealed class ExecutionJournal
         // it was shown. A number that meant a position in the whole journal would refer to calls
         // this evidence does not contain, and an audit checking it would be checking the wrong list.
         var calls = slice.Select((a, i) => Call(a, i + 1, manySteps)).ToArray();
+        var floors = slice.Select(ChangeFloor).ToArray();
 
         // How many can be shown AT ALL. Each costs its call line plus the floor under its output -
         // budgeting the call lines alone was the first version of this and it overran by a factor of
@@ -423,7 +425,7 @@ public sealed class ExecutionJournal
         var shown = new SortedSet<int>(Enumerable.Range(0, slice.Length));
         foreach (var i in Enumerable.Range(0, slice.Length).OrderBy(i => KeptLongest(slice[i]) ? 1 : 0).ThenBy(i => i))
         {
-            if (shown.Count <= 1 || header.Length + Cost(calls, slice, shown) <= maxChars) break;
+            if (shown.Count <= 1 || header.Length + Cost(calls, floors, shown) <= maxChars) break;
             shown.Remove(i);
         }
         var kept = shown.Count;
@@ -441,12 +443,12 @@ public sealed class ExecutionJournal
         // what it did not use goes to the longer ones. Run 596a05, 2026-09-29: nine calls in equal slices
         // of about 400 characters cut three disk tables of 500-700 each in the middle, while the one long
         // result - a report shown in full elsewhere - kept its slice, and room in the budget went unused.
-        var spare = maxChars - header.Length - note.Length - Cost(calls, slice, shown);
+        var spare = maxChars - header.Length - note.Length - Cost(calls, floors, shown);
         var room = MinOutputChars * kept + Math.Max(0, spare);
         var whole = shown.ToDictionary(i => i, i => Changed(slice[i])
             ? AnswerText(slice[i]) + "\n" + slice[i].Change!.Body() : AnswerText(slice[i]));
         var (texts, allowance) = Unrepeated(whole, room, (i, text, budget) => Render(i, text, budget, out _),
-            i => Changed(slice[i]) ? MinChangeChars : 0);
+            i => floors[i]);
 
         var sb = new StringBuilder(header).AppendLine().Append(note);
         var outputsTruncated = false;
@@ -472,8 +474,13 @@ public sealed class ExecutionJournal
             if (!Changed(slice[i]) || text != whole[i]) return Answer(text, budget, out truncated);
             truncated = text.Length > budget;
             if (!truncated) return text;
+            var change = slice[i].Change!;
             var said = Shortening.ToFit(AnswerText(slice[i]), Math.Max(MinOutputChars, budget / 3));
-            var diff = slice[i].Change!.Body(budget - said.Length - 1);
+            // Room for the note at least, taken from the result's line when it has to be: a diff cut to nothing must still
+            // say it was there (WrittenChange.Body).
+            if (budget - said.Length - 1 < change.NoteLength)
+                said = Shortening.ToFit(AnswerText(slice[i]), Math.Max(1, budget - change.NoteLength - 1));
+            var diff = change.Body(Math.Max(change.NoteLength, budget - said.Length - 1));
             return diff.Length == 0 ? said : said + "\n" + diff;
         }
     }
@@ -491,6 +498,14 @@ public sealed class ExecutionJournal
     /// name) and gives up its oldest reads instead.
     /// </summary>
     private const int MinChangeChars = 240;
+
+    /// <summary>
+    /// The room a call's diff has of its own: <see cref="MinChangeChars"/>, or the whole diff when it is shorter. Charged
+    /// in full, a one-line replacement of fifty characters held 240, and a step of many small edits gave up reads it had
+    /// room to show (code review of task 20).
+    /// </summary>
+    private static int ChangeFloor(ExecutedAction action)
+        => Changed(action) ? Math.Min(MinChangeChars, action.Change!.Body().Length + 1) : 0;
 
     /// <summary>
     /// How the step's calls ended, as a count.
@@ -546,7 +561,7 @@ public sealed class ExecutionJournal
     }
 
     /// <summary>The least the actions at <paramref name="shown"/> can be shown in.</summary>
-    private static int Cost(string[] calls, ExecutedAction[] slice, IEnumerable<int> shown)
+    private static int Cost(string[] calls, int[] floors, IEnumerable<int> shown)
     {
         var total = 0;
         foreach (var i in shown)
@@ -554,7 +569,7 @@ public sealed class ExecutionJournal
             // which has to be paid for or the budget is a number the result does not obey. A write shown
             // by its diff pays for the least of that too.
             total += calls[i].Length + 1 + MinOutputChars + 4 + ShortenedNoticeChars
-                   + (Changed(slice[i]) ? MinChangeChars : 0);
+                   + floors[i];
         return total;
     }
 

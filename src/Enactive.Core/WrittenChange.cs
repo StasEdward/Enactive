@@ -17,6 +17,11 @@ namespace Enactive.Core.Execution;
 /// comparison is <see cref="LineDiff"/>'s - one diff in the engine - run only on what lies between the lines both sides
 /// share at the start and the end, so a one-line edit of a long file costs a scan of it and not a table of its lines
 /// squared.</para>
+///
+/// <para><b>What it carries.</b> The file's EARLIER text too - removed lines and the context around them, up to
+/// <see cref="MaxChars"/> - and it goes wherever a result's metadata or the journal goes: the tool log, the parked
+/// progress file (TaskProgress), the reviewer's prompt. Nothing redacts tool content today; a mask over it would be a
+/// pass of its own.</para>
 /// </summary>
 /// <param name="Lines">The diff: <c>@@</c> headers and lines each starting <c>"+ "</c>, <c>"- "</c> or <c>"  "</c>.</param>
 /// <param name="LinesNotKept">How many lines of the diff were not kept, past <see cref="MaxChars"/>.</param>
@@ -84,9 +89,9 @@ public sealed record WrittenChange(string Path, int Added, int Removed, IReadOnl
     public string Summary => $"{Path}: {Invariant.N0(Added)} line(s) added, {Invariant.N0(Removed)} removed";
 
     /// <summary>
-    /// The diff in at most <paramref name="room"/> characters, its note included. What goes first when it does not fit
-    /// is the unchanged lines around a change, then changed lines from the end - and how many are not shown is said, so a
-    /// shortened diff does not read as a smaller change.
+    /// The diff in at most <paramref name="room"/> characters, its note included - or, in a room smaller than the note,
+    /// the note alone. What goes first when it does not fit is the unchanged lines around a change, then changed lines
+    /// from the end - and how many are not shown is said, so a shortened diff does not read as a smaller change.
     /// </summary>
     public string Body(int room = int.MaxValue)
     {
@@ -105,15 +110,26 @@ public sealed record WrittenChange(string Path, int Added, int Removed, IReadOnl
             shown.Add(line);
             used += line.Length + 1;
         }
-        var hidden = dropped + changed.Count - shown.Count;
-        if (hidden > 0)
+        // The note before any line: a diff cut to nothing without it reads as a write that changed nothing (code review of
+        // task 20). Lines give way to it, and with none left it is returned even past the room - the caller keeps room for
+        // it (NoteLength), and "there was a diff, not shown" is the least a reader of this call has to be told.
+        while (true)
         {
+            var hidden = dropped + changed.Count - shown.Count;
+            if (hidden == 0) return string.Join("\n", shown);
             var note = NotShown(hidden);
-            if (used + note.Length > room) return shown.Count == 0 ? "" : string.Join("\n", shown);
-            shown.Add(note);
+            if (used + note.Length <= room || shown.Count == 0)
+                return string.Join("\n", shown.Append(note));
+            used -= shown[^1].Length + 1;
+            shown.RemoveAt(shown.Count - 1);
         }
-        return string.Join("\n", shown);
     }
+
+    /// <summary>
+    /// The longest the note saying what is not shown can be - the room a caller keeps so that a diff cut to nothing still
+    /// says it was there (<see cref="Body"/>).
+    /// </summary>
+    public int NoteLength => NotShown(Lines.Count + LinesNotKept).Length;
 
     /// <summary>The whole of it, as the tool log prints a result's metadata.</summary>
     public override string ToString() => Summary + "\n" + Body();

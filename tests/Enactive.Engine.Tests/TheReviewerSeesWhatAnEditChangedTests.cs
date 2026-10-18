@@ -145,7 +145,77 @@ public sealed class TheReviewerSeesWhatAnEditChangedTests
         Assert.Contains("not shown here", body, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Code review of task 20: in a room too small for even the note, the diff came back empty and nothing said there had
+    /// been one - a write that read as having changed nothing. The note now comes before any line, and alone it is
+    /// returned even past the room.
+    /// </summary>
+    [Theory]
+    [InlineData(10)]
+    [InlineData(30)]
+    public void A_diff_cut_to_nothing_still_says_it_was_there(int room)
+    {
+        var change = WrittenChange.Of(TestFile, TestFile.Replace(Anchor, Anchor + Added, StringComparison.Ordinal), "t.cs")!;
+
+        var body = change.Body(room);
+
+        Assert.Matches(@"^… \d+ line\(s\) of this diff not shown here$", body);
+        Assert.True(body.Length <= Math.Max(room, change.NoteLength), $"{body.Length} characters");
+    }
+
     // ── the evidence ───────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Code review of task 20: every write was charged the whole floor for its diff, used or not, so a step of small edits
+    /// gave up reads the budget had room to show. A diff shorter than the floor is charged what it is.
+    /// </summary>
+    [Fact]
+    public void Small_edits_are_charged_what_their_diffs_take_and_the_reads_beside_them_are_kept()
+    {
+        var journal = new ExecutionJournal();
+        for (var i = 0; i < 6; i++)
+        {
+            journal.Record(1, "read_file", $$"""{"path":"src/F{{i}}.cs"}""", ActionOutcome.Succeeded, $"class F{i} {{ }}", WorkspaceEffect.None);
+            journal.Record(1, "edit_file", """{"path":"src/F.cs"}""", ActionOutcome.Succeeded, "Replaced 1 passage.", WorkspaceEffect.Changed,
+                change: WrittenChange.Of("a\nint x = 0;\nb\n", $"a\nint x = {i};\nb\n", $"src/F{i}.cs"));
+        }
+
+        var view = journal.Describe(maxChars: 4_400);
+
+        Assert.True(view.Text.Length <= 4_400, $"{view.Text.Length} characters");
+        Assert.Equal(12, view.VisibleActionIds.Count);
+        Assert.Contains("+ int x = 5;", view.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_header_says_a_long_diff_is_shortened_as_a_diff()
+    {
+        var journal = new ExecutionJournal();
+        journal.Record(1, "edit_file", "{}", ActionOutcome.Succeeded, "Replaced 1 passage.", WorkspaceEffect.Changed,
+            change: WrittenChange.Of("a\n", "b\n", "f.txt"));
+
+        Assert.Contains("A diff too long to show is not cut in the middle like a result: it keeps its first changed lines and "
+            + "says how many it leaves out.", journal.Describe().Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>A step parked at a question keeps its calls on disk (TaskProgress); a change among them comes back whole.</summary>
+    [Fact]
+    public void A_parked_step_brings_back_what_its_edits_changed()
+    {
+        using var fx = new EngineFixture();
+        var progress = new Enactive.Agents.TaskProgress(fx.Root);
+        var task = Guid.NewGuid();
+        var change = Insertion("GetBestMove_WinTakesPriorityOverBlock");
+        var action = new ExecutedAction(DateTimeOffset.UtcNow, 1, "edit_file", "{}", ActionOutcome.Succeeded, "Replaced 1 passage.",
+            WorkspaceEffect.Changed, Change: change);
+        progress.Park(task, new Enactive.Agents.ParkedPosition(1, [], [action], []));
+
+        var back = Assert.Single(progress.TakeParked(task, 1)!.Actions).Change!;
+
+        Assert.Equal(change.Summary, back.Summary);
+        Assert.Equal(change.Lines, back.Lines);
+        Assert.Equal(change.LinesNotKept, back.LinesNotKept);
+    }
 
     private static WrittenChange Insertion(string name)
         => WrittenChange.Of(TestFile, TestFile.Replace(Anchor, Anchor + Added.Replace("GetBestMove_WinTakesPriorityOverBlock", name,
