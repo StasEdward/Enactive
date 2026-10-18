@@ -110,12 +110,147 @@ public static class EvidenceCoverage
         return items;
     }
 
+    /// <summary>
+    /// The items each results field of a step is to be keyed by, as its gate counts them (StepCoverageGate.Check over
+    /// <paramref name="coverage"/>): the items of every list the step consumes into that field - and, for a step that
+    /// filters, into 'excluded' too. A field no consume feeds, or whose source handed on no list, has no entry: what keys
+    /// it takes is not the engine's to say.
+    /// </summary>
+    /// <param name="outputs">What the steps before it handed on - the step's own output is not among them.</param>
+    internal static IReadOnlyDictionary<string, IReadOnlyList<string>> Owed(IEnumerable<SuccessCriterionDefinition> coverage,
+        IEnumerable<StepOutput> outputs)
+    {
+        var all = outputs.ToArray();
+        var owed = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var typed in coverage.Select(c => c.Typed).OfType<TypedCriterion>())
+        {
+            if (typed.ResultsField is not { } results || typed.SourceField is not { } sourceField) continue;
+            // The source as Account finds it, so this and the gate name the same items.
+            if (all.FirstOrDefault(o => o.StepNo == typed.SourceStep + 1)?.Value(sourceField) is not { ValueKind: JsonValueKind.Array } list)
+                continue;
+            var items = list.EnumerateArray().Where(i => i.ValueKind == JsonValueKind.String).Select(i => i.GetString()!).ToArray();
+            foreach (var field in typed.Subset ? new[] { results, ExcludedField } : [results])
+            {
+                if (!owed.TryGetValue(field, out var into)) owed[field] = into = [];
+                into.AddRange(items.Where(i => !into.Any(x => Same(x, i))));
+            }
+        }
+        return owed.ToDictionary(p => p.Key, p => (IReadOnlyList<string>)p.Value, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// A submission's results keys checked against the items they are owed for (<see cref="Owed"/>): the keys taken as an
+    /// item, and the keys that are not one of them.
+    /// </summary>
+    internal sealed record Keying(IReadOnlyList<(string Field, string Key, string Item)> Taken, IReadOnlyList<(string Field, string Key)> Strangers)
+    {
+        public static readonly Keying None = new([], []);
+
+        public bool IsStranger(ItemEvidence item) => Strangers.Contains((item.Field, item.Item));
+    }
+
+    /// <summary>
+    /// Keys each owed results field of an accepted submission by the items themselves, in place: a key that names exactly
+    /// one item unambiguously - the item's path in matching quotes or backticks, or its file name when no other item has
+    /// that name - is renamed to the item. Any other key that is not an item is left as it is and said to be a stranger.
+    ///
+    /// <para><b>Why.</b> Bench wiki-drift, all 5 runs: the local worker keyed its results by "CLI.md", by
+    /// "'Docs/wiki/CLI.md'", or by one summary key ("discrepancies"), not by Docs/wiki/CLI.md. Each key was looked up as a
+    /// path, so a page read whole was answered "CLI.md (never read) - read them": the worker read it again, sent the same
+    /// keys, and the repeat guard stopped the step - a false failure.</para>
+    ///
+    /// <para><b>Why renamed here, once, at acceptance.</b> The evidence is gathered from these values, the steps after this
+    /// one are shown them, and the step's gate counts them (Account looks each item up by key): renamed anywhere later,
+    /// one of the three would still see "CLI.md", and the gate would say "Docs/wiki/CLI.md (no result)" of a page that
+    /// has one.</para>
+    ///
+    /// <para>Not guessed: a file name two items share, or a key that would land on an item the field already has a result
+    /// for (one of the two results would be lost) - each stays a stranger, and the step is told the keys expected.</para>
+    /// </summary>
+    internal static Keying KeyByItems(StepOutputSchema schema, JsonObject values, IReadOnlyDictionary<string, IReadOnlyList<string>>? owed)
+    {
+        if (owed is not { Count: > 0 }) return Keying.None;
+        var taken = new List<(string, string, string)>();
+        var strangers = new List<(string, string)>();
+        foreach (var field in schema.Fields.Where(f => f.Type == StepOutputFieldType.Results))
+        {
+            if (!owed.TryGetValue(field.Name, out var items) || items.Count == 0 || values[field.Name] is not JsonObject map) continue;
+            var keys = map.Select(p => p.Key).ToArray();
+            var renamed = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var key in keys)
+            {
+                if (items.Any(i => Same(i, key))) continue;
+                var item = NamedItem(key, items);
+                if (item is not null && !keys.Any(k => Same(k, item)) && !renamed.Values.Any(v => Same(v, item)))
+                {
+                    renamed[key] = item;
+                    taken.Add((field.Name, key, item));
+                }
+                else strangers.Add((field.Name, key));
+            }
+            if (renamed.Count == 0) continue;
+            // Rebuilt in the order the step wrote it; a node is detached from the old object before it joins the new one.
+            var entries = map.ToArray();
+            map.Clear();
+            foreach (var (key, result) in entries)
+                map[renamed.GetValueOrDefault(key, key)] = result;
+        }
+        return new(taken, strangers);
+    }
+
+    /// <summary>The one item a key names unambiguously (see <see cref="KeyByItems"/>), or null.</summary>
+    private static string? NamedItem(string key, IReadOnlyList<string> items)
+    {
+        var bare = key.Trim();
+        if (bare.Length >= 2 && bare[0] is '"' or '\'' or '`' && bare[^1] == bare[0])
+            bare = bare[1..^1].Trim();
+        if (items.FirstOrDefault(i => Same(i, bare)) is { } path) return path;
+        // A file name, not the end of a path: "wiki/CLI.md" could as well be a folder's page the step was not given.
+        var name = Normal(bare);
+        if (name.Length == 0 || name.Contains('/')) return null;
+        var named = items.Where(i => string.Equals(FileName(i), name, StringComparison.OrdinalIgnoreCase)).ToArray();
+        return named.Length == 1 ? named[0] : null;
+    }
+
+    private static string FileName(string item)
+    {
+        var normal = Normal(item);
+        return normal[(normal.LastIndexOf('/') + 1)..];
+    }
+
+    /// <summary>What the step is told of the keys taken as items - so it keys the next one by the item itself.</summary>
+    internal static string? TakenAsItems(Keying keying)
+        => keying.Taken.Count == 0 ? null
+            : string.Join(" ", keying.Taken.Select(t => $"{t.Field}: '{t.Key}' was taken as the item {t.Item}."));
+
+    /// <summary>
+    /// The results keys that are not one of the items this step is responsible for, with the keys expected - in place of
+    /// "never read ... read them", which was wrong about them: what is missing is not a read, it is the key (see
+    /// <see cref="KeyByItems"/>). Bounded as <see cref="Unbacked"/> is.
+    /// </summary>
+    internal static string? NotItems(Keying keying, IReadOnlyDictionary<string, IReadOnlyList<string>>? owed)
+    {
+        if (keying.Strangers.Count == 0 || owed is null) return null;
+        static string Named(IEnumerable<string> said, int count)
+            => string.Join(", ", said.Take(8)) + (count > 8 ? $", and {count - 8} more" : "");
+        var fields = keying.Strangers.GroupBy(s => s.Field).Select(g =>
+        {
+            var keys = g.Select(s => s.Key).ToArray();
+            var expected = owed[g.Key];
+            return $"'{g.Key}' is keyed by {Named(keys.Select(k => $"'{k}'"), keys.Length)} - not "
+                   + (keys.Length == 1 ? "one" : "any") + " of the items this step is responsible for, so not counted as covered. "
+                   + $"Its keys are the items themselves; expected: {Named(expected, expected.Count)}.";
+        });
+        return string.Join(" ", fields) + " Hand the result on again with one entry per item, keyed by the item.";
+    }
+
     /// <summary>The items of a submission handed on without any complete evidence - said back to the step, so it can still read them.</summary>
-    internal static string? Unbacked(IReadOnlyList<ItemEvidence> items)
+    /// <param name="keying">Keys that are not items at all are said by <see cref="NotItems"/>, not here: no read would back them.</param>
+    internal static string? Unbacked(IReadOnlyList<ItemEvidence> items, Keying? keying = null)
     {
         // An item left out needs a reason, not evidence: told it had nothing behind it, a filtering step was asked to read
         // the very pages it had decided to leave out.
-        var bare = items.Where(i => i.Complete.Count == 0 && i.Field != ExcludedField).ToArray();
+        var bare = items.Where(i => i.Complete.Count == 0 && i.Field != ExcludedField && keying?.IsStranger(i) != true).ToArray();
         if (bare.Length == 0) return null;
         return $"Not backed by anything this step did, so not counted as covered: "
                + string.Join("; ", bare.Take(8).Select(i => i.Gap is { } gap ? $"{i.Item} ({gap})" : i.Item))

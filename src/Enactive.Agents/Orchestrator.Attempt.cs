@@ -24,7 +24,10 @@ public sealed partial class Orchestrator
             models.Worker, step.Messages, scope.Artifacts, context, step.Store, step.Journal, step.Reads,
             stepNumber, result, scope.Budget, scope.Granted, ct, model.ProviderId,
             step.RestartFrom, changes, before, attemptOrigin, step.Output, step.OutputSlot, step.Boundary, step.WithholdUnchecked,
-            step.Criteria, step.SubmitTool, models.ReviewOn, step.LoadedTools, session.ChangeLimits, title, checks: session.Checks))
+            step.Criteria, step.SubmitTool, models.ReviewOn, step.LoadedTools, session.ChangeLimits, title, checks: session.Checks,
+            // The items its results are to be keyed by, from what the steps before it handed on - so a hand-over keyed by
+            // an item's file name is taken as the item, and one keyed by something else is told the keys expected.
+            owedItems: step.Coverage.Count > 0 ? EvidenceCoverage.Owed(step.Coverage, session.Outputs.Values.Where(o => o.StepNo != stepNumber)) : null))
             await publish(ev);
 
         // The lists this step consumes, counted by the engine before any review - and with review off, before the step is

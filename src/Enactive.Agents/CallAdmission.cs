@@ -723,15 +723,21 @@ internal sealed class CallAdmission(
         string handed;
         if (checkedOutput.Accepted)
         {
+            // Keyed by the items the step's gate counts, before anything reads the values (EvidenceCoverage.KeyByItems).
+            var keying = EvidenceCoverage.KeyByItems(frame.OutputSchema, checkedOutput.Values!, frame.OwedItems);
             frame.OutputSlot.Accept(checkedOutput);
             trail.Leave(() => frame.Open.HandedOn());
             // What the step had shown for each item it hands a result on for, recorded now
             // and by the engine (Phase 5.1): later, only this counts as coverage.
             frame.OutputSlot.Items = EvidenceCoverage.Gather(frame.OutputSchema, checkedOutput.Values!, frame.Reads, frame.Journal.Actions, tools.Definitions,
                 frame.Boundary is { ForItem: true } ? frame.Boundary.Items : null, frame.StepNo);
-            var unbacked = EvidenceCoverage.Unbacked(frame.OutputSlot.Items);
+            var unbacked = EvidenceCoverage.Unbacked(frame.OutputSlot.Items, keying);
+            var notItems = EvidenceCoverage.NotItems(keying, frame.OwedItems);
+            var taken = EvidenceCoverage.TakenAsItems(keying);
             handed = $"Accepted as this step's output (revision {frame.OutputSlot.Revision}); the steps after it receive "
                 + "these values." + (checkedOutput.Notes.Count > 0 ? " " + string.Join(" ", checkedOutput.Notes) : "")
+                + (taken is null ? "" : " " + taken)
+                + (notItems is null ? "" : " " + notItems)
                 + (unbacked is null ? "" : " " + unbacked)
                 // Said to the step when it is answered; with a note, the note is what carries on.
                 + (answered ? " Finish the step with a short closing message." : " Handed on with the handover note.");

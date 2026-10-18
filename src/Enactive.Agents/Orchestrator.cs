@@ -3782,7 +3782,9 @@ public sealed partial class Orchestrator : IOrchestrator
         ChangeLimitGuard? changeLimits = null, string? stepTitle = null,
         // The run's declared checks (RunSession.Checks): this loop runs their write-time ones (WriteChecks). Null - the
         // final checks' repair, a run with none - runs none.
-        Enactive.Core.Checks.CheckSnapshot? checks = null)
+        Enactive.Core.Checks.CheckSnapshot? checks = null,
+        // The items each results field is to be keyed by, as the step's coverage gate counts them (EvidenceCoverage.Owed).
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? owedItems = null)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -3931,7 +3933,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // The step being worked, as the modules that decide about it read it - its record of repetition (counted, not
         // turns - see StallLimit) included, which a handover starts over (StepFrame.StartOver).
         var frame = new StepFrame(taskId, runId, stepNo, _workspace, _tools.Definitions, messages, journal, reads, store,
-            outputSchema, outputSlot, submitTool, boundary, changes, stepStart);
+            outputSchema, outputSlot, submitTool, boundary, changes, stepStart, owedItems);
 
         // The run's write-time checks for this step (Plan Phase 3.2), and what is said once a run about those it does not
         // run - all of them in a staged run, a check too long for a turn. None declared: null, and nothing below changes.
