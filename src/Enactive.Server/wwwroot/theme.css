@@ -592,7 +592,7 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
   background: var(--dialog-scrim); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); animation: fade-in var(--t) var(--ease-out); }
 .dialog { box-sizing: border-box; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; padding: 22px 24px;
   background: var(--popover); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-xl); box-shadow: var(--shadow-lg);
-  animation: pop-in var(--t) var(--ease-out); }
+  animation: fade-in var(--t) var(--ease-out); }
 .dialog-title { font-size: 17px; margin: 0 0 12px; }
 .dialog .body { white-space: pre-wrap; color: var(--text-body); font-size: 13.5px; }
 .dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
@@ -690,7 +690,9 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
 .log-line { white-space: pre; color: var(--tone-text); }
 
 /* The status column: tiles two by two, ROUTING and WHERE IT RAN as label | value rows, the question, the model figures. */
-.status-column { display: flex; flex-direction: column; gap: 12px; padding: 14px 0 14px 10px; min-width: 0; }
+/* As low as the window's: MODEL PERFORMANCE ends within 48 px of the window's foot, over the strip's place (a taller
+   strip and foot padding lifted it to the middle of nowhere above). */
+.status-column { display: flex; flex-direction: column; gap: 12px; padding: 14px 0 10px 10px; min-width: 0; }
 /* One column no wider than the status column: sized by its widest line, a question whose detail had a long command line
    pushed the column, its tiles and the card past the run and off the screen. */
 .status-scroll { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-content: start; }
@@ -735,7 +737,7 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
 .speed-value { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* The repository strip at the foot: one size and one line for every part; added green, removed red. */
-.repo-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 6px 24px; font-size: 12.5px;
+.repo-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 4px 24px; font-size: 12.5px; line-height: 1.5;
   color: var(--text-body); background: var(--chrome-glass); border-top: 1px solid var(--border); cursor: pointer;
   -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
   /* The foot of the screen, edge to edge of the run's area, as the window's status strip: pushed down under a short run,
@@ -747,7 +749,7 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
 .repo-tone { color: var(--tone-text); }
 .repo-ci { display: inline-flex; align-items: center; gap: 6px; color: var(--text-body); text-decoration: none; }
 .repo-light { width: 8px; height: 8px; border-radius: 50%; background: var(--tone); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 20%, transparent); }
-.repo-again { margin-left: auto; width: 24px; height: 24px; }
+.repo-again { margin-left: auto; width: 22px; height: 22px; }
 
 /* The viewer (Ui/TextViewer.razor): a document's own text, read-only, monospaced and never wrapped. */
 .dialog:has(.viewer-text, .viewer-rendered) { width: min(820px, calc(100vw - 32px)); }
@@ -1131,7 +1133,8 @@ main.bare::after { content: ""; position: absolute; inset: 0; z-index: -2; point
 /* ── Motion: short, and only where something arrives - a dialog, a popover, the drawer. Nothing loops but the
    connection's dot while it retries and a running pill's: both say that something is still going on. ─────────────── */
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes pop-in { from { opacity: 0; transform: translateY(4px) scale(0.98); } to { opacity: 1; transform: none; } }
+/* A move, never a scale: a box measured while it arrived was 2% short of its width (the team editor read 862 of 880). */
+@keyframes pop-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @keyframes rise-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes slide-in { from { transform: translateX(-16px); opacity: 0.4; } to { transform: none; opacity: 1; } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
