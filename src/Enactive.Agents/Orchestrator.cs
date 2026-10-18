@@ -1193,6 +1193,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // end of the action with this same start - see NetChangedAsync.
         using var quickChanges = _workspaceChanges.Create(_workspace.RootPath);
         var quickBefore = await quickChanges.TakeAsync(ct);
+        // Where the build baseline was taken - nothing of the work done since - for a step check held against it
+        // (StepStartCheck). A baseline kept from an earlier attempt is not used against it (BuildBaseline.FromAnEarlierAttempt).
+        session.BaselineAt = quickBefore;
 
         using var quickLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
         ValueTask PublishQuick(WorkEvent ev) => quick.Writer.WriteAsync(ev, quickLifetime.Token);
@@ -1945,6 +1948,8 @@ public sealed partial class Orchestrator : IOrchestrator
             {
                 beforeRun = beforeStep;
                 runBoundaryCaptured = true;
+                // Where the build baseline was taken, for a step check held against it (StepStartCheck).
+                session.BaselineAt = beforeStep;
             }
 
             if (MissingInputOf(step) is { } missing)

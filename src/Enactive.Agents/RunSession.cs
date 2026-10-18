@@ -21,6 +21,21 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     public IReadOnlyList<BuildBaseline> Builds { get; init; } = [];
 
     /// <summary>
+    /// The workspace as the first step found it - right after <see cref="Builds"/> was taken, with nothing of the work
+    /// done in between - so a step check of an ecosystem can be held against the baseline while nothing it covers has
+    /// changed since (StepStartCheck). Null for a resumed run: its baseline is from before an earlier attempt, and
+    /// describes a workspace that attempt then worked in.
+    /// </summary>
+    public WorkspaceSnapshot? BaselineAt { get; set; }
+
+    /// <summary>
+    /// What the declared step checks found at the gates of this run's steps, each with the workspace it ran on - how a
+    /// later step's check stood when that step began, while nothing it covers has changed since (StepStartCheck). At most
+    /// StepStartCheck.KeptPerCheck per check. Guarded by its own lock.
+    /// </summary>
+    public List<StepStartCheck.Known> KnownChecks { get; } = [];
+
+    /// <summary>
     /// The declared checks this run is judged by (Plan Phase 3.1): the composed snapshot, or a resumed run's checkpoint's.
     /// Null when there are none. What every checkpoint the run writes carries.
     /// </summary>

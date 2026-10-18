@@ -101,7 +101,15 @@ public enum OutcomeCause
     /// out, it ran no tests: done, not confirmed. A check that did not run has verified nothing, and a blocking one is what
     /// a person said this kind of change is confirmed by. Last, so no stored value moves.
     /// </summary>
-    CheckNotRun
+    CheckNotRun,
+
+    /// <summary>
+    /// A blocking workspace check failed after the step and had failed on the workspace as the step found it too, and what
+    /// it printed cannot be compared to tell whether the step made it worse (Agents.StepStartCheck): done, not confirmed.
+    /// Not sent back for a failure that was there before it began - and not confirmed by a check that said nothing about
+    /// it. Last, so no stored value moves.
+    /// </summary>
+    CheckFailedBefore
 }
 
 /// <summary>

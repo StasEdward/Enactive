@@ -145,15 +145,27 @@ internal static class WorkspaceChecks
     /// </summary>
     public static IReadOnlyList<SuccessCriterionDefinition> Criteria(ResolvedCheck check, string name,
         IReadOnlyList<IEcosystem> ecosystems, string root, out string? none)
+        => Criteria(check, name, ecosystems, root, out none, out _);
+
+    /// <param name="sources">What each criterion runs, in the same order: the ecosystem and target it builds or tests, or
+    /// none for the check's own command - for comparing what it printed with how the check stood before a step
+    /// (StepStartCheck).</param>
+    public static IReadOnlyList<SuccessCriterionDefinition> Criteria(ResolvedCheck check, string name,
+        IReadOnlyList<IEcosystem> ecosystems, string root, out string? none,
+        out IReadOnlyList<(IEcosystem? Ecosystem, string? Target, BaselineKind Kind)> sources)
     {
         none = null;
         var required = check.Definition.Severity == CheckSeverity.Blocking;
         SuccessCriterionDefinition Of(string command) => new(name, command, 0, Required: required, Origin: CriterionOrigin.Declared);
         if (!check.RunsThroughEcosystem)
+        {
+            sources = [(null, null, BaselineKind.Build)];
             return [Of(check.Definition.Command!.Trim())];
+        }
 
         var tests = string.Equals(check.Id, ImplicitCheckIds.Test, StringComparison.OrdinalIgnoreCase);
         var criteria = new List<SuccessCriterionDefinition>();
+        var from = new List<(IEcosystem? Ecosystem, string? Target, BaselineKind Kind)>();
         foreach (var ecosystem in Owners(check, ecosystems))
         {
             EcosystemTargets? targets;
@@ -162,8 +174,12 @@ internal static class WorkspaceChecks
             // As many targets as the engine's own build baseline takes (Orchestrator.MaxBuildTargets): a workspace of loose
             // projects is built a few at most.
             foreach (var target in (tests ? targets?.Tests : targets?.Build)?.Take(MaxTargets) ?? [])
+            {
                 criteria.Add(Of(tests ? ecosystem.TestCommand(target) : ecosystem.BuildCommand(target)));
+                from.Add((ecosystem, target, tests ? BaselineKind.Test : BaselineKind.Build));
+            }
         }
+        sources = from;
         if (criteria.Count == 0)
             none = $"there is no {(tests ? "test project" : "build target")} of {string.Join(", ", check.Ecosystems ?? [])} "
                    + "in the workspace now, so there was nothing to run";

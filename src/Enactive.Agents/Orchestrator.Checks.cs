@@ -21,9 +21,14 @@ public sealed partial class Orchestrator
         + "since been changed; what they found now is recorded below.";
 
     /// <summary>What the checks at a step's gate came to: a blocking one that failed, and why blocking ones did not run.</summary>
-    /// <param name="Failed">The first blocking check that failed, with its result - the step goes back on the gate's budget.</param>
-    /// <param name="NotRun">Which blocking checks did not run and why; the step is then done at best, never confirmed.</param>
-    private sealed record StepCheckVerdict((ResolvedCheck Check, CriterionResult Result)? Failed, string? NotRun);
+    /// <param name="Failed">The first blocking check that failed, with its result - the step goes back on the gate's budget -
+    /// and, where it was known, how it stood when the step began, for the step to be told (StepStartCheck).</param>
+    /// <param name="NotRun">Which blocking checks did not run and why - or failed before the step too, with nothing to
+    /// compare - the step is then done at best, never confirmed.</param>
+    /// <param name="NotRunCause">Why it is not confirmed, as a code: a check that did not run, or only ones that said
+    /// nothing about the step (OutcomeCause.CheckFailedBefore).</param>
+    private sealed record StepCheckVerdict((ResolvedCheck Check, CriterionResult Result, string? Before)? Failed, string? NotRun,
+        Enactive.Core.Tasks.OutcomeCause NotRunCause = Enactive.Core.Tasks.OutcomeCause.CheckNotRun);
 
     /// <summary>
     /// Runs one declared check, labelled with where it was owed (<paramref name="at"/>). Never an exception and never a
@@ -87,13 +92,22 @@ public sealed partial class Orchestrator
     /// <summary>The check run, before its record is put on it - see the overload above, which every caller goes through.</summary>
     private async Task<CriterionResult> RunDeclaredCheckAsync(ResolvedCheck check, string at, Guid taskId, Guid runId,
         WorkContext context, CancellationToken ct)
+        => (await RunDeclaredCheckPartsAsync(check, at, taskId, runId, context, ct)).Result;
+
+    /// <summary>
+    /// The check run, with each command it ran as and what that came to - an ecosystem check's one per target - for a step
+    /// check compared with how it stood before the step (StepStartCheck). Empty when nothing ran.
+    /// </summary>
+    private async Task<(CriterionResult Result, IReadOnlyList<StepStartCheck.Part> Parts)> RunDeclaredCheckPartsAsync(
+        ResolvedCheck check, string at, Guid taskId, Guid runId, WorkContext context, CancellationToken ct)
     {
         var definition = check.Definition;
         var name = WorkspaceChecks.Label(definition.Id, at);
         var blocking = definition.Severity == CheckSeverity.Blocking;
-        var criteria = WorkspaceChecks.Criteria(check, name, _ecosystems, _workspace.RootPath, out var none);
+        var criteria = WorkspaceChecks.Criteria(check, name, _ecosystems, _workspace.RootPath, out var none, out var sources);
         var command = WorkspaceChecks.CommandOf(check, criteria);
-        CriterionResult Unknown(string why) => new(name, command, blocking, CriterionOutcome.Unknown, null, why, CriterionOrigin.Declared);
+        (CriterionResult, IReadOnlyList<StepStartCheck.Part>) Unknown(string why)
+            => (new(name, command, blocking, CriterionOutcome.Unknown, null, why, CriterionOrigin.Declared), []);
 
         if (_settings?.Staged == true)
             return Unknown(WorkspaceChecks.StagedDetail);
@@ -115,7 +129,10 @@ public sealed partial class Orchestrator
         {
             var report = await CheckSuccessAsync(criteria, taskId, runId, context, limit.Token,
                 commandTimeoutSeconds: definition.TimeoutSeconds);
-            return WorkspaceChecks.Combine(name, command, blocking, report.Results);
+            return (WorkspaceChecks.Combine(name, command, blocking, report.Results),
+                report.Results.Count == sources.Count
+                    ? report.Results.Select((r, i) => new StepStartCheck.Part(sources[i].Ecosystem, sources[i].Target, sources[i].Kind, r)).ToArray()
+                    : []);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -132,11 +149,15 @@ public sealed partial class Orchestrator
     /// owed when the files are applied. What ran is said as a criterion each, and put in the journal for the reviewer as
     /// the engine's own record; null when nothing is owed.
     /// </summary>
-    /// <param name="changed">What the step changed (StepChangesAsync) - measured once at the gate for these checks and the
-    /// protected files both.</param>
+    /// <param name="measure">What the step changed (StepChangesAsync) - measured once at the gate for these checks and the
+    /// protected files both - and the workspace it was measured in, which the checks run on.</param>
+    /// <param name="changes">The measurement, and <paramref name="before"/> the workspace as the step found it: how a
+    /// blocking check that fails now stood then is looked up against them (StepStartCheck).</param>
     private async Task<StepCheckVerdict?> StepChecksAsync(RunSession session, StepAttemptState step, int? stepNumber,
-        WorkContext context, StepChanges changed, Func<WorkEvent, ValueTask> publish, CancellationToken ct)
+        WorkContext context, StepMeasure measure, IWorkspaceChanges? changes, WorkspaceSnapshot? before,
+        Func<WorkEvent, ValueTask> publish, CancellationToken ct)
     {
+        var changed = measure.Changed;
         var owed = WorkspaceChecks.Firing(session.Checks, CheckFire.Step);
         if (owed.Count == 0) return null;
         var scope = session.Scope;
@@ -179,12 +200,28 @@ public sealed partial class Orchestrator
                   + "could be another step's."), stepNumber));
         if (now.Count == 0) return null;
 
-        var ran = new List<(ResolvedCheck Check, CriterionResult Result)>();
+        var ran = new List<(ResolvedCheck Check, CriterionResult Result, StepStartCheck.Judgement? Before)>();
         foreach (var check in now)
         {
-            var result = await RunDeclaredCheckAsync(check, at, scope, context,
-                new CheckFiring(check.Id, CheckBoundary.Step) { Step = stepNumber, Attempt = step.LaterAttempt }, ct);
-            ran.Add((check, result));
+            var (raw, parts) = await RunDeclaredCheckPartsAsync(check, at, scope.TaskId, scope.RunId, context, ct);
+            var result = Recorded(raw, new CheckFiring(check.Id, CheckBoundary.Step) { Step = stepNumber, Attempt = step.LaterAttempt }, scope.RunId);
+            StepStartCheck.Judgement? judged = null;
+            // Only at a gate of steps one at a time: there the workspace is this step's alone, before and after. Deferred,
+            // what runs here is advisory and may be a sibling's; staged, nothing runs.
+            if (step.CheckTiming == StepCheckTiming.AtGate)
+            {
+                // Looked up only for a blocking check that failed - the one result that sends a step back - and never by
+                // running the check again: how it stood before the step is taken from a result the run already has (see
+                // BeforeThisStepAsync), so a check that passes costs nothing more, and one that fails costs a comparison.
+                if (result.Required && result.Outcome == CriterionOutcome.Failed)
+                {
+                    judged = await BeforeThisStepAsync(session, check, parts, changes, before, ct);
+                    result = result with { Detail = WithBefore(result.Detail, judged) };
+                }
+                if (measure.After is { } after && result.Outcome != CriterionOutcome.Unknown && parts.Count > 0)
+                    Remember(session, new StepStartCheck.Known(check.Id, after, parts));
+            }
+            ran.Add((check, result, judged));
             await publish(scope.Criterion(result));
         }
 
@@ -203,9 +240,105 @@ public sealed partial class Orchestrator
 
         var notRun = ran.Where(r => r.Result.Required && r.Result.Outcome == CriterionOutcome.Unknown)
             .Select(r => $"the engine's check '{r.Check.Id}' did not run: {r.Result.Detail}").ToArray();
-        return new(ran.FirstOrDefault(r => r.Result.Required && r.Result.Outcome == CriterionOutcome.Failed) is { Check: not null } failed ? failed : null,
-            notRun.Length == 0 ? null : string.Join("; ", notRun));
+        // Failed before the step too, and what it printed cannot be compared: it verified nothing about this step - not a
+        // failure to send it back for, and not a check it passed. Done at best, as for a check that did not run.
+        var saidNothing = ran.Where(r => r.Before?.Standing == StepStartCheck.Standing.Inconclusive)
+            .Select(r => $"the engine's check '{r.Check.Id}' failed before this step too, and whether this step made it worse "
+                         + $"cannot be told: {r.Before!.Note}").ToArray();
+        var unconfirmed = notRun.Concat(saidNothing).ToArray();
+        var failed = ran.FirstOrDefault(r => r.Result.Required && r.Result.Outcome == CriterionOutcome.Failed
+                                             && r.Before?.Standing is not (StepStartCheck.Standing.Theirs or StepStartCheck.Standing.Inconclusive));
+        return new(failed.Check is not null ? (failed.Check, failed.Result, ToldOfBefore(failed.Before)) : null,
+            unconfirmed.Length == 0 ? null : string.Join("; ", unconfirmed),
+            notRun.Length == 0 && saidNothing.Length > 0 ? Enactive.Core.Tasks.OutcomeCause.CheckFailedBefore : Enactive.Core.Tasks.OutcomeCause.CheckNotRun);
     }
+
+    /// <summary>
+    /// How a blocking step check that failed after the step stood on the workspace as the step found it (StepStartCheck),
+    /// from a result the run already has: an earlier step's gate, or - for an ecosystem's build or test - the run's
+    /// baseline, each while nothing the check covers has changed between where it ran and where this step began (the
+    /// premise a step is owed a check on: a change to nothing it covers does not change what it says).
+    ///
+    /// <para><b>Why never by running it.</b> The state the step began from is gone from the disk by its gate: run there,
+    /// the check would need the step's work put aside and back again, which a crash between the two would lose; run at
+    /// every step's start instead, it would cost a build or a test run per step whether or not anything fails. A result
+    /// the run already has costs a comparison of two measurements. Where there is none - the first step of a run with a
+    /// check of its own command, a step whose start was not measured - it is not known, and today's behaviour stands.</para>
+    /// </summary>
+    private async Task<StepStartCheck.Judgement> BeforeThisStepAsync(RunSession session, ResolvedCheck check,
+        IReadOnlyList<StepStartCheck.Part> parts, IWorkspaceChanges? changes, WorkspaceSnapshot? before, CancellationToken ct)
+    {
+        if (parts.Count == 0)
+            return StepStartCheck.NotKnown("what it ran could not be told apart to compare");
+        if (changes is null || before is null)
+            return StepStartCheck.NotKnown("the workspace was not measured when the step began");
+
+        StepStartCheck.Known[] known;
+        lock (session.KnownChecks)
+            known = session.KnownChecks.Where(k => string.Equals(k.CheckId, check.Id, StringComparison.OrdinalIgnoreCase)).Reverse().ToArray();
+        foreach (var earlier in known)
+            if (await NothingCoveredChangedAsync(check, changes, earlier.At, before, ct))
+                return StepStartCheck.Judge(parts, p => StepStartCheck.Matching(earlier.Parts, p), _workspace.RootPath);
+
+        // The baseline is of this run's start only: one kept from before an earlier attempt describes a workspace that
+        // attempt then worked in (BuildBaseline.FromAnEarlierAttempt).
+        var builds = session.Builds.Where(b => !b.FromAnEarlierAttempt).ToArray();
+        if (check.RunsThroughEcosystem && builds.Length > 0 && session.BaselineAt is { } start
+            && await NothingCoveredChangedAsync(check, changes, start, before, ct))
+            return StepStartCheck.Judge(parts, p => StepStartCheck.FromBaseline(builds, p), _workspace.RootPath);
+
+        return StepStartCheck.NotKnown("the run has no result of it on the workspace as this step found it - it has not run "
+            + "on it, and is not run again only to find out");
+    }
+
+    /// <summary>Whether no path <paramref name="check"/> covers differs between two measurements; false when they cannot be compared.</summary>
+    private async Task<bool> NothingCoveredChangedAsync(ResolvedCheck check, IWorkspaceChanges changes, WorkspaceSnapshot from,
+        WorkspaceSnapshot to, CancellationToken ct)
+    {
+        try
+        {
+            if (await changes.ComparePathsAsync(from, to, ct) is not { } found) return false;
+            return !WorkspaceChecks.Covers(check, found.SelectMany(c => c.OldPath is { } old ? new[] { c.Path, old } : [c.Path]), _ecosystems);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    /// <summary>A check's result at a gate, kept for the steps after it - the newest few per check (StepStartCheck.KeptPerCheck).</summary>
+    private static void Remember(RunSession session, StepStartCheck.Known known)
+    {
+        lock (session.KnownChecks)
+        {
+            session.KnownChecks.Add(known);
+            var same = session.KnownChecks.Where(k => string.Equals(k.CheckId, known.CheckId, StringComparison.OrdinalIgnoreCase)).ToArray();
+            foreach (var old in same.Take(Math.Max(0, same.Length - StepStartCheck.KeptPerCheck)))
+                session.KnownChecks.Remove(old);
+        }
+    }
+
+    /// <summary>
+    /// A failed blocking check's detail with how it stood before the step. First where it decides the step - failed before
+    /// too, so it is not what sends the step back; last otherwise, after the output, which stays what a person reads first.
+    /// </summary>
+    private static string? WithBefore(string? detail, StepStartCheck.Judgement judged) => judged.Standing switch
+    {
+        StepStartCheck.Standing.Theirs => "Failed before this step too, and nothing in it is new - not this step's failure, and the "
+            + $"step is not sent back for it: {judged.Note}." + (string.IsNullOrWhiteSpace(detail) ? "" : "\n" + detail),
+        StepStartCheck.Standing.Inconclusive => "Failed before this step too, and whether this step made it worse cannot be told - "
+            + $"the step is not sent back for it, and not confirmed by it: {judged.Note}." + (string.IsNullOrWhiteSpace(detail) ? "" : "\n" + detail),
+        StepStartCheck.Standing.Ours => (string.IsNullOrWhiteSpace(detail) ? "" : detail + "\n") + $"Against this step's start: {judged.Note}.",
+        _ => (string.IsNullOrWhiteSpace(detail) ? "" : detail + "\n") + $"Whether it failed before this step too is not known: {judged.Note}."
+    };
+
+    /// <summary>
+    /// What a step sent back by a check that is its own is told of how the check stood before it: what is new, so it fixes
+    /// that and not what was there before it began - the bench's chase after an old error. Nothing when it is not known.
+    /// </summary>
+    private static string? ToldOfBefore(StepStartCheck.Judgement? judged)
+        => judged is { Standing: StepStartCheck.Standing.Ours } ours
+            ? $"Against how the check stood when this step began: {ours.Note}. Only what this step changed is this step's to "
+              + "fix; a failure that was there before it began is not."
+            : null;
 
     /// <summary>
     /// What a step changed, as its gate reads it (Plan Phase 3.2 / 3.4): the paths, for the checks owed and the protected

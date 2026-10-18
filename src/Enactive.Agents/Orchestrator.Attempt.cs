@@ -75,10 +75,11 @@ public sealed partial class Orchestrator
                 WorkEventPayload.EngineCheckPayload(stepNumber, lost.CheckId)));
             return new(new ReviewResult(new ReviewVerdict.Fail(lost.Notes, lost.Advice, [])), ByGate: true) { ByCheck = lost.CheckId };
         }
-        var checks = measure is not null ? await StepChecksAsync(session, step, stepNumber, context, measure.Changed, publish, ct) : null;
+        var checks = measure is not null ? await StepChecksAsync(session, step, stepNumber, context, measure, changes, before, publish, ct) : null;
         if (checks?.Failed is { } failedCheck)
         {
-            var advice = WorkspaceChecks.RepairAdvice(failedCheck.Check.Id, failedCheck.Result);
+            var advice = WorkspaceChecks.RepairAdvice(failedCheck.Check.Id, failedCheck.Result)
+                         + (failedCheck.Before is { } then ? "\n" + then : "");
             var notes = $"the engine's check '{failedCheck.Check.Id}' failed"
                         + (failedCheck.Result.ExitCode is { } exit ? $" (exit {exit})" : "")
                         + (string.IsNullOrWhiteSpace(failedCheck.Result.Detail) ? "" : ": " + Gist(failedCheck.Result.Detail!, 300));
@@ -114,7 +115,7 @@ public sealed partial class Orchestrator
         // not confirmed; with one, a pass makes it no more than that either (RunAttemptsAsync).
         if (!models.ReviewOn && result.Succeeded && checks?.NotRun is { } notRun)
         {
-            result.Set(StepOutcomeKind.DoneUnverified, notRun, OutcomeCause.CheckNotRun);
+            result.Set(StepOutcomeKind.DoneUnverified, notRun, checks.NotRunCause);
             await publish(scope.Ev(EventKind.ErrorObserved, (stepNumber is { } unverifiedNo ? $"[{unverifiedNo}] " : "") + notRun, stepNumber));
             return null;
         }
@@ -130,7 +131,7 @@ public sealed partial class Orchestrator
             session.Builds, step.Reads, context.Restrictions, result.KeptBack,
             saidBlocked: SaidBlockedOnly(result) ? result.Reason : null, coverage: coverage)) with
             {
-                Coverage = coverage, ChecksNotRun = checks?.NotRun
+                Coverage = coverage, ChecksNotRun = checks?.NotRun, ChecksNotRunCause = checks?.NotRunCause ?? OutcomeCause.CheckNotRun
             };
     }
 
@@ -303,7 +304,7 @@ public sealed partial class Orchestrator
             // and the check a person said this kind of change is confirmed by verified nothing - done, never Succeeded.
             if (verdict is ReviewVerdict.Pass && assessed.ChecksNotRun is { } notRun)
             {
-                result.Set(StepOutcomeKind.DoneUnverified, notRun, OutcomeCause.CheckNotRun);
+                result.Set(StepOutcomeKind.DoneUnverified, notRun, assessed.ChecksNotRunCause);
                 await publish(scope.Ev(EventKind.ErrorObserved, prefix + notRun, stepNumber));
                 return;
             }

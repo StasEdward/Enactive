@@ -20,6 +20,7 @@ internal static class ItemReport
         OutcomeCause.CoverageGateRejected => "Rejected by the engine's coverage check",
         OutcomeCause.CheckGateRejected => "Rejected by an engine check",
         OutcomeCause.CheckNotRun => "Unconfirmed: a blocking check did not run",
+        OutcomeCause.CheckFailedBefore => "Unconfirmed: a blocking check failed before the step too",
         OutcomeCause.ReviewUnprocessable => "Unconfirmed: the review could not be processed",
         OutcomeCause.ReviewUndecided => "Unconfirmed: the reviewer could not decide",
         OutcomeCause.CoverageMentionedOnly => "Unconfirmed: its items were only mentioned",

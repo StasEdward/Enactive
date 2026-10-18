@@ -51,6 +51,9 @@ public sealed partial class Orchestrator
 
         /// <summary>Which blocking declared checks did not run at the gate, and why: a pass then makes the step done, not confirmed.</summary>
         public string? ChecksNotRun { get; init; }
+
+        /// <summary>Why <see cref="ChecksNotRun"/> leaves the step unconfirmed, as a code - see StepCheckVerdict.NotRunCause.</summary>
+        public Enactive.Core.Tasks.OutcomeCause ChecksNotRunCause { get; init; } = Enactive.Core.Tasks.OutcomeCause.CheckNotRun;
     }
 
     /// <summary>
