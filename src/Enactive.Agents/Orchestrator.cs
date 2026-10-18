@@ -1202,11 +1202,23 @@ public sealed partial class Orchestrator : IOrchestrator
         var quickPump = Task.Run(async () =>
         {
             using var _quickScope = LogScope.Begin(scope.RunId, scope.TaskId);
+            IArtifactScope? store = null;
+            StepAttemptState? attemptState = null;
+            var revertTried = false;
+            // Once, whichever way the action ended - by its own result, or by an exception after it was sent back.
+            async Task RevertQuickAsync()
+            {
+                if (revertTried || store is null || attemptState is null) return;
+                revertTried = true;
+                await RevertRejectedAsync(quickResult, store, scope, null,
+                    (line, payload) => PublishQuick(scope.Event(EventKind.ArtifactReverted, line, payload)), quickLifetime.Token,
+                    changes: quickChanges, before: quickBefore, actions: attemptState.Journal.Actions.Skip(attemptState.StepStart));
+            }
             try
             {
-                var store = _artifacts.BeginStep();
+                store = _artifacts.BeginStep();
                 // One step, nothing beside it: its declared checks run at its gate - never against the disk when staged.
-                var attemptState = session.BeginStep(messages, store) with
+                attemptState = session.BeginStep(messages, store) with
                 {
                     CheckTiming = _settings?.Staged == true ? StepCheckTiming.Staged : StepCheckTiming.AtGate,
                     // A quick action has no steps for the planner to mark: it says so beside its disposition (Plan Phase 3.4).
@@ -1216,14 +1228,20 @@ public sealed partial class Orchestrator : IOrchestrator
                 await RunAttemptsAsync(session, attemptState, models, models.Provider, models.Model,
                     intent.Context, quickResult, plan.Title, intent.RawText, null, quickChanges, quickBefore,
                     PublishQuick, quickLifetime.Token);
-                await RevertRejectedAsync(quickResult, store, scope, null,
-                    (line, payload) => PublishQuick(scope.Event(EventKind.ArtifactReverted, line, payload)), quickLifetime.Token,
-                    changes: quickChanges, before: quickBefore, actions: attemptState.Journal.Actions.Skip(attemptState.StepStart));
+                await RevertQuickAsync();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 quickResult.Set(ex is RetryBudgetExceededException ? StepOutcomeKind.Incomplete : StepOutcomeKind.Failed, ex.Message);
                 await PublishQuick(scope.Ev(EventKind.ErrorObserved, ex.Message));
+                // Sent back, then broken (the provider's retries spent, say): Incomplete or Failed with no verdict since, and
+                // its work goes back as the plan's step does (RevertsAsRejected). Never on cancellation - that is not caught
+                // here - and a revert that itself threw is not tried twice.
+                try { await RevertQuickAsync(); }
+                catch (Exception revertFailed) when (revertFailed is not OperationCanceledException)
+                {
+                    await PublishQuick(scope.Ev(EventKind.ErrorObserved, "The rejected work could not be put back: " + revertFailed.Message));
+                }
             }
             finally
             {

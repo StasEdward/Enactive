@@ -361,24 +361,29 @@ public sealed partial class Orchestrator
     {
         var ended = outcome ?? result.Kind;
         if (!RevertsAsRejected(ended, result.SentBack) || !_options.RevertRejectedSteps) return;
-        if (ended != StepOutcomeKind.ReviewRejected)
-            await publish($"The step ended {(ended == StepOutcomeKind.Failed ? "failed" : "incomplete")} after its last verdict sent "
-                + "its work back, with no verdict since: what it changed goes back as a rejected step's does.",
-                WorkEventPayload.RevertPayload(stepNo, [], []));
+        // What the revert says, gathered first: why a step that was not rejected is put back is said only above something
+        // it did - a step sent back that had changed nothing would otherwise read as put back with nothing put back.
+        var said = new List<(string Line, string Payload)>();
         // Rejected, and still not put back: the files the review found right. The step stays rejected - nothing is built
         // on it - but what it made right is left for the person to see, rather than thrown away with the report or the
         // other file it came with; the rest of what it changed goes back. See ReviewResult.Keep.
         var keep = result.Keep.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var kept = store.TouchedPaths.Where(p => keep.Contains(ShellLookup.Normal(p))).ToArray();
         if (kept.Length > 0)
-            await publish("Rejected, but NOT put back: " + string.Join(", ", kept)
+            said.Add(("Rejected, but NOT put back: " + string.Join(", ", kept)
                 + " - the review found it right and rejected the step for something else; it is left as it is, "
-                + "and nothing is built on it.", WorkEventPayload.RevertPayload(stepNo, [], kept));
+                + "and nothing is built on it.", WorkEventPayload.RevertPayload(stepNo, [], kept)));
         var report = await RevertAsync(store, scope.Artifacts, ct, except: kept);
         foreach (var (line, reverted, left) in DescribeRevert(report))
-            await publish(line, WorkEventPayload.RevertPayload(stepNo, reverted, left));
+            said.Add((line, WorkEventPayload.RevertPayload(stepNo, reverted, left)));
         if (await LeftByCommandsAsync(store, keep, changes, before, actions, ct) is { } byCommands)
-            await publish(byCommands.Line, WorkEventPayload.RevertPayload(stepNo, [], byCommands.Paths));
+            said.Add((byCommands.Line, WorkEventPayload.RevertPayload(stepNo, [], byCommands.Paths)));
+        if (said.Count > 0 && ended != StepOutcomeKind.ReviewRejected)
+            said.Insert(0, ($"The step ended {(ended == StepOutcomeKind.Failed ? "failed" : "incomplete")} after its last verdict sent "
+                + "its work back, with no verdict since: what it changed goes back as a rejected step's does.",
+                WorkEventPayload.RevertPayload(stepNo, [], [])));
+        foreach (var (line, payload) in said)
+            await publish(line, payload);
     }
 
     /// <summary>

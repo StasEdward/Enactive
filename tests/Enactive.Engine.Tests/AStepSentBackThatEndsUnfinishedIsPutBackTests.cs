@@ -83,6 +83,128 @@ public sealed class AStepSentBackThatEndsUnfinishedIsPutBackTests
         }
     }
 
+    // ── a plan's step, as the bench's was ──────────────────────────────────────────────────
+
+    private const string TwoSteps = """
+        {"disposition":"task","title":"records","steps":[{"title":"Write the record","dependsOn":[]},{"title":"Report on it","dependsOn":[0]}]}
+        """;
+
+    /// <summary>
+    /// The bench's own shape: a plan's step, sent back by its review, then stuck - its work goes back through the plan's
+    /// call site, and the step after it is skipped as before.
+    /// </summary>
+    [Fact]
+    public async Task A_plan_step_sent_back_by_its_review_that_then_ends_incomplete_has_its_work_put_back()
+    {
+        using var fx = new EngineFixture();
+        var worker = new FakeChatProvider(Turn.Says(TwoSteps),
+            Turn.Calls1("write_file", """{"path":"record.txt","content":"one"}""", "w1"), Turn.Says("Wrote the record."))
+        {
+            WhenExhausted = Turn.Calls1("read_file", """{"path":"record.txt"}""", "r1")
+        };
+        var reviewer = new FakeChatProvider(Verdicts.Fail("the record is wrong"));
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(),
+            reviewProvider: reviewer), "Write one record and report on it");
+
+        var step = events.Last(e => e.Kind == EventKind.StepCompleted && e.Summary.Contains("Write the record", StringComparison.Ordinal));
+        Assert.Equal(StepOutcomeKind.Incomplete, step.StepOutcome());
+        Assert.False(fx.Exists("record.txt"));
+        Assert.Contains(Reverts(events), e => e.Summary.StartsWith("[1] The step ended incomplete after its last verdict sent its work back",
+            StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Sent back by the engine's gate - a blocking check failed on it - then stuck: no review ever saw it, and its work goes
+    /// back whole, as a step the gate rejects does (nothing found right).
+    /// </summary>
+    [Fact]
+    public async Task A_step_sent_back_by_the_gate_that_then_ends_incomplete_has_its_work_put_back()
+    {
+        using var fx = new EngineFixture
+        {
+            Checks = new Enactive.Core.Checks.CheckSnapshot([new Enactive.Core.Checks.ResolvedCheck(
+                new Enactive.Core.Checks.CheckDefinition("lint", null, "echo LINT-ERROR-42 && exit 1", ["src/**"],
+                    Enactive.Core.Checks.CheckFire.Step, Enactive.Core.Checks.CheckSeverity.Blocking,
+                    Enactive.Core.Checks.CheckLimits.DefaultTimeoutSeconds, null), Enactive.Core.Checks.CheckOrigin.Workspace)], [])
+        };
+        var worker = new FakeChatProvider(Turn.Says(TwoSteps),
+            Turn.Calls1("write_file", """{"path":"src/record.txt","content":"one"}""", "w1"), Turn.Says("Wrote the record."))
+        {
+            WhenExhausted = Turn.Calls1("read_file", """{"path":"src/record.txt"}""", "r1")
+        };
+        var reviewer = new FakeChatProvider(Verdicts.Pass());
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(),
+            reviewProvider: reviewer), "Write one record and report on it");
+
+        Assert.Empty(reviewer.Requests);
+        Assert.Contains(events, e => e.Kind == EventKind.ReviewFailed && e.Summary.Contains("the engine's check 'lint'", StringComparison.Ordinal));
+        var step = events.Last(e => e.Kind == EventKind.StepCompleted && e.Summary.Contains("Write the record", StringComparison.Ordinal));
+        Assert.Equal(StepOutcomeKind.Incomplete, step.StepOutcome());
+        Assert.False(fx.Exists("src/record.txt"));
+        Assert.Contains(Reverts(events), e => e.RevertedPaths()!.Contains("src/record.txt"));
+    }
+
+    // ── what the revert says ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Sent back with nothing changed, then stuck: nothing to put back, and nothing is said - the line on why it goes back
+    /// was said above nothing, reading as a revert that put back nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_step_sent_back_that_changed_nothing_says_nothing_of_a_revert()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("record.txt", "as it was");
+        var worker = new FakeChatProvider(Turn.Says(QuickAction), Turn.Says("The record is fine as it is."))
+        {
+            WhenExhausted = Turn.Calls1("read_file", """{"path":"record.txt"}""", "r1")
+        };
+        var reviewer = new FakeChatProvider(Verdicts.Fail("the record was to be written"));
+
+        var events = await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "Write one record");
+
+        Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
+        Assert.Empty(Reverts(events));
+    }
+
+    /// <summary>A provider that answers its script, then fails as one whose retries are spent.</summary>
+    private sealed class SpentAfter(FakeChatProvider inner, int answers) : Enactive.Core.Providers.IChatProvider
+    {
+        private int _asked;
+
+        public IAsyncEnumerable<Enactive.Core.Chat.ChatStreamEvent> StreamChatAsync(Enactive.Core.Chat.ChatRequest request, CancellationToken ct)
+            => ++_asked > answers ? throw new Enactive.Core.Execution.RetryBudgetExceededException("the provider's retries are spent",
+                new HttpRequestException("503")) : inner.StreamChatAsync(request, ct);
+
+        public Task<Enactive.Core.Chat.ChatCompletion> CompleteAsync(Enactive.Core.Chat.ChatRequest request, CancellationToken ct)
+            => ++_asked > answers ? throw new Enactive.Core.Execution.RetryBudgetExceededException("the provider's retries are spent",
+                new HttpRequestException("503")) : inner.CompleteAsync(request, ct);
+    }
+
+    /// <summary>
+    /// A quick action sent back, whose next attempt breaks on the provider - its retries spent: Incomplete with no verdict
+    /// since, as a plan's step in the same place, and its work goes back. The quick action's revert sat after the attempts
+    /// inside the same try, so the exception skipped it.
+    /// </summary>
+    [Fact]
+    public async Task A_quick_action_sent_back_whose_provider_then_gives_out_has_its_work_put_back()
+    {
+        using var fx = new EngineFixture();
+        var script = new FakeChatProvider(Turn.Says(QuickAction),
+            Turn.Calls1("write_file", """{"path":"record.txt","content":"one"}""", "w1"), Turn.Says("Wrote the record."));
+        var reviewer = new FakeChatProvider(Verdicts.Fail("the record is wrong"));
+
+        var events = await fx.RunAsync(fx.Build(new SpentAfter(script, 3), router: Routers.WithReviewer(), reviewProvider: reviewer),
+            "Write one record");
+
+        Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
+        Assert.False(fx.Exists("record.txt"));
+        Assert.Contains(Reverts(events), e => e.Summary.StartsWith("The step ended incomplete after its last verdict sent its work back",
+            StringComparison.Ordinal));
+    }
+
     /// <summary>
     /// A rejected step that changed a file through a command: the store puts back what the file tools wrote, and the file
     /// the command changed is named as left, with why - it used to be named nowhere, as if the revert had undone the step.
