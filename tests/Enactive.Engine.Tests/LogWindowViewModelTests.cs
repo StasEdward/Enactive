@@ -63,6 +63,40 @@ public sealed class LogWindowViewModelTests : IDisposable
 
     private static IEnumerable<string> Shown(LogWindowViewModel log) => log.Rows.Select(r => r.Entry.Message);
 
+    /// <summary>
+    /// The hub stores a line at once and hands it on later, from its pump. A line logged just before the view opened was in
+    /// the backlog the view read AND came through the pump after the view subscribed - shown twice (the service's log page
+    /// on a slow CI runner, PR #58). Held here deterministically: the pump is kept busy on an earlier line while the next
+    /// one is logged and the view opens, then let go.
+    /// </summary>
+    [Fact]
+    public async Task A_line_logged_as_the_view_opens_is_shown_once()
+    {
+        using var hold = new ManualResetEventSlim();
+        var held = new TaskCompletionSource();
+        void Hold(LogEntry e)
+        {
+            if (e.Message != "keeps the pump busy") return;
+            held.TrySetResult();
+            hold.Wait(TimeSpan.FromSeconds(10));
+        }
+        _hub.Entry += Hold;
+        _hub.Log(new LogEntry(0, DateTimeOffset.UtcNow, LogLevel.Info, LogSource.Host, null, null, "keeps the pump busy", null, null));
+        await held.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        _hub.Log(new LogEntry(0, DateTimeOffset.UtcNow, LogLevel.Info, LogSource.Host, null, null, "logged as the view opens", null, null));
+        var log = Open();
+        await Until(() => Shown(log).Contains("logged as the view opens"));   // the backlog, drawn
+        hold.Set();
+        _hub.Entry -= Hold;
+        // A later line handed on by the pump means the one before it was handed on too: the pump keeps their order.
+        await Logged("a later line");
+        _drain!();
+        await Until(() => Shown(log).Contains("a later line"));
+
+        Assert.Single(Shown(log), m => m == "logged as the view opens");
+    }
+
     [Fact]
     public async Task A_line_comes_in_when_the_host_drains_and_not_before()
     {

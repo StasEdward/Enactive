@@ -66,6 +66,9 @@ public sealed class ChecksTests : ComponentHost
     private static void AddLint<T>(IRenderedComponent<T> page, string matches = "src/**") where T : IComponent
     {
         page.Find(".checks-add").Click();
+        // The form is drawn after the click is handled, not by it: found at once, it was not there yet on a slower CI
+        // runner (PR #58).
+        page.WaitForAssertion(() => page.Find("#check-id"));
         page.Find("#check-id").Change("lint");
         page.Find("#check-command").Change("npm run lint");
         page.Find("#check-matches").Change(matches);

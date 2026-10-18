@@ -1230,6 +1230,9 @@ test('on a phone the runs screen stacks and a run can be started and answered', 
   await page.getByRole('button', { name: 'Add workspace…' }).click();
   const browse = page.getByRole('dialog', { name: 'Add workspace' });
   await expect(browse).toBeVisible();
+  // The dialog takes the focus once it has arrived (Dialog.razor.js), not as it is drawn: an Escape pressed before that
+  // went to the drawer, and on a slower CI runner the dialog stayed open (PR #58).
+  await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[role=dialog]'))).toBe(true);
   await page.keyboard.press('Escape');
   await expect(browse).toBeHidden();
   await expect(runsColumn(page)).toBeVisible();
