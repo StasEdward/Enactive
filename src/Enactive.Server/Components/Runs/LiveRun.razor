@@ -87,7 +87,7 @@
                         <RunChecks Checks="view.RunChecks" Root="@run.Workspace" />
                         break;
                     case 1:
-                        <RunArtifacts Root="@run.Workspace" Files="view.Artifacts" RunId="run.Id" Ended="run.Ended.IsCompleted" />
+                        <RunArtifacts Root="@run.Workspace" Files="view.Artifacts" RunId="run.Id" RecordId="run.Session.RunId" Ended="run.Ended.IsCompleted" />
                         break;
                     default:
                         IReadOnlyList<Enactive.Core.Diagnostics.LogEntry> lines = run.Session.RunId is { } runId ? Logs.OfRun(_user!, runId) : [];

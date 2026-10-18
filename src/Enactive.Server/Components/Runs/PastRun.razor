@@ -108,7 +108,7 @@
                     <RunChecks Checks="_runChecks" Root="@Root" />
                     break;
                 case PastRunTabs.Artifacts:
-                    <WrittenFiles Root="@Root" Paths="d.Artifacts" Empty="This run wrote nothing." />
+                    <WrittenFiles Root="@Root" RunId="@RunId" Paths="d.Artifacts" Empty="This run wrote nothing." />
                     break;
                 default:
                     @if (run.Decisions.Count > 0)

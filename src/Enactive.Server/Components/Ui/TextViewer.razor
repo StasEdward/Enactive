@@ -58,6 +58,9 @@ else
     /// <summary>Close drawn as the dialog's primary button - the analysis window's way of closing (LogAnalysisWindow).</summary>
     [Parameter] public bool CloseIsPrimary { get; set; }
 
+    /// <summary>The switch's words: "Source" for a rendering of the text, "Whole file" for a diff of it.</summary>
+    [Parameter] public string SourceLabel { get; set; } = "Source";
+
     /// <summary>What Source says it shows: a file as it is on disk, an answer as the model wrote it.</summary>
     [Parameter] public string SourceTip { get; set; } = "Show the file exactly as it is on disk.";
 
@@ -99,7 +102,7 @@ else
         if (Rendered is not null && Problem is null)
         {
             <button type="button" class="@(_source ? "btn on" : "btn")" aria-pressed="@(_source ? "true" : "false")"
-                    title="@SourceTip" @onclick="() => _source = !_source">Source</button>
+                    title="@SourceTip" @onclick="() => _source = !_source">@SourceLabel</button>
         }
         if (Problem is null)
         {

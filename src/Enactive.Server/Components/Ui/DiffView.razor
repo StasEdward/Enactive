@@ -3,10 +3,28 @@
 @* A unified diff, each line in what it does to the file (DiffLines, Looks.Diff): added green, removed red, the rest
    muted - the window's staged change opened. Text, never markup: a diff is a workspace's content, whatever it holds. *@
 
-<div class="diff">
-    @foreach (var line in Lines)
+<div class="@(Numbered ? "diff numbered" : "diff")" role="region" aria-label="Changes">
+    @if (Numbered)
     {
-        <div class="@("diff-line " + Looks.Diff(DiffLines.Kind(line)))">@line</div>
+        @* Each line with its numbers in the file as it was and as it is - beside the line, never in it: the line is the
+           diff's own text, what is read and copied. Hidden from a screen reader, which reads the +/- of the line. *@
+        var (was, now) = (0, 0);
+        foreach (var line in Lines)
+        {
+            var kind = DiffLines.Kind(line);
+            var (left, right) = Numbers(line, ref was, ref now);
+            <div class="diff-row">
+                <span class="diff-num" aria-hidden="true">@left</span><span class="diff-num" aria-hidden="true">@right</span>
+                <div class="@("diff-line " + Looks.Diff(kind))">@line</div>
+            </div>
+        }
+    }
+    else
+    {
+        @foreach (var line in Lines)
+        {
+            <div class="@("diff-line " + Looks.Diff(DiffLines.Kind(line)))">@line</div>
+        }
     }
 </div>
 
@@ -14,5 +32,23 @@
     /// <summary>The diff as TextDiff.Unified writes it.</summary>
     [Parameter, EditorRequired] public string Diff { get; set; } = "";
 
+    /// <summary>Line numbers beside the lines (a review's diff); the staged previews keep theirs bare.</summary>
+    [Parameter] public bool Numbered { get; set; }
+
     private IEnumerable<string> Lines => Diff.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+
+    /// <summary>
+    /// A line's numbers as LineDiff writes the lines: "  " is in both files, "- " only in the old, "+ " only in the new;
+    /// the "# " heading and anything else - the blank line under it, a too-large notice - has none.
+    /// </summary>
+    private static (string Old, string New) Numbers(string line, ref int was, ref int now)
+    {
+        return line.Length >= 2 ? line[..2] switch
+        {
+            "  " => ((++was).ToString(System.Globalization.CultureInfo.InvariantCulture), (++now).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            "- " => ((++was).ToString(System.Globalization.CultureInfo.InvariantCulture), ""),
+            "+ " => ("", (++now).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            _ => ("", "")
+        } : ("", "");
+    }
 }

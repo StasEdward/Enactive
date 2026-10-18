@@ -403,6 +403,29 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
         return store.Changes(ReadChain(store._root, runId));
     }
 
+    /// <summary>
+    /// How a path stood before an earlier run - and the runs it carried on - first changed it, by the same rule as
+    /// <see cref="BeforeRunAsync"/> read from that run's record (its journal and the copies beside it), and whether the
+    /// file is still exactly as the run's last write left it. What a person reviewing a finished run compares against:
+    /// the copy putting the run back would restore (<see cref="PutBackRunAsync"/>), so a diff shows what that would undo.
+    /// <see cref="BeforeRunState.Untouched"/> when the record holds no write to the path - a command changed it, or the
+    /// record is gone (<see cref="PruneOldBackups"/>) - which says nothing of how it was: no base to compare with.
+    /// </summary>
+    public static async Task<(BeforeRun Before, bool AsLeft)> BeforeRunOfAsync(WorkspaceInfo workspace, Guid runId, string relativePath,
+        CancellationToken ct)
+    {
+        var store = new DiskArtifactStore(workspace);
+        if (store.KeyOrNull(relativePath) is not { } key)
+            return (BeforeRun.Unknown, false);
+        var writes = ReadChain(store._root, runId).Where(w => SameFile(w.Key, key)).ToArray();
+        if (writes.Length == 0)
+            return (BeforeRun.Untouched, false);
+        string? now;
+        try { now = FileHash.OfFile(store.ResolveInsideRoot(relativePath)); }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException) { now = "?"; }
+        return (await store.StoredBeforeRunAsync(relativePath, writes[0], ct), string.Equals(now, writes[^1].AfterHash, StringComparison.Ordinal));
+    }
+
     /// <summary>Puts back everything an earlier run - and the runs it carried on - changed, where a file is still as it left it.</summary>
     public static Task<RevertReport> PutBackRunAsync(WorkspaceInfo workspace, Guid runId, CancellationToken ct)
     {

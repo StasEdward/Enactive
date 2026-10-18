@@ -366,10 +366,38 @@ public sealed class LiveRunTests : ComponentHost
     }
 
     /// <summary>
+    /// While the run goes, Review shows what it changed: the copy its store kept is filed under the run's id in its
+    /// record (the engine's, from its events) - not the page's run (RunSession.Id), under which Review found none.
+    /// </summary>
+    [Fact]
+    public async Task Review_of_a_live_run_s_file_shows_what_the_run_changed()
+    {
+        var run = await StartedAsync();
+        File.WriteAllText(Path.Combine(run.Workspace, "report.md"), "# The disks\nnot checked\n");
+        var store = new Enactive.Workspace.DiskArtifactStore(Enactive.Core.Context.WorkspaceInfo.For(run.Workspace));
+        store.BeginRun(Script.RunId, null);
+        await store.BeginStep().CreateAsync("report.md", Enactive.Core.Artifacts.ArtifactKind.FileSet, "report.md",
+            s => s.WriteAsync(System.Text.Encoding.UTF8.GetBytes("# The disks\nall well\n")).AsTask(), default);
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: report.md", WorkEventPayload.ArtifactPayload("document", "report.md")));
+        await WaitUntil(() => run.Session.Seq == 1);
+        var page = Open("vera", run);
+
+        page.WaitForAssertion(() => Assert.Equal("Artifacts (1)", page.FindAll("[role=tab]")[1].TextContent.Trim()));
+        page.FindAll("[role=tab]")[1].Click();
+        page.WaitForAssertion(() => Assert.Equal("report.md", page.Find(".artifact .path").TextContent.Trim()));
+        page.FindAll(".artifact button").Single(b => b.TextContent.Trim() == "Review").Click();
+
+        var dialog = page.WaitForElement("[role=dialog]");
+        Assert.Contains(dialog.QuerySelectorAll(".diff-line"), l => l.TextContent == "- not checked");
+        Assert.Contains(dialog.QuerySelectorAll(".diff-line"), l => l.TextContent == "+ all well");
+    }
+
+    /// <summary>
     /// A file the run wrote can be deleted from its card, as the window's live run offers (MainWindow.axaml 634-644) -
     /// after the window's question, by an Operator; the card says what became of it. Delete and not the window's Undo:
-    /// the service keeps no copy of what a run overwrote to put back (the window's DiskArtifactStore.Undo), and the
-    /// question says so - it deletes the file as it is now. A Viewer is offered Review only.
+    /// the service does not put a file back (the window's DiskArtifactStore.Undo) - the copy the run's store kept is
+    /// what Review compares with - and the question says so: it deletes the file as it is now. A Viewer is offered
+    /// Review only.
     /// </summary>
     [Fact]
     public async Task A_written_file_is_deleted_from_its_card_after_the_window_s_question()

@@ -21,7 +21,7 @@
         <p class="hint">Nothing written yet.</p>
     }
 
-    <WrittenFiles Root="@Root" Paths="Files.Written" PutBack="Files.PutBack" />
+    <WrittenFiles Root="@Root" RunId="@(RecordId ?? Guid.Empty)" Paths="Files.Written" PutBack="Files.PutBack" />
 
     @if (!Ended && Files.Staged.Count > 0)
     {
@@ -45,6 +45,13 @@
 
     /// <summary>The run, whose kept proposals are named by its id (ServerStaging.Begin).</summary>
     [Parameter] public Guid RunId { get; set; }
+
+    /// <summary>
+    /// The run's id in its record - the engine's, which its store files the copies of what it overwrote under - and not
+    /// <see cref="RunId"/>, the page's run (RunSession.Id): with that one, Review found no copy and never showed a live
+    /// run's changes. None until the run's first event says it.
+    /// </summary>
+    [Parameter] public Guid? RecordId { get; set; }
 
     /// <summary>Over: its proposals can be shown and decided.</summary>
     [Parameter] public bool Ended { get; set; }
