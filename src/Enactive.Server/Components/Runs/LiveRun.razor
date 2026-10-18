@@ -41,7 +41,6 @@
             @* The request, readable and takeable: three lines, fixed, so the run underneath does not move when it is long,
                and selectable - a hover is not reading. *@
             <textarea class="task-intent" readonly aria-label="Request" rows="3">@run.Prompt</textarea>
-            <p class="task-meta">started by @run.Owner at @run.StartedAt.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture)</p>
             @if (others.Count > 0)
             {
                 @* The service's own: the window has one person at it, a run here can have several. *@
@@ -63,7 +62,11 @@
         <p class="said" role="alert">@pauseSaid</p>
     }
 
-    <Tabs Label="Views of the run" Names="@TabNames(view)" Selected="_tab" SelectedChanged="tab => _tab = tab" />
+    @* Who started it and when, on the tabs' line as a past run's facts are (PastRun). *@
+    <div class="tabs-row">
+        <Tabs Label="Views of the run" Names="@TabNames(view)" Selected="_tab" SelectedChanged="tab => _tab = tab" />
+        <p class="task-meta">started by @run.Owner at @run.StartedAt.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture)</p>
+    </div>
 
     <div class="run-body">
         <div class="run-views">

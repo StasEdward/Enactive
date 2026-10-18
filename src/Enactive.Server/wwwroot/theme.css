@@ -575,11 +575,11 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
 .row-icon:disabled { color: var(--text-faint); cursor: not-allowed; background: transparent; }
 
 /* ── The command bar (Runs/CommandBar.razor; MainWindow.axaml 459-545): the chips and the keys hint over the 88 px box,
-   then Run 86 / Stop 64 with Run in background under them, a line, and the worker 118 with Stage changes over the level's
+   then Run and Stop, of one size, with Run in background under them, a line, and the worker 118 with Stage changes over the level's
    label and its slider, 252 wide - all on one raised panel, the screen's one place to start something. ────────────── */
 
-.command-bar { display: grid; gap: 10px; margin: 0 0 18px; padding: 14px 16px; background: var(--card-fill); border: 1px solid var(--card-line);
-  border-radius: var(--r-lg); box-shadow: var(--shadow-md); }
+.command-bar { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin: 0 0 18px; padding: 14px 16px;
+  background: var(--card-fill); border: 1px solid var(--card-line); border-radius: var(--r-lg); box-shadow: var(--shadow-md); }
 .bar-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .verbs { display: flex; flex-wrap: wrap; gap: 6px; }
 .btn.chip { font-size: 12px; padding: 2px 11px; line-height: 18px; border-radius: 999px; color: var(--text-body); box-shadow: none; }
@@ -590,10 +590,11 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
   border-radius: var(--r-md); }
 .bar-input:hover:not(:disabled) { background: var(--input-fill-hover); }
 .run-buttons { flex: none; width: 156px; margin-left: 10px; display: grid; gap: 6px; }
-.run-pair { display: flex; gap: 6px; }
-.run-pair .run { width: 86px; }
-.run-pair .stop { width: 64px; }
-.run-pair .btn, .run-buttons .run-background { min-height: 38px; }
+/* Run and Stop one width and one height, side by side: the window's 86 and 64 px read as a big button and a small one,
+   when they are the two halves of one control - start it, stop it. */
+.run-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.run-pair .btn { width: auto; height: 38px; }
+.run-buttons .run-background { min-height: 38px; }
 /* One line, as tall as Run: wrapped onto two, it made the two rows of buttons taller than the box beside them. */
 .run-buttons .run-background { white-space: nowrap; padding-left: 6px; padding-right: 6px; }
 .bar-divider { flex: none; width: 1px; align-self: stretch; margin: 2px 14px; background: var(--border); }
@@ -638,14 +639,25 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
 
 /* The task: its title, the request kept verbatim and selectable (three lines, fixed, so the run below does not move), who
    started it and who else watches - and the phase pill on the right. */
-.task-header { display: flex; align-items: flex-start; gap: 12px; padding: 4px 0 14px; border-bottom: 1px solid var(--border); }
-.task-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
+/* Stretched, so the request box can take the header's whole height (.task-intent). */
+.task-header { display: flex; align-items: stretch; gap: 12px; padding: 4px 0 14px; border-bottom: 1px solid var(--border); }
+.task-header > .pill, .task-header > .btn.pause { align-self: flex-start; }
+.task-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .task-title { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -0.02em; margin: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.task-intent { width: 100%; height: 48px; resize: none; padding: 0; font-size: 13px; color: var(--text-muted);
+/* Three lines at least, and down to the foot of the header beside the buttons: with the run's facts on the tabs' line
+   (.tabs-row) there is no strip of empty header under it. A longer request scrolls inside. */
+.task-intent { width: 100%; flex: 1 1 auto; min-height: 48px; height: auto; resize: none; padding: 0; font-size: 13px; color: var(--text-muted);
   background: transparent; border: 0; box-shadow: none; }
 .task-intent:focus-visible { box-shadow: none; }
 .task-meta, .also-watching { margin: 0; font-size: 12px; color: var(--text-muted); }
+/* The tabs and the run's facts on one line, the line under them the row's: the facts after a gap of about 2 cm (52 px
+   and the last tab's own 22), on the tabs' baseline, cut short with the whole in their tooltip when the row is narrow -
+   and still selectable, a run id is copied from here. */
+.tabs-row { display: flex; align-items: baseline; gap: 0 52px; border-bottom: 1px solid var(--border); }
+.tabs-row > .tabs { flex: none; border-bottom: 0; }
+.tabs-row > .task-meta { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums; }
 .task-header .pill { flex: none; }
 /* Pause after this step, beside the phase it changes - the plain button: neither the action you came for nor a destructive one. */
 .task-header .btn.pause { flex: none; font-size: 12px; padding: 3px 12px; }
@@ -1254,7 +1266,7 @@ main.bare::after { content: ""; position: absolute; inset: 0; z-index: -2; point
   .bar-row { flex-wrap: wrap; gap: 8px; }
   .bar-input { flex: 1 1 100%; }
   .run-buttons { width: 100%; margin-left: 0; }
-  .run-pair .run, .run-pair .stop { flex: 1; width: auto; }
+  .run-pair .btn { height: auto; }
   .bar-divider { display: none; }
   .run-settings { width: 100%; }
 
@@ -1272,6 +1284,10 @@ main.bare::after { content: ""; position: absolute; inset: 0; z-index: -2; point
   /* Three short boxes to a row on a narrow screen; six were too narrow to hold a number. */
   .short-fields, .settings-editor-column .short-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .tabs { height: auto; overflow-x: auto; }
+  /* The facts under the tabs, wrapped, rather than squeezing the tabs. */
+  .tabs-row { flex-wrap: wrap; }
+  .tabs-row > .tabs { flex: 1 1 100%; }
+  .tabs-row > .task-meta { flex: 1 1 100%; margin: 2px 0 8px; white-space: normal; text-align: left; overflow-wrap: anywhere; }
   .task-title { font-size: 18px; }
   .past-run .task-header { flex-wrap: wrap; }
   .past-run .task-text { flex: 1 1 200px; }
@@ -1330,6 +1346,17 @@ main.bare::after { content: ""; position: absolute; inset: 0; z-index: -2; point
   /* The "?" stays 16 px to the eye and takes a 40 px touch. */
   .hint-mark > summary { position: relative; }
   .hint-mark > summary::after { content: ""; position: absolute; inset: -12px; }
+}
+
+/* A window between the phone layout and room for the whole command bar on one line (rail, the 280 px column, and the
+   box beside Run and the run's settings): the run's settings take a row of their own under the box and the buttons.
+   Kept beside them, they squeezed the box to nothing - and before the bar's column could shrink (.command-bar), the bar
+   pushed the page wider than the window, the screen scrolling sideways. */
+@media (min-width: 900px) and (max-width: 1179.98px) {
+  .bar-row { flex-wrap: wrap; row-gap: 12px; }
+  .bar-divider { display: none; }
+  .run-settings { width: 100%; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 16px; }
+  .run-settings .settings-row { grid-row: 1 / span 2; }
 }
 
 /* A phone held upright: two short boxes to a row - three left a box too narrow for a five-digit value and its label. */

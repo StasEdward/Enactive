@@ -320,6 +320,20 @@ test('a past run is tried again from its page, and deleted after its question', 
   // And beside the column of Retry and Run again, level with its top: in one row with them, it moved with each.
   expect(Math.abs(status.y - retry.y)).toBeLessThanOrEqual(1);
   expect(status.x).toBeGreaterThan(retry.x + retry.width);
+  // The run's facts on the tabs' line, after the tabs, not a line of the header; the header's request box takes the
+  // room they left, down to the header's foot.
+  const line = await past.evaluate((run) => {
+    const meta = run.querySelector('.tabs-row > .task-meta').getBoundingClientRect();
+    const tabs = [...run.querySelectorAll('[role=tab]')].map((t) => t.getBoundingClientRect());
+    const header = run.querySelector('.task-header');
+    const intent = run.querySelector('.task-intent')?.getBoundingClientRect();
+    return { meta: { left: meta.left, bottom: meta.bottom }, tabsRight: Math.max(...tabs.map((t) => t.right)),
+      tabsBottom: tabs[0].bottom, intentBottom: intent?.bottom,
+      headerFoot: header.getBoundingClientRect().bottom - parseFloat(getComputedStyle(header).paddingBottom) };
+  });
+  expect(line.meta.left).toBeGreaterThan(line.tabsRight + 40);
+  expect(Math.abs(line.meta.bottom - line.tabsBottom)).toBeLessThanOrEqual(12);
+  if (line.intentBottom !== undefined) expect(Math.abs(line.intentBottom - line.headerFoot)).toBeLessThanOrEqual(2);
 
   // Retry: a run of the same task starts, opens at its own address, and asks its question again.
   await past.getByRole('button', { name: 'Retry' }).click();
@@ -691,6 +705,10 @@ test('the command bar buttons are no taller than the box beside them, Run in bac
   // As tall as Run - one line, not two - and the two rows end where the box does, or above.
   expect(Math.abs(background.height - run.height)).toBeLessThanOrEqual(1);
   expect(background.y + background.height).toBeLessThanOrEqual(task.y + task.height + 1);
+  // Run and Stop one size: the two halves of one control, not a big button and a small one.
+  const stopButton = await page.getByRole('button', { name: 'Stop', exact: true }).boundingBox();
+  expect(Math.abs(stopButton.width - run.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(stopButton.height - run.height)).toBeLessThanOrEqual(1);
   await context.close();
 });
 

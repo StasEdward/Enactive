@@ -47,7 +47,6 @@
                    command bar, or into a message about what went wrong. *@
                 <textarea class="task-intent" readonly aria-label="Request" rows="3">@run.Request</textarea>
             }
-            <p class="task-meta" title="@d.Meta">@d.Meta</p>
         </div>
         <div class="past-actions">
             <div class="past-buttons">
@@ -84,7 +83,12 @@
        proposals' page has them too only while the proposals are kept. Shows nothing for a run that was not staged. *@
     <CheckRecordsPanel Root="@Root" RunId="@RunId" />
 
-    <Tabs Label="Views of the run" Names="@TabNames(d)" Selected="_tab" SelectedChanged="tab => _tab = tab" />
+    @* The run's facts - when, which model, which run - on the tabs' line, after a gap: under the request they took a line
+       of the header, and the request box, the one thing there worth more room, stopped short above them. *@
+    <div class="tabs-row">
+        <Tabs Label="Views of the run" Names="@TabNames(d)" Selected="_tab" SelectedChanged="tab => _tab = tab" />
+        <p class="task-meta" title="@d.Meta">@d.Meta</p>
+    </div>
 
     <div class="run-body">
         <div class="run-view" role="tabpanel">
