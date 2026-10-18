@@ -317,6 +317,9 @@ test('a past run is tried again from its page, and deleted after its question', 
   const retry = await past.getByRole('button', { name: 'Retry' }).boundingBox();
   const status = await past.locator('.past-buttons .pill').boundingBox();
   expect(Math.abs(status.height - retry.height)).toBeLessThanOrEqual(1);
+  // And beside the column of Retry and Run again, level with its top: in one row with them, it moved with each.
+  expect(Math.abs(status.y - retry.y)).toBeLessThanOrEqual(1);
+  expect(status.x).toBeGreaterThan(retry.x + retry.width);
 
   // Retry: a run of the same task starts, opens at its own address, and asks its question again.
   await past.getByRole('button', { name: 'Retry' }).click();

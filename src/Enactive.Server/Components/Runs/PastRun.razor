@@ -51,21 +51,27 @@
         </div>
         <div class="past-actions">
             <div class="past-buttons">
-                @if (_canOperate && d.CanRetry)
-                {
-                    <button type="button" class="btn go" title="Run this again, exactly as it was" disabled="@_busy"
-                            @onclick="() => AgainAsync(ServerHistory.Act.Retry)">Retry</button>
-                }
-                @if (_canOperate && run.RunAgain.Can)
-                {
-                    <button type="button" class="btn go-soft" title="@run.RunAgain.Tooltip" disabled="@_busy"
-                            @onclick="() => AgainAsync(ServerHistory.Act.RunAgain)">Run again</button>
-                }
-                <Pill Class="@Looks.Phase(RunStanding.Of(d.Status))">@d.Status</Pill>
+                @* Retry over Run again, one column of one width - drawn even when empty, so the pill beside it stands
+                   where it always does whichever of them a run offers: side by side, the pill moved with each. *@
+                <div class="past-again">
+                    @if (_canOperate && d.CanRetry)
+                    {
+                        <button type="button" class="btn go" title="Run this again, exactly as it was" disabled="@_busy"
+                                @onclick="() => AgainAsync(ServerHistory.Act.Retry)">Retry</button>
+                    }
+                    @if (_canOperate && run.RunAgain.Can)
+                    {
+                        <button type="button" class="btn go-soft" title="@run.RunAgain.Tooltip" disabled="@_busy"
+                                @onclick="() => AgainAsync(ServerHistory.Act.RunAgain)">Run again</button>
+                    }
+                </div>
+                <div class="past-state">
+                    <Pill Class="@Looks.Phase(RunStanding.Of(d.Status))">@d.Status</Pill>
+                    @* Kept when empty, so the pill above sits where it always does. "attempt 1 of 1" is noise on every
+                       run never retried, and is not said (RunDigest). *@
+                    <p class="hint past-attempt">@d.AttemptLabel</p>
+                </div>
             </div>
-            @* Kept when empty, so the buttons above sit where they always do. "attempt 1 of 1" is noise on every run never
-               retried, and is not said (RunDigest). *@
-            <p class="hint past-attempt">@d.AttemptLabel</p>
         </div>
     </header>
 

@@ -787,13 +787,18 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
    again beside the status pill, and the attempt on a row of its own below them - a label that comes and goes beside the
    buttons moved them while somebody aimed. */
 .past-run .back { flex: none; align-self: center; }
-.past-actions { display: grid; gap: 4px; flex: none; }
-.past-buttons { display: flex; align-items: stretch; gap: 8px; }
-/* The status pill as tall as Retry and Run again beside it, its words in the middle: a thin pill beside two tall buttons
-   read as a label stuck on, not the run's state. The font stays the pill's. */
-.past-buttons .pill { display: inline-flex; align-items: center; }
-.past-buttons .btn { width: 118px; }
-.past-attempt { margin: 0; min-height: 16px; text-align: right; }
+.past-actions { flex: none; }
+.past-buttons { display: flex; align-items: flex-start; gap: 10px; }
+/* Retry over Run again: one column, one width, there even when a run offers neither, so nothing beside it moves. */
+.past-again { display: grid; gap: 6px; width: 124px; }
+.past-again .btn { width: 100%; }
+/* The run's state beside them: the pill over which attempt this is. */
+.past-state { display: grid; gap: 4px; justify-items: center; }
+/* The status pill as tall as Retry beside it, its words in the middle - a thin pill beside a tall button read as a
+   label stuck on, not the run's state - and one width for every outcome, wide enough for the longest word: sized by
+   its word, it grew and shrank from run to run, and what was beside it moved. The font stays the pill's. */
+.past-buttons .pill { box-sizing: border-box; width: 120px; height: 34px; justify-content: center; white-space: nowrap; overflow: hidden; }
+.past-attempt { margin: 0; min-height: 16px; text-align: center; white-space: nowrap; }
 .past-run .run-view { padding-right: 14px; }
 .past-decisions { list-style: none; margin: 6px 0 12px; padding: 0; }
 .past-decisions .card { padding: 10px 12px 10px 15px; font-size: 12.5px; color: var(--text-body); }
@@ -1271,8 +1276,9 @@ main.bare::after { content: ""; position: absolute; inset: 0; z-index: -2; point
   .past-run .task-header { flex-wrap: wrap; }
   .past-run .task-text { flex: 1 1 200px; }
   .past-actions { flex: 1 1 100%; }
-  .past-buttons .btn { flex: 1; width: auto; }
-  .past-attempt { text-align: left; }
+  /* Across the screen: the column of buttons takes what the pill leaves, the pill as tall as a touch's button. */
+  .past-again { flex: 1; width: auto; }
+  .past-buttons .pill { height: 40px; }
   .timeline-row { grid-template-columns: auto minmax(0, 1fr); }
   .timeline-summary { grid-column: 1 / -1; }
 
