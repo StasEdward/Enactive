@@ -31,10 +31,28 @@ public static class LineDiff
             : oldText.Replace("\r\n", "\n").Split('\n');
         var newLines = newText.Replace("\r\n", "\n").Split('\n');
 
-        int n = oldLines.Length, m = newLines.Length;
+        if (Lines(oldLines, newLines) is not { } lines)
+            return TooLarge(oldText, path, oldLines.Length, newLines.Length, tooLarge);
 
+        var sb = new StringBuilder();
+        sb.AppendLine(oldText is null ? $"# new file: {path}" : $"# modified: {path}");
+        sb.AppendLine();
+        foreach (var (op, line) in lines)
+            sb.Append(op).Append(' ').AppendLine(line);
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The comparison itself, line by line: <c>' '</c> a line both have, <c>'-'</c> one only the old has, <c>'+'</c> one
+    /// only the new has. Null past <see cref="MaxCells"/>. Shared by the preview above and by what a reviewer is shown of
+    /// a write (<see cref="WrittenChange"/>), so there is one diff in the engine and not two that disagree.
+    /// </summary>
+    internal static List<(char Op, string Line)>? Lines(IReadOnlyList<string> oldLines, IReadOnlyList<string> newLines)
+    {
+        int n = oldLines.Count, m = newLines.Count;
         if ((long)(n + 1) * (m + 1) > MaxCells)
-            return TooLarge(oldText, path, n, m, tooLarge);
+            return null;
 
         var lcs = new int[n + 1, m + 1];
         for (var i = n - 1; i >= 0; i--)
@@ -43,21 +61,17 @@ public static class LineDiff
                     ? lcs[i + 1, j + 1] + 1
                     : Math.Max(lcs[i + 1, j], lcs[i, j + 1]);
 
-        var sb = new StringBuilder();
-        sb.AppendLine(oldText is null ? $"# new file: {path}" : $"# modified: {path}");
-        sb.AppendLine();
-
+        var lines = new List<(char, string)>(Math.Max(n, m));
         int x = 0, y = 0;
         while (x < n && y < m)
         {
-            if (oldLines[x] == newLines[y]) { sb.AppendLine("  " + oldLines[x]); x++; y++; }
-            else if (lcs[x + 1, y] >= lcs[x, y + 1]) { sb.AppendLine("- " + oldLines[x]); x++; }
-            else { sb.AppendLine("+ " + newLines[y]); y++; }
+            if (oldLines[x] == newLines[y]) { lines.Add((' ', oldLines[x])); x++; y++; }
+            else if (lcs[x + 1, y] >= lcs[x, y + 1]) { lines.Add(('-', oldLines[x])); x++; }
+            else { lines.Add(('+', newLines[y])); y++; }
         }
-        while (x < n) { sb.AppendLine("- " + oldLines[x]); x++; }
-        while (y < m) { sb.AppendLine("+ " + newLines[y]); y++; }
-
-        return sb.ToString();
+        while (x < n) { lines.Add(('-', oldLines[x])); x++; }
+        while (y < m) { lines.Add(('+', newLines[y])); y++; }
+        return lines;
     }
 
     /// <summary>

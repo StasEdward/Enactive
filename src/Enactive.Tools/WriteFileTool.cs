@@ -3,6 +3,7 @@ namespace Enactive.Tools;
 using System.Text;
 using System.Text.Json;
 using Enactive.Core.Artifacts;
+using Enactive.Core.Execution;
 using Enactive.Core.Permissions;
 using Enactive.Core.Tools;
 
@@ -137,7 +138,11 @@ public sealed class WriteFileTool : ITool
                     ["bytes"] = bytes,
                     ["replacedExistingFile"] = replacing && !append,
                     ["appended"] = append && replacing,
-                    ["previousVersionRecoverable"] = restorable
+                    ["previousVersionRecoverable"] = restorable,
+                    // A replaced file, for the reviewer, as what changed in it - not the first 120 characters of the
+                    // new content, which for a rewrite that changes three lines is the part that did not change
+                    // (WrittenChange). Null for a new file: all of it is new, and its arguments show its start.
+                    [WrittenChange.MetadataKey] = WrittenChange.Of(previousText, text, path)
                 });
         }
         // A path WorkspacePaths would not resolve - it leaves the workspace, or it is not a path.

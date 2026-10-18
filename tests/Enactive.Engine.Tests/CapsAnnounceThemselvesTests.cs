@@ -145,7 +145,12 @@ public sealed class CapsAnnounceThemselvesTests
         // An item it would have named is reported as having no mention behind it, by name, at the step's gate.
         ["EvidenceCoverage.MaxNamedChars"] = nameof(EvidenceCoversAllTests.A_mention_is_read_from_the_full_arguments_not_the_cut_record),
         // A floor, not a cut: under it the reviewer's item account is left out whole, and the calls keep the budget.
-        ["StepCoverageGate.MinimumAccountChars"] = nameof(CoverageAtTheStepGateTests.A_small_evidence_budget_is_kept_to_and_the_account_gives_way)
+        ["StepCoverageGate.MinimumAccountChars"] = nameof(CoverageAtTheStepGateTests.A_small_evidence_budget_is_kept_to_and_the_account_gives_way),
+        // What a write changed, as the reviewer is shown it: the diff kept per write, a line of it, and the floor each
+        // write's diff has in a shared evidence budget - each cut says how many lines it leaves out.
+        ["WrittenChange.MaxChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.A_long_change_is_kept_to_its_bound_and_says_how_much_is_not_kept),
+        ["WrittenChange.MaxLineChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.A_long_line_of_a_diff_is_clipped_and_says_how_long_it_is),
+        ["ExecutionJournal.MinChangeChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.An_edit_cut_to_fit_keeps_its_first_changed_lines_and_counts_the_lines_it_leaves_out)
     };
 
     /// <summary>

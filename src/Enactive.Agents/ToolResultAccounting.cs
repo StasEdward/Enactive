@@ -45,12 +45,12 @@ internal sealed class ToolResultAccounting(StepFrame frame, IToolRegistry tools,
         // prompt afterwards can take it away.
         frame.Reads.Saw(call, result, tools.DefinitionOf(call.Name));
 
+        var outcome = result.Metadata.ContainsKey("taskConstraintRefusal") ? ActionOutcome.Refused
+            : result.Success ? ActionOutcome.Succeeded
+            : result.IsAnswer ? ActionOutcome.Answered
+            : ActionOutcome.Failed;
         frame.Journal.Record(
-            frame.StepNo, call.Name, Compact(call.ArgumentsJson),
-            result.Metadata.ContainsKey("taskConstraintRefusal") ? ActionOutcome.Refused
-                : result.Success ? ActionOutcome.Succeeded
-                : result.IsAnswer ? ActionOutcome.Answered
-                : ActionOutcome.Failed,
+            frame.StepNo, call.Name, Compact(call.ArgumentsJson), outcome,
             result.Success ? result.Output : failure,
             result.WorkspaceEffect ?? WorkspaceEffect.Unknown, result.ChangedPaths,
             exitCode: !result.DidNotRun && tools.DefinitionOf(call.Name)?.Kind == ToolKind.Command
@@ -60,7 +60,13 @@ internal sealed class ToolResultAccounting(StepFrame frame, IToolRegistry tools,
             // What the call named, from its FULL arguments: the recorded ones are compacted for reading and cut at 120
             // characters, and coverage read its mentions from those - a write_file call named nothing (EvidenceCoverage.NamesIn).
             // Only when coverage will read it (recordNamed): nothing else does.
-            named: recordNamed ? EvidenceCoverage.NamesIn(call.ArgumentsJson) : null);
+            named: recordNamed ? EvidenceCoverage.NamesIn(call.ArgumentsJson) : null,
+            // What the write changed, as the tool that made it reports it: the reviewer is shown that in place of the
+            // compacted arguments, whose 120 characters are an edit's anchor (WrittenChange). Only a write that went
+            // through - one that failed or was refused changed nothing.
+            change: outcome == ActionOutcome.Succeeded && !result.DidNotRun
+                && result.Metadata.TryGetValue(WrittenChange.MetadataKey, out var change) && change is WrittenChange written
+                    ? written : null);
 
         // What the step may change, told of a change made within it - a result, so here and not in the loop.
         if (result.Success) frame.Boundary?.Succeeded(call);

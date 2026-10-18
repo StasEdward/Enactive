@@ -128,6 +128,11 @@ public enum ToolCallOrigin
 /// from. <see cref="Arguments"/> is cut at 120 characters, which leaves JSON that does not parse: a write_file call named
 /// nothing, and a call listing twelve paths named none of them. Null for a call recorded without it (older records).
 /// </param>
+/// <param name="Change">
+/// What the call changed in a file, as its tool reported it (<see cref="WrittenChange"/>) - what the evidence shows of a
+/// successful write in place of its arguments, whose first 120 characters are an edit's anchor and not its change. Null
+/// for a call that changed no file it could compare, and for one that did not succeed: nothing was changed.
+/// </param>
 public sealed record ExecutedAction(
     DateTimeOffset At,
     int? Step,
@@ -140,7 +145,8 @@ public sealed record ExecutedAction(
     int? ExitCode = null,
     bool FileDeletion = false,
     ToolCallOrigin Origin = ToolCallOrigin.Native,
-    IReadOnlyList<string>? Named = null);
+    IReadOnlyList<string>? Named = null,
+    WrittenChange? Change = null);
 
 /// <summary>
 /// What a step actually did, written down when it did it.
@@ -215,12 +221,12 @@ public sealed class ExecutionJournal
     public void Record(int? step, string tool, string arguments, ActionOutcome outcome, string? output,
         WorkspaceEffect workspaceEffect = WorkspaceEffect.Unknown, IReadOnlyList<string>? changedPaths = null,
         int? exitCode = null, bool fileDeletion = false,
-        ToolCallOrigin origin = ToolCallOrigin.Native, IReadOnlyList<string>? named = null)
+        ToolCallOrigin origin = ToolCallOrigin.Native, IReadOnlyList<string>? named = null, WrittenChange? change = null)
     {
         lock (_gate)
             _actions.Add(new ExecutedAction(DateTimeOffset.UtcNow, step, tool, arguments, outcome, output,
                 workspaceEffect, changedPaths is null ? null : Array.AsReadOnly(changedPaths.ToArray()), exitCode, fileDeletion,
-                origin, named is null ? null : Array.AsReadOnly(named.ToArray())));
+                origin, named is null ? null : Array.AsReadOnly(named.ToArray()), change));
     }
 
     /// <summary>
@@ -389,7 +395,14 @@ public sealed class ExecutionJournal
                        : "")
                    + " A result too long to show keeps its START and its END, with the cut marked "
                    + "between them — so a command's closing summary is always here; the call it "
-                   + "belongs to still happened.";
+                   + "belongs to still happened."
+                   // Said once, and only when there is such a call: a diff read as arguments is the misreading this
+                   // presentation is here to end (WrittenChange).
+                   + (slice.Any(Changed)
+                       ? " A call that changed a file is shown by WHAT IT CHANGED, not by its arguments: under its result, "
+                         + "lines starting '+ ' were added, '- ' removed, and '  ' are unchanged lines around them; each @@ "
+                         + "gives the lines it covers, in the file before and after."
+                       : "");
 
         // Numbered from 1 WITHIN THIS SLICE, not within the run. The number is a handle for a
         // reviewer that is asked to point at a call - see StepVerdictReview - and it can only point at what
@@ -410,7 +423,7 @@ public sealed class ExecutionJournal
         var shown = new SortedSet<int>(Enumerable.Range(0, slice.Length));
         foreach (var i in Enumerable.Range(0, slice.Length).OrderBy(i => KeptLongest(slice[i]) ? 1 : 0).ThenBy(i => i))
         {
-            if (shown.Count <= 1 || header.Length + Cost(calls, shown) <= maxChars) break;
+            if (shown.Count <= 1 || header.Length + Cost(calls, slice, shown) <= maxChars) break;
             shown.Remove(i);
         }
         var kept = shown.Count;
@@ -428,9 +441,12 @@ public sealed class ExecutionJournal
         // what it did not use goes to the longer ones. Run 596a05, 2026-09-29: nine calls in equal slices
         // of about 400 characters cut three disk tables of 500-700 each in the middle, while the one long
         // result - a report shown in full elsewhere - kept its slice, and room in the budget went unused.
-        var spare = maxChars - header.Length - note.Length - Cost(calls, shown);
+        var spare = maxChars - header.Length - note.Length - Cost(calls, slice, shown);
         var room = MinOutputChars * kept + Math.Max(0, spare);
-        var (texts, allowance) = Unrepeated(shown.ToDictionary(i => i, i => AnswerText(slice[i])), room);
+        var whole = shown.ToDictionary(i => i, i => Changed(slice[i])
+            ? AnswerText(slice[i]) + "\n" + slice[i].Change!.Body() : AnswerText(slice[i]));
+        var (texts, allowance) = Unrepeated(whole, room, (i, text, budget) => Render(i, text, budget, out _),
+            i => Changed(slice[i]) ? MinChangeChars : 0);
 
         var sb = new StringBuilder(header).AppendLine().Append(note);
         var outputsTruncated = false;
@@ -439,14 +455,42 @@ public sealed class ExecutionJournal
         foreach (var i in shown)
         {
             sb.AppendLine(calls[i]);
-            sb.Append("<- ").AppendLine(Answer(texts[i], allowance[i], out var shortened));
+            sb.Append("<- ").AppendLine(Render(i, texts[i], allowance[i], out var shortened));
             outputsTruncated |= shortened;
-            argumentsTruncated |= slice[i].Arguments?.Length > MaxArguments;
+            argumentsTruncated |= !Changed(slice[i]) && slice[i].Arguments?.Length > MaxArguments;
         }
 
         return new EvidenceView(sb.ToString().TrimEnd(), slice,
             shown.Select(i => i + 1), outputsTruncated, argumentsTruncated, resumed);
+
+        // A write's result is its tool's line and then its diff. Cut as one text, the start and the end were kept and the
+        // middle of the diff went - where an insertion's new lines are, the very thing it is shown for. So the line keeps a
+        // share of its own and the diff is shortened as a diff (WrittenChange.Body): the unchanged lines go first, then
+        // changed lines from the end, and how many are not shown is said.
+        string Render(int i, string text, int budget, out bool truncated)
+        {
+            if (!Changed(slice[i]) || text != whole[i]) return Answer(text, budget, out truncated);
+            truncated = text.Length > budget;
+            if (!truncated) return text;
+            var said = Shortening.ToFit(AnswerText(slice[i]), Math.Max(MinOutputChars, budget / 3));
+            var diff = slice[i].Change!.Body(budget - said.Length - 1);
+            return diff.Length == 0 ? said : said + "\n" + diff;
+        }
     }
+
+    /// <summary>
+    /// A call shown by what it changed (<see cref="ExecutedAction.Change"/>) rather than by its arguments. Only one that
+    /// succeeded: a write that failed or was refused changed nothing, and keeps the presentation it always had.
+    /// </summary>
+    private static bool Changed(ExecutedAction action)
+        => action.Change is not null && action.Outcome == ActionOutcome.Succeeded;
+
+    /// <summary>
+    /// The least of a diff each write is given, on top of the floor under its result - paid for in <see cref="Cost"/>, so a
+    /// step of many writes keeps enough of each to see what it added (an insertion's first added lines: the new test's
+    /// name) and gives up its oldest reads instead.
+    /// </summary>
+    private const int MinChangeChars = 240;
 
     /// <summary>
     /// How the step's calls ended, as a count.
@@ -502,13 +546,15 @@ public sealed class ExecutionJournal
     }
 
     /// <summary>The least the actions at <paramref name="shown"/> can be shown in.</summary>
-    private static int Cost(string[] calls, IEnumerable<int> shown)
+    private static int Cost(string[] calls, ExecutedAction[] slice, IEnumerable<int> shown)
     {
         var total = 0;
         foreach (var i in shown)
             // The call, "<- ", the floor under its output, and the notice that says it was shortened -
-            // which has to be paid for or the budget is a number the result does not obey.
-            total += calls[i].Length + 1 + MinOutputChars + 4 + ShortenedNoticeChars;
+            // which has to be paid for or the budget is a number the result does not obey. A write shown
+            // by its diff pays for the least of that too.
+            total += calls[i].Length + 1 + MinOutputChars + 4 + ShortenedNoticeChars
+                   + (Changed(slice[i]) ? MinChangeChars : 0);
         return total;
     }
 
@@ -537,7 +583,11 @@ public sealed class ExecutionJournal
     private static string Call(ExecutedAction action, int number, bool withStep = false)
     {
         var arguments = action.Arguments ?? "";
-        if (arguments.Length > MaxArguments)
+        if (Changed(action))
+            // Not the arguments: compacted, they are the first 120 characters of the call, and for an edit that inserts
+            // after an anchor that is the anchor - what the edit kept, read as what it changed (WrittenChange).
+            arguments = "changed " + action.Change!.Summary;
+        else if (arguments.Length > MaxArguments)
             arguments = arguments[..MaxArguments] + $"… ({Invariant.N0(arguments.Length)} characters of arguments)";
 
         var whose = withStep && action.Step is { } step ? $" (step {step})" : "";
@@ -582,7 +632,14 @@ public sealed class ExecutionJournal
     /// the budget so that the middle was cut out of both. Only the same text: a file that changed between two
     /// reads is shown both times, since what changed is the point.
     /// </summary>
-    private static (Dictionary<int, string> Texts, Dictionary<int, int> Allowance) Unrepeated(Dictionary<int, string> texts, int room)
+    /// <param name="render">How a result is printed in its allowance - checked against, so "shown there" holds for a result
+    /// printed in a shape of its own (a write's diff) too.</param>
+    /// <param name="floor">Room a result has of its own, on top of its share of <paramref name="room"/> - a write's diff
+    /// (<see cref="MinChangeChars"/>). Added after the sharing, not pooled into it: pooled, a step of twelve long reads and
+    /// one edit gave the edit's floor out in thirteen parts, and the edit kept too little to show the name of the test it
+    /// added.</param>
+    private static (Dictionary<int, string> Texts, Dictionary<int, int> Allowance) Unrepeated(Dictionary<int, string> texts, int room,
+        Func<int, string, int, string> render, Func<int, int> floor)
     {
         static string Flat(string text) => text.Replace("\r\n", "\n").Trim();
         var flat = texts.ToDictionary(p => p.Key, p => Flat(p.Value));
@@ -606,8 +663,9 @@ public sealed class ExecutionJournal
             var result = new Dictionary<int, string>(texts);
             foreach (var (i, j) in holders)
                 result[i] = $"(the same {Invariant.N0(flat[i].Length)} characters as in the result of [{j + 1}] - shown there, not repeated here)";
-            var allowance = Fair(result.ToDictionary(p => p.Key, p => p.Value.Length), room);
-            var lost = holders.Where(h => !Flat(Answer(result[h.Value], allowance[h.Value], out _)).Contains(flat[h.Key], StringComparison.Ordinal))
+            var allowance = Fair(result.ToDictionary(p => p.Key, p => Math.Max(0, p.Value.Length - floor(p.Key))), room);
+            foreach (var i in allowance.Keys.ToArray()) allowance[i] += floor(i);
+            var lost = holders.Where(h => !Flat(render(h.Value, result[h.Value], allowance[h.Value])).Contains(flat[h.Key], StringComparison.Ordinal))
                 .Select(h => h.Key).ToArray();
             if (lost.Length == 0) return (result, allowance);
             foreach (var i in lost) holders.Remove(i);
