@@ -140,13 +140,21 @@ public static class EvidenceCoverage
 
     /// <summary>
     /// A submission's results keys checked against the items they are owed for (<see cref="Owed"/>): the keys taken as an
-    /// item, and the keys that are not one of them.
+    /// item, the keys that are not one of them, and the keys that name an item the field already has a result for.
     /// </summary>
-    internal sealed record Keying(IReadOnlyList<(string Field, string Key, string Item)> Taken, IReadOnlyList<(string Field, string Key)> Strangers)
+    /// <param name="Duplicates">
+    /// Kept apart from <paramref name="Strangers"/>: "CLI.md" sent beside "Docs/wiki/CLI.md" does name one of the items,
+    /// and told it was "not one of the items" the step would look for a different name, when what is wrong is a second
+    /// result for the same item.
+    /// </param>
+    internal sealed record Keying(IReadOnlyList<(string Field, string Key, string Item)> Taken, IReadOnlyList<(string Field, string Key)> Strangers,
+        IReadOnlyList<(string Field, string Key, string Item)> Duplicates)
     {
-        public static readonly Keying None = new([], []);
+        public static readonly Keying None = new([], [], []);
 
-        public bool IsStranger(ItemEvidence item) => Strangers.Contains((item.Field, item.Item));
+        /// <summary>A key that is no item of its own - a stranger, or a second result for an item: no read would back it.</summary>
+        public bool IsStranger(ItemEvidence item)
+            => Strangers.Contains((item.Field, item.Item)) || Duplicates.Any(d => d.Field == item.Field && d.Key == item.Item);
     }
 
     /// <summary>
@@ -164,14 +172,16 @@ public static class EvidenceCoverage
     /// one of the three would still see "CLI.md", and the gate would say "Docs/wiki/CLI.md (no result)" of a page that
     /// has one.</para>
     ///
-    /// <para>Not guessed: a file name two items share, or a key that would land on an item the field already has a result
-    /// for (one of the two results would be lost) - each stays a stranger, and the step is told the keys expected.</para>
+    /// <para>Not guessed: a file name two items share stays a stranger, and the step is told the keys expected. Not
+    /// renamed either: a key that would land on an item the field already has a result for (one of the two results would
+    /// be lost) - it is a duplicate, and the step is told so.</para>
     /// </summary>
     internal static Keying KeyByItems(StepOutputSchema schema, JsonObject values, IReadOnlyDictionary<string, IReadOnlyList<string>>? owed)
     {
         if (owed is not { Count: > 0 }) return Keying.None;
         var taken = new List<(string, string, string)>();
         var strangers = new List<(string, string)>();
+        var duplicates = new List<(string, string, string)>();
         foreach (var field in schema.Fields.Where(f => f.Type == StepOutputFieldType.Results))
         {
             if (!owed.TryGetValue(field.Name, out var items) || items.Count == 0 || values[field.Name] is not JsonObject map) continue;
@@ -181,12 +191,13 @@ public static class EvidenceCoverage
             {
                 if (items.Any(i => Same(i, key))) continue;
                 var item = NamedItem(key, items);
-                if (item is not null && !keys.Any(k => Same(k, item)) && !renamed.Values.Any(v => Same(v, item)))
+                if (item is null) strangers.Add((field.Name, key));
+                else if (keys.Any(k => Same(k, item)) || renamed.Values.Any(v => Same(v, item))) duplicates.Add((field.Name, key, item));
+                else
                 {
                     renamed[key] = item;
                     taken.Add((field.Name, key, item));
                 }
-                else strangers.Add((field.Name, key));
             }
             if (renamed.Count == 0) continue;
             // Rebuilt in the order the step wrote it; a node is detached from the old object before it joins the new one.
@@ -195,7 +206,7 @@ public static class EvidenceCoverage
             foreach (var (key, result) in entries)
                 map[renamed.GetValueOrDefault(key, key)] = result;
         }
-        return new(taken, strangers);
+        return new(taken, strangers, duplicates);
     }
 
     /// <summary>The one item a key names unambiguously (see <see cref="KeyByItems"/>), or null.</summary>
@@ -226,22 +237,33 @@ public static class EvidenceCoverage
     /// <summary>
     /// The results keys that are not one of the items this step is responsible for, with the keys expected - in place of
     /// "never read ... read them", which was wrong about them: what is missing is not a read, it is the key (see
-    /// <see cref="KeyByItems"/>). Bounded as <see cref="Unbacked"/> is.
+    /// <see cref="KeyByItems"/>). And the keys that name an item the field already has a result for, as that. Bounded as
+    /// <see cref="Unbacked"/> is.
     /// </summary>
     internal static string? NotItems(Keying keying, IReadOnlyDictionary<string, IReadOnlyList<string>>? owed)
     {
-        if (keying.Strangers.Count == 0 || owed is null) return null;
+        if ((keying.Strangers.Count == 0 && keying.Duplicates.Count == 0) || owed is null) return null;
         static string Named(IEnumerable<string> said, int count)
             => string.Join(", ", said.Take(8)) + (count > 8 ? $", and {count - 8} more" : "");
-        var fields = keying.Strangers.GroupBy(s => s.Field).Select(g =>
+        var said = keying.Strangers.GroupBy(s => s.Field).Select(g =>
         {
             var keys = g.Select(s => s.Key).ToArray();
             var expected = owed[g.Key];
             return $"'{g.Key}' is keyed by {Named(keys.Select(k => $"'{k}'"), keys.Length)} - not "
                    + (keys.Length == 1 ? "one" : "any") + " of the items this step is responsible for, so not counted as covered. "
                    + $"Its keys are the items themselves; expected: {Named(expected, expected.Count)}.";
-        });
-        return string.Join(" ", fields) + " Hand the result on again with one entry per item, keyed by the item.";
+        }).ToList();
+        if (keying.Duplicates.Count > 0)
+            said.Add($"A second result for an item, not counted: "
+                     + Named(keying.Duplicates.Select(d => $"'{d.Key}' in '{d.Field}' names {d.Item}, which already has a result there"), keying.Duplicates.Count)
+                     + ".");
+        // A step that filters gives each item ONE entry - in its results or in 'excluded' (Owed puts the items under both).
+        // Told "one entry per item" alone, it could put an item in both, which its gate fails as "both processed and
+        // excluded".
+        var results = owed.Keys.Where(f => f != ExcludedField).Select(f => $"'{f}'").ToArray();
+        return string.Join(" ", said) + (owed.ContainsKey(ExcludedField)
+            ? $" Hand the result on again keyed by the items: each item once, in {string.Join(" or ", results)} or in '{ExcludedField}', not both."
+            : " Hand the result on again with one entry per item, keyed by the item.");
     }
 
     /// <summary>The items of a submission handed on without any complete evidence - said back to the step, so it can still read them.</summary>

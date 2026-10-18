@@ -157,7 +157,47 @@ public sealed class AConsumersResultIsKeyedByItsItemTests
         var keying = EvidenceCoverage.KeyByItems(Schema, values, Owed);
 
         Assert.Equal(["Docs/wiki/CLI.md", "CLI.md"], values["notes"]!.AsObject().Select(p => p.Key));
-        Assert.Equal([("notes", "CLI.md")], keying.Strangers);
+        Assert.Equal([("notes", "CLI.md", "Docs/wiki/CLI.md")], keying.Duplicates);
+        Assert.Empty(keying.Strangers);
+    }
+
+    /// <summary>
+    /// A key refused only because its item already has a result names one of the items: it is told so, not that it is
+    /// "not one of the items" - which sent it looking for another name when the fault is the second result.
+    /// </summary>
+    [Fact]
+    public void A_second_result_for_an_item_is_said_to_be_one()
+    {
+        var values = Values("""{"notes":{"Docs/wiki/CLI.md":"a","CLI.md":"b"}}""");
+
+        var said = EvidenceCoverage.NotItems(EvidenceCoverage.KeyByItems(Schema, values, Owed), Owed)!;
+
+        Assert.Contains("'CLI.md' in 'notes' names Docs/wiki/CLI.md, which already has a result there", said, StringComparison.Ordinal);
+        Assert.DoesNotContain("not one of the items", said, StringComparison.Ordinal);
+        // No read would back it either: only the item itself (here really unread) is told "never read", not the second key.
+        var gathered = EvidenceCoverage.Gather(Schema, values, new ReadLedger(), [], [], step: 2);
+        Assert.Equal("Not backed by anything this step did, so not counted as covered: Docs/wiki/CLI.md (never read). "
+                     + "Read or check them, then hand the result on again.",
+            EvidenceCoverage.Unbacked(gathered, EvidenceCoverage.KeyByItems(Schema, values, Owed)));
+    }
+
+    /// <summary>
+    /// A step that filters gives each item one entry, in its results or in 'excluded' - told "one entry per item" alone it
+    /// could put an item in both, which its gate fails as "both processed and excluded".
+    /// </summary>
+    [Fact]
+    public void A_step_that_filters_is_told_each_item_once_in_its_results_or_excluded()
+    {
+        var filtering = new StepOutputSchema("s", 1,
+            [new StepOutputField("notes", StepOutputFieldType.Results, "a note per page", Required: true),
+             new StepOutputField(EvidenceCoverage.ExcludedField, StepOutputFieldType.Results, "why left out", Required: false)]);
+        var owed = new Dictionary<string, IReadOnlyList<string>> { ["notes"] = Pages, [EvidenceCoverage.ExcludedField] = Pages };
+        var values = Values("""{"notes":{"discrepancies":"x"}}""");
+
+        var said = EvidenceCoverage.NotItems(EvidenceCoverage.KeyByItems(filtering, values, owed), owed)!;
+
+        Assert.EndsWith("Hand the result on again keyed by the items: each item once, in 'notes' or in 'excluded', not both.", said, StringComparison.Ordinal);
+        Assert.DoesNotContain("one entry per item", said, StringComparison.Ordinal);
     }
 
     [Fact]
