@@ -90,7 +90,17 @@ internal sealed class StepProgress
     private readonly SortedDictionary<string, string> _madeBy = new(StringComparer.OrdinalIgnoreCase);
     private string _state = "";
 
-    /// <summary>What a put-back leaves a path as: the bytes the run found, whichever write it undoes.</summary>
+    /// <summary>
+    /// What a put-back leaves a path as: the bytes the run found, whichever write it undoes.
+    ///
+    /// <para>A token, not the path taken out of <see cref="_madeBy"/> - though taken out, break and put back would return
+    /// to the very state the step began in, and a true alternation would stall one write sooner. Two reasons. A put-back
+    /// restores the RUN's start, not the step's: a path an earlier step changed is absent from this step's key, and
+    /// "absent" would claim the earlier step's bytes are back. And a put-back of a path only a command changed (never in
+    /// the key) must still change the key - the workspace did change - or what is written after it would be judged
+    /// against the state before the command. The cost is that one extra write counts as new before an alternation
+    /// stalls (pinned by The_same_edits_alternating_with_nothing_else_changing_come_back_to_a_seen_state_and_stall).</para>
+    /// </summary>
     private const string RunStart = "run-start";
 
     /// <summary>Paths this step changed and has not since put back (or tried to) - what licenses letting a put-back through.</summary>

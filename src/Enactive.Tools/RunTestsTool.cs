@@ -32,7 +32,11 @@ public sealed class RunTestsTool(IReadOnlyList<IEcosystem> ecosystems, ITool? ru
                    + "flags. 'target' runs one test project (default: all of them); 'filter' runs only the tests whose name "
                    + "contains it. The whole output is kept in the scratch.",
         JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Unknown,
-        ProgressIdentity: ProgressIdentity.Action, Kind: ToolKind.Command);
+        // An observation, identified with the generation it looks at, as run_command is. Declared an Action until
+        // 2026-10-19 (no reason recorded): a second run_tests was then the same call wherever the step had edited in
+        // between - the repair loop's own check counted as no progress - and, once writes were keyed by the state they
+        // are applied to, it was new only in StatesPerWrite states, a limit made for writes, not for a command that looks.
+        ProgressIdentity: ProgressIdentity.Observation, Kind: ToolKind.Command);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 

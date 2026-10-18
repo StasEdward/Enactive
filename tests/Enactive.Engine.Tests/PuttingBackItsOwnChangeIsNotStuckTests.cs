@@ -266,6 +266,33 @@ public sealed class PuttingBackItsOwnChangeIsNotStuckTests
         Assert.False(progress.PutsBackOwnChange([Restore("New.cs")]));
     }
 
+    /// <summary>
+    /// run_tests looks at the tree, as run_command does: after each edit, running the tests again is new - however many
+    /// edits - and with nothing written between, it is a repeat. Declared an Action, it was a repeat after any edit, and
+    /// with writes keyed by state it would be new in only StatesPerWrite states.
+    /// </summary>
+    [Fact]
+    public void Running_the_tests_after_each_edit_is_new_and_without_one_is_a_repeat()
+    {
+        var progress = new StepProgress([.. Definitions, new RunTestsTool([]).Definition]);
+        var runTests = new ToolCall("t", "run_tests", "{}");
+        var looked = new List<bool>();
+        for (var i = 0; i < StepProgress.StatesPerWrite + 3; i++)
+        {
+            Ran(progress, Write("Game.cs", $"version {i}"), out _);
+            Ran(progress, runTests, out var advanced, changes: false);
+            looked.Add(advanced);
+        }
+        Ran(progress, runTests, out var again, changes: false);
+
+        Assert.All(looked, Assert.True);
+        Assert.False(again);
+    }
+
+    [Fact]
+    public void Run_tests_is_identified_as_an_observation()
+        => Assert.Equal(ProgressIdentity.Observation, new RunTestsTool([]).Definition.ProgressIdentity);
+
     [Fact]
     public void One_write_counts_as_new_in_a_bounded_number_of_states()
     {
