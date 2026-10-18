@@ -145,6 +145,8 @@ internal static class StepStartCheck
     {
         // Errors on both sides, or there is nothing to compare: a build that fails without one error the ecosystem can read
         // has not said what is wrong, and "no new error" of it would be a pass of a failure nobody read.
+        // Blind spot, as BuildRegression's: a compiler that stops after an earlier phase fails (Go type-checks no package
+        // depending on one that does not compile) can hide a new error behind the old one; the step still goes to review.
         var now = DiagnosticSet.Of(before.Ecosystem.ParseDiagnostics(after.Result.Output ?? "", root));
         if (before.Diagnostics!.Total(DiagnosticSeverity.Error) == 0 || now.Total(DiagnosticSeverity.Error) == 0)
             return said(Standing.Inconclusive, "it failed before this step too, and what it printed does not read as errors that "

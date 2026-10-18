@@ -39,7 +39,7 @@ public sealed class AStepSentBackThatEndsUnfinishedIsPutBackTests
 
         Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
         Assert.False(fx.Exists("record.txt"));
-        Assert.Contains(Reverts(events), e => e.Summary.StartsWith("The step ended incomplete after its last verdict sent its work back",
+        Assert.Contains(Reverts(events), e => e.Summary.StartsWith("The step ended incomplete because the step got stuck repeating the same calls, not on a verdict.",
             StringComparison.Ordinal));
         Assert.Contains(Reverts(events), e => e.RevertedPaths()!.Contains("record.txt"));
     }
@@ -110,7 +110,7 @@ public sealed class AStepSentBackThatEndsUnfinishedIsPutBackTests
         var step = events.Last(e => e.Kind == EventKind.StepCompleted && e.Summary.Contains("Write the record", StringComparison.Ordinal));
         Assert.Equal(StepOutcomeKind.Incomplete, step.StepOutcome());
         Assert.False(fx.Exists("record.txt"));
-        Assert.Contains(Reverts(events), e => e.Summary.StartsWith("[1] The step ended incomplete after its last verdict sent its work back",
+        Assert.Contains(Reverts(events), e => e.Summary.StartsWith("[1] The step ended incomplete because the step got stuck repeating the same calls, not on a verdict.",
             StringComparison.Ordinal));
     }
 
@@ -201,7 +201,29 @@ public sealed class AStepSentBackThatEndsUnfinishedIsPutBackTests
 
         Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
         Assert.False(fx.Exists("record.txt"));
-        Assert.Contains(Reverts(events), e => e.Summary.StartsWith("The step ended incomplete after its last verdict sent its work back",
+        Assert.Contains(Reverts(events), e => e.Summary.StartsWith("The step ended incomplete because the provider gave out, not on a verdict.",
+            StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A plan's step in the same place: its provider gives out on the attempt after the review sent it back. The exception
+    /// ends the step past its result, so what stopped it is carried to the revert apart - and named, not read as a verdict.
+    /// </summary>
+    [Fact]
+    public async Task A_plan_step_sent_back_whose_provider_then_gives_out_says_so_above_its_revert()
+    {
+        using var fx = new EngineFixture();
+        var script = new FakeChatProvider(Turn.Says(TwoSteps),
+            Turn.Calls1("write_file", """{"path":"record.txt","content":"one"}""", "w1"), Turn.Says("Wrote the record."));
+        var reviewer = new FakeChatProvider(Verdicts.Fail("the record is wrong"));
+
+        var events = await fx.RunAsync(fx.Build(new SpentAfter(script, 3), EngineFixture.Role("developer"), router: Routers.WithReviewer(),
+            reviewProvider: reviewer), "Write one record and report on it");
+
+        var step = events.Last(e => e.Kind == EventKind.StepCompleted && e.Summary.Contains("Write the record", StringComparison.Ordinal));
+        Assert.Equal(StepOutcomeKind.Incomplete, step.StepOutcome());
+        Assert.False(fx.Exists("record.txt"));
+        Assert.Contains(Reverts(events), e => e.Summary.StartsWith("[1] The step ended incomplete because the provider gave out, not on a verdict.",
             StringComparison.Ordinal));
     }
 

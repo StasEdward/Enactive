@@ -1232,7 +1232,8 @@ public sealed partial class Orchestrator : IOrchestrator
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                quickResult.Set(ex is RetryBudgetExceededException ? StepOutcomeKind.Incomplete : StepOutcomeKind.Failed, ex.Message);
+                quickResult.Set(ex is RetryBudgetExceededException ? StepOutcomeKind.Incomplete : StepOutcomeKind.Failed, ex.Message,
+                    stoppedBy: StoppedByError(ex));
                 await PublishQuick(scope.Ev(EventKind.ErrorObserved, ex.Message));
                 // Sent back, then broken (the provider's retries spent, say): Incomplete or Failed with no verdict since, and
                 // its work goes back as the plan's step does (RevertsAsRejected). Never on cancellation - that is not caught
@@ -1897,6 +1898,8 @@ public sealed partial class Orchestrator : IOrchestrator
             var stepResult = new ToolLoopResult();
             var outcome = StepOutcomeKind.Succeeded;
             string? outcomeReason = null;
+            // What stopped the step, where an exception did and the step's result was not set (ToolLoopResult.StoppedBy).
+            string? stoppedBy = null;
 
             // This step owns its writes. Review retries keep the transcript and evidence;
             // only terminal rejection may restore this owner's files. Recorded as this step's, by its id, so a run that
@@ -1997,6 +2000,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 // Fail this step and its dependents, not independent DAG work.
                 outcome = ex is RetryBudgetExceededException ? StepOutcomeKind.Incomplete : StepOutcomeKind.Failed;
                 outcomeReason = ex.Message;
+                stoppedBy = StoppedByError(ex);
             }
 
             // The last result the step handed on, kept whatever came after it - and worth what its
@@ -2020,7 +2024,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
             await RevertRejectedAsync(stepResult, store, scope, stepNumber,
                 (line, payload) => Publish(scope.Event(EventKind.ArtifactReverted, $"[{stepNumber}] {line}", payload)), stepCt,
-                outcome, workspaceChanges, beforeStep, attemptState.Journal.Actions.Skip(attemptState.StepStart));
+                outcome, workspaceChanges, beforeStep, attemptState.Journal.Actions.Skip(attemptState.StepStart), stoppedBy);
 
             // What it changed, for the wave it ended in (Phase 6) - after a revert, which the files show.
             waves?.Finished(WaveStep.Of(step.Id, stepNumber, step.Title, store.TouchedPaths,
@@ -3232,11 +3236,21 @@ public sealed partial class Orchestrator : IOrchestrator
         public OutcomeCause Cause => _cause ?? StepRecord.CauseOf(Kind);
         private OutcomeCause? _cause;
 
-        public void Set(StepOutcomeKind kind, string? reason, OutcomeCause? cause = null)
+        /// <summary>
+        /// What stopped the step short of a verdict, in a few words for a person ("the provider gave out", "the run's
+        /// budget ran out"), where a limit or a failure ended it; null otherwise. Said above the revert of a step sent back
+        /// that then ended so (RevertRejectedAsync): without it the line read as put back for a verdict, when what went
+        /// back included what an attempt after the verdict did, which no verdict judged.
+        /// </summary>
+        public string? StoppedBy { get; private set; }
+
+        // Every Set replaces StoppedBy: a limit's words left over from an earlier ending would name the wrong cause.
+        public void Set(StepOutcomeKind kind, string? reason, OutcomeCause? cause = null, string? stoppedBy = null)
         {
             Kind = kind;
             Reason = reason;
             _cause = cause;
+            StoppedBy = stoppedBy;
         }
     }
 
@@ -3825,7 +3839,8 @@ public sealed partial class Orchestrator : IOrchestrator
         // guessed. Pessimistic until proven otherwise: falling out of the loop means the iteration
         // cap was reached, which is not success.
         loopResult.Set(StepOutcomeKind.Incomplete,
-            $"ran for {RunawayCeiling} turns without a final answer");
+            $"ran for {RunawayCeiling} turns without a final answer",
+            stoppedBy: $"the step used all {RunawayCeiling} turns it is given without a final answer");
 
         WorkEvent Ev(EventKind kind, string summary)
             => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
@@ -4116,7 +4131,7 @@ public sealed partial class Orchestrator : IOrchestrator
         {
             if (runBudget.TurnExhausted is { } turnSpent)
             {
-                loopResult.Set(StepOutcomeKind.Incomplete, turnSpent);
+                loopResult.Set(StepOutcomeKind.Incomplete, turnSpent, stoppedBy: "the run's budget ran out");
                 yield return Ev(EventKind.ErrorObserved, turnSpent);
                 yield break;
             }
@@ -4416,7 +4431,7 @@ public sealed partial class Orchestrator : IOrchestrator
             // Recheck after a handover, which is itself a billed model request.
             if (runBudget.TurnExhausted is { } afterHandover)
             {
-                loopResult.Set(StepOutcomeKind.Incomplete, afterHandover);
+                loopResult.Set(StepOutcomeKind.Incomplete, afterHandover, stoppedBy: "the run's budget ran out");
                 yield return Ev(EventKind.ErrorObserved, afterHandover);
                 yield break;
             }
@@ -4569,7 +4584,7 @@ public sealed partial class Orchestrator : IOrchestrator
                             $"the context window is full: this turn needs about {scale.TokensFor(sizeNow)} "
                             + $"of the {window} tokens this model was given (num_ctx), and there is nothing "
                             + "left to trim";
-                        loopResult.Set(StepOutcomeKind.Incomplete, reason);
+                        loopResult.Set(StepOutcomeKind.Incomplete, reason, stoppedBy: "the model's context window was full");
                         yield return Ev(EventKind.ErrorObserved,
                             char.ToUpperInvariant(reason[0]) + reason[1..]
                             + ". Raise num_ctx in Settings, or use a model with a larger window.");
@@ -4656,7 +4671,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 if (runawayStops > 1)
                 {
                     loopResult.Set(StepOutcomeKind.Incomplete,
-                        $"the model's reply ran away again after being told why the first was stopped: {stopped.Reason}");
+                        $"the model's reply ran away again after being told why the first was stopped: {stopped.Reason}",
+                        stoppedBy: "the model's reply ran away twice");
                     yield break;
                 }
 
@@ -4699,7 +4715,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 {
                     var why = squeezed ? $"the context window filled up: {lastPromptTokens} of {hardWindow} tokens; {reason}"
                         : reason + "; two recovery turns were already allowed";
-                    loopResult.Set(StepOutcomeKind.Incomplete, why);
+                    loopResult.Set(StepOutcomeKind.Incomplete, why,
+                        stoppedBy: squeezed ? "the model's context window was full" : "the model's replies kept coming back cut off or unreadable");
                     yield return Ev(EventKind.ErrorObserved, why + (squeezed ? ". Raise num_ctx or use a larger window." : ". Use smaller actions or adjust generation budgets."));
                     yield break;
                 }
@@ -4799,7 +4816,8 @@ public sealed partial class Orchestrator : IOrchestrator
             {
                 var repeated = frame.Progress.Describe();
                 loopResult.Set(StepOutcomeKind.Incomplete,
-                    $"stopped after {StallLimit} turns that only repeated earlier tool calls: {repeated}");
+                    $"stopped after {StallLimit} turns that only repeated earlier tool calls: {repeated}",
+                    stoppedBy: "the step got stuck repeating the same calls");
                 yield return Ev(EventKind.ErrorObserved,
                     $"The model spent {StallLimit} turns repeating tool calls it had already made "
                     + $"({repeated}) without doing anything new; stopping this step. It is stuck rather "

@@ -230,7 +230,47 @@ public sealed class AStepCheckThatFailedBeforeTheStepTests
         Assert.Empty(reviewer.Requests);
         Assert.Equal(StepOutcomeKind.ReviewRejected, StepEnd(events, "Write the page").StepOutcome());
         Assert.All(Checks(events, "lint (step 1)"), c => Assert.Contains("Whether it failed before this step too is not known: the run "
-            + "has no result of it on the workspace as this step found it", c.Summary, StringComparison.Ordinal));
+            + "has no result of it on the workspace as this step found it - it has not run on it, and is not run again only to "
+            + "find out", c.Summary, StringComparison.Ordinal));
+        // The worker is told the short form only: why the engine does not know is the record's (above), and to a weak worker
+        // it is one more thing to act on.
+        var told = ToldAfterTheCheck(worker);
+        Assert.Contains("How it stood before this step is not known.", told, StringComparison.Ordinal);
+        Assert.DoesNotContain("is not run again only to find out", told, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A run carrying a task on - started again under it after a question, or resumed - keeps the baseline from before the
+    /// task's FIRST attempt (BuildBaseline.FromAnEarlierAttempt), and the workspace it starts in is not the one that
+    /// describes: the earlier attempt worked in it in between, and held against it, the step's check would call that
+    /// attempt's errors old. So it is not held against it: not known, and today's behaviour stands - the step is sent back.
+    /// </summary>
+    [Fact]
+    public async Task A_baseline_kept_from_an_earlier_attempt_is_not_what_a_step_check_is_held_against()
+    {
+        using var fx = Workspace();
+        var taskId = Guid.NewGuid();
+        // The baseline an earlier attempt of this task kept: the build failing on the very error the workspace shows now -
+        // compared with it, the step's failure would be "nothing in it is new".
+        new BaselineStore(fx.Root).Save(taskId, [new BaselineSnapshot("notes", "Build", "notes.proj", 1, null,
+            [new BuildDiagnostic("notes", "pages/old.page", "N1", DiagnosticSeverity.Error, "broken link to /gone")])]);
+        var worker = new FakeChatProvider(Turn.Says(OneStep), Writes("pages/new.page", "# New", "w1"), Turn.Says("Wrote the page."));
+        worker.WhenExhausted = Turn.Says("Done.");
+        var reviewer = new FakeChatProvider(Verdicts.Pass());
+
+        var events = new List<WorkEvent>();
+        var context = new Enactive.Core.Context.WorkContext(fx.Workspace.Id, fx.Workspace.Name, null, null, null, [], []);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        await foreach (var ev in fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer)
+                           .SubmitIntentAsync(new Enactive.Core.Intents.Intent(taskId, "write the new page",
+                               Enactive.Core.Intents.IntentSource.CommandBar, context, DateTimeOffset.UtcNow), cts.Token))
+            events.Add(ev);
+
+        Assert.Contains(events, e => e.Summary.Contains("kept from before the FIRST attempt of this task", StringComparison.Ordinal));
+        var check = Checks(events, "build (step 1)").First();
+        Assert.Contains("Whether it failed before this step too is not known", check.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("Failed before this step too", check.Summary, StringComparison.Ordinal);
+        Assert.Contains(events, e => e.Kind == EventKind.ReviewFailed);
     }
 
     /// <summary>A workspace that could not be measured: the step's start is not known, today's behaviour stands, and the result says why.</summary>

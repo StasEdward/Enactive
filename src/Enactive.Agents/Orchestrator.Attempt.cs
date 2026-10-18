@@ -185,7 +185,7 @@ public sealed partial class Orchestrator
             // Quick does not dispatch DAG steps. Retain its existing pre-attempt budget boundary.
             if (stepNumber is null && scope.Budget.Exhausted is { } spent)
             {
-                result.Set(StepOutcomeKind.Incomplete, spent);
+                result.Set(StepOutcomeKind.Incomplete, spent, stoppedBy: "the run's budget ran out");
                 await publish(scope.Ev(EventKind.ErrorObserved, spent));
                 return;
             }
@@ -347,6 +347,10 @@ public sealed partial class Orchestrator
         => outcome == StepOutcomeKind.ReviewRejected
            || (sentBack && outcome is StepOutcomeKind.Incomplete or StepOutcomeKind.Failed);
 
+    /// <summary>What stopped a step that an exception ended, in the words ToolLoopResult.StoppedBy keeps.</summary>
+    private static string StoppedByError(Exception ex)
+        => ex is RetryBudgetExceededException ? "the provider gave out" : "it broke off with an error (" + ex.Message + ")";
+
     /// <param name="publish">Publishes one line about the revert, with its payload (WorkEventPayload.RevertPayload).</param>
     /// <param name="outcome">How the step ended, where it is not the result's own - the step broke with an exception
     /// (Failed) after the result was last set. Null: the result's.</param>
@@ -354,10 +358,12 @@ public sealed partial class Orchestrator
     /// command changed is found by them, as the store records only what the file tools wrote.</param>
     /// <param name="actions">The step's calls, to say that a command whose changes were not measured may have changed
     /// something the revert did not put back.</param>
+    /// <param name="stoppedBy">What stopped the step, where an exception did after the result was last set (as
+    /// <paramref name="outcome"/>). Null: the result's own (ToolLoopResult.StoppedBy).</param>
     private async Task RevertRejectedAsync(ToolLoopResult result, IArtifactScope store,
         RunScope scope, int? stepNo, Func<string, string, ValueTask> publish, CancellationToken ct,
         StepOutcomeKind? outcome = null, IWorkspaceChanges? changes = null, WorkspaceSnapshot? before = null,
-        IEnumerable<ExecutedAction>? actions = null)
+        IEnumerable<ExecutedAction>? actions = null, string? stoppedBy = null)
     {
         var ended = outcome ?? result.Kind;
         if (!RevertsAsRejected(ended, result.SentBack) || !_options.RevertRejectedSteps) return;
@@ -378,9 +384,16 @@ public sealed partial class Orchestrator
             said.Add((line, WorkEventPayload.RevertPayload(stepNo, reverted, left)));
         if (await LeftByCommandsAsync(store, keep, changes, before, actions, ct) is { } byCommands)
             said.Add((byCommands.Line, WorkEventPayload.RevertPayload(stepNo, [], byCommands.Paths)));
+        // What ended it is named first. Final review, 2026-10-18: the line said only that the last verdict had sent the work
+        // back, so a step put back after the provider gave out, or a budget ran out, read as put back for a verdict - when
+        // what goes back includes what the attempts after that verdict did, which no verdict judged. The revert stays (a
+        // step ended so is still in a rejected step's place); the person is told it went back after a limit. Where nothing
+        // named the stop, the step's own reason stands in for it.
         if (said.Count > 0 && ended != StepOutcomeKind.ReviewRejected)
-            said.Insert(0, ($"The step ended {(ended == StepOutcomeKind.Failed ? "failed" : "incomplete")} after its last verdict sent "
-                + "its work back, with no verdict since: what it changed goes back as a rejected step's does.",
+            said.Insert(0, ($"The step ended {(ended == StepOutcomeKind.Failed ? "failed" : "incomplete")} because "
+                + (stoppedBy ?? result.StoppedBy ?? result.Reason ?? "it stopped short of a verdict")
+                + ", not on a verdict. Its last verdict had sent its work back, and nothing it did after that was judged: "
+                + "what it changed goes back as a rejected step's does.",
                 WorkEventPayload.RevertPayload(stepNo, [], [])));
         foreach (var (line, payload) in said)
             await publish(line, payload);

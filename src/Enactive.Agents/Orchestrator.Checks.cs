@@ -22,7 +22,7 @@ public sealed partial class Orchestrator
 
     /// <summary>What the checks at a step's gate came to: a blocking one that failed, and why blocking ones did not run.</summary>
     /// <param name="Failed">The first blocking check that failed, with its result - the step goes back on the gate's budget -
-    /// and, where it was known, how it stood when the step began, for the step to be told (StepStartCheck).</param>
+    /// and how it stood when the step began, as the step is told it (StepStartCheck, ToldOfBefore).</param>
     /// <param name="NotRun">Which blocking checks did not run and why - or failed before the step too, with nothing to
     /// compare - the step is then done at best, never confirmed.</param>
     /// <param name="NotRunCause">Why it is not confirmed, as a code: a check that did not run, or only ones that said
@@ -335,14 +335,25 @@ public sealed partial class Orchestrator
 
     /// <summary>
     /// What a step sent back by a check that is its own is told of how the check stood before it: what is new, so it fixes
-    /// that and not what was there before it began - the bench's chase after an old error. Nothing when it is not known.
+    /// that and not what was there before it began - the bench's chase after an old error. Where it is not known, that
+    /// alone, without why.
+    ///
+    /// <para><b>Why not the reason too.</b> Final review, 2026-10-18: the step was told nothing of a start that is not
+    /// known, and the record's whole note - "the run has no result of it on the workspace as this step found it - it has
+    /// not run on it, and is not run again only to find out" - is why the engine does not know, for a person and the
+    /// reviewer. To a weak worker that reason is one more thing in its advice to act on, and nothing in it is the step's to
+    /// do; that it is not known is all it needs - not to take the failure for one it surely made, nor for one it surely
+    /// did not. The record keeps the reason (WithBefore, in the check's detail); the repair advice shows the check's
+    /// output, not its detail (WorkspaceChecks.RepairAdvice).</para>
     /// </summary>
-    private static string? ToldOfBefore(StepStartCheck.Judgement? judged)
-        => judged is { Standing: StepStartCheck.Standing.Ours } ours
-            ? $"Against how the check stood when this step began: {ours.Note}."
-              // Only where there was an old failure: a step whose check passed before it began has none to leave alone.
-              + (ours.FailedBefore ? " Only what this step changed is this step's to fix; a failure that was there before it began is not." : "")
-            : null;
+    private static string? ToldOfBefore(StepStartCheck.Judgement? judged) => judged switch
+    {
+        { Standing: StepStartCheck.Standing.Ours } ours => $"Against how the check stood when this step began: {ours.Note}."
+            // Only where there was an old failure: a step whose check passed before it began has none to leave alone.
+            + (ours.FailedBefore ? " Only what this step changed is this step's to fix; a failure that was there before it began is not." : ""),
+        { Standing: StepStartCheck.Standing.NotKnown } => "How it stood before this step is not known.",
+        _ => null
+    };
 
     /// <summary>
     /// What a step changed, as its gate reads it (Plan Phase 3.2 / 3.4): the paths, for the checks owed and the protected
