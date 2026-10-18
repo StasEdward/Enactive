@@ -470,6 +470,15 @@ test('a run fills the screen beside the column, its repository strip at the foot
   expect(Math.abs(box.bar.left - box.area.left)).toBeLessThanOrEqual(1);
   expect(Math.abs(box.bar.right - box.area.right)).toBeLessThanOrEqual(1);
   expect(Math.abs(box.bar.bottom - box.height)).toBeLessThanOrEqual(1);
+  // And the column's run count is a foot bar on the strip's line: the same height, at the bottom of the window - left
+  // under the last card, it floated a screen away from the strip beside it.
+  const foot = await page.evaluate(() => {
+    const count = document.querySelector('.runs-column .column-status').getBoundingClientRect();
+    const bar = document.querySelector('.repo-bar').getBoundingClientRect();
+    return { top: count.top, bottom: count.bottom, barTop: bar.top, barBottom: bar.bottom };
+  });
+  expect(Math.abs(foot.top - foot.barTop)).toBeLessThanOrEqual(1);
+  expect(Math.abs(foot.bottom - foot.barBottom)).toBeLessThanOrEqual(1);
 
   await answerWhateverWaits(page);
 

@@ -118,6 +118,9 @@
   /* The top bar's height: the screens under it fill what is left of the window, to the pixel (the Runs screen's strip
      is the foot of the window). */
   --top-h: 56px;
+  /* The Runs screen's two foot bars - the repository strip under the run, the run count under the column - one height,
+     so they read as one line across the bottom of the window. */
+  --foot-h: 32px;
 
   --t-fast: 120ms;
   --t: 180ms;
@@ -481,13 +484,27 @@ a.card:hover, .card.selectable:hover { background: var(--card-fill-hover); borde
    strip floating in the middle under a short run. */
 .runs-main > .live-run, .runs-main > .past-run { flex: 1; }
 
-/* The context column: the window's Border.context - the surface a step up from the ground, a line on its right. */
-.runs-column { flex: none; box-sizing: border-box; width: 280px; padding: 16px 14px 10px; background: var(--bg-elevated);
-  border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 0; }
+/* The context column: the window's Border.context - the surface a step up from the ground, a line on its right. As tall
+   as the window under the top bar, its lists scrolling in a box of their own (.column-scroll), so its foot - the run
+   count - stays at the bottom of the window beside the repository strip while the cards scroll above it; growing with
+   its cards, the column ran the page down and the count floated under the last card, a screen away. */
+.runs-column { flex: none; box-sizing: border-box; width: 280px; padding: 16px 14px 0; background: var(--bg-elevated);
+  border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 0;
+  position: sticky; top: var(--top-h); height: calc(100vh - var(--top-h)); }
+/* Edge to edge of the column, so its scrollbar is the column's edge and not a bar in the cards' margin. */
+.column-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 -14px; padding: 0 14px; }
 .runs-column .said { font-size: 12px; margin: 4px 0; }
 .column-top { display: grid; gap: 10px; }
 .column-rule { height: 1px; background: var(--border); margin: 14px 0 12px; }
-.column-status { margin: 6px 0 0; }
+/* "9 of 37 runs": the column's foot bar, drawn as the repository strip is (.repo-bar) - its height, line, glass and
+   type - and on its line at the bottom of the window. Pushed to the foot under a short list; the negative margins take
+   back the column's side padding. Sticky for the drawer, where the drawer is what scrolls. */
+.runs-column .column-status { position: sticky; bottom: 0; z-index: 2; flex: none; display: flex; align-items: center;
+  box-sizing: border-box; min-height: var(--foot-h); margin: auto -14px 0; padding: 4px 14px; font-size: 12.5px; line-height: 1.5;
+  color: var(--text-body); background: var(--chrome-glass); border-top: 1px solid var(--border);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+/* Room under the last card, so it does not sit on the foot bar. */
+.runs-column .history { margin-bottom: 10px; }
 .panel-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; }
 .panel-row .panel-header { margin: 0; }
 h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
@@ -743,7 +760,8 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
 .speed-value { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* The repository strip at the foot: one size and one line for every part; added green, removed red. */
-.repo-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 4px 24px; font-size: 12.5px; line-height: 1.5;
+.repo-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; box-sizing: border-box; min-height: var(--foot-h);
+  padding: 4px 24px; font-size: 12.5px; line-height: 1.5;
   color: var(--text-body); background: var(--chrome-glass); border-top: 1px solid var(--border); cursor: pointer;
   -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
   /* The foot of the screen, edge to edge of the run's area, as the window's status strip: pushed down under a short run,
@@ -1220,7 +1238,9 @@ main.bare::after { content: ""; position: absolute; inset: 0; z-index: -2; point
     box-shadow: var(--shadow-lg); animation: slide-in var(--t) var(--ease-out); }
   .runs-screen { display: block; min-height: 0; }
   .runs-main { padding: 14px 14px 16px; }
-  .runs-column { width: 100%; min-height: 100%; border-right: 0; }
+  /* In the drawer the drawer scrolls, not the column: the count stays the drawer's foot (sticky in the drawer). */
+  .runs-column { position: static; width: 100%; height: auto; min-height: 100%; border-right: 0; }
+  .column-scroll { flex: 1 0 auto; overflow: visible; }
   .runs-column .switcher { width: 100%; }
 
   /* The command bar: the box across the screen, Run and Stop under it, the run's settings under them. */
