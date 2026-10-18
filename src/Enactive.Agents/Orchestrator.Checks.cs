@@ -89,7 +89,10 @@ public sealed partial class Orchestrator
         _ => CheckRecords.NameOf(firing.FiredOn)
     };
 
-    /// <summary>The check run, before its record is put on it - see the overload above, which every caller goes through.</summary>
+    /// <summary>
+    /// The check run, before its record is put on it - every caller puts it on: through the overload above, or, at a step's
+    /// gate, StepChecksAsync, which runs RunDeclaredCheckPartsAsync for the parts and calls Recorded itself.
+    /// </summary>
     private async Task<CriterionResult> RunDeclaredCheckAsync(ResolvedCheck check, string at, Guid taskId, Guid runId,
         WorkContext context, CancellationToken ct)
         => (await RunDeclaredCheckPartsAsync(check, at, taskId, runId, context, ct)).Result;
@@ -336,8 +339,9 @@ public sealed partial class Orchestrator
     /// </summary>
     private static string? ToldOfBefore(StepStartCheck.Judgement? judged)
         => judged is { Standing: StepStartCheck.Standing.Ours } ours
-            ? $"Against how the check stood when this step began: {ours.Note}. Only what this step changed is this step's to "
-              + "fix; a failure that was there before it began is not."
+            ? $"Against how the check stood when this step began: {ours.Note}."
+              // Only where there was an old failure: a step whose check passed before it began has none to leave alone.
+              + (ours.FailedBefore ? " Only what this step changed is this step's to fix; a failure that was there before it began is not." : "")
             : null;
 
     /// <summary>

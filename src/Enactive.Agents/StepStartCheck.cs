@@ -25,6 +25,13 @@ using Enactive.Core.Templates;
 /// failure it may not have made, and is never confirmed by a check that said nothing about it (done, not confirmed) -
 /// neither the bench's chase after an old error nor a step that made the failure worse passing silently. Where nothing
 /// says how the check stood when the step began, today's behaviour stands, and the result says it was not known.</para>
+///
+/// <para><b>What "passes that check" means here.</b> The step passes the check in what decides the step - it is not sent
+/// back, and its review is asked - but the check's own result stays FAILED with the note first in its detail: the build
+/// does fail, and a person reading the check is owed that. So a step card can show a red check beside a step that
+/// succeeded, with the note saying the failure was there before it. Nothing else reads it: a step-level check's result
+/// decides the step only, never the run (the run's outcome reads the steps' outcomes, and the checks at waves and at the
+/// run's end).</para>
 /// </summary>
 internal static class StepStartCheck
 {
@@ -61,9 +68,15 @@ internal static class StepStartCheck
         NotKnown
     }
 
-    internal sealed record Judgement(Standing Standing, string Note);
+    /// <param name="FailedBefore">Some part of it is known to have failed before the step - so there is an old failure the
+    /// step is not to chase. False when it passed before, or how it stood is not known: a step sent back for a check that
+    /// passed before is not told of an old failure there was none of.</param>
+    internal sealed record Judgement(Standing Standing, string Note, bool FailedBefore = false);
 
     public static Judgement NotKnown(string why) => new(Standing.NotKnown, why);
+
+    /// <summary>What a part that passed before the step says - the one judgement of a known start with no old failure in it.</summary>
+    private const string PassedBefore = "it passed before this step";
 
     /// <summary>
     /// The check, as it ran after the step (<paramref name="after"/>), against how each of its parts stood before it. A
@@ -76,7 +89,7 @@ internal static class StepStartCheck
         if (judged.Length == 0) return NotKnown("no part of it failed that could be compared");
         foreach (var standing in new[] { Standing.Ours, Standing.NotKnown, Standing.Inconclusive, Standing.Theirs })
             if (judged.Where(j => j.Standing == standing).Select(j => j.Note).ToArray() is { Length: > 0 } notes)
-                return new(standing, string.Join("; ", notes));
+                return new(standing, string.Join("; ", notes), judged.Any(j => j.FailedBefore));
         return NotKnown("no part of it failed that could be compared");
     }
 
@@ -99,7 +112,8 @@ internal static class StepStartCheck
     private static Judgement Of(Part after, Before? before, string root)
     {
         var what = after.Target is { } target ? $"{after.Result.Command} ({target})" : after.Result.Command;
-        Judgement Said(Standing standing, string note) => new(standing, $"{what}: {note}");
+        Judgement Said(Standing standing, string note)
+            => new(standing, $"{what}: {note}", standing != Standing.NotKnown && note != PassedBefore);
         if (before is null) return Said(Standing.NotKnown, "it has no earlier result to compare with");
 
         if (after.Ecosystem is not { } ecosystem)
@@ -107,7 +121,7 @@ internal static class StepStartCheck
             if (before.Result is not { } was) return Said(Standing.NotKnown, "it has no earlier result to compare with");
             return was.Outcome switch
             {
-                CriterionOutcome.Passed => Said(Standing.Ours, "it passed before this step"),
+                CriterionOutcome.Passed => Said(Standing.Ours, PassedBefore),
                 CriterionOutcome.Failed when was.ExitCode == after.Result.ExitCode && Same(was.Output, after.Result.Output)
                     => Said(Standing.Theirs, $"it failed before this step too (exit {was.ExitCode}), and printed exactly what it printed then"),
                 // A command's own output has no reading the engine knows: a list of findings with one more, and the same
@@ -122,7 +136,7 @@ internal static class StepStartCheck
                        ?? (before.Result is { } earlier ? BuildRegression.Baseline(ecosystem, after.Target ?? "", earlier, root, after.Kind) : null);
         if (baseline is null) return Said(Standing.NotKnown, "it has no earlier result to compare with");
         if (!baseline.Taken) return Said(Standing.NotKnown, "it could not be run before this step: " + baseline.NotTaken);
-        if (baseline.ExitCode == 0) return Said(Standing.Ours, "it passed before this step");
+        if (baseline.ExitCode == 0) return Said(Standing.Ours, PassedBefore);
 
         return after.Kind == BaselineKind.Test ? Tests(baseline, after, Said) : Build(baseline, after, root, Said);
     }
@@ -150,11 +164,22 @@ internal static class StepStartCheck
         if (before.Ecosystem.ParseTests(after.Result.Output ?? "") is not { } now)
             return said(Standing.Inconclusive, "they failed before this step too, and nothing they printed now reads as a test result "
                 + "to compare with then");
+        var totals = $"before this step: {was.Describe()}; now: {now.Describe()}";
+        // More failing by the run's own totals is the step's, whatever the names say: a run that printed only totals, or
+        // was cut before it named a test, names nothing to compare - and 2 failed then, 7 now, would otherwise read as
+        // "nothing new" and pass the step silently (code review of Task 18).
+        if (was.Summary is { } then && now.Summary is { } counted && counted.Failed > then.Failed)
+            return said(Standing.Ours, $"{counted.Failed - then.Failed} more test(s) fail now than before this step ({totals})");
+        // Names on both sides, or there is nothing to compare: the absence of names is not the absence of tests
+        // (TestRunReport), and "no test fails now that did not then" of a run that named none would be a pass nobody read -
+        // as a build with no readable error is not compared either (Build, above).
+        if (was.Cases.Count == 0 || now.Cases.Count == 0)
+            return said(Standing.Inconclusive, "they failed before this step too, and the run does not name its tests on both "
+                + $"sides, so which fail cannot be compared ({totals})");
         // Not BuildRegression's comparison: there a test that is new and failing is a note, never counted - it may be what
         // the work was asked to add. Here it is the step's: a blocking test check fails on it, and it was not failing before.
         var worse = now.Regressions(was).Concat(now.FailingAndNew(was)).Concat(now.Disappeared(was))
             .Distinct(StringComparer.Ordinal).ToArray();
-        var totals = $"before this step: {was.Describe()}; now: {now.Describe()}";
         return worse.Length > 0
             ? said(Standing.Ours, $"{worse.Length} test(s) fail now, or are gone, that did not fail before this step: "
                 + string.Join(", ", worse.Take(5)) + (worse.Length > 5 ? $", and {worse.Length - 5} more" : "") + $" ({totals})")

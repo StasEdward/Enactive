@@ -174,7 +174,10 @@ public sealed class AStepCheckThatFailedBeforeTheStepTests
         var end = StepEnd(events, "Write the page");
         Assert.Equal(StepOutcomeKind.ReviewRejected, end.StepOutcome());
         Assert.StartsWith("the engine's check 'build' failed", end.OutcomeReason(), StringComparison.Ordinal);
-        Assert.Contains("it passed before this step", ToldAfterTheCheck(worker), StringComparison.Ordinal);
+        var told = ToldAfterTheCheck(worker);
+        Assert.Contains("it passed before this step", told, StringComparison.Ordinal);
+        // Nothing failed before it: it is not told to leave an old failure alone that there never was.
+        Assert.DoesNotContain("a failure that was there before it began", told, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -280,5 +283,62 @@ public sealed class AStepCheckThatFailedBeforeTheStepTests
         Assert.Equal(StepStartCheck.Standing.Ours, Against(Plain(CriterionOutcome.Passed, 0, "")).Standing);
         Assert.Equal(StepStartCheck.Standing.NotKnown, Against(Plain(CriterionOutcome.Unknown, null, "")).Standing);
         Assert.Equal(StepStartCheck.Standing.NotKnown, StepStartCheck.Judge([after], _ => null, Path.GetTempPath()).Standing);
+    }
+
+    // ── a test run ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A test runner, as an ecosystem: <c>PASS name</c> / <c>FAIL name</c> lines for the tests it names, and a closing
+    /// <c>TOTAL passed failed</c> line - which a run cut short, or one set to print totals only, may be all there is.
+    /// </summary>
+    private sealed class Suite : IEcosystem
+    {
+        public string Name => "suite";
+        public EcosystemTargets? Detect(string workspaceRoot) => null;
+        public bool Owns(string relativePath) => true;
+        public string BuildCommand(string target) => "build";
+        public string TestCommand(string target) => "run the suite";
+        public IReadOnlyList<BuildDiagnostic> ParseDiagnostics(string output, string workspaceRoot) => [];
+
+        public TestRunReport? ParseTests(string output)
+        {
+            var lines = output.Split('\n').Select(l => l.Trim()).ToArray();
+            var cases = lines.Where(l => l.StartsWith("PASS ", StringComparison.Ordinal) || l.StartsWith("FAIL ", StringComparison.Ordinal))
+                .Select(l => new TestCaseResult(l[5..], l.StartsWith("PASS", StringComparison.Ordinal) ? TestVerdict.Passed : TestVerdict.Failed))
+                .ToArray();
+            var total = lines.FirstOrDefault(l => l.StartsWith("TOTAL ", StringComparison.Ordinal))?.Split(' ');
+            var summary = total is { Length: 3 }
+                ? new TestRunSummary(int.Parse(total[1]), int.Parse(total[2]), 0, int.Parse(total[1]) + int.Parse(total[2]))
+                : null;
+            return cases.Length == 0 && summary is null ? null : new TestRunReport(cases, summary);
+        }
+    }
+
+    private static StepStartCheck.Part Tests(string output)
+        => new(new Suite(), "suite", BaselineKind.Test,
+            new CriterionResult("test (step 2)", "run the suite", true, CriterionOutcome.Failed, 1, null) { Output = output });
+
+    private static StepStartCheck.Standing Judged(string before, string after)
+        => StepStartCheck.Judge([Tests(after)], p => StepStartCheck.Matching([Tests(before)], p), Path.GetTempPath()).Standing;
+
+    /// <summary>
+    /// A test check that failed before the step too is compared by which tests fail: the same ones is not the step's; a
+    /// test failing that did not before, or one that passed and is gone, is. A run that names no tests on a side cannot be
+    /// compared by names - and more failing by its totals is the step's, names or none: 2 failed then and 7 now, with no
+    /// test named, used to read as "nothing new" and pass the step silently.
+    /// </summary>
+    [Fact]
+    public void A_test_checks_failure_is_compared_by_which_tests_fail_and_by_its_totals()
+    {
+        const string old = "PASS adds\nFAIL rounds\nTOTAL 1 1";
+
+        Assert.Equal(StepStartCheck.Standing.Theirs, Judged(old, "PASS adds\nFAIL rounds\nTOTAL 1 1"));
+        Assert.Equal(StepStartCheck.Standing.Ours, Judged(old, "PASS adds\nFAIL rounds\nFAIL medians\nTOTAL 1 2"));
+        Assert.Equal(StepStartCheck.Standing.Ours, Judged(old, "FAIL adds\nFAIL rounds\nTOTAL 0 2"));
+        Assert.Equal(StepStartCheck.Standing.Ours, Judged("PASS adds\nPASS sums\nFAIL rounds", "PASS adds\nFAIL rounds"));
+        // Totals only: more failing is the step's; as many is not known to be the same tests.
+        Assert.Equal(StepStartCheck.Standing.Ours, Judged("TOTAL 8 2", "TOTAL 3 7"));
+        Assert.Equal(StepStartCheck.Standing.Inconclusive, Judged("TOTAL 8 2", "TOTAL 8 2"));
+        Assert.Equal(StepStartCheck.Standing.Inconclusive, Judged(old, "TOTAL 1 1"));
     }
 }

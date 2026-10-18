@@ -23,8 +23,11 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     /// <summary>
     /// The workspace as the first step found it - right after <see cref="Builds"/> was taken, with nothing of the work
     /// done in between - so a step check of an ecosystem can be held against the baseline while nothing it covers has
-    /// changed since (StepStartCheck). Null for a resumed run: its baseline is from before an earlier attempt, and
-    /// describes a workspace that attempt then worked in.
+    /// changed since (StepStartCheck). Set at the first step of a planned run that is not resumed, and at a quick action's
+    /// start - including one that carries a task on. It says where THIS run began, not that <see cref="Builds"/> describes
+    /// that state: a baseline kept from before an earlier attempt (BuildBaseline.FromAnEarlierAttempt) describes a
+    /// workspace that attempt then worked in, and whoever holds a baseline against this must leave such entries out
+    /// (Orchestrator.BeforeThisStepAsync does). Null where the run's start was not measured or the plan run was resumed.
     /// </summary>
     public WorkspaceSnapshot? BaselineAt { get; set; }
 
