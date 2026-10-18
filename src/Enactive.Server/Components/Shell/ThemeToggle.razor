@@ -1,0 +1,9 @@
+@* The colour theme's button: the system's, light, dark, in turn. wwwroot/theme.js does what it does - on <html>, kept in
+   this browser - and says in its label which theme is on; theme.css shows the icon for it. No @onclick: the choice is
+   the browser's, nothing the service keeps, and the button works the same on the sign-in page, which has no
+   connection to the service. *@
+<button type="button" class="theme-toggle" data-theme-toggle aria-label="Colour theme" title="Colour theme">
+    <svg class="theme-system" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M 4,4 H 20 A 1,1 0 0 1 21,5 V 15 A 1,1 0 0 1 20,16 H 4 A 1,1 0 0 1 3,15 V 5 A 1,1 0 0 1 4,4 Z" /><path d="M 8,20 H 16 M 12,16 V 20" /><path d="M 12,7 A 3,3 0 0 0 12,13 Z" fill="currentColor" /></svg>
+    <svg class="theme-light" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M 8,12 A 4,4 0 1 0 16,12 A 4,4 0 1 0 8,12 Z" /><path d="M 12,2 V 4 M 12,20 V 22 M 4.93,4.93 L 6.34,6.34 M 17.66,17.66 L 19.07,19.07 M 2,12 H 4 M 20,12 H 22 M 6.34,17.66 L 4.93,19.07 M 19.07,4.93 L 17.66,6.34" /></svg>
+    <svg class="theme-dark" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M 20.99,12.79 A 9,9 0 1 1 11.21,3 A 7,7 0 0 0 20.99,12.79 Z" /></svg>
+</button>

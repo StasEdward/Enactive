@@ -345,8 +345,8 @@ public sealed class SettingsTests : ComponentHost
     }
 
     /// <summary>
-    /// Templates are files, saved by their editor at once, and the section says so; it lists them and leads to the
-    /// Templates screen's editor rather than being a second one.
+    /// Templates are files, saved by their editor at once, and the section says so; it lists them and opens the Templates
+    /// screen's editor over itself rather than being a second one.
     /// </summary>
     [Fact]
     public void The_templates_section_lists_them_and_leads_to_their_editor()
@@ -362,8 +362,9 @@ public sealed class SettingsTests : ComponentHost
         Assert.Contains("Templates are FILES", pane.TextContent);
         Assert.NotEmpty(pane.QuerySelectorAll(".settings-card"));
         Assert.All(pane.QuerySelectorAll(".settings-card a.card-title"),
-            a => Assert.StartsWith("templates/", a.GetAttribute("href")));
-        Assert.Equal(Enactive.Server.Components.Links.NewTemplate(id), screen.FindAll("a.btn").Single(a => a.TextContent.Trim() == "New template").GetAttribute("href"));
+            a => Assert.StartsWith("settings/ai-templates/", a.GetAttribute("href")));
+        Assert.Equal(Enactive.Server.Components.Links.SettingsTemplate(id, Enactive.Server.Components.Links.NewTemplateId),
+            screen.FindAll("a.btn").Single(a => a.TextContent.Trim() == "New template").GetAttribute("href"));
     }
 
     /// <summary>
@@ -385,8 +386,8 @@ public sealed class SettingsTests : ComponentHost
 
         var screen = Screen("ada", "ai-templates");
         var card = Card(screen, "Digest");
-        Assert.Equal(Enactive.Server.Components.Links.Template(id, "digest"), card.QuerySelector("a.template-edit")!.GetAttribute("href"));
-        Assert.Equal(Enactive.Server.Components.Links.Template(id, "digest", copy: true),
+        Assert.Equal(Enactive.Server.Components.Links.SettingsTemplate(id, "digest"), card.QuerySelector("a.template-edit")!.GetAttribute("href"));
+        Assert.Equal(Enactive.Server.Components.Links.SettingsTemplate(id, "digest", copy: true),
             card.QuerySelector("a.template-duplicate")!.GetAttribute("href"));
         Assert.Equal("Delete this template", card.QuerySelector("button.template-remove")!.GetAttribute("title"));
         // A built-in is customised, never removed: Edit and Duplicate only.
@@ -405,5 +406,81 @@ public sealed class SettingsTests : ComponentHost
         Assert.DoesNotContain(new Enactive.Workspace.TemplateStore(workspace).Inventory(),
             t => t.Template.Id == "digest" && t.Scope == Enactive.Workspace.TemplateScope.Workspace);
         Assert.Contains(Users.AuditTrail(), e => e is { Account: "ada", Action: "template deleted" });
+    }
+    /// <summary>
+    /// The editor opened from Settings › Templates opens over Settings - its menu beside it, the section behind it - and
+    /// Cancel comes back to the section. At the library's address the settings' menu went away under the editor and the
+    /// person was left on the Templates screen when it closed.
+    /// </summary>
+    [Fact]
+    public void A_template_edited_from_settings_is_edited_over_settings_and_cancel_comes_back_there()
+    {
+        var (_, id) = WorkspaceWithDigest();
+
+        var screen = SettingsAt("ada", Enactive.Server.Components.Links.SettingsTemplate(id, "digest"), "digest");
+
+        screen.WaitForAssertion(() => Assert.NotNull(screen.Find("[role='dialog'] .template-editor")));
+        Assert.Equal("digest", screen.Find("[role='dialog'] #t-id").GetAttribute("value"));
+        // Behind it, the settings: the menu on Templates, and the section's list.
+        Assert.Equal("Templates", screen.Find(".settings-nav-item.on").TextContent.Trim());
+        Assert.NotNull(Card(screen, "Digest"));
+
+        screen.InvokeAsync(() => screen.Find("[role='dialog'] .template-editor-actions").QuerySelectorAll("button")
+            .Single(b => b.TextContent.Trim() == "Cancel").Click()).GetAwaiter().GetResult();
+
+        screen.WaitForAssertion(() => Assert.EndsWith("/settings/ai-templates", Navigation.Uri));
+        // The router draws the page again at that address - the same page, so the settings being edited are kept.
+        screen.Render(p => p.Add(s => s.Section, "ai-templates").Add(s => s.Edit, null));
+        Assert.Empty(screen.FindAll(".template-editor"));
+        Assert.Equal("Templates", screen.Find(".settings-nav-item.on").TextContent.Trim());
+        Assert.NotNull(Card(screen, "Digest"));
+    }
+
+    /// <summary>
+    /// Saved from the editor over Settings, the template is in the section's list - read again from the files - and the
+    /// section says what the save did; the person is on Settings › Templates still.
+    /// </summary>
+    [Fact]
+    public void A_template_saved_from_settings_is_listed_there_and_said()
+    {
+        var (_, id) = WorkspaceWithDigest();
+
+        var screen = SettingsAt("ada", Enactive.Server.Components.Links.SettingsTemplate(id, "digest"), "digest");
+        screen.WaitForAssertion(() => Assert.NotNull(screen.Find("[role='dialog'] #t-name")));
+        screen.InvokeAsync(() => screen.Find("[role='dialog'] #t-name").Input("Weekly digest")).GetAwaiter().GetResult();
+        screen.InvokeAsync(() => screen.Find("[role='dialog'] .template-editor-actions").QuerySelectorAll("button")
+            .Single(b => b.TextContent.Trim() == "Save").Click()).GetAwaiter().GetResult();
+
+        screen.WaitForAssertion(() => Assert.EndsWith("/settings/ai-templates", Navigation.Uri));
+        screen.Render(p => p.Add(s => s.Section, "ai-templates").Add(s => s.Edit, null));
+        Assert.Empty(screen.FindAll(".template-editor"));
+        screen.WaitForAssertion(() => Assert.NotNull(Card(screen, "Weekly digest")));
+        Assert.StartsWith("Saved 'Weekly digest'", screen.Find(".settings-templates-said").TextContent.Trim());
+        Assert.Equal("Templates", screen.Find(".settings-nav-item.on").TextContent.Trim());
+    }
+
+    private NavigationManager Navigation => Services.GetRequiredService<NavigationManager>();
+
+    /// <summary>A workspace of the service with a template of its own, "digest", saved as alice; its folder and id.</summary>
+    private (string Folder, Guid Id) WorkspaceWithDigest()
+    {
+        var workspace = Path.Combine(_roots, "project");
+        Directory.CreateDirectory(workspace);
+        Engine.Workspaces.Touch(workspace);
+        var (saved, said) = Services.GetRequiredService<ServerLibrary>().SaveTemplate(
+            Enactive.Server.Accounts.ServerAuth.PrincipalOf(Users.Find("alice")!), workspace,
+            """{ "id": "digest", "name": "Digest", "goal": "Write the digest." }""", Enactive.Workspace.TemplateScope.Workspace);
+        Assert.True(saved, said);
+        return (workspace, Services.GetRequiredService<WorkspaceIds>().TryIdOf(workspace)!.Value);
+    }
+
+    /// <summary>Settings › Templates at the editor's address, drawn as the router draws it: the section and the template.</summary>
+    private IRenderedComponent<SettingsScreen> SettingsAt(string who, string address, string edit)
+    {
+        SignIn(who);
+        Navigation.NavigateTo("/" + address);
+        var screen = Render<SettingsScreen>(p => p.Add(s => s.Section, "ai-templates").Add(s => s.Edit, edit));
+        screen.WaitForAssertion(() => Assert.True(screen.FindAll(".settings-pane, .said").Count > 0));
+        return screen;
     }
 }

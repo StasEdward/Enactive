@@ -47,25 +47,30 @@
                    command bar, or into a message about what went wrong. *@
                 <textarea class="task-intent" readonly aria-label="Request" rows="3">@run.Request</textarea>
             }
-            <p class="task-meta" title="@d.Meta">@d.Meta</p>
         </div>
         <div class="past-actions">
             <div class="past-buttons">
-                @if (_canOperate && d.CanRetry)
-                {
-                    <button type="button" class="btn go" title="Run this again, exactly as it was" disabled="@_busy"
-                            @onclick="() => AgainAsync(ServerHistory.Act.Retry)">Retry</button>
-                }
-                @if (_canOperate && run.RunAgain.Can)
-                {
-                    <button type="button" class="btn go-soft" title="@run.RunAgain.Tooltip" disabled="@_busy"
-                            @onclick="() => AgainAsync(ServerHistory.Act.RunAgain)">Run again</button>
-                }
-                <Pill Class="@Looks.Phase(RunStanding.Of(d.Status))">@d.Status</Pill>
+                @* Retry over Run again, one column of one width - drawn even when empty, so the pill beside it stands
+                   where it always does whichever of them a run offers: side by side, the pill moved with each. *@
+                <div class="past-again">
+                    @if (_canOperate && d.CanRetry)
+                    {
+                        <button type="button" class="btn go" title="Run this again, exactly as it was" disabled="@_busy"
+                                @onclick="() => AgainAsync(ServerHistory.Act.Retry)">Retry</button>
+                    }
+                    @if (_canOperate && run.RunAgain.Can)
+                    {
+                        <button type="button" class="btn go-soft" title="@run.RunAgain.Tooltip" disabled="@_busy"
+                                @onclick="() => AgainAsync(ServerHistory.Act.RunAgain)">Run again</button>
+                    }
+                </div>
+                <div class="past-state">
+                    <Pill Class="@Looks.Phase(RunStanding.Of(d.Status))">@d.Status</Pill>
+                    @* Kept when empty, so the pill above sits where it always does. "attempt 1 of 1" is noise on every
+                       run never retried, and is not said (RunDigest). *@
+                    <p class="hint past-attempt">@d.AttemptLabel</p>
+                </div>
             </div>
-            @* Kept when empty, so the buttons above sit where they always do. "attempt 1 of 1" is noise on every run never
-               retried, and is not said (RunDigest). *@
-            <p class="hint past-attempt">@d.AttemptLabel</p>
         </div>
     </header>
 
@@ -78,7 +83,12 @@
        proposals' page has them too only while the proposals are kept. Shows nothing for a run that was not staged. *@
     <CheckRecordsPanel Root="@Root" RunId="@RunId" />
 
-    <Tabs Label="Views of the run" Names="@TabNames(d)" Selected="_tab" SelectedChanged="tab => _tab = tab" />
+    @* The run's facts - when, which model, which run - on the tabs' line, after a gap: under the request they took a line
+       of the header, and the request box, the one thing there worth more room, stopped short above them. *@
+    <div class="tabs-row">
+        <Tabs Label="Views of the run" Names="@TabNames(d)" Selected="_tab" SelectedChanged="tab => _tab = tab" />
+        <p class="task-meta" title="@d.Meta">@d.Meta</p>
+    </div>
 
     <div class="run-body">
         <div class="run-view" role="tabpanel">
@@ -98,7 +108,7 @@
                     <RunChecks Checks="_runChecks" Root="@Root" />
                     break;
                 case PastRunTabs.Artifacts:
-                    <WrittenFiles Root="@Root" Paths="d.Artifacts" Empty="This run wrote nothing." />
+                    <WrittenFiles Root="@Root" RunId="@RunId" Paths="d.Artifacts" Empty="This run wrote nothing." />
                     break;
                 default:
                     @if (run.Decisions.Count > 0)

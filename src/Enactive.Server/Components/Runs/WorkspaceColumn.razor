@@ -54,6 +54,10 @@
         <p class="said">@problem</p>
     }
 
+    @* The lists, scrolling in a box of their own between the column's head and its foot bar (theme.css): the run count
+       stays at the bottom of the window under them, and the workspace switcher's popup above them is not cut off by a
+       scrolling box. *@
+    <div class="column-scroll">
     @if (State.Running.Count > 0)
     {
         @* What is happening now, above everything: a run is written to the history when it ENDS, so between Run and its
@@ -146,6 +150,7 @@
             </li>
         }
     </ul>
+    </div>
 
     @if (State.Selected is not null && State.Problem is null)
     {

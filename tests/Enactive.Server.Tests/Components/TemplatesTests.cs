@@ -107,6 +107,25 @@ public sealed class TemplatesTests : ComponentHost
         Assert.Contains("Write the digest of", screen.Find(".template-goal").TextContent);
     }
 
+    /// <summary>
+    /// Opened over the library, the editor's Cancel comes back to the library on the template it was opened on - not to
+    /// Settings, which opens the same editor over itself (TemplatesSection).
+    /// </summary>
+    [Fact]
+    public void Cancel_in_the_editor_over_the_library_comes_back_to_the_library()
+    {
+        Saved();
+        SignIn("alice");
+        Navigation.NavigateTo($"/templates/digest?ws={WorkspaceId}");
+        var screen = Render<TemplatesScreen>(p => p.Add(s => s.Edit, "digest"));
+        screen.WaitForAssertion(() => Assert.NotNull(screen.Find("[role='dialog'] .template-editor")));
+
+        screen.InvokeAsync(() => screen.Find("[role='dialog'] .template-editor-actions").QuerySelectorAll("button")
+            .Single(b => b.TextContent.Trim() == "Cancel").Click()).GetAwaiter().GetResult();
+
+        screen.WaitForAssertion(() => Assert.EndsWith($"/templates?ws={WorkspaceId}&t=digest", Navigation.Uri));
+    }
+
     /// <summary>A Viewer at an editor's address reads the template in the library; no editor is offered.</summary>
     [Fact]
     public void A_viewer_at_an_editor_s_address_reads_the_template_and_is_offered_no_editor()

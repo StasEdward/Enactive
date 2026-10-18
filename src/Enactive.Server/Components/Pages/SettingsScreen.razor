@@ -1,5 +1,7 @@
 @page "/settings"
 @page "/settings/{Section}"
+@* Settings › Templates with the template editor over it (Links.SettingsTemplate); the other sections have no editor. *@
+@page "/settings/{Section}/{Edit}"
 @attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = "Admin")]
 @using System.Collections.Specialized
 @using System.ComponentModel
@@ -66,7 +68,7 @@
                     case "ai-team": <TeamSection /> break;
                     case "ai-phases": <PhasesSection /> break;
                     case "ai-mcp": <McpSection /> break;
-                    case "ai-templates": <TemplatesSection Workspace="_templatesWorkspace" Root="@_templatesRoot" /> break;
+                    case "ai-templates": <TemplatesSection Workspace="_templatesWorkspace" Root="@_templatesRoot" Edit="@Edit" /> break;
                     case "ai-checks": <ChecksSection Workspace="_templatesWorkspace" Root="@_templatesRoot" /> break;
                 }
             </CascadingValue>
@@ -121,6 +123,9 @@
 
     /// <summary>The section, by its address (SettingsSection); none or one that is not a section, the first.</summary>
     [Parameter] public string? Section { get; set; }
+
+    /// <summary>The template open in the editor over Settings › Templates (Links.SettingsTemplate), or "New"; none, no editor.</summary>
+    [Parameter] public string? Edit { get; set; }
 
     private SettingsViewModel? _vm;
     private SettingsSection _section = SettingsSection.All[0];

@@ -92,6 +92,15 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
     public (string? Text, string? Problem) File(ClaimsPrincipal user, string root, string relative)
         => Workspace(user, root) is { } known ? WorkspaceFiles.Read(known.RootPath, relative) : (null, Unknown(user));
 
+    /// <summary>
+    /// A file a run wrote, as a review shows it (WrittenFileReview): what the run changed in it against how it was before
+    /// the run, or the file as it is with why there is no diff. Whoever may read the file may review it.
+    /// </summary>
+    public async Task<WrittenFileReview.Review> ReviewAsync(ClaimsPrincipal user, string root, Guid runId, string relative, CancellationToken ct)
+        => Workspace(user, root) is { } known
+            ? await WrittenFileReview.OfAsync(known.RootPath, runId, relative, ct)
+            : new WrittenFileReview.Review(null, Unknown(user), null, "");
+
     private bool CanRead(ClaimsPrincipal user) => ServerAuth.StillValid(users, user) is { Role: >= Role.Viewer };
 
     private string Unknown(ClaimsPrincipal user)

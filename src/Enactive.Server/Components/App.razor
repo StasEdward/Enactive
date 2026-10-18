@@ -5,8 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
     <title>Enactive</title>
+    <meta name="color-scheme" content="dark light" />
     <link rel="stylesheet" href="@Assets["brand/brand.css"]" />
+    <link rel="stylesheet" href="@Assets["fonts/fonts.css"]" />
     <link rel="stylesheet" href="@Assets["theme.css"]" />
+    @* Before the page is drawn, not deferred: it sets the colour theme on <html>, and set later a light page showed dark
+       for a frame on every load (wwwroot/theme.js). *@
+    <script src="@Assets["theme.js"]"></script>
     <HeadOutlet @rendermode="PageRenderMode" />
 </head>
 <body>
