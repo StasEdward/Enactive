@@ -4812,7 +4812,13 @@ public sealed partial class Orchestrator : IOrchestrator
             // with the size of the job: seven new files are seven turns of progress, while one file
             // read three times is three turns of nothing however big the project is.
             var advanced = frame.Progress.Advanced(toolCalls);
-            if (!advanced && frame.Progress.Stalled >= StallLimit)
+            // Except a turn that puts back a change this step made: run it, then judge the next turn as before. Run
+            // da4b3b, 2026-10-19: stopped on the restore that would have undone its own temporary break, the step ended
+            // Incomplete with the break in place, and the run's final checks failed on it (StepProgress, remarks).
+            if (!advanced && frame.Progress.Stalled >= StallLimit && frame.Progress.LetThroughToPutBack(toolCalls))
+                yield return Ev(EventKind.ContextAssembled, "This turn only repeats earlier calls, but it puts back a change "
+                    + "this step made: it is run, and the next turn is judged as before.");
+            else if (!advanced && frame.Progress.Stalled >= StallLimit)
             {
                 var repeated = frame.Progress.Describe();
                 loopResult.Set(StepOutcomeKind.Incomplete,
