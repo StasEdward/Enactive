@@ -205,6 +205,9 @@ pre, code, .path { font-family: var(--font-mono); font-feature-settings: normal;
    the keyboard (:focus-visible): a ring after every click was noise, and was why pages used to remove focus styles. */
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 :focus:not(:focus-visible) { outline: none; }
+/* Except a dialog or the drawer that took the focus as it opened (tabindex -1, never reached by Tab): a screen reader
+   starts there, and the ring drew round the whole window as if all of it were one control. */
+[tabindex="-1"]:focus-visible { outline: none; }
 
 /* Scrollbars on the page's own colours: the platform's light grey bar ran down every dark column. */
 * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
@@ -590,7 +593,10 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
 
 .dialog-scrim { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center;
   background: var(--dialog-scrim); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); animation: fade-in var(--t) var(--ease-out); }
+/* The scrollbar's room kept on both sides: a long dialog's scrollbar sat inside its right padding only, and the content
+   then stood further from the right edge than from the left. */
 .dialog { box-sizing: border-box; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; padding: 22px 24px;
+  scrollbar-gutter: stable both-edges;
   background: var(--popover); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-xl); box-shadow: var(--shadow-lg);
   animation: fade-in var(--t) var(--ease-out); }
 .dialog-title { font-size: 17px; margin: 0 0 12px; }
@@ -876,7 +882,9 @@ h2.panel-header { font-family: var(--font-sans); letter-spacing: 0.08em; }
 .check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 
 /* ── The template editor (Pages/TemplateEditor.razor; TemplateEditWindow.axaml): Form | JSON, Save at the foot. ───── */
-.template-editor { display: grid; gap: 10px; max-width: 840px; }
+/* As wide as its dialog (dialog-wide, TemplatesScreen): capped at a reading width, it stopped 170 px short of the
+   dialog's right edge while its left inset was the dialog's 24 - the window looked wider than what was in it. */
+.template-editor { display: grid; gap: 10px; min-width: 0; }
 .template-form { display: grid; gap: 4px; }
 /* Id, Name and Category in one row of short boxes, the description under them across. */
 .template-head { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }

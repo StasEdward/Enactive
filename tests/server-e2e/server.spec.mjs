@@ -622,6 +622,12 @@ test('the team member editor is wider and in two columns, and a template id, nam
   expect(description.y).toBeGreaterThan(id.y + id.height);
   expect(Math.abs(description.x - id.x)).toBeLessThanOrEqual(1);
   expect(description.x + description.width).toBeGreaterThanOrEqual(category.x + category.width - 1);
+  // The form as wide as its dialog: the same inset on the right as on the left. Held to a reading width, it stopped
+  // 170 px short of the dialog's right edge, and the dialog looked wider than what was in it.
+  const editor = await box(page.getByRole('dialog', { name: 'Template' }));
+  const leftInset = description.x - editor.x;
+  const rightInset = editor.x + editor.width - (description.x + description.width);
+  expect(Math.abs(leftInset - rightInset)).toBeLessThanOrEqual(2);
   // Its comment is the "?" beside the name, not a line under the box.
   await expect(page.getByLabel('About Id')).toHaveAttribute('title', /The id is the file name/);
   await context.close();
