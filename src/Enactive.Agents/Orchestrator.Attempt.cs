@@ -225,6 +225,9 @@ public sealed partial class Orchestrator
                 // review attempt.
                 if (++gateFailures < gates)
                 {
+                    // Sent back with nothing found right, as the gate's rejection keeps nothing (below).
+                    result.SentBack = true;
+                    result.Keep = [];
                     // A step that said it cannot go on is told, as after a review that failed it, that nothing stops it.
                     var repair = shortOf.RepairAdvice + (SaidBlockedOnly(result) ? " " + NotABlock : "");
                     if (assessed.ByCheck is not null)
@@ -245,6 +248,8 @@ public sealed partial class Orchestrator
             // the request (ReviewVerdict.Unreachable). The step's work stays as it is.
             if (verdict is ReviewVerdict.Unreachable unreachable)
             {
+                // A verdict of its own, newer than any that sent the step back: its work stays (RevertRejectedAsync).
+                result.SentBack = false;
                 result.Set(StepOutcomeKind.Incomplete, "not reachable within the request: " + unreachable.Notes, OutcomeCause.ReviewUnreachable);
                 return;
             }
@@ -262,6 +267,8 @@ public sealed partial class Orchestrator
                         + "the review found its part not done: it is an attempt like any other - " + notDone.Notes, stepNumber));
                     if (++reviewFailures < reviews)
                     {
+                        result.SentBack = true;
+                        result.Keep = notDone.Keep;
                         RetryAfterReview(step.Messages, notDone.RepairAdvice + " " + NotABlock, stepNumber is null ? "the work" : "this step");
                         continue;
                     }
@@ -311,6 +318,8 @@ public sealed partial class Orchestrator
             if (verdict is not ReviewVerdict.Fail fail) return;   // a pass: the step stands
             if (++reviewFailures < reviews)
             {
+                result.SentBack = true;
+                result.Keep = fail.Keep;
                 RetryAfterReview(step.Messages, fail.RepairAdvice, stepNumber is null ? "the work" : "this step");
                 continue;
             }
@@ -320,11 +329,42 @@ public sealed partial class Orchestrator
         }
     }
 
+    /// <summary>
+    /// Whether a step's work goes back as rejected work: rejected - or sent back by its last verdict and ended Incomplete
+    /// or Failed with no verdict since.
+    ///
+    /// <para><b>Why the second.</b> Bench build-error, 2026-10-18: the step review rejected the step for a change to a file
+    /// the request forbade; the attempt after it got stuck re-reading that file and the step ended INCOMPLETE - and with
+    /// RevertRejectedSteps on, the rejected change stayed, because only ReviewRejected was put back. The step was in the
+    /// rejected step's position all the same: the last verdict on its work was "no", nothing since was approved, and
+    /// nothing is built on it - and the version left is the one a person opens next, which RevertRejectedSteps exists to
+    /// prevent. What the rejecting review found right (Keep) stays, as for a rejected step. Not a step that ended Blocked:
+    /// a block waits for a person, and a step stopped at a question is carried on from where it stopped, with its work
+    /// standing (TaskProgress) - put back under it, the work it carries on from would be gone. Nor a step whose last
+    /// attempt had a verdict of its own (unreachable within the request: its work stays as it is).</para>
+    /// </summary>
+    private static bool RevertsAsRejected(StepOutcomeKind outcome, bool sentBack)
+        => outcome == StepOutcomeKind.ReviewRejected
+           || (sentBack && outcome is StepOutcomeKind.Incomplete or StepOutcomeKind.Failed);
+
     /// <param name="publish">Publishes one line about the revert, with its payload (WorkEventPayload.RevertPayload).</param>
+    /// <param name="outcome">How the step ended, where it is not the result's own - the step broke with an exception
+    /// (Failed) after the result was last set. Null: the result's.</param>
+    /// <param name="changes">The measurement, and <paramref name="before"/> the workspace as the step found it - what a
+    /// command changed is found by them, as the store records only what the file tools wrote.</param>
+    /// <param name="actions">The step's calls, to say that a command whose changes were not measured may have changed
+    /// something the revert did not put back.</param>
     private async Task RevertRejectedAsync(ToolLoopResult result, IArtifactScope store,
-        RunScope scope, int? stepNo, Func<string, string, ValueTask> publish, CancellationToken ct)
+        RunScope scope, int? stepNo, Func<string, string, ValueTask> publish, CancellationToken ct,
+        StepOutcomeKind? outcome = null, IWorkspaceChanges? changes = null, WorkspaceSnapshot? before = null,
+        IEnumerable<ExecutedAction>? actions = null)
     {
-        if (result.Kind != StepOutcomeKind.ReviewRejected || !_options.RevertRejectedSteps) return;
+        var ended = outcome ?? result.Kind;
+        if (!RevertsAsRejected(ended, result.SentBack) || !_options.RevertRejectedSteps) return;
+        if (ended != StepOutcomeKind.ReviewRejected)
+            await publish($"The step ended {(ended == StepOutcomeKind.Failed ? "failed" : "incomplete")} after its last verdict sent "
+                + "its work back, with no verdict since: what it changed goes back as a rejected step's does.",
+                WorkEventPayload.RevertPayload(stepNo, [], []));
         // Rejected, and still not put back: the files the review found right. The step stays rejected - nothing is built
         // on it - but what it made right is left for the person to see, rather than thrown away with the report or the
         // other file it came with; the rest of what it changed goes back. See ReviewResult.Keep.
@@ -337,6 +377,54 @@ public sealed partial class Orchestrator
         var report = await RevertAsync(store, scope.Artifacts, ct, except: kept);
         foreach (var (line, reverted, left) in DescribeRevert(report))
             await publish(line, WorkEventPayload.RevertPayload(stepNo, reverted, left));
+        if (await LeftByCommandsAsync(store, keep, changes, before, actions, ct) is { } byCommands)
+            await publish(byCommands.Line, WorkEventPayload.RevertPayload(stepNo, [], byCommands.Paths));
+    }
+
+    /// <summary>
+    /// What a rejected step's commands changed that its revert leaves: the files the workspace measurement finds changed
+    /// since the step began, past what the store put back - or, unmeasured, that its commands may have changed anything.
+    ///
+    /// <para><b>Why it is said and not put back.</b> The revert is the store's, and the store holds the bytes of what the
+    /// file tools changed; a command's writes are not recorded per file (restore_file says so of each). Bench build-error,
+    /// 2026-10-18: refused twice by the write boundary, the worker rewrote the forbidden file with a PowerShell
+    /// <c>-replace | Set-Content</c>; the step was rejected for it, and the run's record said only what the store put
+    /// back - the file the command changed stayed changed, named nowhere. Putting it back is not something the engine can
+    /// stand behind: outside git the measurement keeps a size, a time and a hash, not the bytes; in git the step-start
+    /// tree keeps the file as <c>git add</c> stored it, after the repository's own line-ending conversion, which written
+    /// back can differ from what the person had. And a change the measurement finds is anything that changed in the
+    /// workspace while the step ran - a person's own edit, another program's output (the workspace can change around a
+    /// run: run 3fe4f8) - which the store's revert would never touch (a file changed since the step wrote it is left).
+    /// So the file is named, with why it is left, for the person to look at.</para>
+    /// </summary>
+    private static async Task<(string Line, IReadOnlyList<string> Paths)?> LeftByCommandsAsync(IArtifactScope store,
+        IReadOnlySet<string> keep, IWorkspaceChanges? changes, WorkspaceSnapshot? before, IEnumerable<ExecutedAction>? actions,
+        CancellationToken ct)
+    {
+        var (_, found) = await MeasuredSinceAsync(changes, before, ct);
+        if (found is null)
+        {
+            // Not measured (steps side by side, a workspace that could not be measured): what a command changed is not
+            // known. Said only where the step ran one that changes the workspace and recorded no paths.
+            return actions?.Any(a => a.Origin != ToolCallOrigin.Engine && a.Outcome != ActionOutcome.Refused
+                                     && a.WorkspaceEffect != Enactive.Core.Tools.WorkspaceEffect.None && a.ChangedPaths is not { Count: > 0 }) == true
+                ? ("This step ran commands whose changes are not recorded per file, and the workspace was not measured: anything "
+                   + "they changed is left as it is, and was not put back with the rest.", [])
+                : null;
+        }
+        var stored = store.TouchedPaths.Select(ShellLookup.Normal).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var left = found.SelectMany(c => c.OldPath is { } old ? new[] { c.Path, old } : [c.Path])
+            .Select(ShellLookup.Normal)
+            .Where(p => p.Length > 0 && !stored.Contains(p) && !keep.Contains(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToArray();
+        // Named up to a few, the rest counted: a build a step ran where its output folder is not ignored changes a folder
+        // of files, and a line that lists them all hides the one that matters. Every path is in the payload all the same.
+        const int named = 10;
+        var said = string.Join(", ", left.Take(named)) + (left.Length > named ? $", and {left.Length - named} more" : "");
+        return left.Length == 0 ? null
+            : ("Left as it is, changed by a command or outside the run: " + said + " - a command's writes are "
+               + "not recorded per file, and the engine keeps no copy of how a file was before one changed it, so the revert "
+               + "cannot put it back. Look at it before building on it.", left);
     }
 
 }

@@ -1217,7 +1217,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     intent.Context, quickResult, plan.Title, intent.RawText, null, quickChanges, quickBefore,
                     PublishQuick, quickLifetime.Token);
                 await RevertRejectedAsync(quickResult, store, scope, null,
-                    (line, payload) => PublishQuick(scope.Event(EventKind.ArtifactReverted, line, payload)), quickLifetime.Token);
+                    (line, payload) => PublishQuick(scope.Event(EventKind.ArtifactReverted, line, payload)), quickLifetime.Token,
+                    changes: quickChanges, before: quickBefore, actions: attemptState.Journal.Actions.Skip(attemptState.StepStart));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -2000,7 +2001,8 @@ public sealed partial class Orchestrator : IOrchestrator
             }
 
             await RevertRejectedAsync(stepResult, store, scope, stepNumber,
-                (line, payload) => Publish(scope.Event(EventKind.ArtifactReverted, $"[{stepNumber}] {line}", payload)), stepCt);
+                (line, payload) => Publish(scope.Event(EventKind.ArtifactReverted, $"[{stepNumber}] {line}", payload)), stepCt,
+                outcome, workspaceChanges, beforeStep, attemptState.Journal.Actions.Skip(attemptState.StepStart));
 
             // What it changed, for the wave it ended in (Phase 6) - after a revert, which the files show.
             waves?.Finished(WaveStep.Of(step.Id, stepNumber, step.Title, store.TouchedPaths,
@@ -3189,6 +3191,15 @@ public sealed partial class Orchestrator : IOrchestrator
 
         /// <summary>Rejected on a review that found these files right. See <see cref="ReviewResult.Keep"/>.</summary>
         public IReadOnlyList<string> Keep { get; set; } = [];
+
+        /// <summary>
+        /// The last verdict on the step's work sent it back - a review's, or the engine's gate - and <see cref="Keep"/> is
+        /// what that verdict found right. Set at each send-back; an attempt after it that ends the step with a verdict of
+        /// its own (a pass, a rejection, a missing verdict) decides the step itself. What it is for: a step that ends
+        /// Incomplete or Failed after it has no newer verdict, and its work goes back as a rejected step's does
+        /// (RevertRejectedAsync).
+        /// </summary>
+        public bool SentBack { get; set; }
 
         /// <summary>
         /// The tools this run kept back from the step and why, as <see cref="ToolOffer.Because"/> words it; null
