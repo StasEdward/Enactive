@@ -609,4 +609,63 @@ public sealed partial class SignInTests : IAsyncLifetime
     [Fact]
     public async Task Health_answers_without_signing_in()
         => Assert.Equal(HttpStatusCode.OK, (await NewBrowser().GetAsync("/health")).StatusCode);
+
+    // ── a static page's redirect ────────────────────────────────────────────
+
+    private const string NoNavigationException = "Microsoft.AspNetCore.Components.Endpoints.NavigationManager.DisableThrowNavigationException";
+
+    /// <summary>
+    /// The service redirects from its statically rendered sign-in without an exception: by default NavigateTo throws
+    /// NavigationException for the framework to turn into a 302, and a debugger stopped on every sign-in
+    /// (SignIn.razor:70, 2026-10-18) though nothing was wrong.
+    /// </summary>
+    [Fact]
+    public void The_service_is_built_to_redirect_from_a_static_page_without_an_exception()
+    {
+        var config = System.Text.Json.Nodes.JsonNode.Parse(
+            File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Enactive.Server.runtimeconfig.json")))!;
+
+        Assert.True(config["runtimeOptions"]?["configProperties"]?[NoNavigationException]?.GetValue<bool>());
+    }
+
+    /// <summary>The sign-in tests run the pages in this process: with the service's switch, or they test a redirect it no longer makes.</summary>
+    [Fact]
+    public void These_tests_run_the_pages_the_way_the_service_does()
+        => Assert.True(AppContext.TryGetSwitch(NoNavigationException, out var on) && on);
+
+    /// <summary>
+    /// With the switch, NavigateTo only sets the redirect and the code after it runs: a sign-in must still end in one
+    /// redirect to where the person was going, signed in once - and with no NavigationException thrown at all.
+    /// </summary>
+    [Fact]
+    public async Task A_right_password_redirects_back_without_a_navigation_exception()
+    {
+        var browser = NewBrowser();
+        var thrown = 0;
+        void Count(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e)
+        {
+            if (e.Exception is Microsoft.AspNetCore.Components.NavigationException) Interlocked.Increment(ref thrown);
+        }
+
+        var token = await TokenFromAsync(await browser.GetAsync("/signin?ReturnUrl=%2Finbox"));
+        AppDomain.CurrentDomain.FirstChanceException += Count;
+        HttpResponseMessage response;
+        try
+        {
+            response = await browser.PostAsync("/signin?ReturnUrl=%2Finbox", new()
+            {
+                ["_handler"] = "signin",
+                ["__RequestVerificationToken"] = token,
+                ["Input.Name"] = "alice",
+                ["Input.Password"] = Password
+            });
+        }
+        finally { AppDomain.CurrentDomain.FirstChanceException -= Count; }
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("/inbox", response.Headers.Location!.OriginalString.Replace("https://localhost", ""));
+        Assert.Contains("enactive", browser.Cookies);
+        Assert.Single(_users.AuditTrail(), e => e is { Account: "alice", Action: "signed in" });
+        Assert.Equal(0, thrown);
+    }
 }

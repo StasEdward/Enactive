@@ -29,4 +29,12 @@
     <ProjectReference Include="..\..\src\Enactive.Server\Enactive.Server.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The service's own switch (Enactive.Server.csproj, BlazorDisableThrowNavigationException), set for this process
+         too: the pages run in the test's process, and without it every sign-in test ran the way the service no longer
+         does - redirecting by an exception, where the service only sets the redirect and runs the code after it.
+         SignInTests checks the two agree. -->
+    <RuntimeHostConfigurationOption Include="Microsoft.AspNetCore.Components.Endpoints.NavigationManager.DisableThrowNavigationException" Value="true" />
+  </ItemGroup>
+
 </Project>
