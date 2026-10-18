@@ -23,8 +23,12 @@
     {
         <ReconnectState />
     }
+    <ThemeToggle />
     @if (_user?.Identity?.IsAuthenticated == true)
     {
+        @* The name's first letter on the brand's gradient: who is signed in, found at a glance. Decoration - the name is
+           said in words beside it. *@
+        <span class="who-avatar" aria-hidden="true">@Initial(_user.Identity.Name)</span>
         @* Each named for what it is: a name and a role side by side read as one word twice when they matched (admin,
            Admin). *@
         <span class="who"><span class="who-label">User:</span> <span class="who-name">@_user.Identity.Name</span></span>
@@ -41,6 +45,8 @@
 
     /// <summary>The layout's workspace drawer; none where a page is drawn without the layout (sign-in has no top bar).</summary>
     [CascadingParameter] public DrawerState? Drawer { get; set; }
+
+    private static string Initial(string? name) => name is { Length: > 0 } ? name[..1] : "?";
 
     // The address the person typed to reach the service, which is the name they know it by.
     private string Host => new Uri(Navigation.BaseUri).Host;

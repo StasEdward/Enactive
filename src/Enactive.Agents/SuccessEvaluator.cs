@@ -124,24 +124,16 @@ public sealed class SuccessEvaluator(IReadOnlyList<Enactive.Core.Builds.IEcosyst
             => new(criterion.Name, criterion.Command, criterion.Required,
                    CriterionOutcome.Unknown, null, why, criterion.Origin, criterion.AlreadyPassing);
 
-        var candidates = tools.Definitions.Where(d => d.Kind == ToolKind.Command && d.RunsSuccessChecks).ToArray();
-        if (candidates.Length != 1)
-            return Unknown("Exactly one tool must declare the success-check command protocol; found " + candidates.Length + ".");
-        var commandTool = candidates[0].Name;
+        var found = CheckCommandGate.Of(tools, permissions, policy);
+        if (found.Tool is not { } commandTool)
+            return Unknown("Exactly one tool must declare the success-check command protocol; found " + found.Found + ".");
 
-        PermissionLevel required;
-        try
-        {
-            required = tools.RequiredLevelOf(commandTool);
-        }
-        catch (Exception ex)
-        {
-            // The declared adapter cannot be resolved. Not a failure of the work - we simply cannot
-            // check it here, and saying so beats reporting a pass nobody verified.
-            return Unknown($"'{commandTool}' is not available in this workspace: {ex.Message}");
-        }
+        // The declared adapter cannot be resolved. Not a failure of the work - we simply cannot
+        // check it here, and saying so beats reporting a pass nobody verified.
+        if (found.Unavailable is { } unavailable)
+            return Unknown($"'{commandTool}' is not available in this workspace: {unavailable}");
 
-        var gate = permissions.Evaluate(policy, commandTool, required);
+        var gate = found.Decision!.Value;
 
         if (gate == PermissionDecision.Deny)
             return Unknown(
@@ -214,6 +206,12 @@ public sealed class SuccessEvaluator(IReadOnlyList<Enactive.Core.Builds.IEcosyst
             return Unknown("the shell would not start this check, so it has verified nothing. "
                          + Trim(result.Error ?? result.Output));
 
+        // Stopped at its time limit: it did not finish, and that is what is said - "reported no exit code" sent a person
+        // looking for a fault in the command when the check only needed more time (or its timeout said too little).
+        if (result.Metadata.TryGetValue(CommandResultKeys.TimedOut, out var timedOut) && timedOut is true)
+            return Unknown(DidNotFinish(result.Metadata.TryGetValue(CommandResultKeys.TimeoutSeconds, out var limit) && limit is int seconds
+                ? seconds : null));
+
         // The exit code, not the tool's own Success flag. run_command reports failure for any
         // non-zero code, but a criterion is allowed to EXPECT one - 'git diff --exit-code' means
         // something by returning 1 - so the number is what decides, and the flag is not consulted.
@@ -281,6 +279,11 @@ public sealed class SuccessEvaluator(IReadOnlyList<Enactive.Core.Builds.IEcosyst
     /// the totals of a test run, the error count of a build - was the part the reviewer of a criterion never saw.
     /// </summary>
     private const int MaxDetailChars = 1200;
+
+    /// <summary>What a check stopped at its time limit is said to be - by the tool's limit or the engine's, the same words.</summary>
+    internal static string DidNotFinish(int? seconds)
+        => seconds is { } s ? $"not run to its end: it did not finish within its {s} second(s)"
+            : "not run to its end: it did not finish within its time";
 
     internal static string Trim(string? text)
     {

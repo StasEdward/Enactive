@@ -32,6 +32,7 @@ public sealed class PaletteTests
         { nameof(Palette.Timeline), typeof(TimelineTone) },
         { nameof(Palette.Schedule), typeof(ScheduleState) },
         { nameof(Palette.LogLevel), typeof(Enactive.Core.Diagnostics.LogLevel) },
+        { nameof(Palette.CheckVerdict), typeof(CheckVerdict) },
     };
 
     /// <summary>

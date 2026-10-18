@@ -13,7 +13,9 @@ using Enactive.Core.Tools;
 internal sealed record CriteriaReviewInput(
     string StepTitle, int StepNumber, string Report, string? HandedOn,
     IReadOnlyList<ShownFile> Files, EvidenceView Evidence,
-    RequestObligations Obligations);
+    RequestObligations Obligations,
+    // The engine's account of the lists the step consumes - see StepVerdictInput.Coverage.
+    string? Coverage = null);
 
 /// <summary>
 /// A step judged against the semantic criteria its plan set - only those (Phase 1.4, 5.2). The plan's invariant: the
@@ -32,7 +34,7 @@ internal static class CriteriaReview
         For each criterion: pass - the evidence shows it holds; fail - the evidence shows it does not; unknown - it shows
         neither. A pass or a fail cites what shows it: calls [n] of a kind the criterion allows, or paths shown whole under
         FILES (they count as file_read). Kinds: file_read - a read of a file that covered it whole; command - a command that
-        ran; call - any call that succeeded.
+        ran; call - any call that succeeded; file_write - a call that succeeded and recorded a change to a file.
         Return ONLY one JSON object:
         {"criteria":[{"id":"C1","verdict":"pass|fail|unknown","reason":"...","calls":[n],"files":["path"]}]}
         One entry for every criterion, by id. A fail says what is wrong, concretely enough to be put right.
@@ -69,6 +71,8 @@ internal static class CriteriaReview
         sb.AppendLine("REPORT - the worker's claim, not evidence:").AppendLine(input.Report).AppendLine();
         if (input.HandedOn is { Length: > 0 } handed)
             sb.AppendLine("HANDED ON by the step (accepted values):").AppendLine(handed).AppendLine();
+        if (input.Coverage is { Length: > 0 } coverage)
+            sb.AppendLine(StepCoverageGate.SectionHeading).AppendLine(coverage).AppendLine();
         sb.AppendLine("FILES this step changed:");
         foreach (var file in input.Files)
             sb.AppendLine($"--- {file.Path}{(file.Whole ? "" : " (shown in part - not whole)")}{(file.Heading is { } heading ? " - " + heading : "")}").AppendLine(file.Text);

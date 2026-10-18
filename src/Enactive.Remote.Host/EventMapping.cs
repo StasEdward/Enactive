@@ -94,9 +94,17 @@ public static class EventMapping
     /// <para>The summary is carried as written. It is the sentence the desktop shows, and two
     /// wordings of the same event - one for here, one for there - is how the two views of a run
     /// start disagreeing about what it did.</para>
+    ///
+    /// <para>A write-time check's result (Plan Phase 3.3) is a criterion like any other, and is not carried: it is said
+    /// after every turn of an edit that writes what it covers - advisory, for the worker - and a phone would be sent a line
+    /// for each. The step and run checks, which decide something, still are.</para>
     /// </summary>
     public static string? Progress(WorkEvent published)
-        => IsCarried(published.Kind) ? published.Summary : null;
+        => IsCarried(published.Kind)
+           && !(published.Kind == EventKind.CriterionEvaluated
+                && published.CriterionCheck()?.FiredOn == Enactive.Core.Checks.CheckBoundary.Write)
+            ? published.Summary
+            : null;
 
     /// <summary>
     /// How the run ended, for a terminal engine event.
@@ -132,6 +140,8 @@ public static class EventMapping
             RunOutcomeKind.NeedsUser => (RemoteEventKind.Incomplete, detail),
             // Nor for "blocked, resume once put right" (Phase 7); the detail says what blocks it.
             RunOutcomeKind.Blocked => (RemoteEventKind.Incomplete, detail),
+            // Nor for "paused, resume to carry on" (Plan Phase 4.2); the detail says where it was paused.
+            RunOutcomeKind.Paused => (RemoteEventKind.Incomplete, detail),
 
             // The engine ended the run and did not say how. Reported as unfinished rather than as
             // either success or failure: both would be inventions, and this way the run stops

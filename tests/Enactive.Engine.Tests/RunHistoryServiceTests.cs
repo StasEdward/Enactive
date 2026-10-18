@@ -231,4 +231,38 @@ public sealed class RunHistoryServiceTests : IDisposable
         Assert.Null(problem);
         Assert.Empty(await new JsonCheckpointStore(_workspace).LoadAllAsync(CancellationToken.None));
     }
+
+    private static RunCheckpoint Unfinished() => new(Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+        "tidy the wiki", "tidy the wiki", null, null,
+        [new CheckpointStep(Guid.NewGuid(), "first", [], "low", "Done"), new CheckpointStep(Guid.NewGuid(), "second", [], "low", "Pending")],
+        [], [], [], 1, 0);
+
+    private string ChecksFolder(Guid runId) => Path.Combine(_root, ".enactive", "checks", "runs", runId.ToString("D"));
+
+    /// <summary>
+    /// An interrupted run that was never recorded takes what its checks left behind with it (Plan Phase 3.3): no deletion of
+    /// a record would ever reach that folder. One that was recorded keeps it - its history still lists it.
+    /// </summary>
+    [Fact]
+    public async Task Forgetting_an_unfinished_run_removes_its_check_records_unless_its_history_keeps_them()
+    {
+        var never = Unfinished();
+        var recorded = Unfinished();
+        foreach (var checkpoint in new[] { never, recorded })
+        {
+            await new JsonCheckpointStore(_workspace).SaveAsync(checkpoint, CancellationToken.None);
+            Directory.CreateDirectory(ChecksFolder(checkpoint.RunId));
+            File.WriteAllText(Path.Combine(ChecksFolder(checkpoint.RunId), "step-1-lint.txt"), "output");
+        }
+        await RunStoreFactory.Create(_workspace).SaveAsync(Record("tidy the wiki", DateTimeOffset.Now) with { RunId = recorded.RunId },
+            CancellationToken.None);
+        var service = new RunHistoryService(() => 0);
+
+        Assert.Equal((null, null), await service.ForgetUnfinishedAsync(_root, never, putBack: false, CancellationToken.None));
+        Assert.Equal((null, null), await service.ForgetUnfinishedAsync(_root, recorded, putBack: false, CancellationToken.None));
+
+        Assert.False(Directory.Exists(ChecksFolder(never.RunId)));
+        Assert.True(File.Exists(Path.Combine(ChecksFolder(recorded.RunId), "step-1-lint.txt")));
+        Enactive.Tests.SqlitePools.ClearUnder(_root);
+    }
 }

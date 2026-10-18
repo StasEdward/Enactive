@@ -27,7 +27,11 @@ internal sealed record StepVerdictInput(
     // What the request forbids, as the check of the plan found it (TaskRestriction): the earlier review classified it
     // again and failed the step in code on a recorded deletion; the tools refuse the ones they recognise, and this
     // review, shown every deletion now, is told the rule (code review of the move to one short review, 2026-09-30).
-    IReadOnlyList<TaskRestriction>? Forbidden = null);
+    IReadOnlyList<TaskRestriction>? Forbidden = null,
+    // The engine's account of the lists the step consumes, item by item (StepCoverageGate.ReviewerBlock): a section of its
+    // own, with its room taken out of the evidence budget, not a call among the calls - there it was given an equal share
+    // and cut in the middle, where the weakly backed items are.
+    string? Coverage = null);
 
 /// <summary>
 /// One short verdict on one step: did the worker do what this step was for, and is what it reported true? Pass or fail,
@@ -164,6 +168,8 @@ internal static class StepVerdictReview
         sb.AppendLine("REPORT - the worker's claim:").AppendLine(input.Report).AppendLine();
         if (input.HandedOn is { Length: > 0 } handed)
             sb.AppendLine("HANDED ON by the step (accepted values):").AppendLine(handed).AppendLine();
+        if (input.Coverage is { Length: > 0 } coverage)
+            sb.AppendLine(StepCoverageGate.SectionHeading).AppendLine(coverage).AppendLine();
         sb.AppendLine("FILES this step changed:");
         foreach (var file in input.Files)
             sb.AppendLine($"--- {file.Path}{(file.Whole ? "" : " (shown in part)")}{(file.Heading is { } heading ? " - " + heading : "")}").AppendLine(file.Text);

@@ -8,7 +8,7 @@
 @inject ServerInbox Inbox
 @inject ServerStaging Staging
 
-@* The desktop's icon rail (MainWindow.axaml): 52 px of chrome on the darkest ink; only the section you are in takes ember. *@
+@* The desktop's icon rail (MainWindow.axaml): 60 px of chrome on the darkest ink; only the section you are in takes ember. *@
 @if (_items.Count > 0)
 {
     <nav class="rail" aria-label="Sections">
@@ -33,9 +33,9 @@
                 <div class="rail-away" @onclick="CloseMore"></div>
             }
             @* A disclosure of links, not a menu: aria-haspopup announced a menu, whose keys and items it does not have. *@
-            <button type="button" class="@("rail-item rail-more-button" + (lowIsHere ? " on" : ""))" aria-label="More sections" title="More sections"
+            <button type="button" class="@("rail-item rail-more-button" + (lowIsHere ? " on" : ""))" aria-label="More sections"
                     aria-expanded="@(_moreOpen ? "true" : "false")" aria-controls="rail-more-items" @onclick="ToggleMore">
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" /></svg>
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" /></svg>
             </button>
             <div class="rail-low" id="rail-more-items">
                 @foreach (var item in low)
@@ -106,10 +106,12 @@
                 var inbox = item.Href == "/inbox" && _unread > 0;
                 var label = inbox ? Enactive.Application.Projections.InboxRows.Tooltip(_unread) : item.Label;
             }
-            <a class="@("rail-item" + (on ? " on" : ""))" href="@item.Link" data-rail="@item.Href" aria-label="@label" title="@label"
+            @* No title: the name shows beside the icon under the pointer and the keyboard's focus (theme.css), and the
+               browser's own tooltip came a second later on top of it. *@
+            <a class="@("rail-item" + (on ? " on" : ""))" href="@item.Link" data-rail="@item.Href" aria-label="@label"
                aria-current="@(on ? "page" : null)">
                 @Icon(item)
-                @* Its name in words, shown only in More's list (theme.css): an icon alone, out of the bar's row, is a guess. *@
+                @* Its name in words, in More's list and beside the icon under the pointer (theme.css): an icon alone is a guess. *@
                 <span class="rail-text">@item.Label</span>
                 @if (inbox)
                 {
@@ -123,7 +125,7 @@
         </text>;
 
     private static RenderFragment Icon(RailItem item) =>
-        @<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        @<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             @foreach (var stroke in item.Strokes)
             {
                 <path d="@stroke" />

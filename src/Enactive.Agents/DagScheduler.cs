@@ -165,6 +165,16 @@ public sealed class DagScheduler
         get { lock (_gate) return _steps.Any(s => _status[s.Id] == StepStatus.Pending); }
     }
 
+    /// <summary>
+    /// Whether a step could be handed out now - Pending, with what it waits on met. Only looks: nothing is marked. What
+    /// tells a run held back by a pause (Plan Phase 4.2), with work it could do, from one whose pending steps can never
+    /// become ready (a cycle).
+    /// </summary>
+    public bool HasReady
+    {
+        get { lock (_gate) return _steps.Any(s => _status[s.Id] == StepStatus.Pending && DependenciesSatisfied(s)); }
+    }
+
     /// <summary>The next ready step, marked Running, or null if none is ready now.</summary>
     public PlanStep? NextReady() => NextReadyBatch(1).FirstOrDefault();
 

@@ -1,0 +1,59 @@
+@using Enactive.Server.Components.Runs
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerHistory History
+
+@* The declared checks that fired (Plan Phase 3.5), as the window's CheckLinesView: one line each - the verdict in its
+   colour (Looks.Check), the check and where it fired, why - and Open for the file with its whole output, read through
+   the service as the person (ServerHistory.File: only under the workspace, never through a link) and shown in the
+   viewer. A step card's checks and the run's own, with the same words (CheckLines). *@
+
+@if (Checks.Count > 0)
+{
+    <ul class="check-lines" aria-label="@Label">
+        @foreach (var check in Checks)
+        {
+            <li class="@("check-line " + check.Tone)">
+                <span class="check-word">@check.Word</span>
+                <span class="check-text">
+                    <span class="check-id">@check.CheckId</span> — @check.Where
+                    @if (check.Reason.Length > 0)
+                    {
+                        <span class="check-reason"><br />@check.Reason</span>
+                    }
+                </span>
+                @if (check.DetailPath is { Length: > 0 } path && Root is { Length: > 0 })
+                {
+                    <button type="button" class="btn small check-open" title="@path" @onclick="() => OpenAsync(path)">Open</button>
+                }
+            </li>
+        }
+    </ul>
+}
+
+@if (_viewing is { } viewing)
+{
+    <TextViewer Title="@viewing.Path" Text="@(viewing.Text ?? "")" Problem="@viewing.Problem" OnClose="() => _viewing = null" />
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The checks, as CheckLines words them.</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<CheckView> Checks { get; set; } = [];
+
+    /// <summary>The run's workspace, whose files the detail paths are relative to; none, no Open.</summary>
+    [Parameter] public string? Root { get; set; }
+
+    [Parameter] public string Label { get; set; } = "Checks";
+
+    private (string Path, string? Text, string? Problem)? _viewing;
+
+    private async Task OpenAsync(string path)
+    {
+        if (Root is not { Length: > 0 } root)
+            return;
+        var (text, problem) = History.File((await Auth).User, root, path);
+        _viewing = (path, text, problem);
+    }
+}

@@ -45,6 +45,7 @@ if (args is ["--help"] or ["-h"])
         enactive timeline "workspace"
         enactive --template TEMPLATE --workspace PATH [--param name=value] [--report FILE]
         enactive --due
+        While a run runs: P pauses it after the steps running now (--resume carries it on); Ctrl+C stops it.
         Providers and models are configured in Enactive Settings.
         """);
     return 0;
@@ -461,14 +462,20 @@ if (args.Contains("--resume", StringComparer.OrdinalIgnoreCase))
     }
 
     command = resumeFrom.Request;
-    Console.WriteLine(
-        $"Resuming a run stopped on {resumeFrom.At.ToLocalTime():yyyy-MM-dd HH:mm}: "
-        + $"{resumeFrom.Finished} of {resumeFrom.Steps.Count} step(s) were done.");
+    Console.WriteLine(ConsolePauseKey.Resuming(resumeFrom));
 }
 
 // ── Run ──────────────────────────────────────────────────────────────────────
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+
+// "Pause after this step" (Plan Phase 4.2): P, read while the run runs - Ctrl+C above stays Stop. The run's own pause,
+// handed in with its request, and offered by the rule every host offers it by (PauseOffer): once the run has a plan, and
+// not for a quick action or a staged run, which ignore a pause. Only with a keyboard to read: a scheduled job's input is
+// redirected or absent, and nobody there presses anything.
+var pause = new Enactive.Core.Execution.RunPause();
+var pauseOffer = new Enactive.Application.Projections.PauseOffer(pause);
+var readsKeys = !Console.IsInputRedirected;
 
 Console.WriteLine("Enactive — vertical slice");
 Console.WriteLine($"  Workspace : {workspace.RootPath}");
@@ -487,7 +494,37 @@ Console.WriteLine($"  Command   : {command}");
 Console.WriteLine($"  Autonomy  : {AutonomyTiers.Names[resumeFrom?.Settings?.Autonomy ?? autonomyTier.Value]}");
 Console.WriteLine($"  Role      : {resumeFrom?.Settings?.Worker ?? roleId ?? DefaultWorkers.DefaultId}");
 Console.WriteLine($"  Approvals : {approve ?? (spec is null ? "asked at this console" : "refused, unattended")}");
+if (readsKeys)
+    Console.WriteLine($"  Keys      : {ConsolePauseKey.Banner}");
 Console.WriteLine(new string('-', 72));
+
+// The keys, read beside the run until it ends. Never while the permission prompt reads its answer (ConsoleDecisionHandler
+// .Asking): a key taken here would be a letter missing from "allow". Every other key typed while the run runs is read
+// here, and one that is not P is dropped. That is a change: before, keys typed during a run stayed buffered, and reached
+// the next permission prompt or the shell after the run. The console cannot look at a key without taking it, so seeing a
+// P means taking the rest too - and a line typed ahead into a run is no answer to a question it has not asked yet.
+using var keysDone = new CancellationTokenSource();
+var keys = readsKeys ? Task.Run(async () =>
+{
+    while (!keysDone.IsCancellationRequested)
+    {
+        try
+        {
+            if (!ConsoleDecisionHandler.Asking && Console.KeyAvailable)
+            {
+                if (ConsolePauseKey.Press(Console.ReadKey(intercept: true).KeyChar, pauseOffer) is { } said)
+                    Console.WriteLine(said);
+                continue;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            return;   // no console to read after all
+        }
+        try { await Task.Delay(100, keysDone.Token); }
+        catch (OperationCanceledException) { return; }
+    }
+}) : Task.CompletedTask;
 
 // Composed inside the run's try below: connecting a configured MCP server can fail, and a scheduled run
 // that failed to start must still end with an exit code and its Inbox item.
@@ -551,12 +588,18 @@ try
         {
             // --autonomy is the level of the workspace this console is pointed at; a template's own
             // permissions are already narrowed to it (TemplateResolution, above).
-            Defaults = new(autonomyTier.Value)
+            Defaults = new(autonomyTier.Value),
+            Pause = pause
         },
         decisionHandler, cts.Token);
+    // A staged run ignores a pause (it cannot be resumed): P says so rather than promising one.
+    if (composed.Artifacts is StagingArtifactStore)
+        pauseOffer.Staging();
 
     await foreach (var ev in composed.Events(cts.Token))
     {
+        pauseOffer.Apply(ev);
+
         // Assistant text arrives token by token — print it inline as a live stream.
         if (ev.Kind == EventKind.AssistantDelta)
         {
@@ -630,6 +673,10 @@ catch (Exception ex)
 }
 finally
 {
+    // Over, however it ended: P is not read any more, and keys typed after the run are left to the shell.
+    pauseOffer.Ended();
+    keysDone.Cancel();
+    await keys;
     // The MCP servers the run started are child processes; they end with the run, however it ended.
     if (composed is not null) await composed.DisposeAsync();
 }
@@ -687,6 +734,10 @@ if (outcome == RunOutcomeKind.Blocked)
     Console.WriteLine("The run is blocked. Put the cause right (see above), then run with --resume to carry on "
         + "from the blocked step(s); with --approve allow if what blocks it is a refused permission.");
 
+// Nor is a paused one (Plan Phase 4.2): it kept its checkpoint at a step boundary, and nothing is redone.
+if (outcome == RunOutcomeKind.Paused)
+    Console.WriteLine("The run is paused. Run with --resume to carry on with the step(s) that are left.");
+
 // One line, last, in a shape something other than a person can read.
 //
 // The report above is for reading; this is for a scenario runner deciding what happened. The exit
@@ -742,7 +793,20 @@ sealed class FixedDecisionHandler(string answer) : IDecisionHandler
 // Console approver for decision forks. A future Avalonia UI implements IDecisionHandler with a card.
 sealed class ConsoleDecisionHandler : IDecisionHandler
 {
+    /// <summary>
+    /// The prompt is reading its answer: the run's key reader (P, "Pause after this step") leaves the keyboard alone
+    /// meanwhile, or a P - or any letter - typed into the answer would be taken from it.
+    /// </summary>
+    public static volatile bool Asking;
+
     public Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
+    {
+        Asking = true;
+        try { return Ask(request); }
+        finally { Asking = false; }
+    }
+
+    private static Task<DecisionOutcome> Ask(DecisionRequest request)
     {
         Console.WriteLine();
         Console.WriteLine("  !! USER DECISION REQUIRED");

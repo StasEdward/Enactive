@@ -54,6 +54,10 @@ internal sealed class RunActivity
                 ToolCalls++;
                 changed |= Change.ToolCalls | Doing(ev.Summary);
                 break;
+            // The engine's coverage check says its verdict as a ReviewFailed; no reviewer is at work, and the step goes on.
+            case EventKind.ReviewFailed when ev.ByEngineCheck():
+                changed |= Doing(ev.Summary);
+                break;
             case EventKind.ReviewRequested:
             case EventKind.ReviewPassed:
             case EventKind.ReviewFailed:

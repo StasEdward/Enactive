@@ -1,7 +1,7 @@
 // One service for the whole run (tests/ServerHarness: the real pipeline over a scripted engine), on a data folder of
 // its own: built, started, waited for. The teardown stops it and deletes the folder, whatever the tests did.
 import { spawn, spawnSync } from 'node:child_process';
-import { createWriteStream, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { createWriteStream, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createInterface } from 'node:readline';
 import os from 'node:os';
@@ -22,7 +22,10 @@ export default async function globalSetup() {
     if (built.status !== 0) throw new Error('Building tests/ServerHarness failed.');
   }
 
-  const data = mkdtempSync(path.join(os.tmpdir(), 'enactive-server-e2e-'));
+  // The long form of the path: on a CI runner the temp folder is a short 8.3 name (C:\Users\RUNNER~1\...), the service
+  // names the folders it offers by their long form, and the tests that pick E2E_DATA from the Add workspace dialog
+  // waited a minute for a button that was there under its other name (master and PR #58).
+  const data = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'enactive-server-e2e-')));
   const port = await freePort();
   mkdirSync(logs, { recursive: true });
   const log = createWriteStream(path.join(logs, 'server.log'));

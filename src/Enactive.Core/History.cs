@@ -175,7 +175,19 @@ public sealed record RunRecord(
     /// TODAY answers the wrong question. Parse it with <c>ResolvedTaskSpec.Parse</c>, which gives
     /// values back rather than leaving anyone to pick at the text.</para>
     /// </summary>
-    string? Spec = null) : IRunHeader;
+    string? Spec = null) : IRunHeader
+{
+    /// <summary>
+    /// The declared checks the run was judged by (Plan Phase 3.1), whole - as it was composed with them, or, for a
+    /// resumed run, as its checkpoint carried them. Kept with the run because the manifests are files anybody can edit
+    /// or delete, and a past run read against today's would be judged by checks it never had. Null for runs recorded
+    /// before check manifests, and for runs composed without them.
+    ///
+    /// <para>An init property rather than a parameter, as <see cref="RunUsage.ByModel"/> is: every
+    /// <c>new RunRecord(...)</c> already written still compiles and every row already stored still loads.</para>
+    /// </summary>
+    public Enactive.Core.Checks.CheckSnapshot? CheckSnapshot { get; init; }
+}
 
 /// <summary>
 /// A run without its EVENTS: everything a list, a timeline or a grouping needs, and nothing that
@@ -244,4 +256,21 @@ public interface IRunStore
     /// is tidying a list, not asking for their code back.</para>
     /// </summary>
     Task DeleteAsync(Guid runId, CancellationToken ct);
+
+    /// <summary>
+    /// Keeps one "Run checks now" record (Plan Phase 3.2) in the run's history, beside the run - never in the run's own
+    /// record, which says what the run did and is not rewritten after it. A run can have several, one per press.
+    ///
+    /// <para>Defaulted, like <see cref="LoadSummariesAsync"/>, so a store written before this still compiles; it refuses
+    /// rather than pretending to keep what it drops. Every store that ships keeps them.</para>
+    /// </summary>
+    Task AddCheckRecordAsync(Enactive.Core.Checks.CheckRecord record, CancellationToken ct)
+        => throw new NotSupportedException("This run store keeps no check records.");
+
+    /// <summary>
+    /// A run's "Run checks now" records, oldest first; empty when it has none - or for a store that keeps none (the
+    /// default), which has none to show. A run deleted from the history (<see cref="DeleteAsync"/>) takes its records with it.
+    /// </summary>
+    Task<IReadOnlyList<Enactive.Core.Checks.CheckRecord>> LoadCheckRecordsAsync(Guid runId, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<Enactive.Core.Checks.CheckRecord>>([]);
 }

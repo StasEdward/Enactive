@@ -22,6 +22,34 @@ internal sealed class RunCheckpointWriter(IRunCheckpointStore? store, Func<strin
         finally { _gate.Release(); }
     }
 
+    /// <summary>
+    /// Saves, and says whether it did: null once the checkpoint is stored, otherwise why not. For a boundary somebody is
+    /// promised they can carry on from (a pause, Plan Phase 4.2) - <see cref="SaveAsync"/> reports a failed save as a
+    /// warning and the run goes on, which is right on the way and wrong at an end that claims to be resumable.
+    /// </summary>
+    internal async Task<string?> SaveOrSayWhyNotAsync(Func<RunCheckpoint> capture)
+    {
+        if (store is null) return "this run keeps no checkpoints";
+        await _gate.WaitAsync(CancellationToken.None);
+        try
+        {
+            if (_forgotten) return "the run's checkpoint was already forgotten";
+            await store.SaveAsync(capture(), CancellationToken.None);
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return ex.Message; }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Forgets one checkpoint and keeps writing this run's: the one a resumed run began from, once a newer one stands for it.</summary>
+    internal async Task ForgetOnlyAsync(Guid runId)
+    {
+        if (store is null) return;
+        await _gate.WaitAsync(CancellationToken.None);
+        try { await DeleteAsync(runId); }
+        finally { _gate.Release(); }
+    }
+
     internal async Task ForgetAsync(Guid runId, Guid? resumedRunId)
     {
         if (store is null) return;

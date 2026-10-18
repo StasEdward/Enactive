@@ -58,7 +58,58 @@ public enum OutcomeCause
     /// The reviewer found the step had done what can be done within the request, and the rest of its purpose not reachable
     /// here without going beyond it. Not tried again: a retry can only go beyond the request. Last, so no stored value moves.
     /// </summary>
-    ReviewUnreachable
+    ReviewUnreachable,
+
+    /// <summary>
+    /// The items of a list the step consumes were covered only by being mentioned - named in a call that succeeded - and no
+    /// review approved the work: done, not confirmed. One call naming every path covers every item. Last, so no stored
+    /// value moves.
+    /// </summary>
+    CoverageMentionedOnly,
+
+    /// <summary>
+    /// The engine's coverage check at the step's gate found items of a list it consumes not covered, on every attempt
+    /// its budget allowed (StepCoverageGate): rejected with no reviewer asked. Kept apart from ReviewRejected so nothing
+    /// says a review rejected a step no reviewer saw. Last, so no stored value moves.
+    /// </summary>
+    CoverageGateRejected,
+
+    /// <summary>
+    /// A step that filters left items of a list it consumes out, each with a reason, and no review approved it: done, not
+    /// confirmed. A reason is the step's word; whether the request permits the omission is a reviewer's to judge (Plan
+    /// Phase 1.2). Last, so no stored value moves.
+    /// </summary>
+    CoverageExclusionsUnapproved,
+
+    /// <summary>
+    /// A join: every step for its items finished, and some items are still not covered as the plan requires - a result
+    /// handed on without the evidence it owes (Plan Phase 1.3). Done, not confirmed: never rejected wholesale, so what the
+    /// items handed on still goes on. Items whose steps did not finish are ItemsUnfinished. Last, so no stored value moves.
+    /// </summary>
+    ItemsNotCovered,
+
+    /// <summary>
+    /// A blocking workspace check (Plan Phase 3.2) owed for what the step changed failed at the step's gate, on every
+    /// attempt the gate's budget allowed: rejected with no reviewer asked, as the coverage check rejects - and told apart
+    /// from it, so nothing says a coverage count or a review rejected a step a declared check did. Last, so no stored
+    /// value moves.
+    /// </summary>
+    CheckGateRejected,
+
+    /// <summary>
+    /// A blocking workspace check owed for what the step changed did not run - the policy would have had to ask, it timed
+    /// out, it ran no tests: done, not confirmed. A check that did not run has verified nothing, and a blocking one is what
+    /// a person said this kind of change is confirmed by. Last, so no stored value moves.
+    /// </summary>
+    CheckNotRun,
+
+    /// <summary>
+    /// A blocking workspace check failed after the step and had failed on the workspace as the step found it too, and what
+    /// it printed cannot be compared to tell whether the step made it worse (Agents.StepStartCheck): done, not confirmed.
+    /// Not sent back for a failure that was there before it began - and not confirmed by a check that said nothing about
+    /// it. Last, so no stored value moves.
+    /// </summary>
+    CheckFailedBefore
 }
 
 /// <summary>

@@ -70,6 +70,8 @@
                                 Content="MCP" Command="{Binding ShowMcpCommand}" />
                         <Button Classes="nav" Classes.on="{Binding IsTemplates}"
                                 Content="Templates" Command="{Binding ShowTemplatesCommand}" />
+                        <Button Classes="nav" Classes.on="{Binding IsChecks}"
+                                Content="Checks" Command="{Binding ShowChecksCommand}" />
                     </StackPanel>
                 </Border>
 
@@ -173,6 +175,11 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
                 </DockPanel>
+
+                <!-- The global checks; a workspace's own are on its card in the main window. -->
+                <Panel IsVisible="{Binding IsChecks}" Margin="12">
+                    <local:ChecksView DataContext="{Binding Checks}" />
+                </Panel>
 
                 <StackPanel IsVisible="{Binding IsGeneral}" Margin="12" Spacing="6">
 

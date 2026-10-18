@@ -54,8 +54,20 @@ public sealed record CheckpointStep(
     /// <summary>Only looks, and changes no file.</summary>
     public bool ReadOnly { get; init; }
 
+    /// <summary>
+    /// The planner marked it as a step the request asks to change protected files (Plan Phase 3.4): a protected file it
+    /// removes is shown to the reviewer, not sent back. Kept, so a resumed step is judged as it was planned.
+    /// </summary>
+    public bool ChangesProtected { get; init; }
+
     /// <summary>Every time this step was blocked, oldest first (Phase 7) - kept, so a resume loses no attempt.</summary>
     public IReadOnlyList<Enactive.Core.Tasks.StepBlock>? Blocks { get; init; }
+
+    /// <summary>What the step consumes, so a resumed step is held to account for the same lists.</summary>
+    public IReadOnlyList<Enactive.Core.Tasks.ConsumeSpec>? Consumes { get; init; }
+
+    /// <summary>The dependencies the step only waits for - an order, not data.</summary>
+    public IReadOnlyList<Guid>? OrderOnly { get; init; }
 }
 
 /// <summary>A step of a wave not yet validated, and what it changed as the engine recorded it.</summary>
@@ -166,6 +178,66 @@ public sealed record RunCheckpoint(
 
     /// <summary>Where the plan's waves had got to (Phase 6). Null when waves were not validated.</summary>
     public WaveCheckpoint? Waves { get; init; }
+
+    /// <summary>
+    /// The <see cref="Enactive.Core.Tasks.PlanContractVersions"/> version the plan was made under. Null: a checkpoint from
+    /// before the contract, whose steps never declared what they consume - it must not be read as if they had.
+    /// </summary>
+    public int? PlanContractVersion { get; init; }
+
+    /// <summary>
+    /// What the plan leaves uncovered of the lists its steps depend on, after its one replan (Plan Phase 1.2): each a
+    /// reason that keeps the run from Completed. Kept so a resumed run is held to it - resume does not plan, so it
+    /// cannot find it again. Null: none, or a checkpoint from before the contract.
+    /// </summary>
+    public IReadOnlyList<string>? CoverageObligations { get; init; }
+
+    /// <summary>
+    /// Written by a run that was PAUSED (Plan Phase 4.2), not left behind by one that stopped: no step was running, so a
+    /// resume redoes nothing and runs exactly the steps that are left. False for every other checkpoint - a step
+    /// boundary written on the way, which is what a process that died leaves - and for every checkpoint written before
+    /// pausing existed. Resumed through the same path as any other (<see cref="IsResumable"/>).
+    /// </summary>
+    public bool Paused { get; init; }
+
+    /// <summary>
+    /// The declared checks the run was composed with (Plan Phase 3.1), whole. A resumed run is judged by THESE, not by
+    /// the manifests as they are when it is resumed: they may have been edited or deleted since, and a run carried on
+    /// under checks it was never given is not the run that was started. Null: a checkpoint from before check manifests,
+    /// whose run had none - its resume has none either.
+    /// </summary>
+    public Enactive.Core.Checks.CheckSnapshot? CheckSnapshot { get; init; }
+
+    /// <summary>
+    /// The checks the run owes and has not run yet - deferred to a wave or to apply (Plan Phase 3.2) - so a pause or an
+    /// interruption cannot lose one: a deferred blocking check is not a pass. Null when none is owed.
+    /// </summary>
+    public IReadOnlyList<Enactive.Core.Checks.PendingCheck>? PendingChecks { get; init; }
+
+    /// <summary>
+    /// What the checks at a wave's end came to that holds the run back (Plan Phase 3.2) - a blocking check that failed or
+    /// did not run there - without its whole output (that is kept in the run's folder). A wave's check is discharged once
+    /// it has run, so it is no longer owed; its result was only in the running process, and a pause or a crash after the
+    /// wave's end lost it: the resumed run, with nothing owed and nothing failing, ended Completed on a blocking check
+    /// that never passed. Kept here, a resumed run's end is decided on it as the run's own would have been. Null when
+    /// nothing holds the run back, and for a checkpoint from before.
+    /// </summary>
+    public IReadOnlyList<Enactive.Core.Templates.CriterionResult>? HeldBackBy { get; init; }
+
+    /// <summary>
+    /// The files the run's checks protect, with their hashes as its baseline found them (Plan Phase 3.4). A resumed run
+    /// judges a step's removals against THESE: taken again on resume, they would be the files as the run's first half left
+    /// them - a file it had already removed would no longer be protected, and one added meanwhile would be. Null when no
+    /// check protects anything, and for a checkpoint from before protected files.
+    /// </summary>
+    public IReadOnlyList<Enactive.Core.Checks.ProtectedFile>? ProtectedFiles { get; init; }
+
+    /// <summary>
+    /// Protected files a step the request asks to change them has removed (Plan Phase 3.4): no longer looked for. Kept, so a
+    /// resumed run does not take a removal it was asked to make for a loss - at a step whose changes were not measured, or
+    /// at the boundary an obligation for that file is owed at. Null when none, and for a checkpoint from before.
+    /// </summary>
+    public IReadOnlyList<string>? ProtectedReleased { get; init; }
 }
 
 /// <summary>

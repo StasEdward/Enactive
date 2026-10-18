@@ -80,7 +80,13 @@ public sealed class SettingsDeclaredOnceTests
             root["MaxTotalSteps"] = 77;
         });
 
-        Assert.Equal(engine with { MaxParallelSteps = 5, FanOut = engine.FanOut with { MaxTotalSteps = 77 } }, AppSettings.Load(path).Engine);
+        // A switch added after the section (GateRetries) is one such a build does not know: its save drops it, and it is
+        // back at its default - that is the older build's loss, not this one's.
+        var expected = engine with { MaxParallelSteps = 5, FanOut = engine.FanOut with { MaxTotalSteps = 77 } };
+        foreach (var newer in typeof(EngineOptions).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                     .Where(p => p.Name != nameof(EngineOptions.FanOut) && !OlderBuildsSwitches.Any(f => f.TopLevel == p.Name)))
+            newer.SetValue(expected, newer.GetValue(EngineOptions.Default));
+        Assert.Equal(expected, AppSettings.Load(path).Engine);
     }
 
     /// <summary>A new installation runs on the engine's own defaults: there is no other set.</summary>
@@ -220,6 +226,7 @@ public sealed class SettingsDeclaredOnceTests
             : type == typeof(int?) ? 1000 + n
             : type == typeof(GenerationBudgets) ? new GenerationBudgets(Action: 2000 + n)
             : type == typeof(RepairConsultation) ? new RepairConsultation(FailedRepairs: n)
+            : type == typeof(ObligationNudges) ? new ObligationNudges { Attended = new(2, 10 + n), Unattended = new(3, 20 + n) }
             : throw new Xunit.Sdk.XunitException($"No different value is known for {type.Name}; add one here.");
 
     // ── provider settings ───────────────────────────────────────────────────

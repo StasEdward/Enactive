@@ -8,6 +8,8 @@
 <li class="@("card step " + Looks.Card(Step.Status, Step.WaitingForYou))">
     <div class="step-title">@Step.Title</div>
     <div class="step-activity">@Step.Activity</div>
+    @* The declared checks that fired for the step, not behind the tally: that holds what the step DID. *@
+    <CheckList Checks="Step.Checks" Root="@Root" Label="Step checks" />
     @if (Step.Lines.Count > 0)
     {
         <button type="button" class="disclosure" aria-expanded="@(_open ? "true" : "false")" @onclick="() => _open = !_open">
@@ -35,6 +37,9 @@
 
 @code {
     [Parameter, EditorRequired] public StepView Step { get; set; } = default!;
+
+    /// <summary>The run's workspace, which a check's detail file is opened from; none, no Open.</summary>
+    [Parameter] public string? Root { get; set; }
 
     // Open or folded is how this person looks at the card, not a fact of the run: the page's, as the window keeps it on
     // the card's view model and not in the feed.

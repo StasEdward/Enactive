@@ -23,6 +23,9 @@ internal sealed record CertificateOptions(
 /// <para><b>Nothing here has a default that opens it up.</b> No addresses means it listens nowhere, no subnets means
 /// it answers nobody, no certificate means it does not start: a fresh service on a network must not be reachable
 /// by being installed and forgotten (ADR 0002 §5).</para>
+///
+/// <para>A data folder with no <c>server.json</c> at all gets one on the first start (FirstStart): this machine only,
+/// <c>127.0.0.1</c> and a self-signed certificate for <c>localhost</c>. That opens nothing to a network either.</para>
 /// </summary>
 internal sealed record ServerOptions
 {

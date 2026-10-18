@@ -100,6 +100,38 @@ public sealed class DueSchedulesTests : IDisposable
         Assert.False(_markers.IsRunning(schedule.Id));
     }
 
+    /// <summary>
+    /// While this process runs "Run checks now" in the folder, a due schedule waits for the next tick, unclaimed and
+    /// unspent - the lease counts this process's own takes, so it was taken, its occurrence spent, and the run then refused
+    /// by the composer: the day skipped. After the press it fires.
+    /// </summary>
+    [Fact]
+    public async Task A_schedule_due_while_checks_run_in_its_folder_stays_due_and_fires_after()
+    {
+        var schedule = Due();
+
+        using (WorkspaceActivity.TryChecks(_workspace, out _)!)
+        {
+            var take = await DueSchedules.TakeAsync(_schedules, _markers, _workspace, DateTimeOffset.Now, CancellationToken.None);
+
+            Assert.Null(take.Run);
+            Assert.Contains("next tick", take.Busy);
+            Assert.Contains("checks are running", take.Busy);
+            Assert.Null(_schedules.For(_workspace).Single().LastFiredAt);
+            Assert.False(_markers.IsRunning(schedule.Id));
+        }
+
+        var after = await DueSchedules.TakeAsync(_schedules, _markers, _workspace, DateTimeOffset.Now, CancellationToken.None);
+        Assert.NotNull(after.Run);
+        Assert.NotNull(_schedules.For(_workspace).Single().LastFiredAt);
+        // Held as a run of this process now: the checks wait for it.
+        Assert.Null(WorkspaceActivity.TryChecks(_workspace, out var why));
+        Assert.Contains("A run is going", why);
+        after.Run.Dispose();
+        using var free = WorkspaceActivity.TryChecks(_workspace, out _);
+        Assert.NotNull(free);
+    }
+
     /// <summary>A schedule that cannot become a task is said in the inbox, once: its occurrence is spent all the same.</summary>
     [Fact]
     public async Task A_schedule_that_cannot_start_is_reported_once_in_the_inbox()

@@ -84,6 +84,13 @@ public sealed record CriterionResult(
     public string? Output { get; init; }
 
     /// <summary>
+    /// The declared workspace check this is the result of (Plan Phase 3.3) - its id, where it fired, where its whole output
+    /// was kept - or null for any other criterion. Carried with the result so its event says it as values. Not serialized
+    /// into events itself: the event's payload says what of it a reader needs.
+    /// </summary>
+    public Enactive.Core.Checks.CheckFiring? Check { get; init; }
+
+    /// <summary>
     /// Whether this result holds the run back.
     ///
     /// <para>A required criterion that FAILED always does: it ran, and it said no. An

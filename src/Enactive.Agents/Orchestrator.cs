@@ -209,6 +209,22 @@ public sealed partial class Orchestrator : IOrchestrator
     /// </summary>
     private readonly RunSettings? _settings;
 
+    /// <summary>Nobody watches this run (RunEngineResources.Unattended): its steps are told what they owe under the unattended limits.</summary>
+    private readonly bool _unattended;
+
+    /// <summary>The host's "pause after this step" (Plan Phase 4.2); null for a run nobody can pause.</summary>
+    private readonly RunPause? _pause;
+
+    /// <summary>The declared checks a NEW run is judged by (RunEngineResources.Checks); a resumed one uses its checkpoint's.</summary>
+    private readonly Enactive.Core.Checks.CheckSnapshot? _checks;
+
+    /// <summary>
+    /// Whether a check a new run is judged by protects files (Plan Phase 3.4) - then, and only then, the planner is told it
+    /// can mark a step the request asks to change them. Planning is for a new run: a resume does not plan.
+    /// </summary>
+    private bool ChecksProtectFiles
+        => _checks?.Checks.Any(c => c.Definition.Enabled && c.Definition.Protects is { Count: > 0 }) == true;
+
     /// <summary>
     /// An orchestrator for one run: what the run is given, and the engine's switches - two values, both said.
     /// The switches used to default to EngineOptions.Default when left out, so a host could forget the
@@ -222,6 +238,9 @@ public sealed partial class Orchestrator : IOrchestrator
         _writableRoots = resources.WritableRoots;
         _checkpoints = resources.Checkpoints;
         _settings = resources.Settings;
+        _unattended = resources.Unattended;
+        _pause = resources.Pause;
+        _checks = resources.Checks;
         _successCriteria = resources.SuccessCriteria;
         _limits = resources.Limits;
         _workspaceChanges = resources.WorkspaceChanges;
@@ -261,7 +280,7 @@ public sealed partial class Orchestrator : IOrchestrator
     }
 
     public IAsyncEnumerable<WorkEvent> SubmitIntentAsync(Intent intent, CancellationToken ct)
-        => StopsAtQuestions(RunAsync(intent, null, ct), intent.Id, ct);
+        => KeepsTheChecks(StopsAtQuestions(RunAsync(intent, null, ct), intent.Id, ct), ct);
 
     /// <summary>
     /// Picks an interrupted run up at its last step boundary. A NEW run under the SAME task - see
@@ -269,14 +288,78 @@ public sealed partial class Orchestrator : IOrchestrator
     /// </summary>
     public IAsyncEnumerable<WorkEvent> ResumeRunAsync(
         RunCheckpoint checkpoint, WorkContext context, CancellationToken ct)
-        => StopsAtQuestions(RunAsync(
+        => KeepsTheChecks(StopsAtQuestions(RunAsync(
             // The task id comes from the checkpoint, never from a caller: a resumed run that landed
             // under a different task would show in the history as unrelated work, and everything
             // built on "attempts at one task" would quietly stop being true.
             new Intent(checkpoint.TaskId, checkpoint.Request, IntentSource.CommandBar, context,
                        DateTimeOffset.UtcNow, checkpoint.WorkerId),
             checkpoint,
-            ct), checkpoint.TaskId, ct);
+            ct), checkpoint.TaskId, ct), ct);
+
+    /// <summary>
+    /// Where every run ends, for the check manifests (Plan Phase 3.1, anti-tamper): what the run added, changed or deleted
+    /// in <c>.enactive/checks</c> is put back, and said - see <see cref="CheckManifestGuard"/>. The outermost layer, so
+    /// every ending passes it: completed, failed, paused, blocked, waiting for an answer, stopped, crashed.
+    ///
+    /// <para>Said BEFORE the run's terminal event, not after it: a host may stop reading at the ending, and the sentence
+    /// belongs to the run whose record says how it ended. Checked again once the stream has ended, for anything done after
+    /// the terminal event; and in the finally, silently, when the consumer stopped listening first - there is nobody left
+    /// to tell, but the next run must still not be judged by what this one wrote.</para>
+    /// </summary>
+    private async IAsyncEnumerable<WorkEvent> KeepsTheChecks(IAsyncEnumerable<WorkEvent> run,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        // Taken when the run STARTS - the first MoveNext - so whatever a person had edited before it is what is kept.
+        var guard = CheckManifestGuard.Take(_workspace.RootPath);
+        var events = run.GetAsyncEnumerator(ct);
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? failed = null;
+        WorkEvent? last = null;
+        var settled = false;
+        try
+        {
+            while (true)
+            {
+                try
+                {
+                    if (!await events.MoveNextAsync()) break;
+                }
+                catch (Exception ex)
+                {
+                    // Held, not thrown yet: the manifests are put back and the run says so first.
+                    failed = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
+                    break;
+                }
+
+                var current = events.Current;
+                last = current;
+                if (current.Kind is EventKind.TaskCompleted or EventKind.TaskFailed && Restored(guard, current) is { } said)
+                    yield return said;
+                yield return current;
+            }
+
+            // Also when no event ever arrived: nothing to say it with, and still something to put back.
+            var late = Restored(guard, last);
+            settled = true;
+            if (late is not null)
+                yield return late;
+        }
+        finally
+        {
+            await events.DisposeAsync();
+            // Restore never throws (an IO error there replaced the run's own exception); what it could not do is lost
+            // here, with nobody left listening, rather than thrown over why the run ended.
+            if (!settled)
+                guard.Restore(last?.RunId);
+        }
+        failed?.Throw();
+    }
+
+    /// <summary>The run's sentence about manifests it changed and that were put back, or null when it changed none.</summary>
+    private static WorkEvent? Restored(CheckManifestGuard guard, WorkEvent? of)
+        => guard.Restore(of?.RunId).Describe() is { } said && of is not null
+            ? new WorkEvent(Guid.NewGuid(), of.TaskId, of.RunId, DateTimeOffset.UtcNow, EventKind.ErrorObserved, said, null)
+            : null;
 
     /// <summary>
     /// Where a run that stopped at a question ends: with the question, not with an error.
@@ -334,8 +417,10 @@ public sealed partial class Orchestrator : IOrchestrator
             await events.DisposeAsync();
         }
         // A blocked run has not ended (Phase 7.3): the answers it was given, its baseline and its place are
-        // what it carries on with once the cause is put right.
-        if (ended == RunOutcomeKind.Blocked) yield break;
+        // what it carries on with once the cause is put right. Nor has a paused one (Plan Phase 4.2): its resume is
+        // the same run going on, and without these it would ask again what it was told and call the errors its first
+        // part made old.
+        if (ended is RunOutcomeKind.Blocked or RunOutcomeKind.Paused) yield break;
         _ledger.Forget(taskId);
         _baselines.Forget(taskId);
         _progress.Forget(taskId);
@@ -478,7 +563,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         turnCeiling: RunawayCeiling, outputBudget: _options.GenerationBudgets.For(GenerationPurpose.Planning),
                         stepOutputs: _options.StepOutputs, typedCriteria: _options.TypedCriteria,
                         exhaustedAfter: budget.TurnExhaustedAfter, dynamicSteps: _options.DynamicSteps, validateWaves: _options.ValidateWaves,
-                        semanticCriteria: _options.SemanticCriteria));
+                        semanticCriteria: _options.SemanticCriteria, protectsFiles: ChecksProtectFiles));
         }
         catch (RetryBudgetExceededException ex)
         {
@@ -520,7 +605,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                     intent.RawText, intent.Context, plan, defect, models.PlanProvider, models.Plan.Model, ct,
                     _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
-                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
+                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria, protectsFiles: ChecksProtectFiles));
                 replanFailure = plan.IncompleteReason;
                 if (plan.Usage.Any)
                     yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
@@ -551,7 +636,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                     intent.RawText, intent.Context, plan, missing.Diagnostic, models.PlanProvider, models.Plan.Model, ct,
                     _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
-                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
+                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria, protectsFiles: ChecksProtectFiles));
                 unclear = plan.IncompleteReason;
                 if (plan.Usage.Any)
                     yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
@@ -590,7 +675,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                     intent.RawText, intent.Context, plan, diagnostic, models.PlanProvider, models.Plan.Model, ct,
                     _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
-                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria));
+                    _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria, protectsFiles: ChecksProtectFiles));
                 unclear = plan.IncompleteReason;
                 if (plan.Usage.Any)
                     yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.Usage);
@@ -631,6 +716,98 @@ public sealed partial class Orchestrator : IOrchestrator
             foreach (var why in runOnce)
                 yield return scope.Ev(EventKind.ErrorObserved, why);
         }
+
+        // ── What the steps do with the lists they depend on (Plan Phase 1.1-1.2) ──
+        //
+        // With step outputs and typed criteria on, a dependency on a step that hands on a list must say whether it
+        // consumes the list - and is then held to covering every item - or only waits for that step. Unsaid, the plan
+        // goes back to the planner once, with the diagnosis. What it still leaves unsaid is not a stop: the plan can run,
+        // and the partial result has value; it is a run obligation that keeps the run from Completed. A plan that cannot
+        // run at all (a cycle, a missing step) is left to the structural check below, which stops it as it always has.
+        // Before fan-out expansion, which happens at run time: an item's step carries no forEach and would read as a
+        // consumer that never said so. Not on resume: the plan is the checkpoint's, and so are its obligations.
+        IReadOnlyList<UpstreamCoverage.Derived> derivedCoverage = [];
+        // The contract the plan was made under, as its checkpoints record it: a resumed run keeps its checkpoint's, and a
+        // new one is under the current contract only if the contract ran on it. Stamped Current whatever happened, a plan
+        // made with typed criteria off was later resumed with them on and read as one whose consumes had been declared -
+        // and the "planned before the coverage contract" note below was never said.
+        var planContractVersion = resume?.PlanContractVersion;
+        if (resume is null && _options.StepOutputs && _options.TypedCriteria && plan.Disposition != IntentDisposition.QuickAction
+            && plan.Plan is { Steps.Count: > 0 } contracted && PlanValidation.Error(contracted) is null)
+        {
+            planContractVersion = PlanContractVersions.Current;
+            var contract = CoverageContract(plan);
+            foreach (var note in contract.Notes)
+                yield return scope.Ev(EventKind.ContextAssembled, note);
+            if (contract.Defects.Count > 0)
+            {
+                var diagnostic = CoverageDiagnostic(contract.Defects);
+                yield return scope.Ev(EventKind.ContextAssembled, diagnostic + " Asking the planner once.");
+                var before = plan with { Plan = contract.Plan };
+                var replanned = plan;
+                string? unclear = budget.TurnExhausted;
+                if (unclear is null)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    // A provider's failure comes back in the result (Planner.ReplanAsync), not as an exception to catch.
+                    replanned = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
+                        intent.RawText, intent.Context, before, diagnostic, models.PlanProvider, models.Plan.Model, ct,
+                        _limits.MaxSteps, _options.ProposeChecks && _successCriteria.Count == 0, RunawayCeiling, _options.GenerationBudgets.For(GenerationPurpose.Planning),
+                        _options.StepOutputs, _options.TypedCriteria, _options.DynamicSteps, _options.ValidateWaves, _options.SemanticCriteria, protectsFiles: ChecksProtectFiles));
+                    unclear = replanned.IncompleteReason;
+                    if (replanned.Usage.Any)
+                        yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, replanned.Usage);
+                }
+                // The earlier repairs - the report declaration, the request lines given to no step - are not asked again of
+                // this plan: each would be one more planner call, and the planner was handed the plan they produced.
+                // The corrected plan is shaped as the first one was - a forEach only where the switch allows it, and
+                // checked - and taken only if it can run. One that cannot does not replace the plan that can: that one
+                // runs, with what it leaves uncovered.
+                IReadOnlyList<string> notTaken = [];
+                if (unclear is null && replanned.Readout != PlanReadout.Unreadable && replanned.Plan is { Steps.Count: > 0 } fresh
+                    && PlanValidation.Error(fresh) is null)
+                {
+                    var shaped = fresh;
+                    IReadOnlyList<string> runOnce = [];
+                    if (!_options.DynamicSteps)
+                        shaped = fresh with { Steps = fresh.Steps.Select(st => st.Joins ? st : st with { ForEach = null }).ToArray() };
+                    else if (fresh.Steps.Any(st => st.ForEach is not null))
+                        (shaped, runOnce) = FanOut.Validate(fresh);
+                    // Its contract may need a dependency that closes a cycle (CoverageContract): a plan that could not run
+                    // that way is no better than one that cannot run at all, and the one before it is kept.
+                    var second = PlanValidation.Error(shaped) is null ? CoverageContract(replanned with { Plan = shaped }) : null;
+                    if (second is { Unrunnable: null })
+                    {
+                        notTaken = runOnce;
+                        contract = second;
+                        plan = replanned with { Plan = contract.Plan };
+                        foreach (var note in contract.Notes)
+                            yield return scope.Ev(EventKind.ContextAssembled, note);
+                    }
+                    else plan = before;
+                }
+                else plan = before;
+                foreach (var why in notTaken)
+                    yield return scope.Ev(EventKind.ErrorObserved, why);
+                if (ReferenceEquals(plan, before))
+                    yield return scope.Ev(EventKind.ContextAssembled, "The corrected plan was not taken"
+                        + (unclear is null ? " (it could not be read, or could not run)" : $" ({unclear})")
+                        + ": the plan as it was runs, with the lists it leaves uncovered.");
+                else if (contract.Defects.Count == 0)
+                    yield return scope.Ev(EventKind.ContextAssembled, "The planner said what each step does with the lists it depends on.");
+            }
+            else
+                plan = plan with { Plan = contract.Plan };
+            derivedCoverage = contract.Derived;
+            plan = plan with { CoverageObligations = contract.Defects };
+        }
+
+        // A plan from before the contract never said what its steps consume; resumed under it, it must not be read as
+        // if it had. Said once; no obligation is made up for it - nothing about the plan is known to be uncovered.
+        if (resume is { PlanContractVersion: null } && _options.StepOutputs && _options.TypedCriteria)
+            yield return scope.Ev(EventKind.ContextAssembled,
+                "This run was planned before the coverage contract: what its steps consume was never declared, so list coverage "
+                + "is not guaranteed.");
 
         // Validate before baseline checks, worker dispatch, or checkpoint writes can have effects.
         // A completed prefix in a checkpoint does not make a structurally invalid graph valid.
@@ -677,6 +854,55 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield return scope.Ev(EventKind.ContextAssembled, "Planner criteria accepted: "
                     + string.Join("; ", accepted.Select(c => c.Command)));
             }
+        }
+
+        // The coverage each consume owes, beside the criteria accepted above and checked with them when the run ends.
+        // One the planner already wrote is not added again (UpstreamCoverage.NotAlreadyChecked).
+        if (derivedCoverage.Count > 0 && UpstreamCoverage.NotAlreadyChecked(derivedCoverage, CriteriaFor(plan)) is { Count: > 0 } owed)
+        {
+            plan = plan with { Checks = [.. plan.Checks, .. owed] };
+            yield return scope.Ev(EventKind.ContextAssembled, "Coverage the plan owes for the lists its steps consume, checked when "
+                + "the run ends: " + string.Join("; ", owed.Select(c => c.Name)));
+        }
+
+        // A list the plan still does not cover: asked once, before any work, when somebody can answer (Plan Phase 1.2). In
+        // an attended run this is the last cheap moment to rephrase the request; it is not a stop by default, because
+        // the replan already failed and the partial result has value. Going on does not waive the obligation - the run
+        // still cannot end Completed. With nobody to ask (unattended, scheduled, --approve deny) the run goes on: this
+        // is about completeness, not safety, and stopping would throw the partial result away; its final reason, and
+        // so its Inbox line, names the obligation. A resumed run is not asked again: its plan and obligations are the
+        // checkpoint's, and the answer was given when the run began.
+        if (resume is null && plan.CoverageObligations is { Count: > 0 } obligations)
+        {
+            var summary = string.Join("; ", obligations);
+            if (_decisions.CanApprove)
+            {
+                // No Subject and no "allow": nothing a standing approval answers (RememberedApprovals), and every plan's
+                // gap is a different one, so an answer to this is never kept for the next.
+                var question = new DecisionRequest(taskId, "The plan does not cover a list", summary,
+                    [new("go_on", "Go on - the run cannot end as completed"), new("stop", "Stop - no work starts")],
+                    RecommendedOptionId: "go_on", SessionOnly: true,
+                    FullDetail: "The plan was sent back to the planner once, and it still does not say how these lists are covered:\n"
+                        + string.Join("\n", obligations.Select(o => "- " + o))
+                        + "\n\nGoing on runs the plan as it is. It does not waive this: the run cannot end as completed while a "
+                        + "list it depends on is not covered. Stopping starts no work.")
+                    { RequiresExplicitAnswer = true };
+                yield return scope.Ev(EventKind.DecisionRequested, $"{question.Topic}: {summary}");
+                var settled = await ToolAccess.AskAsync(_decisions, _decisionGate, question, ct);
+                yield return scope.Ev(EventKind.DecisionResolved, $"List coverage: {settled.OptionId}"
+                    + (settled.Because is { } because ? $" ({because})" : ""));
+                // As at the final-checks question: a person who answers "stop" has stopped the run. Any other answer -
+                // or one somebody else gave in advance - goes on, under the obligation.
+                if (settled.Because is null && string.Equals(settled.OptionId, "stop", StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return scope.Terminal(RunOutcomeKind.Cancelled,
+                        "Stopped at the question about list coverage; no work started.", _ => "");
+                    yield break;
+                }
+            }
+            else
+                yield return scope.Ev(EventKind.ContextAssembled, "Nobody to ask about the lists the plan does not cover: the "
+                    + $"run goes on, and cannot end as completed - {summary}");
         }
 
         if (_planner.ChecksAuditEnabled)
@@ -853,7 +1079,55 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
-        var session = new RunSession(scope, messages) { Builds = builds, ChangeLimits = ChangeLimitsFor(intent, models, scope) };
+        // A resumed run is judged by the checks it was STARTED with, as its checkpoint carried them - never by the
+        // manifests as they are now, which may have been edited or deleted since (Plan Phase 3.1). The checkpoint is
+        // the precedent's place too (PlanContractVersion, CoverageObligations): resume does not compose again. A
+        // checkpoint from before check manifests had none, and its resume has none.
+        var runChecks = resume is null ? _checks : resume.CheckSnapshot;
+
+        // The files those checks protect, hashed with the baseline (Plan Phase 3.4), and on the same terms: a run carrying
+        // the task on takes them from the checkpoint or the task's own file, never from the workspace as the earlier attempt
+        // left it - a file that attempt removed would no longer be protected. Taken whether or not any ecosystem builds here:
+        // what is protected is a person's list of files, not a build's.
+        IReadOnlyList<Enactive.Core.Checks.ProtectedFile> protectedFiles;
+        if (resume is not null)
+            protectedFiles = resume.ProtectedFiles ?? [];
+        else if (_baselines.LoadProtected(scope.TaskId) is { } carried)
+            protectedFiles = Enactive.Core.Checks.ProtectedFiles.StillProtected(carried, runChecks);
+        else
+        {
+            protectedFiles = Enactive.Core.Checks.ProtectedFiles.Take(_workspace.RootPath, runChecks, out var notAll);
+            if (protectedFiles.Count > 0) _baselines.SaveProtected(scope.TaskId, protectedFiles);
+            if (notAll is not null) yield return scope.Ev(EventKind.ErrorObserved, notAll);
+        }
+
+        var session = new RunSession(scope, messages)
+        {
+            Builds = builds, ChangeLimits = ChangeLimitsFor(intent, models, scope),
+            Checks = runChecks,
+            PendingChecks = resume?.PendingChecks?.ToList() ?? [],
+            Protected = protectedFiles
+        };
+        // What the interrupted run was asked to remove stays released (RunCheckpoint.ProtectedReleased).
+        foreach (var released in resume?.ProtectedReleased ?? [])
+            session.ProtectedReleased.Add(released);
+        // What held the interrupted run back at a wave's end (RunCheckpoint.HeldBackBy): run and discharged there, so not
+        // owed again - and, not carried, a resumed run ended as if that blocking check had passed.
+        session.BoundaryChecks.AddRange(resume?.HeldBackBy ?? []);
+
+        // Which declared checks judge this run, and which manifests were skipped (WorkspaceChecks.Inventory) - from the
+        // snapshot the run is judged by, so a resumed run says what IT is judged by. Nothing when there is nothing to say.
+        if (WorkspaceChecks.Inventory(runChecks) is { } inventory)
+            yield return scope.Ev(EventKind.ContextAssembled, inventory);
+
+        // The manifests as they are now against what the checkpoint's snapshot hashed: a person may have edited them
+        // while the run was interrupted. The resumed run is judged by its snapshot all the same, so this is only SAID -
+        // nothing is put back (the checkpoint keeps hashes, not bytes, and the change is a person's) - but a run judged
+        // by checks that no longer match the files must not look as if they did.
+        if (resume?.CheckSnapshot is { } startedWith
+            && CheckManifestGuard.DescribeChangedSince(
+                CheckManifestGuard.ChangedSince(startedWith.Manifests, _workspace.RootPath)) is { } changedMeanwhile)
+            yield return scope.Ev(EventKind.ErrorObserved, changedMeanwhile);
 
         // A step the interrupted run was in the middle of is done again from its beginning - so what it had already changed
         // is put back first, as it was before that step. Left in place, it was the ground the step began again on: on
@@ -889,7 +1163,7 @@ public sealed partial class Orchestrator : IOrchestrator
             yield break;
         }
 
-        await foreach (var ev in RunPlanAsync(intent, resume, session, models, plan, ct))
+        await foreach (var ev in RunPlanAsync(intent, resume, session, models, plan, planContractVersion, ct))
             yield return ev;
     }
     /// <summary>
@@ -919,26 +1193,56 @@ public sealed partial class Orchestrator : IOrchestrator
         // end of the action with this same start - see NetChangedAsync.
         using var quickChanges = _workspaceChanges.Create(_workspace.RootPath);
         var quickBefore = await quickChanges.TakeAsync(ct);
+        // Where the build baseline was taken - nothing of the work done since - for a step check held against it
+        // (StepStartCheck). A baseline kept from an earlier attempt is not used against it (BuildBaseline.FromAnEarlierAttempt).
+        session.BaselineAt = quickBefore;
 
         using var quickLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
         ValueTask PublishQuick(WorkEvent ev) => quick.Writer.WriteAsync(ev, quickLifetime.Token);
         var quickPump = Task.Run(async () =>
         {
             using var _quickScope = LogScope.Begin(scope.RunId, scope.TaskId);
+            IArtifactScope? store = null;
+            StepAttemptState? attemptState = null;
+            var revertTried = false;
+            // Once, whichever way the action ended - by its own result, or by an exception after it was sent back.
+            async Task RevertQuickAsync()
+            {
+                if (revertTried || store is null || attemptState is null) return;
+                revertTried = true;
+                await RevertRejectedAsync(quickResult, store, scope, null,
+                    (line, payload) => PublishQuick(scope.Event(EventKind.ArtifactReverted, line, payload)), quickLifetime.Token,
+                    changes: quickChanges, before: quickBefore, actions: attemptState.Journal.Actions.Skip(attemptState.StepStart));
+            }
             try
             {
-                var store = _artifacts.BeginStep();
-                var attemptState = session.BeginStep(messages, store);
+                store = _artifacts.BeginStep();
+                // One step, nothing beside it: its declared checks run at its gate - never against the disk when staged.
+                attemptState = session.BeginStep(messages, store) with
+                {
+                    CheckTiming = _settings?.Staged == true ? StepCheckTiming.Staged : StepCheckTiming.AtGate,
+                    // A quick action has no steps for the planner to mark: it says so beside its disposition (Plan Phase 3.4).
+                    ChangesProtected = plan.ChangesProtected,
+                    ProtectedAtStart = ProtectedAtStepStart(session)
+                };
                 await RunAttemptsAsync(session, attemptState, models, models.Provider, models.Model,
                     intent.Context, quickResult, plan.Title, intent.RawText, null, quickChanges, quickBefore,
                     PublishQuick, quickLifetime.Token);
-                await RevertRejectedAsync(quickResult, store, scope, null,
-                    (line, payload) => PublishQuick(scope.Event(EventKind.ArtifactReverted, line, payload)), quickLifetime.Token);
+                await RevertQuickAsync();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                quickResult.Set(ex is RetryBudgetExceededException ? StepOutcomeKind.Incomplete : StepOutcomeKind.Failed, ex.Message);
+                quickResult.Set(ex is RetryBudgetExceededException ? StepOutcomeKind.Incomplete : StepOutcomeKind.Failed, ex.Message,
+                    stoppedBy: StoppedByError(ex));
                 await PublishQuick(scope.Ev(EventKind.ErrorObserved, ex.Message));
+                // Sent back, then broken (the provider's retries spent, say): Incomplete or Failed with no verdict since, and
+                // its work goes back as the plan's step does (RevertsAsRejected). Never on cancellation - that is not caught
+                // here - and a revert that itself threw is not tried twice.
+                try { await RevertQuickAsync(); }
+                catch (Exception revertFailed) when (revertFailed is not OperationCanceledException)
+                {
+                    await PublishQuick(scope.Ev(EventKind.ErrorObserved, "The rejected work could not be put back: " + revertFailed.Message));
+                }
             }
             finally
             {
@@ -966,7 +1270,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // as a plan's (RunOutcomeDecision).
         var quickWork = new RunWork(
             [new SettledStep(null, plan.Title, quickResult.Kind, quickResult.Reason,
-                BlockedBecause: quickResult.Kind == StepOutcomeKind.Blocked ? quickResult.Reason : null)],
+                BlockedBecause: quickResult.Kind == StepOutcomeKind.Blocked ? quickResult.Reason : null,
+                // What tells an engine check's rejection from a reviewer's in the run's line, as a plan's steps carry it.
+                Cause: quickResult.Cause)],
             Resumable: false);
         var quickDecision = RunOutcomeDecision.BeforeChecks(quickWork);
 
@@ -985,8 +1291,11 @@ public sealed partial class Orchestrator : IOrchestrator
 
         IReadOnlyList<CriterionResult> quickChecks = [.. await ProducedFilesNowAsync(scope, session, ct), .. await BuildRegressionNowAsync(scope, session,
                 intent.Context, ct, session.Builds.Count > 0 ? await NetChangedAsync(quickChanges, quickBefore, ct) : null)];
-        foreach (var check in quickChecks)
+        // The declared checks at the run's end (Plan Phase 3.2), as a plan's: a quick action is a run of one step.
+        var declaredQuick = await RunEndChecksAsync(session, intent.Context, ct);
+        foreach (var check in (IEnumerable<CriterionResult>)[.. quickChecks, .. declaredQuick.Said])
             yield return scope.Criterion(check);
+        quickChecks = [.. quickChecks, .. declaredQuick.Decide];
 
         var (quickOutcome, quickReason) = RunOutcomeDecision.Settle(quickWork, quickDecision, quickVerification, quickChecks);
 
@@ -1007,8 +1316,10 @@ public sealed partial class Orchestrator : IOrchestrator
     /// The interrupted run this one carries on from, or null. Only this half takes it: a quick
     /// action has no step boundary to resume at.
     /// </param>
+    /// <param name="planContractVersion">The coverage contract the plan was made under, written to every checkpoint; null
+    /// when it was made without one.</param>
     private async IAsyncEnumerable<WorkEvent> RunPlanAsync(
-        Intent intent, RunCheckpoint? resume, RunSession session, RunModels models, PlanResult plan,
+        Intent intent, RunCheckpoint? resume, RunSession session, RunModels models, PlanResult plan, int? planContractVersion,
         [EnumeratorCancellation] CancellationToken ct)
     {
         var scope = session.Scope;
@@ -1318,7 +1629,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 return blockHistory.TryGetValue(id, out var list) ? list.ToArray() : null;
         }
 
-        Task CheckpointAsync() => checkpointWriter.SaveAsync(() =>
+        Task CheckpointAsync() => checkpointWriter.SaveAsync(CaptureCheckpoint);
+
+        // The run as a checkpoint describes it, now. One capture for every checkpoint the run writes - on the way, and
+        // the one a pause ends with (Plan Phase 4.2) - so a paused run keeps everything any other checkpoint keeps.
+        RunCheckpoint CaptureCheckpoint()
         {
             string[] doneLines;
             ArtifactRef[] produced;
@@ -1346,7 +1661,8 @@ public sealed partial class Orchestrator : IOrchestrator
                         Result = session.Outputs.TryGetValue(s.Id, out var handed) ? handed : null,
                         ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
                         Record = session.Records.TryGetValue(s.Id, out var record) ? record : null,
-                        Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly,
+                        Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly, ChangesProtected = s.ChangesProtected,
+                        Consumes = s.Consumes, OrderOnly = s.OrderOnly,
                         Blocks = BlocksOf(s.Id),
                         Owned = s.ExpandedFrom is null ? null : _progress.OwnedBy(scope.TaskId, s.Id) is { Count: > 0 } owned ? owned.ToArray() : null
                     })
@@ -1359,8 +1675,31 @@ public sealed partial class Orchestrator : IOrchestrator
                 produced.Select(a => a.RelativePath).ToArray(),
                 scope.Budget.StepsRun, scope.Budget.TokensSpent, _settings) { Checks = CriteriaFor(plan), Restrictions = plan.Restrictions, ActionPolicy = plan.ActionPolicy,
                     Baseline = session.Builds.Count == 0 ? null : session.Builds.Select(b => b.ToSnapshot()).ToArray(),
-                    Waves = waves?.ToCheckpoint(waveBeforeKept) };
-        });
+                    Waves = waves?.ToCheckpoint(waveBeforeKept),
+                    // The contract it was planned under, if any (planContractVersion): a plan from before it is not one after.
+                    PlanContractVersion = planContractVersion,
+                    CoverageObligations = plan.CoverageObligations.Count > 0 ? plan.CoverageObligations : null,
+                    // The checks whole, and what is still owed of them (Plan Phase 3.1): a resume reads both from here.
+                    CheckSnapshot = session.Checks,
+                    PendingChecks = PendingChecksNow(session),
+                    HeldBackBy = HeldBackNow(session),
+                    // With the baseline, as it was taken (Plan Phase 3.4): a resume judges removals against these.
+                    ProtectedFiles = session.Protected.Count > 0 ? session.Protected : null,
+                    ProtectedReleased = ReleasedNow(session) };
+        }
+
+        // Whether a step boundary of this task is in the store to carry on from - this run's own, or on a resume the one
+        // it began from - read back rather than assumed: what a run says can be resumed must be there (Plan Phase 4.2).
+        async Task<bool> BoundaryKeptAsync()
+        {
+            if (_checkpoints is null) return false;
+            try
+            {
+                if (await _checkpoints.LoadAsync(scope.RunId, CancellationToken.None) is { IsResumable: true }) return true;
+                return resume is not null && await _checkpoints.LoadAsync(resume.RunId, CancellationToken.None) is { IsResumable: true };
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { return false; }
+        }
 
         // Forgets the checkpoint: this run reached an end, and an ending is not resumable. Called
         // for every ending, not only a good one - a run that FAILED ran to a conclusion, and the
@@ -1457,8 +1796,23 @@ public sealed partial class Orchestrator : IOrchestrator
                 unverifiedSteps = stepOutcomes.Where(p => p.Value == StepOutcomeKind.DoneUnverified).Select(p => p.Key).ToArray();
             }
             // What the steps it depends on handed on, as values (Phase 2) - not a retelling of them.
-            var handedOn = step.DependsOn.Select(d => session.Outputs.TryGetValue(d, out var o) ? o : null).OfType<StepOutput>().ToArray();
-            var handedMessage = handedOn.Length > 0 ? ChatMessage.User(StepOutputContract.ForDependents(handedOn)) : null;
+            // As the step declared it (Plan Phase 1.4), when the run holds steps to their declarations - step outputs and
+            // typed criteria both on, the switches of this run (a resume has them too). The planner is asked for
+            // consumes/after whenever step outputs are on, but only with typed criteria are they checked; unchecked, a
+            // typo'd consume would starve the step of the values it needs. A step it only waits for ("after") is an
+            // order, not data, and hands on nothing; of a step it consumes a list from, the lists it does not consume
+            // are withheld (StepOutputContract.ForDependents). Its forEach is a consume too, so its own list is never
+            // withheld from it or its items. Without a declaration, as before.
+            var declared = _options.StepOutputs && _options.TypedCriteria;
+            var stepsNow = scheduler.Steps;
+            var eachOf = step.ForEach ?? (step.ExpandedFrom is { } from ? stepsNow.FirstOrDefault(s => s.Id == from)?.ForEach : null);
+            IReadOnlyList<ConsumeSpec>? consumed = declared && step.Consumes is { Count: > 0 } own
+                ? [.. own, .. eachOf is { } each ? [new ConsumeSpec(each.Step, each.Field)] : Array.Empty<ConsumeSpec>()]
+                : null;
+            var handedOn = step.DependsOn.Where(d => !declared || step.OrderOnly?.Contains(d) != true)
+                .Select(d => (Handed: session.Outputs.TryGetValue(d, out var o) ? o : null, Schema: stepsNow.FirstOrDefault(s => s.Id == d)?.Output))
+                .Where(h => h.Handed is not null).Select(h => (h.Handed!, h.Schema)).ToArray();
+            var handedMessage = handedOn.Length > 0 ? ChatMessage.User(StepOutputContract.ForDependents(handedOn, consumed)) : null;
             if (handedMessage is not null)
                 convo.Add(handedMessage);
             // What each item came to, for a step after a join: done, or not and why - so a report is
@@ -1544,6 +1898,8 @@ public sealed partial class Orchestrator : IOrchestrator
             var stepResult = new ToolLoopResult();
             var outcome = StepOutcomeKind.Succeeded;
             string? outcomeReason = null;
+            // What stopped the step, where an exception did and the step's result was not set (ToolLoopResult.StoppedBy).
+            string? stoppedBy = null;
 
             // This step owns its writes. Review retries keep the transcript and evidence;
             // only terminal rejection may restore this owner's files. Recorded as this step's, by its id, so a run that
@@ -1585,7 +1941,24 @@ public sealed partial class Orchestrator : IOrchestrator
                 // Only a step of the plan as planned: an item's step has no position of its own in the planner's list.
                 Criteria = step.ExpandedFrom is null
                     ? CriteriaFor(plan).Where(c => c.Step == stepNumber - 1 || c.Typed?.PathFromStep == stepNumber - 1).ToArray()
-                    : []
+                    : [],
+                // The lists it consumes, counted at its gate (Plan Phase 1.3). Not for a step done for each item, nor
+                // for the join its forEach step becomes: their coverage is the item steps' together, counted at the
+                // join (JoinCoverage) - which leaves the join unconfirmed and never sends anything back.
+                Coverage = step.ExpandedFrom is null && step.ForEach is null
+                    ? StepCoverageGate.For(CriteriaFor(plan), stepNumber - 1)
+                    : [],
+                // Where the declared checks owed for what it changes run (Plan Phase 3.2). At its own gate only when what
+                // they find is this step's: steps one at a time, or this one critical - the scheduler starts a critical step
+                // alone and nothing beside it (DagScheduler.NextReadyBatch). Never against the disk in a staged run.
+                CheckTiming = _settings?.Staged == true ? StepCheckTiming.Staged
+                    : maxParallel == 1 || step.Critical ? StepCheckTiming.AtGate
+                    : StepCheckTiming.Deferred,
+                StepId = step.Id,
+                // The planner's word that the request asks this step to change protected files (Plan Phase 3.4).
+                ChangesProtected = step.ChangesProtected,
+                // How the protected files are as it begins, for its gate to compare with (Plan Phase 3.4).
+                ProtectedAtStart = ProtectedAtStepStart(session)
             };
 
             // The workspace as this step found it. Taken once, before the first attempt: a retry
@@ -1597,6 +1970,8 @@ public sealed partial class Orchestrator : IOrchestrator
             {
                 beforeRun = beforeStep;
                 runBoundaryCaptured = true;
+                // Where the build baseline was taken, for a step check held against it (StepStartCheck).
+                session.BaselineAt = beforeStep;
             }
 
             if (MissingInputOf(step) is { } missing)
@@ -1625,6 +2000,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 // Fail this step and its dependents, not independent DAG work.
                 outcome = ex is RetryBudgetExceededException ? StepOutcomeKind.Incomplete : StepOutcomeKind.Failed;
                 outcomeReason = ex.Message;
+                stoppedBy = StoppedByError(ex);
             }
 
             // The last result the step handed on, kept whatever came after it - and worth what its
@@ -1647,7 +2023,8 @@ public sealed partial class Orchestrator : IOrchestrator
             }
 
             await RevertRejectedAsync(stepResult, store, scope, stepNumber,
-                (line, payload) => Publish(scope.Event(EventKind.ArtifactReverted, $"[{stepNumber}] {line}", payload)), stepCt);
+                (line, payload) => Publish(scope.Event(EventKind.ArtifactReverted, $"[{stepNumber}] {line}", payload)), stepCt,
+                outcome, workspaceChanges, beforeStep, attemptState.Journal.Actions.Skip(attemptState.StepStart), stoppedBy);
 
             // What it changed, for the wave it ended in (Phase 6) - after a revert, which the files show.
             waves?.Finished(WaveStep.Of(step.Id, stepNumber, step.Title, store.TouchedPaths,
@@ -1656,13 +2033,15 @@ public sealed partial class Orchestrator : IOrchestrator
             // The card's colour comes from this payload, not from the wording of the summary - and
             // so does the LINE UNDER IT. The reason used to be glued into the summary only, so a
             // replayed step said "Incomplete" and stopped there.
-            ValueTask EmitStepDone(string summary, int? no, StepOutcomeKind kind, string? why = null)
+            ValueTask EmitStepDone(string summary, int? no, StepOutcomeKind kind, string? why = null, bool engineCheck = false,
+                string? checkId = null)
                 => Publish(scope.Event(
-                    EventKind.StepCompleted, summary, WorkEventPayload.StepPayload(no, kind, why)));
+                    EventKind.StepCompleted, summary, WorkEventPayload.StepPayload(no, kind, why, engineCheck, checkId)));
 
-            // Succeeded is the ONLY outcome that unblocks what comes after it - and MarkDone is what
-            // does the unblocking, so it goes LAST. It used to go first, which opened two races on
-            // everything a dependent is entitled to see the moment it starts:
+            // A step that is done - Succeeded, or DoneUnverified (below) - unblocks what comes after it,
+            // and MarkDone is what does the unblocking, so it goes LAST. (A failure releases too, but only
+            // a join, which waits for its items to end - see the failure path.) It used to go first, which
+            // opened two races on everything a dependent is entitled to see the moment it starts:
             //
             //   - the DIGEST. A dependent seeds its conversation from it, and could be dispatched
             //     and read it before this step's line was in - losing the conclusion of the very
@@ -1727,17 +2106,32 @@ public sealed partial class Orchestrator : IOrchestrator
                 return;
             }
 
+            // Rejected by the engine's coverage check, which no reviewer saw: said so on the line and in the payload,
+            // which the card reads (WorkEventPayload.StepPayload).
+            var byGate = outcome == StepOutcomeKind.ReviewRejected && outcome == stepResult.Kind
+                         && stepResult.Cause is OutcomeCause.CoverageGateRejected or OutcomeCause.CheckGateRejected;
+            // Rejected by a blocking declared check (Plan Phase 3.2): which one, in the payload the card reads.
+            var byCheck = byGate && stepResult.Cause == OutcomeCause.CheckGateRejected ? stepResult.RejectedByCheck ?? "" : null;
             var label = outcome switch
             {
+                StepOutcomeKind.ReviewRejected when byCheck is { Length: > 0 } => $"REJECTED BY THE ENGINE'S CHECK '{byCheck}'",
+                StepOutcomeKind.ReviewRejected when byCheck is not null => "REJECTED BY AN ENGINE CHECK",
+                StepOutcomeKind.ReviewRejected when byGate => "REJECTED BY THE ENGINE'S COVERAGE CHECK",
                 StepOutcomeKind.ReviewRejected => "REVIEW REJECTED",
                 StepOutcomeKind.Incomplete => "INCOMPLETE",
                 _ => "FAILED"
             };
 
-            var skippedSteps = scheduler.MarkFailed(step.Id);
+            // Reported BEFORE MarkFailed, for the COMPLETION EVENT race described above the success path:
+            // a failure releases too. A join waits for its items to END, not to succeed (DagScheduler.
+            // DependenciesSatisfied), so this step's MarkFailed can be what lets the join start - and with
+            // MarkFailed first, the join's StepStarted reached the channel ahead of this StepCompleted
+            // (ParallelStepTests: a failing item is reported before the join its failure releases starts).
+            // The skipped steps are MarkFailed's cascade, so they still follow this step's own event.
             await EmitStepDone(
                 $"[{stepNumber}/{total}] {step.Title} — {label}{(string.IsNullOrWhiteSpace(outcomeReason) ? "" : ": " + outcomeReason)}",
-                stepNumber, outcome, outcomeReason);
+                stepNumber, outcome, outcomeReason, engineCheck: byGate, checkId: byCheck);
+            var skippedSteps = scheduler.MarkFailed(step.Id);
 
             foreach (var sk in skippedSteps)
             {
@@ -1915,9 +2309,46 @@ public sealed partial class Orchestrator : IOrchestrator
                         + (record?.Result is { } result && ItemReport.Standing(record) is { } worth && record.Standing != ResultStanding.Unreviewed
                             ? $" [{worth} {Gist(result.ValuesJson, 300)}]" : ""));
                 }
+                // The items the coverage the plan requires does not count, by name - a finished item without its evidence
+                // among them, which its status above does not show - so the report can say what is missing. Counted again
+                // from what the join handed on, as the join counted it, so a resumed run says the same.
+                // Covered, and not confirmed (the join's own decision, JoinApproval): what was left out and what rests on a
+                // mention alone, by name. The items' statuses read "done" for both, so a report told nothing more presented
+                // an omitted page as reviewed.
+                if (join.NotExpanded is null && stepNumbers.TryGetValue(join.Id, out var joinNo)
+                    && JoinCoverage(joinNo, session.Outputs.TryGetValue(join.Id, out var joined) ? joined : null) is { } counted)
+                {
+                    if (!counted.Passed)
+                        lines.Add(counted.HandOff($"'{join.Title}'"));
+                    else if (counted.Unconfirmed(JoinApproval(join)) is { } unconfirmed)
+                        lines.Add($"'{join.Title}' is not confirmed: {unconfirmed.Reason} Say which items these are, and why, in what this "
+                                  + "step writes - do not present them as done.");
+                }
             }
             return ChatMessage.User("What the steps for each item came to (engine record) - report on EVERY item, "
                 + "the ones not done included, and say why they were not:\n" + string.Join("\n", lines));
+        }
+
+        // The coverage the plan owes for the items of a step done for each item, decided at its join (Plan Phase 1.3): the
+        // covers_all criteria - derived from the forEach or a consume, or the planner's - whose results are this step's,
+        // over what its finished items handed on as one and the evidence each recorded when it did. The item steps are
+        // not gated themselves: each has one item, and the list is the join's. Null when it owes none, or when its source
+        // handed on no list.
+        StepCoverageGate.Outcome? JoinCoverage(int joinNo, StepOutput? joinedOutput)
+            => StepCoverageGate.For(CriteriaFor(plan), joinNo - 1) is { Count: > 0 } owed
+                ? StepCoverageGate.Check(owed, session.Outputs.Values, joinedOutput, joinNo)
+                : null;
+
+        // What an approving review stands behind at a join: no exclusion - a join has no reviewer, and an item's step is
+        // not asked about its list (it has no gate of its own) - and the mentions of the items whose own step a review
+        // passed (ResultStanding.Confirmed), as a step's pass stands behind its own. Read from the recorded outcomes, so a
+        // resumed run decides the same.
+        StepCoverageGate.Approval JoinApproval(PlanStep join)
+        {
+            var confirmed = scheduler.Steps
+                .Where(s => s.ExpandedFrom == join.Id && session.Records.GetValueOrDefault(s.Id)?.Standing == ResultStanding.Confirmed)
+                .SelectMany(s => s.Items ?? []).ToArray();
+            return StepCoverageGate.Approval.None with { Mentioned = item => confirmed.Any(c => EvidenceCoverage.Same(c, item)) };
         }
 
         // The join: what its items' steps handed on, as one, once every one of them has ended. An item
@@ -1932,18 +2363,40 @@ public sealed partial class Orchestrator : IOrchestrator
             var finished = items.Where(i => ended.GetValueOrDefault(i.Id) is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified).ToArray();
             var unfinished = items.Except(finished).ToArray();
 
+            // What the finished items handed on, as one - put together before the join's outcome is decided, because the
+            // coverage the plan owes for its items is counted on it (Plan Phase 1.3). Pure: nothing is stored or said yet.
+            var handedOn = finished.Select(f => (Step: f, Output: session.Outputs.TryGetValue(f.Id, out var o) ? o : null))
+                .Where(x => x.Output is not null).Select(x => (x.Step, x.Output!)).ToArray();
+            var joined = join.NotExpanded is null ? FanOut.Join(join, joinNo, handedOn) : null;
+            // Items not covered - a step that did not finish, or one that finished without the evidence the item owes - keep
+            // the join unconfirmed with the count, and never reject it: what the others handed on is still handed on and the
+            // steps after it still run, so a report can say what is missing (amendment D). The run-end check is what keeps
+            // the run from Completed; this only says so where the items are.
+            var coverage = join.NotExpanded is null ? JoinCoverage(joinNo, joined) : null;
+            var uncovered = coverage is { Passed: false } ? coverage.Notes : null;
+            // Coverage that holds and that nothing confirms (JoinApproval): items its item steps left out with a reason (a
+            // forEach that filters), or items with nothing but a mention behind them whose step no review passed. A reason
+            // alone never authorises leaving an item out, and one call naming a page shows nothing done with it; so the
+            // join is done, not confirmed - which keeps the run from Completed (RunOutcomeDecision), as for a step whose
+            // own gate found the same (StepCoverageGate.Outcome.Unconfirmed decides both).
+            var unconfirmed = coverage is { Passed: true } ? coverage.Unconfirmed(JoinApproval(join)) : null;
+
             var (outcome, reason) = join.NotExpanded is { } notExpanded
                 ? (StepOutcomeKind.Incomplete, notExpanded)
                 : unfinished.Length > 0
-                    ? (StepOutcomeKind.DoneUnverified, $"{unfinished.Length} of {items.Length} item step(s) did not finish: "
-                        + string.Join("; ", unfinished.Select(u => u.Title)))
-                    : finished.Any(f => ended[f.Id] == StepOutcomeKind.DoneUnverified)
-                        ? (StepOutcomeKind.DoneUnverified, "some item steps were done but not verified")
-                        : (StepOutcomeKind.Succeeded, (string?)null);
+                    ? (StepOutcomeKind.DoneUnverified, (uncovered is null ? "" : uncovered + " ")
+                        + $"{unfinished.Length} of {items.Length} item step(s) did not finish: " + string.Join("; ", unfinished.Select(u => u.Title)))
+                : uncovered is not null ? (StepOutcomeKind.DoneUnverified, uncovered)
+                : unconfirmed is { } notConfirmed ? (StepOutcomeKind.DoneUnverified, notConfirmed.Reason)
+                : finished.Any(f => ended[f.Id] == StepOutcomeKind.DoneUnverified)
+                    ? (StepOutcomeKind.DoneUnverified, "some item steps were done but not verified")
+                    : (StepOutcomeKind.Succeeded, (string?)null);
 
             Note(join.Id, outcome,
                 join.NotExpanded is not null ? OutcomeCause.NotExpanded
                     : unfinished.Length > 0 ? OutcomeCause.ItemsUnfinished
+                    : uncovered is not null ? OutcomeCause.ItemsNotCovered
+                    : unconfirmed is { } cause ? cause.Cause
                     : outcome == StepOutcomeKind.DoneUnverified ? OutcomeCause.ReviewUnprocessable : OutcomeCause.None,
                 reason, null);
 
@@ -1954,9 +2407,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
             if (outcome is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified)
             {
-                var handedOn = finished.Select(f => (Step: f, Output: session.Outputs.TryGetValue(f.Id, out var o) ? o : null))
-                    .Where(x => x.Output is not null).Select(x => (x.Step, x.Output!)).ToArray();
-                if (FanOut.Join(join, joinNo, handedOn) is { } joined)
+                if (joined is not null)
                 {
                     session.Outputs[join.Id] = joined;
                     await Publish(new WorkEvent(Guid.NewGuid(), scope.TaskId, scope.RunId, DateTimeOffset.UtcNow,
@@ -2003,7 +2454,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 // have settled more steps than the checkpoint had, and the number a person reads
                 // should be the number of steps this run is not going to do.
                 $"Resumed: {stepOutcomes.Count} of {builtPlan.Steps.Count} step(s) were already settled when "
-                + $"the previous run stopped on {resume.At.ToLocalTime():yyyy-MM-dd HH:mm}."
+                + $"the previous run {(resume.Paused ? "was paused" : "stopped")} on {resume.At.ToLocalTime():yyyy-MM-dd HH:mm}."
                 + (resume.Steps.Any(s => s.Status == nameof(StepStatus.Running))
                     ? " One step was in progress and is being done again from its beginning — the "
                       + "files it had already written are still in the workspace."
@@ -2019,8 +2470,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 var no = stepNumbers.TryGetValue(step.Id, out var rn) ? rn : 0;
                 yield return scope.Event(
                     EventKind.StepCompleted,
-                    $"[{(no > 0 ? no : 0)}/{total}] {step.Title} — {RunOutcomeDecision.Word(kind)} before this run",
-                    WorkEventPayload.StepPayload(no > 0 ? no : null, kind));
+                    $"[{(no > 0 ? no : 0)}/{total}] {step.Title} — {RunOutcomeDecision.Word(kind, session.Records.GetValueOrDefault(step.Id)?.Cause)} before this run",
+                    WorkEventPayload.StepPayload(no > 0 ? no : null, kind,
+                        engineCheck: session.Records.GetValueOrDefault(step.Id)?.Cause is OutcomeCause.CoverageGateRejected or OutcomeCause.CheckGateRejected,
+                        // A declared check's rejection: the record keeps the cause, not which check - its reason says that.
+                        checkId: session.Records.GetValueOrDefault(step.Id)?.Cause == OutcomeCause.CheckGateRejected ? "" : null));
             }
         }
 
@@ -2039,10 +2493,28 @@ public sealed partial class Orchestrator : IOrchestrator
                 scope.TaskId, scope.RunId, intent.Context, wct)).Results.ToArray();
 
         // Why the run cannot go on after a wave, or null: a workspace the engine's own trial builds changed
-        // and could not put back is not one any further step may build on.
+        // and could not put back is not one any further step may build on - nor one a blocking check owed at this wave's
+        // end failed on (Plan Phase 3.2), run after the wave's builds are validated, on the workspace as the wave left it.
+        // The owed checks are run even with no step in the wave: a resumed run carries them over from a checkpoint whose
+        // open wave may be empty, and an obligation left owed would hold the dispatcher (OwesAtWave) for good.
         async Task<string?> WaveBoundaryAsync()
         {
-            if (waves is null || waves.Steps is not { Count: > 0 } steps) return null;
+            if (waves is null) return null;
+            var no = waves.Closed + 1;
+            var steps = waves.Steps;
+            var stop = steps.Count > 0 ? await ValidateWaveAsync(steps) : null;
+            var owed = OwesAtWave(session);
+            var stopForChecks = await WaveChecksAsync(session, no, steps.Count > 0 ? WaveLedger.Span(steps) : null, intent.Context,
+                Publish, stepLifetime.Token);
+            // What is still owed is what a resume must pick up: discharged here, it is not owed again.
+            if (owed)
+                await CheckpointAsync();
+            return stop ?? stopForChecks;
+        }
+
+        async Task<string?> ValidateWaveAsync(IReadOnlyList<WaveStep> steps)
+        {
+            if (waves is null) return null;
             string? stop = null;
             var wct = stepLifetime.Token;
             var root = _workspace.RootPath;
@@ -2167,6 +2639,13 @@ public sealed partial class Orchestrator : IOrchestrator
             return stop;
         }
 
+        // A staged run takes no pause (Plan Phase 4.2), as a quick action takes none: a pause is only worth taking if the
+        // run can be resumed from it, and a staged run cannot - its proposals live in this process's memory, and the
+        // checkpoint store refuses to keep its checkpoints (RunCheckpoint.Staged). Held, it would stop with its steps
+        // undone and nothing to carry them on; not held, it runs on to its end and says the pause was not taken.
+        var stagedRun = _settings?.Staged == true;
+        var pause = stagedRun ? null : _pause;
+
         // Dispatcher: keep up to maxParallel steps in flight, topping up as each one finishes.
         var pump = Task.Run(async () =>
         {
@@ -2196,7 +2675,14 @@ public sealed partial class Orchestrator : IOrchestrator
                     // resume does not quietly do work a limit had already refused.
                     await CheckpointAsync();
                 }, () => events.Writer.TryComplete(), waves is null ? null : WaveBoundaryAsync,
-                waves is null ? null : () => waves.Waiting);
+                // Two reasons to start nothing new, one gate: a wave waiting to be validated, and a pause (Plan Phase
+                // 4.2). Held, the dispatcher lets what is running finish - a pause cancels nothing, unlike Stop - and a
+                // wave that ends meanwhile is still validated at its boundary, before the run ends. Null when neither
+                // can hold, so a run nobody can pause is dispatched exactly as before.
+                // A check owed at the wave's end (Plan Phase 3.2) holds the dispatcher too: the boundary it is owed at is the
+                // moment nothing is running, and a steady stream of new steps would never let that moment come.
+                waves is null && pause is null ? null
+                    : () => pause?.IsRequested == true || waves?.Waiting == true || (waves is not null && OwesAtWave(session)));
         }, CancellationToken.None);
 
         try
@@ -2215,6 +2701,50 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
+        // Paused (Plan Phase 4.2): the dispatcher stopped because a pause held it, with steps it could have started.
+        // Every step that was running has finished and committed - its outcome, its card, its checkpoint - so this is
+        // a step boundary, and the run ends HERE: no AbandonPending and no skip cascade (the steps left are not
+        // skipped, they are still to do), no closing documents, criteria or final checks (they are about a finished
+        // run, and the run that finishes is the resume). What it does is save the checkpoint it will be carried on
+        // from, marked Paused, and keep its answers and baseline (StopsAtQuestions) as a blocked run does.
+        // Told from a cycle by HasReady: a pause with nothing left that could start is not a pause of anything.
+        if (pause?.IsRequested == true && limitReason is null && scheduler.HasReady)
+        {
+            RunCheckpoint? pausedAt = null;
+            var notSaved = await checkpointWriter.SaveOrSayWhyNotAsync(() => pausedAt = CaptureCheckpoint() with { Paused = true });
+            var statuses = scheduler.Snapshot();
+            var settledSteps = pausedAt?.Finished ?? statuses.Values.Count(s => s is StepStatus.Done or StepStatus.Failed or StepStatus.Skipped);
+            // Blocked steps are not simply left: a resume tries them again, and the reason says so.
+            var blockedSteps = statuses.Values.Count(s => s == StepStatus.Blocked);
+            var boundaryKept = false;
+            if (notSaved is null)
+            {
+                // The checkpoint this resumed run began from is behind the one just saved; left, it would be offered
+                // as a second way to carry the same task on - redoing what this run did since.
+                if (resume is not null && resume.RunId != scope.RunId)
+                    await checkpointWriter.ForgetOnlyAsync(resume.RunId);
+            }
+            else
+            {
+                // Only the marker is lost. The boundary checkpoints written on the way - this run's last one is this
+                // same state without the flag; on a resume, the paused one it began from - and the wave captures are
+                // still good places to carry on from, and are KEPT: deleting them turned one failed write into "run
+                // the task again", worse than Stop. What is said is what is there, read back from the store.
+                yield return scope.Ev(EventKind.ErrorObserved, "The pause could not be saved: " + notSaved);
+                boundaryKept = await BoundaryKeptAsync();
+            }
+            var (pauseOutcome, pauseReason) = RunOutcomeDecision.Paused(settledSteps, scheduler.Total, blockedSteps, notSaved,
+                keepsCheckpoints: _checkpoints is not null, boundaryKept);
+
+            RecordWhatThisRunWrote(scope, intent);
+            yield return scope.Terminal(pauseOutcome, pauseReason,
+                artifacts => SummarizeArtifacts(artifacts, null, _artifacts.PendingPaths, _workspace.RootPath));
+            yield break;
+        }
+        if (stagedRun && _pause?.IsRequested == true)
+            yield return scope.Ev(EventKind.ContextAssembled, "A pause was asked for and not taken: a run that stages its "
+                + "changes cannot be resumed - its proposals are held in memory and its checkpoints are never kept - so it "
+                + "ran on to its end.");
 
         // The documents, once more from the final records - so a resumed run, or one a limit stopped,
         // leaves the same document a finished one would have for what it did.
@@ -2273,7 +2803,9 @@ public sealed partial class Orchestrator : IOrchestrator
                 // A step's own reason, or the engine's record of it - a step joining items has only the record.
                 session.ReasonOf.GetValueOrDefault(s.Id) ?? session.Records.GetValueOrDefault(s.Id)?.Reason,
                 s.ObligationIds,
-                BlocksOf(s.Id) is { Count: > 0 } b && b[^1].Cause != OutcomeCause.BlockedDependency ? b[^1].Reason : null)).ToArray(),
+                BlocksOf(s.Id) is { Count: > 0 } b && b[^1].Cause != OutcomeCause.BlockedDependency ? b[^1].Reason : null,
+                // What tells a rejection by the engine's coverage check from a reviewer's (RunOutcomeDecision.Word).
+                session.Records.GetValueOrDefault(s.Id)?.Cause)).ToArray(),
             // A blocked run waits on its checkpoint (Phase 7) - where the engine was given a store to keep one in.
             Resumable: _checkpoints is not null,
             Cycle: cycle,
@@ -2300,10 +2832,14 @@ public sealed partial class Orchestrator : IOrchestrator
         // have had their turn to change it.
         IReadOnlyList<CriterionResult> finalChecks = [.. await ProducedFilesNowAsync(scope, session, ct), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct,
                 session.Builds.Count > 0 ? await NetChangedAsync(workspaceChanges, beforeRun, ct) : null)];
-        foreach (var check in finalChecks)
+        // The declared checks owed at the run's end, and those that fire on it (Plan Phase 3.2) - with the run's own final
+        // checks, as a person's and not the engine's: a blocking one keeps the run from Completed (RunOutcomeDecision.Settle).
+        var declared = await RunEndChecksAsync(session, intent.Context, ct);
+        foreach (var check in (IEnumerable<CriterionResult>)[.. finalChecks, .. declared.Said])
             yield return scope.Criterion(check);
+        finalChecks = [.. finalChecks, .. declared.Decide];
 
-        var (runOutcome, runReason) = RunOutcomeDecision.Settle(work, decision, verification, finalChecks);
+        var (runOutcome, runReason) = RunOutcomeDecision.Settle(work, decision, verification, finalChecks, plan.CoverageObligations);
 
         // This run reached an end, whatever kind of end. Nothing here is resumable any more, and a
         // checkpoint left behind would offer to redo work that is finished. Except a BLOCKED run (Phase 7): it
@@ -2347,6 +2883,86 @@ public sealed partial class Orchestrator : IOrchestrator
             review is null ? null : RunProvider(review.ProviderId, budget));
     }
 
+    /// <summary>What a plan's steps do with the lists they depend on, and what they owe for it - see <see cref="CoverageContract"/>.</summary>
+    /// <param name="Unrunnable">Why the dependencies the classifier would add make the plan unable to run; null when they do not.</param>
+    private sealed record PlanCoverage(Plan Plan, IReadOnlyList<string> Notes, IReadOnlyList<string> Defects,
+        IReadOnlyList<UpstreamCoverage.Derived> Derived, string? Unrunnable = null);
+
+    /// <summary>
+    /// A plan's coverage contract (Plan Phase 1.1-1.2): each covers_all the planner wrote and the engine accepts, or the
+    /// run was given (a template's, a person's), read as the consume it states; every list dependency classified
+    /// (PlanConsumes); and the coverage each consume owes (UpstreamCoverage). A defect is either one the classifier found
+    /// or a consume no criterion can be derived for.
+    /// </summary>
+    private PlanCoverage CoverageContract(PlanResult plan)
+    {
+        var written = TypedCriteria.Validate(
+            plan.PlannedCriteria.Where(c => c.Kind.Trim().Equals("covers_all", StringComparison.OrdinalIgnoreCase)).ToArray(),
+            _workspace.RootPath, _ecosystems, plan.Plan).Accepted;
+        // The run's own coverage criteria say the same about the plan as the planner's: a dependency they cover is not
+        // unsaid. Only one the engine can check against this plan; any other declares nothing.
+        var given = _successCriteria.Where(c => c.Typed is { Kind: TypedCriterionKind.EvidenceCoversAll } t
+                                                && EvidenceCoverage.Invalid(t, plan.Plan) is null);
+        var folded = UpstreamCoverage.WithPlannedCoverage(plan.Plan!, [.. written, .. given]);
+        var classified = PlanConsumes.Classify(folded);
+
+        // A dependency the classifier adds for a consume can close a cycle (the source already waits for the consumer).
+        // The plan with it cannot run, and would be stopped as structurally invalid - for a coverage gap, which never
+        // stops a run. So it is not taken: the plan stays as it was, and the consume it could not honour is a defect.
+        // Said of the plan that is kept, in which the dependency is NOT there: the classifier's notes say it was added,
+        // and quoted here they told the person, the planner and the run's reason that the step runs after the list exists.
+        if (!ReferenceEquals(classified.Plan, folded) && PlanValidation.Error(classified.Plan) is { } closes)
+        {
+            var asWas = UpstreamCoverage.Derive(folded);
+            var unrunnable = "the dependencies the plan's consumes need would make it unable to run: "
+                             + string.Join("; ", classified.Added.Select(a =>
+                                 $"step {a.Consumer + 1} consumes step {a.Source + 1}'s list {a.Field} but does not depend on it"))
+                             + $"; adding {(classified.Added.Count == 1 ? "that dependency" : "those dependencies")} would close a cycle ("
+                             + closes.TrimEnd('.') + ")";
+            return new(folded, [], [.. classified.Defects, unrunnable, .. asWas.Defects], asWas.Criteria, unrunnable);
+        }
+        var derived = UpstreamCoverage.Derive(classified.Plan);
+        return new(classified.Plan, classified.Notes, [.. classified.Defects, .. derived.Defects], derived.Criteria);
+    }
+
+    /// <summary>What the planner is told when its plan does not say how it covers the lists it depends on.</summary>
+    // What a consume costs is said, not only that something is missing: told only "say consumes or after", the cheaper
+    // word wins, and "after" on a step that uses the data hands it nothing.
+    private static string CoverageDiagnostic(IReadOnlyList<string> defects)
+        => "The plan does not say how some steps account for the lists they depend on: " + string.Join("; ", defects) + ". "
+           + "A step that depends on a step handing on a list (path[], string[]) either consumes it or only waits for it. "
+           + "Consuming costs something: \"consumes\":[{\"step\":0,\"field\":\"pages\"}] holds the step to accounting for every "
+           + "item - it declares a results output (\"type\":\"results\", one entry per item) or is done for each item (\"forEach\") - "
+           + "and the run cannot end as completed until each item is shown covered. \"after\":[0] says the step only waits for "
+           + "that step: an order, not data, and it is handed none of that step's results. Steps are numbered from 1 in this "
+           + "message and from 0 in the plan.";
+
+    /// <summary>The checks still owed, for a checkpoint - null rather than empty when none is, as the checkpoint's other lists are.</summary>
+    private static IReadOnlyList<Enactive.Core.Checks.PendingCheck>? PendingChecksNow(RunSession session)
+    {
+        lock (session.PendingChecks)
+            return session.PendingChecks.Count > 0 ? session.PendingChecks.ToArray() : null;
+    }
+
+    /// <summary>
+    /// What the waves' checks came to that holds the run back, for a checkpoint (RunCheckpoint.HeldBackBy): the results that
+    /// keep the run from Completed (CriterionResult.Blocking), without their whole output - it is in the run's folder
+    /// already, and a checkpoint is written on every step boundary. Null rather than empty when none does.
+    /// </summary>
+    private static IReadOnlyList<CriterionResult>? HeldBackNow(RunSession session)
+    {
+        lock (session.BoundaryChecks)
+            return session.BoundaryChecks.Where(r => r.Blocking).Select(r => r with { Output = null }).ToArray() is { Length: > 0 } held
+                ? held : null;
+    }
+
+    /// <summary>The protected files released so far, for a checkpoint - null rather than empty when none was.</summary>
+    private static IReadOnlyList<string>? ReleasedNow(RunSession session)
+    {
+        lock (session.ProtectedReleased)
+            return session.ProtectedReleased.Count > 0 ? session.ProtectedReleased.Order(StringComparer.Ordinal).ToArray() : null;
+    }
+
     /// <summary>The plan a checkpoint is carrying, rebuilt with the step ids it was written with.</summary>
     private static PlanResult PlanOf(RunCheckpoint checkpoint)
     {
@@ -2359,7 +2975,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 {
                     ObligationIds = s.ObligationIds, Output = s.Output,
                     ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
-                    Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly
+                    Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly, ChangesProtected = s.ChangesProtected,
+                    Consumes = s.Consumes, OrderOnly = s.OrderOnly
                 })
             .ToArray();
 
@@ -2370,7 +2987,8 @@ public sealed partial class Orchestrator : IOrchestrator
         return new PlanResult(
             IntentDisposition.Task, checkpoint.Title, new Plan(Guid.NewGuid(), steps),
             Readout: PlanReadout.Understood)
-            { Checks = checkpoint.Checks ?? Array.Empty<SuccessCriterionDefinition>(), RestoredChecks = checkpoint.Checks is not null, Restrictions = checkpoint.Restrictions, ActionPolicy = checkpoint.ActionPolicy };
+            { Checks = checkpoint.Checks ?? Array.Empty<SuccessCriterionDefinition>(), RestoredChecks = checkpoint.Checks is not null, Restrictions = checkpoint.Restrictions, ActionPolicy = checkpoint.ActionPolicy,
+              CoverageObligations = checkpoint.CoverageObligations ?? [] };
     }
 
     /// <summary>What each step's status was when the checkpoint was written.</summary>
@@ -2597,20 +3215,42 @@ public sealed partial class Orchestrator : IOrchestrator
         public IReadOnlyList<string> Keep { get; set; } = [];
 
         /// <summary>
+        /// The last verdict on the step's work sent it back - a review's, or the engine's gate - and <see cref="Keep"/> is
+        /// what that verdict found right. Set at each send-back; an attempt after it that ends the step with a verdict of
+        /// its own (a pass, a rejection, a missing verdict) decides the step itself. What it is for: a step that ends
+        /// Incomplete or Failed after it has no newer verdict, and its work goes back as a rejected step's does
+        /// (RevertRejectedAsync).
+        /// </summary>
+        public bool SentBack { get; set; }
+
+        /// <summary>
         /// The tools this run kept back from the step and why, as <see cref="ToolOffer.Because"/> words it; null
         /// when none were. Carried out of the loop for the review, which judges what the step says it could not do.
         /// </summary>
         public string? KeptBack { get; set; }
 
+        /// <summary>The declared check whose failure rejected the step at its gate (OutcomeCause.CheckGateRejected), for its card.</summary>
+        public string? RejectedByCheck { get; set; }
+
         /// <summary>Why, as a code: what was recorded, or what the outcome implies.</summary>
         public OutcomeCause Cause => _cause ?? StepRecord.CauseOf(Kind);
         private OutcomeCause? _cause;
 
-        public void Set(StepOutcomeKind kind, string? reason, OutcomeCause? cause = null)
+        /// <summary>
+        /// What stopped the step short of a verdict, in a few words for a person ("the provider gave out", "the run's
+        /// budget ran out"), where a limit or a failure ended it; null otherwise. Said above the revert of a step sent back
+        /// that then ended so (RevertRejectedAsync): without it the line read as put back for a verdict, when what went
+        /// back included what an attempt after the verdict did, which no verdict judged.
+        /// </summary>
+        public string? StoppedBy { get; private set; }
+
+        // Every Set replaces StoppedBy: a limit's words left over from an earlier ending would name the wrong cause.
+        public void Set(StepOutcomeKind kind, string? reason, OutcomeCause? cause = null, string? stoppedBy = null)
         {
             Kind = kind;
             Reason = reason;
             _cause = cause;
+            StoppedBy = stoppedBy;
         }
     }
 
@@ -3043,7 +3683,9 @@ public sealed partial class Orchestrator : IOrchestrator
         IReadOnlyList<SuccessCriterionDefinition> criteria,
         Guid taskId, Guid runId, WorkContext context, CancellationToken ct,
         // What this run's steps handed on: a coverage criterion is decided from it and from nothing else.
-        IEnumerable<StepOutput>? outputs = null)
+        IEnumerable<StepOutput>? outputs = null,
+        // A declared check's own time for each command (ToolContext.CommandTimeoutSeconds); null: the tool's own limit.
+        int? commandTimeoutSeconds = null)
     {
         // A semantic criterion is judged with its step, by its reviewer, and by nothing else (Phase 1.4): it is not a
         // command, and there is nothing here that could decide it.
@@ -3056,7 +3698,7 @@ public sealed partial class Orchestrator : IOrchestrator
         {
             var handed = outputs?.ToArray() ?? [];
             var rest = criteria.Where(c => c.Typed is not { FromRun: true }).ToArray();
-            var others = await CheckSuccessAsync(rest, taskId, runId, context, ct);
+            var others = await CheckSuccessAsync(rest, taskId, runId, context, ct, commandTimeoutSeconds: commandTimeoutSeconds);
             var results = new List<CriterionResult>(criteria.Count);
             var next = 0;
             foreach (var c in criteria)
@@ -3073,7 +3715,7 @@ public sealed partial class Orchestrator : IOrchestrator
             Context: context,
             PermissionPolicy: _policy,
             WorkspaceRoot: _workspace.RootPath,
-            Artifacts: _artifacts);
+            Artifacts: _artifacts) { CommandTimeoutSeconds = commandTimeoutSeconds };
 
         return await _successEvaluator.EvaluateAsync(
             criteria, _tools, _permissions, _policy, _decisions, toolContext, taskId, ct);
@@ -3185,14 +3827,20 @@ public sealed partial class Orchestrator : IOrchestrator
         // What the step has loaded from its tool catalog so far - the step's, shared by its attempts (ToolBudget).
         List<string>? loadedTools = null,
         // What the request says may be changed, and the step's title for the question (ChangeLimitGuard).
-        ChangeLimitGuard? changeLimits = null, string? stepTitle = null)
+        ChangeLimitGuard? changeLimits = null, string? stepTitle = null,
+        // The run's declared checks (RunSession.Checks): this loop runs their write-time ones (WriteChecks). Null - the
+        // final checks' repair, a run with none - runs none.
+        Enactive.Core.Checks.CheckSnapshot? checks = null,
+        // The items each results field is to be keyed by, as the step's coverage gate counts them (EvidenceCoverage.Owed).
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? owedItems = null)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
         // guessed. Pessimistic until proven otherwise: falling out of the loop means the iteration
         // cap was reached, which is not success.
         loopResult.Set(StepOutcomeKind.Incomplete,
-            $"ran for {RunawayCeiling} turns without a final answer");
+            $"ran for {RunawayCeiling} turns without a final answer",
+            stoppedBy: $"the step used all {RunawayCeiling} turns it is given without a final answer");
 
         WorkEvent Ev(EventKind kind, string summary)
             => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
@@ -3334,7 +3982,14 @@ public sealed partial class Orchestrator : IOrchestrator
         // The step being worked, as the modules that decide about it read it - its record of repetition (counted, not
         // turns - see StallLimit) included, which a handover starts over (StepFrame.StartOver).
         var frame = new StepFrame(taskId, runId, stepNo, _workspace, _tools.Definitions, messages, journal, reads, store,
-            outputSchema, outputSlot, submitTool, boundary, changes, stepStart);
+            outputSchema, outputSlot, submitTool, boundary, changes, stepStart, owedItems);
+
+        // The run's write-time checks for this step (Plan Phase 3.2), and what is said once a run about those it does not
+        // run - all of them in a staged run, a check too long for a turn. None declared: null, and nothing below changes.
+        var writeChecks = WriteChecks.ForStep(checks, _settings?.Staged == true, frame, out var aboutWriteChecks);
+        foreach (var sentence in aboutWriteChecks)
+            if (FirstTimeSaid(runId, sentence))
+                yield return Ev(EventKind.ContextAssembled, sentence);
 
         // How many times this step has already started over with a handover, and how many turns
         // the CURRENT conversation has taken. The iteration counter keeps counting the whole step,
@@ -3417,11 +4072,13 @@ public sealed partial class Orchestrator : IOrchestrator
         // What happens to each call before its tool runs, in order - see CallAdmission. It also keeps the step's
         // own report that it cannot go on: the turn's other calls are answered, not run, and the step ends blocked
         // when the turn does.
-        // Whether each turn ends the step, and how - in one order, with its once-only reminders (see StepEnding). It
-        // keeps the step's open calls, which the admission and the accounting of results write to and this loop does not.
+        // Whether each turn ends the step, and how - in one order, with its reminders told under this run's limits, the
+        // attended or the unattended pair (see StepEnding, ObligationLoop). One per attempt, so what it has told lives as
+        // long as the attempt. It keeps the step's open calls, which the admission and the accounting of results write to
+        // and this loop does not.
         var stepEnding = new StepEnding(frame,
             async (path, token) => await store.TryReadPendingAsync(path, token) ?? await ReadOrNullAsync(path, token),
-            stepCriteria, reviewed);
+            stepCriteria, reviewed, _options.ObligationNudges.For(_unattended));
 
         var admission = new CallAdmission(frame, _tools, _permissions, worker, EffectivePolicyFor(worker), offer, _progress,
             _decisions, _decisionGate, granted, _writableRoots, toolsOnRequest, mayReportBlocked,
@@ -3458,7 +4115,7 @@ public sealed partial class Orchestrator : IOrchestrator
             messages.AddRange(parkedAt.Messages);
             foreach (var done in parkedAt.Actions)
                 journal.Record(done.Step, done.Tool, done.Arguments, done.Outcome, done.Output, done.WorkspaceEffect,
-                    done.ChangedPaths, done.ExitCode, done.FileDeletion, done.Origin);
+                    done.ChangedPaths, done.ExitCode, done.FileDeletion, done.Origin, done.Named, done.Change);
             foreach (var waiting in parkedAt.Pending)
                 messages.Add(ChatMessage.Tool(waiting.Id,
                     "NOT CARRIED OUT: the run stopped here to wait for a decision, and it has now been answered. "
@@ -3474,7 +4131,7 @@ public sealed partial class Orchestrator : IOrchestrator
         {
             if (runBudget.TurnExhausted is { } turnSpent)
             {
-                loopResult.Set(StepOutcomeKind.Incomplete, turnSpent);
+                loopResult.Set(StepOutcomeKind.Incomplete, turnSpent, stoppedBy: "the run's budget ran out");
                 yield return Ev(EventKind.ErrorObserved, turnSpent);
                 yield break;
             }
@@ -3774,7 +4431,7 @@ public sealed partial class Orchestrator : IOrchestrator
             // Recheck after a handover, which is itself a billed model request.
             if (runBudget.TurnExhausted is { } afterHandover)
             {
-                loopResult.Set(StepOutcomeKind.Incomplete, afterHandover);
+                loopResult.Set(StepOutcomeKind.Incomplete, afterHandover, stoppedBy: "the run's budget ran out");
                 yield return Ev(EventKind.ErrorObserved, afterHandover);
                 yield break;
             }
@@ -3927,7 +4584,7 @@ public sealed partial class Orchestrator : IOrchestrator
                             $"the context window is full: this turn needs about {scale.TokensFor(sizeNow)} "
                             + $"of the {window} tokens this model was given (num_ctx), and there is nothing "
                             + "left to trim";
-                        loopResult.Set(StepOutcomeKind.Incomplete, reason);
+                        loopResult.Set(StepOutcomeKind.Incomplete, reason, stoppedBy: "the model's context window was full");
                         yield return Ev(EventKind.ErrorObserved,
                             char.ToUpperInvariant(reason[0]) + reason[1..]
                             + ". Raise num_ctx in Settings, or use a model with a larger window.");
@@ -4014,7 +4671,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 if (runawayStops > 1)
                 {
                     loopResult.Set(StepOutcomeKind.Incomplete,
-                        $"the model's reply ran away again after being told why the first was stopped: {stopped.Reason}");
+                        $"the model's reply ran away again after being told why the first was stopped: {stopped.Reason}",
+                        stoppedBy: "the model's reply ran away twice");
                     yield break;
                 }
 
@@ -4057,7 +4715,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 {
                     var why = squeezed ? $"the context window filled up: {lastPromptTokens} of {hardWindow} tokens; {reason}"
                         : reason + "; two recovery turns were already allowed";
-                    loopResult.Set(StepOutcomeKind.Incomplete, why);
+                    loopResult.Set(StepOutcomeKind.Incomplete, why,
+                        stoppedBy: squeezed ? "the model's context window was full" : "the model's replies kept coming back cut off or unreadable");
                     yield return Ev(EventKind.ErrorObserved, why + (squeezed ? ". Raise num_ctx or use a larger window." : ". Use smaller actions or adjust generation budgets."));
                     yield break;
                 }
@@ -4153,11 +4812,18 @@ public sealed partial class Orchestrator : IOrchestrator
             // with the size of the job: seven new files are seven turns of progress, while one file
             // read three times is three turns of nothing however big the project is.
             var advanced = frame.Progress.Advanced(toolCalls);
-            if (!advanced && frame.Progress.Stalled >= StallLimit)
+            // Except a turn that puts back a change this step made: run it, then judge the next turn as before. Run
+            // da4b3b, 2026-10-19: stopped on the restore that would have undone its own temporary break, the step ended
+            // Incomplete with the break in place, and the run's final checks failed on it (StepProgress, remarks).
+            if (!advanced && frame.Progress.Stalled >= StallLimit && frame.Progress.LetThroughToPutBack(toolCalls))
+                yield return Ev(EventKind.ContextAssembled, "This turn only repeats earlier calls, but it puts back a change "
+                    + "this step made: it is run, and the next turn is judged as before.");
+            else if (!advanced && frame.Progress.Stalled >= StallLimit)
             {
                 var repeated = frame.Progress.Describe();
                 loopResult.Set(StepOutcomeKind.Incomplete,
-                    $"stopped after {StallLimit} turns that only repeated earlier tool calls: {repeated}");
+                    $"stopped after {StallLimit} turns that only repeated earlier tool calls: {repeated}",
+                    stoppedBy: "the step got stuck repeating the same calls");
                 yield return Ev(EventKind.ErrorObserved,
                     $"The model spent {StallLimit} turns repeating tool calls it had already made "
                     + $"({repeated}) without doing anything new; stopping this step. It is stuck rather "
@@ -4178,7 +4844,8 @@ public sealed partial class Orchestrator : IOrchestrator
             var turnOrigin = recovered ? ToolCallOrigin.Healed
                 : resent ? ToolCallOrigin.Nudged
                 : attemptOrigin;
-            var accounting = new ToolResultAccounting(frame, _tools, repairAttempts, _options.RepairConsultation.Enabled, turnOrigin);
+            var accounting = new ToolResultAccounting(frame, _tools, repairAttempts, _options.RepairConsultation.Enabled, turnOrigin,
+                recordNamed: _options.StepOutputs, writeChecks: writeChecks);
             var readResults = new Dictionary<int, ToolInvocation.Result>();
             // Calls admitted ahead of the batch of reads they run in, with what each left kept until its turn comes - the
             // feed, the journal and the conversation keep the calls' order (CallAdmission.Held).
@@ -4343,6 +5010,25 @@ public sealed partial class Orchestrator : IOrchestrator
 
                 messages.Add(ChatMessage.Tool(call.Id, reply));
             }
+
+            // The write checks this turn's writes owe, each run once now that the turn's calls are answered, and told with
+            // the result of the last write each covers - before the worker is asked again (WriteChecks). The engine's own
+            // commands, under the run's policy, as the final checks are run.
+            //
+            // Each result is the check's criterion event, fired on write (Plan Phase 3.3) - said in the words the worker's
+            // line was, its output kept in the run's folder: one file per check and step, written over at each turn, as its
+            // journal entry is (the latest is the one the step ends on; a file per turn would be an edit loop's worth).
+            if (writeChecks is { Owed: true })
+                foreach (var said in await writeChecks.RunOwedAsync(WriteChecks.WhyNotRun(_tools, _permissions, _policy),
+                             async (criterion, token) => (await CheckSuccessAsync([criterion], taskId, runId, context, token)).Results[0], ct))
+                    yield return said is { Result: { } wrote, CheckId: { } writeCheck }
+                        ? WriteCheckEvent(said.Line, Recorded(wrote, new Enactive.Core.Checks.CheckFiring(writeCheck, Enactive.Core.Checks.CheckBoundary.Write) { Step = stepNo }, runId,
+                            replace: true))
+                        : Ev(EventKind.ContextAssembled, said.Line);
+
+            WorkEvent WriteCheckEvent(string line, CriterionResult r)
+                => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.CriterionEvaluated, line,
+                       WorkEventPayload.CriterionPayload(r));
 
             // A step that said it cannot go on ends blocked now that its turn's calls are answered (StepEnding).
             if (admission.ReportedBlocked is { } reportedBlocked)
@@ -4732,6 +5418,19 @@ public sealed partial class Orchestrator : IOrchestrator
             + "above needs something you have not looked at yet. A worker-message target means correct your reply, not a file. The original request and its O-ID map are in this conversation, not in the first lines of source files. Files you wrote are still there as you left "
             + "them: change the passages the points are about with edit_file, rather than writing a whole "
             + "file again."));
+
+    /// <summary>
+    /// What a step is told when the ENGINE's coverage check sent it back (StepCoverageGate), not a reviewer: said as the
+    /// count it is, so the step does not argue with a judgement nobody made or redo work the count did not question.
+    /// Files stay as they are between attempts, as after a review.
+    /// </summary>
+    private static void RetryAfterCoverageCheck(List<ChatMessage> convo, string advice, string what)
+        => convo.Add(ChatMessage.User(
+            $"The engine's coverage check did not pass the previous attempt of {what}. It is a count of what was done for each "
+            + "item of the list this step consumes - recorded reads, writes and calls, and a result handed on per item - and "
+            + "not a reviewer's judgement.\n" + advice + "\n"
+            + "What you already read, ran and wrote above still stands, and files you wrote are still there as you left them: "
+            + "do what the items above still need, and keep the rest."));
 
     /// <summary>
     /// Puts back what the rejected work produced, and takes it out of the run's artifact list so the

@@ -125,19 +125,67 @@ public sealed class StepEndingTests : IDisposable
 
     // ── told once, before any verdict ───────────────────────────────────────
 
-    [Fact]
-    public async Task A_criterion_the_plan_set_this_step_is_told_once_as_the_step_ends()
+    private static SuccessCriterionDefinition DiskReport()
+        => new("disk report", "") { Step = 0, Typed = new TypedCriterion(TypedCriterionKind.FileExists, "disk-report.md") };
+
+    private static async Task<List<WorkEvent>> EndWithEvents(StepEnding ending, StepEnding.Verdict verdict, StepEnding.Turn turn)
     {
-        var report = new SuccessCriterionDefinition("disk report", "") { Step = 0, Typed = new TypedCriterion(TypedCriterionKind.FileExists, "disk-report.md") };
-        var ending = Ending(criteria: [report]);
+        var events = new List<WorkEvent>();
+        await foreach (var e in ending.EndAsync(turn, verdict, CancellationToken.None))
+            events.Add(e);
+        return events;
+    }
+
+    /// <summary>
+    /// Told once, then looked at again as the step ends. It used to end Succeeded on the second look with nothing
+    /// said anywhere: with no reviewer, nothing ever saw a criterion the plan set that still failed.
+    /// </summary>
+    [Fact]
+    public async Task A_criterion_the_plan_set_this_step_is_told_once_and_a_step_still_failing_it_is_unfinished()
+    {
+        var ending = Ending(criteria: [DiskReport()]);
 
         var first = await End(ending, Says("Done."));
         var told = LastTold;
-        var second = await End(ending, Says("Done."));
+        var verdict = new StepEnding.Verdict();
+        var events = await EndWithEvents(ending, verdict, Says("Done."));
 
         Assert.Equal(StepEnding.Next.Continue, first.Next);
         Assert.StartsWith("Before this step ends: the plan checks this step's work", told);
-        Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Succeeded), (second.Next, second.Kind));
+        Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Incomplete), (verdict.Next, verdict.Kind));
+        Assert.Contains("disk-report.md", verdict.Reason);
+        Assert.Contains(events, e => e.Kind == EventKind.ErrorObserved && e.Summary.Contains("disk-report.md", StringComparison.Ordinal));
+    }
+
+    /// <summary>With a reviewer the step goes on to it as before; the review shows it the check (Orchestrator.Review), and the timeline says so.</summary>
+    [Fact]
+    public async Task A_reviewed_step_still_failing_its_criterion_goes_to_review_and_the_timeline_says_so()
+    {
+        var ending = Ending(criteria: [DiskReport()], reviewed: true);
+
+        await End(ending, Says("Done."));
+        var verdict = new StepEnding.Verdict();
+        var events = await EndWithEvents(ending, verdict, Says("Done."));
+
+        Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Succeeded), (verdict.Next, verdict.Kind));
+        var observed = Assert.Single(events, e => e.Kind == EventKind.ErrorObserved);
+        Assert.Contains("disk-report.md", observed.Summary);
+        Assert.Contains("review decides", observed.Summary);
+        Assert.Empty(_journal.Actions); // the review records the check itself; a second entry would say it twice
+    }
+
+    [Fact]
+    public async Task A_criterion_made_good_after_the_step_was_told_ends_it_succeeded_and_quietly()
+    {
+        var ending = Ending(criteria: [DiskReport()]);
+
+        await End(ending, Says("Done."));
+        _fx.Write("disk-report.md", "all disks healthy");
+        var verdict = new StepEnding.Verdict();
+        var events = await EndWithEvents(ending, verdict, Says("Written."));
+
+        Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Succeeded), (verdict.Next, verdict.Kind));
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.ErrorObserved);
     }
 
     /// <summary>
@@ -192,6 +240,19 @@ public sealed class StepEndingTests : IDisposable
         Assert.Equal(StepEnding.Next.Continue, told.Next);
         Assert.Equal((StepEnding.Next.End, StepOutcomeKind.Succeeded), (ended.Next, ended.Kind));
         Assert.Contains(_journal.Actions, a => a.Tool == "engine_open_calls");
+    }
+
+    /// <summary>The reminder to hand the result on changes what the model is asked; the timeline said nothing of it.</summary>
+    [Fact]
+    public async Task The_reminder_to_hand_the_result_on_is_on_the_timeline()
+    {
+        var ending = Ending(schema: Findings, slot: new StepOutputSlot());
+
+        var events = await EndWithEvents(ending, new StepEnding.Verdict(), Says("Done."));
+
+        var reminded = Assert.Single(events, e => e.Kind == EventKind.ContextAssembled);
+        Assert.Contains(StepOutputContract.ToolName, reminded.Summary);
+        Assert.EndsWith("The step is told, once.", reminded.Summary);
     }
 
     [Fact]

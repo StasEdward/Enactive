@@ -7,10 +7,10 @@
 @inject ServerHistory History
 
 @* The files a run wrote, each on a card as the window's (MainWindow.axaml 626-644 for the live run, 1087-1125 for a past
-   one): the path, what became of it under it, Review - its text, in the viewer on the screen - and, for an Operator,
-   Delete, asked first in the window's words (RunHistoryService.DeleteFile, through ServerHistory) in a dialog. Delete,
-   never the window's Undo: the service keeps no copy of what a run overwrote to put back (the window's
-   DiskArtifactStore), and the question says what it does - delete the file as it is on disk now. Every action is the
+   one): the path, what became of it under it, Review - what the run changed in it, as a diff against how it was before the run
+   (WrittenFileReview, from the copies the run's store kept), with the whole file a switch away; or the file as it is
+   with why there is no diff - and, for an Operator, Delete, asked first in the window's words
+   (RunHistoryService.DeleteFile, through ServerHistory) in a dialog: it deletes the file as it is on disk now. Every action is the
    service's to decide; a card it is done with offers nothing more, as the window's (ArtifactItemViewModel.CanAct) - and
    a file a rejected step put back says so and offers nothing, as the window marks its card (RunFiles.PutBackStatus):
    Review would show a file that is no longer the one the run wrote, and Delete would delete what was put back. *@
@@ -52,7 +52,11 @@
 
 @if (_viewing is { } viewing)
 {
-    <TextViewer Title="@viewing.Path" Text="@(viewing.Text ?? "")" Problem="@viewing.Problem" OnClose="() => _viewing = null" />
+    @* The diff first, when there is one - it is what Review is for - and the whole file one switch away; what the diff is
+       against, or why there is none, said above it. *@
+    <TextViewer Title="@viewing.Path" Text="@(viewing.Review.Text ?? "")" Problem="@viewing.Review.Problem"
+                Lead="@viewing.Review.Note" Rendered="@(viewing.Review.Diff is { } diff ? Changes(diff) : null)"
+                SourceLabel="Whole file" SourceTip="Show the whole file as it is now." OnClose="() => _viewing = null" />
 }
 
 @if (_asking is { } asking)
@@ -74,6 +78,9 @@
     /// <summary>The run's workspace, where its files are.</summary>
     [Parameter, EditorRequired] public string Root { get; set; } = "";
 
+    /// <summary>The run, whose record says how each file was before it: what Review diffs against.</summary>
+    [Parameter] public Guid RunId { get; set; }
+
     /// <summary>The files the run wrote, in the order first written.</summary>
     [Parameter] public IReadOnlyList<string> Paths { get; set; } = [];
 
@@ -92,7 +99,7 @@
     private readonly Dictionary<string, string> _status = new(StringComparer.Ordinal);
     private readonly HashSet<string> _done = new(StringComparer.Ordinal);
 
-    private (string Path, string? Text, string? Problem)? _viewing;
+    private (string Path, WrittenFileReview.Review Review)? _viewing;
     private (string Path, Question Question)? _asking;
 
     protected override async Task OnParametersSetAsync()
@@ -107,10 +114,9 @@
     }
 
     private async Task ReviewAsync(string path)
-    {
-        var (text, problem) = History.File((await Auth).User, Root, path);
-        _viewing = (path, text, problem);
-    }
+        => _viewing = (path, await History.ReviewAsync((await Auth).User, Root, RunId, path, CancellationToken.None));
+
+    private static RenderFragment Changes(string diff) => @<DiffView Diff="@diff" Numbered="true" />;
 
     private async Task AskDeleteAsync(string path)
     {

@@ -71,6 +71,14 @@ public sealed record RunRequest(
     public string? KeepProposalsIn { get; init; }
 
     /// <summary>
+    /// The host's "Pause after this step" for this run (Plan Phase 4.2): the host makes one, keeps it, and calls
+    /// <see cref="RunPause.Request"/> when the person asks. The run then starts nothing new, lets the steps running
+    /// finish, and ends <see cref="RunOutcomeKind.Paused"/> with a checkpoint it is resumed from like any other
+    /// (<see cref="Resume"/>). One per run - a resumed run is given a new one. Null: the run cannot be paused, as before.
+    /// </summary>
+    public RunPause? Pause { get; init; }
+
+    /// <summary>
     /// A task from a phone, governed by what is saved against THE WORKSPACE IT NAMES - its level, its worker,
     /// its staging - and not by the desktop's slider, which is about whatever folder happens to be open
     /// there. Reading the slider for both once ran a remote task at whatever permission an unrelated project
@@ -111,6 +119,12 @@ public sealed record ComposedRun(
             : Engine.ResumeRunAsync(Resume, Intent.Context, ct);
 
     public ValueTask DisposeAsync() => Resources.DisposeAsync();
+
+    /// <summary>
+    /// The declared checks this run is judged by (Plan Phase 3.1), as the engine was given them: read from the manifests
+    /// when it was composed, or a resumed run's checkpoint's. Null when there are none.
+    /// </summary>
+    public Enactive.Core.Checks.CheckSnapshot? Checks { get; init; }
 }
 
 /// <summary>
@@ -203,6 +217,14 @@ public static class RunComposer
         // second host in the same folder is two agents editing the same files (WorkspaceLease). Here, so no
         // host can forget it.
         var lease = WorkspaceLease.Take(workspace.RootPath);
+        // And within this process, never while its "Run checks now" runs there (WorkspaceActivity): the lease above counts
+        // this process's takes, so it does not keep a run out of a folder whose files the checks are reading.
+        var activity = WorkspaceActivity.TryRun(workspace.RootPath, out var checking);
+        if (activity is null)
+        {
+            lease.Dispose();
+            throw new WorkspaceInUseException(workspace.RootPath, null, checking);
+        }
         McpRunTools? tools = null;
         try
         {
@@ -249,6 +271,13 @@ public static class RunComposer
             if (request.Source == IntentSource.Remote)
                 policy = RemotePolicy.ForRemoteRun(policy);
 
+            // The declared checks, read ONCE, here (Plan Phase 3.1): the run uses this snapshot and reads no manifest
+            // itself, so a manifest edited or deleted while it runs cannot change what judges it. A resumed run is judged
+            // by the checks it was started with, from its checkpoint - for the same reason it keeps its permissions.
+            var checks = request.Resume is { } resuming
+                ? resuming.CheckSnapshot
+                : new CheckStore(workspace.RootPath, engine.GlobalChecks, KnownEcosystems.All).Snapshot();
+
             var orchestrator = new Orchestrator(new RunEngineResources
             {
                 Providers = engine.Providers,
@@ -267,9 +296,14 @@ public static class RunComposer
                 // A new kind is a new IEcosystem here; nothing in the orchestrator changes.
                 Ecosystems = KnownEcosystems.All,
                 SuccessCriteria = spec?.SuccessCriteria ?? [],
+                Checks = checks,
                 Limits = spec?.Limits ?? ExecutionLimits.None,
                 Checkpoints = new JsonCheckpointStore(workspace),
-                Settings = runSettings
+                Settings = runSettings,
+                // Where the run was started, and so whether anybody watches it - not who answers its questions: a
+                // console run under "--approve deny" can approve nothing and is watched all the same.
+                Unattended = !Attended(request),
+                Pause = request.Pause
             }, engine.EngineOptions);
 
             var context = await new ContextProvider(workspace, new EnvironmentProbe(), memory)
@@ -280,35 +314,46 @@ public static class RunComposer
                     orchestrator,
                     // The specification is recorded WITH the run, so reading it back later shows the
                     // template as it was rather than as it has since been edited.
-                    new RunRecorder(RunStoreFactory.Create(workspace), memory, workspace.Id, runSettings, spec?.Snapshot()),
+                    new RunRecorder(RunStoreFactory.Create(workspace), memory, workspace.Id, runSettings, spec?.Snapshot(), checks),
                     engine.Log),
                 new Intent(request.Resume?.TaskId ?? request.TaskId ?? Guid.NewGuid(), request.Prompt, request.Source,
                     context, DateTimeOffset.UtcNow, workerId),
                 artifacts,
                 request.Resume,
-                new Holding(tools, lease));
+                new Holding(tools, lease, activity))
+            {
+                Checks = checks
+            };
         }
         catch
         {
             // Every preparation step can fail, including choosing the memory store. Until ownership
             // passes to ComposedRun, release the workspace even if closing a tool connection also fails.
             try { if (tools is not null) await tools.DisposeAsync(); }
-            finally { lease.Dispose(); }
+            finally
+            {
+                activity.Dispose();
+                lease.Dispose();
+            }
             throw;
         }
     }
 
     /// <summary>
-    /// What a composed run holds until it is disposed: its tool servers, then the workspace. In one disposable
-    /// because hosts pass <see cref="ComposedRun.Resources"/> on (the remote runner does) and must not have to
-    /// know there are two.
+    /// What a composed run holds until it is disposed: its tool servers, then the workspace - its lease, and its count
+    /// among this process's runs there (WorkspaceActivity). In one disposable because hosts pass
+    /// <see cref="ComposedRun.Resources"/> on (the remote runner does) and must not have to know there are several.
     /// </summary>
-    private sealed class Holding(IAsyncDisposable tools, ProcessLease lease) : IAsyncDisposable
+    private sealed class Holding(IAsyncDisposable tools, ProcessLease lease, IDisposable activity) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {
             try { await tools.DisposeAsync(); }
-            finally { lease.Dispose(); }
+            finally
+            {
+                activity.Dispose();
+                lease.Dispose();
+            }
         }
     }
 

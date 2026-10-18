@@ -23,7 +23,11 @@ internal sealed record PastRun(
     IReadOnlyList<ModelWorkRow> Work,
     IReadOnlyList<string> Decisions,
     string? Request,
-    RunAgainOffer RunAgain);
+    RunAgainOffer RunAgain)
+{
+    /// <summary>The declared checks that fired for the run as a whole (RunFeed.RunChecks), from the same fold as <see cref="Cards"/>.</summary>
+    public IReadOnlyList<FeedCheck> RunChecks { get; init; } = [];
+}
 
 /// <summary>
 /// Reading the history of the service's workspaces (server plan 1.6), for anybody signed in.
@@ -69,20 +73,33 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         var settings = engine.Settings;
         // Whether the template is still there is a fact about now, read as the window reads it (its library in the folder).
         var spec = Core.Templates.ResolvedTaskSpec.Parse(record.Spec);
+        var feed = RunFeed.Replay(record);
         return (new PastRun(
             RunDigest.Of(record, attempts),
-            RunFeed.Replay(record).Cards,
+            feed.Cards,
             RunTimeline.Fold(record),
             RunRouting.From(record).Rows.ToList(),
             ModelWorkSplit.From(record, id => settings is null ? ModelReach.Unknown : ModelReaches.Of(settings, id)).Rows.ToList(),
             record.Decisions,
             RunHistory.RequestOf(record),
-            RunAgainOffer.Of(spec, spec is null ? null : new TemplateStore(known.RootPath).Find(spec.TemplateId))), null);
+            RunAgainOffer.Of(spec, spec is null ? null : new TemplateStore(known.RootPath).Find(spec.TemplateId)))
+        {
+            RunChecks = feed.RunChecks
+        }, null);
     }
 
     /// <summary>A file of a known workspace, as text, within the limits a page has (WorkspaceFiles).</summary>
     public (string? Text, string? Problem) File(ClaimsPrincipal user, string root, string relative)
         => Workspace(user, root) is { } known ? WorkspaceFiles.Read(known.RootPath, relative) : (null, Unknown(user));
+
+    /// <summary>
+    /// A file a run wrote, as a review shows it (WrittenFileReview): what the run changed in it against how it was before
+    /// the run, or the file as it is with why there is no diff. Whoever may read the file may review it.
+    /// </summary>
+    public async Task<WrittenFileReview.Review> ReviewAsync(ClaimsPrincipal user, string root, Guid runId, string relative, CancellationToken ct)
+        => Workspace(user, root) is { } known
+            ? await WrittenFileReview.OfAsync(known.RootPath, runId, relative, ct)
+            : new WrittenFileReview.Review(null, Unknown(user), null, "");
 
     private bool CanRead(ClaimsPrincipal user) => ServerAuth.StillValid(users, user) is { Role: >= Role.Viewer };
 
@@ -247,6 +264,87 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
         foreach (var run in gone)
             users.Audit(who, "run deleted", $"{known.RootPath}: {RunTitle.For(run)}");
         return (refused ?? $"{gone.Count} run{(gone.Count == 1 ? "" : "s")} deleted; the files they wrote are where they were.", gone.Count);
+    }
+
+    // ── "Run checks now" on a staged run (Plan Phase 3.2) ───────────────────
+    // A staged run's checks could not run while it ran: its writes were proposals. Once a person has decided them, the run's
+    // snapshotted checks run against the workspace as it is now (ChecksNow) - commands, run from a page, so by the roles that
+    // may apply proposals (ServerStaging.MayDecide) and in the audit trail next to apply and reject, refusals included.
+
+    /// <summary>
+    /// A run's "Run checks now" records, newest first, each current or outdated - for anybody who may read the history -
+    /// and whether the action is offered on this run (a staged run with checks to run) and to this person.
+    /// </summary>
+    public async Task<(IReadOnlyList<CheckRecordView> Records, bool Offered, bool CanRun, string? Problem)> ChecksAsync(
+        ClaimsPrincipal user, string root, Guid runId, CancellationToken ct)
+    {
+        if (Workspace(user, root) is not { } known)
+            return ([], false, false, Unknown(user));
+        var offered = ChecksNow.Refusal(await RecordAsync(known.RootPath, runId, ct)) is null;
+        var canRun = offered && ServerAuth.StillValid(users, user) is { } account && ServerStaging.MayDecide(account.Role);
+        try
+        {
+            return (await CheckRecordViews.ForRunAsync(known.RootPath, runId, ct), offered, canRun, null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Records that cannot be read are said to be so - never shown as none, which reads as "never checked".
+            return ([], offered, canRun, "This run's check records cannot be read: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Runs a staged run's checks now and keeps the record in its history; what to tell the person. A role that may not
+    /// apply proposals is refused, and the refusal is audited: somebody asking a page to run commands they may not run is
+    /// what an audit trail is for.
+    /// </summary>
+    public async Task<string> RunChecksNowAsync(ClaimsPrincipal user, string root, Guid runId, CancellationToken ct)
+    {
+        if (ServerAuth.StillValid(users, user) is not { } account)
+            return "Your session has ended. Sign in again.";
+        if (Workspace(user, root) is not { } known)
+            return Unknown(user);
+        var run = await RecordAsync(known.RootPath, runId, ct);
+        var title = run is null ? runId.ToString() : RunTitle.For(run);
+        if (!ServerStaging.MayDecide(account.Role))
+        {
+            users.Audit(account.Name, "staged run checks refused", $"{known.RootPath}: {title} (role {account.Role})");
+            return "Your role does not include running checks on proposed changes - the roles that apply them do.";
+        }
+        if (ChecksNow.Refusal(run) is { } refused)
+            return refused;
+        if (engine.Current is not { } composed)
+            return engine.Problem ?? "There is no engine to run on.";
+        // Not while a run of the service is going in the folder - one waiting its turn in the line too: the checks would read
+        // files a run is in the middle of changing. Said here, early; what holds against a run that starts a moment later
+        // is ChecksNow's own WorkspaceActivity, taken for as long as the checks run.
+        if (runs.List(user).Any(r => !r.Ended.IsCompleted && SameFolder(r.Workspace, known.RootPath)))
+            return "A run is going in this workspace; run the checks when it has ended, so they see the files as you left them.";
+
+        // Audited as it starts, before any command runs: the commands are what the trail is for, and a record that could not
+        // be kept afterwards (a locked database, a full disk) must not leave commands run from a page that nobody can trace.
+        users.Audit(account.Name, "staged run checks started", $"{known.RootPath}: {title}");
+        Core.Checks.CheckRecord? record;
+        string? problem;
+        try
+        {
+            (record, problem) = await ChecksNow.RunAsync(composed, WorkspaceInfo.For(known.RootPath), runId, account.Name,
+                known.Autonomy, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            users.Audit(account.Name, "staged run checks failed", $"{known.RootPath}: {title}: {ex.Message}");
+            // Said on the page, not thrown into it: a history that cannot be written is this press's failure, and a page
+            // that dies of it takes the person's other work on it along.
+            return "The checks could not be run or their record kept: " + ex.Message;
+        }
+        if (record is null)
+        {
+            users.Audit(account.Name, "staged run checks not run", $"{known.RootPath}: {title}: {problem}");
+            return problem ?? "The checks were not run.";
+        }
+        users.Audit(account.Name, "staged run checked now", $"{known.RootPath}: {title}: {CheckRecordViews.Counts(record.Results)}");
+        return $"Checked: {CheckRecordViews.Counts(record.Results)}. The record is kept with the run; it does not change how the run ended.";
     }
 
     /// <summary>
@@ -415,10 +513,9 @@ internal sealed class ServerHistory(UserStore users, ServerEngine engine, IRunCo
 
     private static string Count(int n, string what) => n == 1 ? $"1 {what}" : $"{n} {what}s";
 
-    // As the registry compares folders: on Windows C:\Repo and c:\repo are one.
-    private static bool SameFolder(string a, string b)
-        => string.Equals(WorkspaceRegistry.Normalise(a), WorkspaceRegistry.Normalise(b),
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    // One rule for "the same workspace folder", ServerChecks' too: full paths, a trailing separator ignored, case ignored
+    // where the file system ignores it - on Windows C:\Repo and c:\repo are one (WorkspaceActivity.SameFolder).
+    private static bool SameFolder(string a, string b) => Enactive.Core.Storage.WorkspaceActivity.SameFolder(a, b);
 
     // ── adding a workspace (Operators) ──────────────────────────────────────
 

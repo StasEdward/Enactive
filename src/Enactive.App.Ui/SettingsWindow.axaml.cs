@@ -35,7 +35,8 @@ internal sealed partial class SettingsWindow : Window
         string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null,
         Func<CancellationToken, Task<string>>? remoteCheck = null,
         Func<ConnectionCode, Func<string, Task<bool>>, Task<(bool Connected, string Detail)>>? remoteConnect = null,
-        RemoteDevices? remoteDevices = null)
+        RemoteDevices? remoteDevices = null,
+        ChecksViewModel? checks = null)
     {
         // Remote access is this window's own pane, over the copy the shared settings edit (IHostSettingsPane).
         RemoteSettingsViewModel remote = null!;
@@ -61,6 +62,9 @@ internal sealed partial class SettingsWindow : Window
                 "What it already read stays on it. To use it again, add it again from this computer.",
                 "Remove", "Keep");
         }
+        // The global checks (Plan Phase 3.5): files, written at once, as the templates are.
+        _viewModel = viewModel;
+        FollowWorkspace(checks);
         viewModel.CloseRequested += () => Close();
         viewModel.ProviderEditRequested += (config, saved) =>
             new ProviderEditWindow(config, saved).Show(this);
@@ -85,6 +89,19 @@ internal sealed partial class SettingsWindow : Window
         WorkerList.DoubleTapped += (_, e) => OpenTapped<WorkerRow>(e, row => row.EditCommand);
         McpList.DoubleTapped += (_, e) => OpenTapped<McpServerRow>(e, row => row.EditCommand);
         TemplateList.DoubleTapped += (_, e) => OpenTapped<TemplateRow>(e, row => row.EditCommand);
+    }
+
+    private readonly SettingsViewModel _viewModel = null!;
+
+    /// <summary>
+    /// The global Checks list, read over the workspace now open in the main window: set when the window opens, and again
+    /// when the main window's workspace changes, so the list never describes a folder that is no longer open.
+    /// </summary>
+    internal void FollowWorkspace(ChecksViewModel? checks)
+    {
+        _viewModel.Checks = checks;
+        if (checks is not null)
+            checks.ConfirmRequested += (headline, detail, confirm) => ConfirmWindow.AskAsync(this, headline, detail, confirm, "Keep");
     }
 
     /// <summary>

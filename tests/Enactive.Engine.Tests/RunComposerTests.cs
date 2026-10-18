@@ -55,7 +55,9 @@ public sealed class RunComposerTests
             new SessionApprovals())
         {
             Planner = new Planner(checksAuditEnabled: false),
-            Approvals = approvals
+            Approvals = approvals,
+            // Never the machine's own %APPDATA% checks: a run here must not depend on who runs the suite.
+            GlobalChecks = Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-global-checks")
         };
     }
 
@@ -148,6 +150,109 @@ public sealed class RunComposerTests
         // Autonomous would have written without asking; the Observe the run was started under asks.
         Assert.Contains(decisions.Requests, r => r.Subject == "write_file");
         Assert.False(fx.Exists("report.md"));
+    }
+
+    /// <summary>
+    /// The pause a host hands in with its request is the one the run obeys (Plan Phase 4.2), and the checkpoint it ends
+    /// with is on disk - through JSON - marked Paused, for the host's ordinary resume to carry on from.
+    /// </summary>
+    [Fact]
+    public async Task A_pause_handed_in_with_the_request_pauses_the_run_and_its_resume_finishes_it()
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(TwoStepPlan)) { WhenExhausted = Turn.Says("step done") },
+            TempApprovals(), EngineFixture.WorkerWith());
+        var pause = new Enactive.Core.Execution.RunPause();
+        pause.Request();
+
+        var paused = await RunAsync(engine, Request(fx, "write the report", IntentSource.CommandBar) with { Pause = pause },
+            new ScriptedDecisionHandler("allow"));
+
+        Assert.Equal(RunOutcomeKind.Paused, paused.Last().Outcome());
+        var kept = Assert.Single(await new JsonCheckpointStore(fx.Workspace).LoadAllAsync(CancellationToken.None));
+        Assert.True(kept.Paused);
+        Assert.Equal(2, kept.Remaining);
+
+        var resumed = await RunAsync(engine, new RunRequest(fx.Workspace, kept.Request, IntentSource.CommandBar, Resume: kept)
+            { Defaults = new(2) }, new ScriptedDecisionHandler("allow"));
+
+        Assert.Equal(RunOutcomeKind.Completed, resumed.Last().Outcome());
+        Assert.Empty(await new JsonCheckpointStore(fx.Workspace).LoadAllAsync(CancellationToken.None));
+    }
+
+    /// <summary>
+    /// A host's "Pause after this step" (PauseOffer), pressed while the first step is in flight - it is waiting on an
+    /// approval, so it cannot have ended first: the step finishes, the second never starts, and the run ends Paused. The
+    /// host resumes it with a pause of its own - a fresh one, offered again once the resumed run has its plan - and the
+    /// resume does exactly the step that was left.
+    /// </summary>
+    [Fact]
+    public async Task A_pause_pressed_while_a_step_runs_ends_the_run_paused_and_its_resume_finishes_it()
+    {
+        using var fx = new EngineFixture();
+        var engine = Engine(new FakeChatProvider(Turn.Says(TwoStepPlan),
+                Turn.Calls1("write_file", """{"path":"first.md","content":"one"}"""), Turn.Says("first done"))
+            { WhenExhausted = Turn.Says("step done") }, TempApprovals(), EngineFixture.WorkerWith("write_file"));
+        var offer = new Enactive.Application.Projections.PauseOffer(new Enactive.Core.Execution.RunPause());
+        var pressing = new PressesPauseWhenAsked(offer);
+
+        var paused = await RunHostingAsync(engine, Request(fx, "write the report", IntentSource.CommandBar, autonomy: 0)
+            with { Pause = offer.Pause }, pressing, offer);
+
+        Assert.Null(pressing.Said);
+        Assert.Equal(RunOutcomeKind.Paused, paused.Last().Outcome());
+        Assert.Equal(Enactive.Application.Projections.PauseStanding.Hidden, offer.Standing);
+        Assert.Equal(1, paused.Count(e => e.Kind == EventKind.StepStarted));
+        Assert.True(fx.Exists("first.md"));
+        var kept = Assert.Single(await new JsonCheckpointStore(fx.Workspace).LoadAllAsync(CancellationToken.None));
+        Assert.True(kept.Paused);
+        Assert.Equal((1, 1), (kept.Finished, kept.Remaining));
+
+        var again = new Enactive.Application.Projections.PauseOffer(new Enactive.Core.Execution.RunPause());
+        var offeredOnResume = false;
+        var resumed = await RunHostingAsync(engine, new RunRequest(fx.Workspace, kept.Request, IntentSource.CommandBar, Resume: kept)
+            { Defaults = new(0), Pause = again.Pause }, new ScriptedDecisionHandler("allow"), again,
+            _ => offeredOnResume |= again.Standing == Enactive.Application.Projections.PauseStanding.Offered);
+
+        Assert.True(offeredOnResume);
+        Assert.False(again.Pause!.IsRequested);
+        Assert.Equal(RunOutcomeKind.Completed, resumed.Last().Outcome());
+        Assert.Equal(1, resumed.Count(e => e.Kind == EventKind.StepStarted));
+        Assert.Empty(await new JsonCheckpointStore(fx.Workspace).LoadAllAsync(CancellationToken.None));
+    }
+
+    /// <summary>A run drained as a host drains it, every event folded into its pause control as it arrives.</summary>
+    private static async Task<List<WorkEvent>> RunHostingAsync(ComposedEngine engine, RunRequest request, IDecisionHandler decisions,
+        Enactive.Application.Projections.PauseOffer offer, Action<WorkEvent>? seen = null)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        await using var composed = await RunComposer.ComposeAsync(engine, request, decisions, cts.Token);
+        var events = new List<WorkEvent>();
+        await foreach (var ev in composed.Events(cts.Token))
+        {
+            offer.Apply(ev);
+            seen?.Invoke(ev);
+            events.Add(ev);
+        }
+        return events;
+    }
+
+    /// <summary>Somebody at the window: asked to approve the first step's write, they press Pause, then allow it.</summary>
+    private sealed class PressesPauseWhenAsked(Enactive.Application.Projections.PauseOffer offer) : IDecisionHandler
+    {
+        public string? Said { get; private set; } = "never asked";
+
+        public async Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
+        {
+            // The plan is on screen before any step asks anything; waited for only because the events are folded on
+            // the draining thread, not this one.
+            var until = DateTime.UtcNow.AddSeconds(10);
+            while (offer.Standing != Enactive.Application.Projections.PauseStanding.Offered
+                   && offer.Standing != Enactive.Application.Projections.PauseStanding.Pending && DateTime.UtcNow < until)
+                await Task.Delay(10, ct);
+            Said = offer.Request();
+            return new DecisionOutcome("allow");
+        }
     }
 
     // ── what governs a run: its workspace's level and worker ────────────────

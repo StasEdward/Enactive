@@ -237,6 +237,43 @@ public sealed class PastRunTests : ComponentHost
     private static AngleSharp.Dom.IElement Bar(IRenderedComponent<RunsScreen> screen, string name)
         => screen.FindAll(".command-bar button").Single(b => b.TextContent.Trim() == name);
 
+    /// <summary>
+    /// A staged run's page lists its "Run checks now" records - checked at their time, never a green - for anybody who reads
+    /// the history, and offers the action only to the roles that may apply proposals. A run that was not staged shows none.
+    /// </summary>
+    [Fact]
+    public async Task A_staged_runs_page_lists_its_check_records_and_offers_run_checks_now_to_an_operator()
+    {
+        var root = Known("project");
+        var past = await RecordedAsync(root);
+        Assert.Empty(Past("alice", root, past.RunId).FindAll(".check-records"));
+
+        Directory.CreateDirectory(Path.Combine(root, ".enactive", "checks"));
+        File.WriteAllText(Path.Combine(root, ".enactive", "checks", "notes.json"), """{"id":"notes","command":"echo ran","fireOn":"Run"}""");
+        var store = RunStoreFactory.Create(WorkspaceInfo.For(root));
+        await store.SaveAsync(past with
+        {
+            Settings = new RunSettings(3, "autonomous", null, Staged: true),
+            CheckSnapshot = new CheckStore(root, Path.Combine(_folders, "no-global"), KnownEcosystems.All).Snapshot()
+        }, CancellationToken.None);
+        await store.AddCheckRecordAsync(new Enactive.Core.Checks.CheckRecord(Guid.NewGuid(), past.RunId, "bob", DateTimeOffset.Now,
+            [], [new Enactive.Core.Checks.CheckResultLine("notes", Enactive.Core.Templates.CriterionOutcome.Failed, false, "echo ran", 1, "no")],
+            new Enactive.Core.Checks.StateFingerprint(Enactive.Core.Checks.FingerprintKind.None, "")), CancellationToken.None);
+
+        var operating = Past("alice", root, past.RunId);
+        operating.WaitForAssertion(() => Assert.Single(operating.FindAll(".check-records .check-record")));
+        Assert.Equal("Run checks now", operating.Find(".check-records .run-checks-now").TextContent.Trim());
+        var record = operating.Find(".check-record");
+        Assert.Contains("by bob", record.TextContent);
+        // A fingerprint that holds nothing is never shown current.
+        Assert.Contains("outdated", record.ClassList);
+        Assert.Contains("FAIL notes (echo ran), exit 1", record.QuerySelector(".check-line")!.TextContent);
+
+        var viewing = Past("vera", root, past.RunId);
+        viewing.WaitForAssertion(() => Assert.Single(viewing.FindAll(".check-records .check-record")));
+        Assert.Empty(viewing.FindAll(".run-checks-now"));
+    }
+
     /// <summary>An address naming a run the workspace does not have says so, rather than an empty frame.</summary>
     [Fact]
     public void A_run_the_workspace_does_not_have_is_said_to_be_missing()

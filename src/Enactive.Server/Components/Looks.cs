@@ -78,6 +78,18 @@ internal static class Looks
         _ => throw Unknown(level)
     };
 
+    /// <summary>
+    /// A declared check's verdict on a card, as Palette.CheckVerdict: passed green, failed red, not run amber - it verified
+    /// nothing, and must be seen.
+    /// </summary>
+    public static string Check(CheckVerdict verdict) => verdict switch
+    {
+        CheckVerdict.Pass => "tone-done",
+        CheckVerdict.Fail => "tone-failed",
+        CheckVerdict.NotRun => "tone-warning",
+        _ => throw Unknown(verdict)
+    };
+
     /// <summary>The icon of a line on a step card, as Palette.EntryIcon: what the step did, by its kind.</summary>
     public static string Entry(FeedEntryKind kind) => kind switch
     {
@@ -109,14 +121,17 @@ internal static class Looks
 
     /// <summary>
     /// An inbox item's edge and kind, as Palette.InboxKind: a result green, a question nobody was there to answer amber, an
-    /// error red. The kind is a word kept on disk, not an enum, and - unlike the tables above - one this does not know is
-    /// drawn muted rather than refused, as the window draws it: an item filed by a newer build must still be listed.
+    /// error red, a paused run amber. The kind is a word kept on disk, not an enum, and - unlike the tables above - one
+    /// this does not know is drawn muted rather than refused, as the window draws it: an item filed by a newer build must
+    /// still be listed.
     /// </summary>
     public static string Inbox(string kind) => kind.ToLowerInvariant() switch
     {
         "result" => "tone-done",
         "decision" => "tone-open",
         "error" => "tone-failed",
+        // Paused by somebody, resumed from where it stopped (Plan Phase 4.2): open, as an unfinished run's pill is.
+        "paused" => "tone-open",
         _ => "tone-idle"
     };
 
@@ -180,6 +195,22 @@ internal static class Looks
         // Both at once is not a state a change is in; the window's ChangeState cannot say it either.
         _ => throw Unknown((applied, rejected))
     };
+
+    /// <summary>One check's line in a "Run checks now" record: what it came to - a failure red, a check not run amber, a pass plain.</summary>
+    public static string CheckLine(CheckLineTone tone) => tone switch
+    {
+        // Plain, never green: a record is "checked at its time", and a green PASS under it reads as a standing pass.
+        CheckLineTone.Passed => "tone-plain",
+        CheckLineTone.Failed => "tone-failed",
+        CheckLineTone.NotRun => "tone-warning",
+        _ => throw Unknown(tone)
+    };
+
+    /// <summary>
+    /// A "Run checks now" record's edge: amber while the workspace still matches it - checked at its time, never a standing
+    /// green - and muted once it is outdated.
+    /// </summary>
+    public static string CheckRecord(bool outdated) => outdated ? "tone-idle" : "tone-open";
 
     /// <summary>A tier, 0 Observe to 3 Autonomous: a risk scale, green through blue and yellow to red.</summary>
     public static string Autonomy(int level) => level switch

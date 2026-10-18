@@ -3,6 +3,7 @@ namespace Enactive.Agents;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Builds;
 using Enactive.Core.Context;
+using Enactive.Core.Execution;
 using Enactive.Core.History;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
@@ -69,6 +70,13 @@ public sealed record RunEngineResources
     /// <summary>The checks that decide whether the run did what was asked - a template's; none for a typed request.</summary>
     public IReadOnlyList<SuccessCriterionDefinition> SuccessCriteria { get; init; } = [];
 
+    /// <summary>
+    /// The declared checks this run is judged by (Plan Phase 3.1), resolved once when it was composed (CheckStore) - the
+    /// run reads no manifest itself, so a manifest edited or deleted while it runs changes nothing about it. A resumed run
+    /// uses its checkpoint's instead, whatever this says. Null: none, which is every run before check manifests.
+    /// </summary>
+    public Enactive.Core.Checks.CheckSnapshot? Checks { get; init; }
+
     /// <summary>How far the run may go - a template's; none for a typed request.</summary>
     public ExecutionLimits Limits { get; init; } = ExecutionLimits.None;
 
@@ -85,6 +93,21 @@ public sealed record RunEngineResources
     /// run can be recognised as one that must not be checkpointed at all.
     /// </summary>
     public RunSettings? Settings { get; init; }
+
+    /// <summary>
+    /// Nobody is watching this run: it was started in the background, on a schedule or from a phone - not at a screen
+    /// that shows its questions (RunComposer.Attended). Decides which of EngineOptions.ObligationNudges' pairs its steps
+    /// are told under. Not the decision handler's CanApprove: that says whether an approval is possible at all, and is
+    /// false as well for a console run under "--approve deny", which somebody is watching. False - watched - for every
+    /// caller that does not say, which is what a test driving the engine is.
+    /// </summary>
+    public bool Unattended { get; init; }
+
+    /// <summary>
+    /// The host's "pause after this step" for this run (Plan Phase 4.2) - see <see cref="RunPause"/>. Null: the run
+    /// cannot be paused, which is how every run behaved before pausing existed.
+    /// </summary>
+    public RunPause? Pause { get; init; }
 
     // ── this machine's places ───────────────────────────────────────────────
 

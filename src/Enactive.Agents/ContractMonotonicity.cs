@@ -73,9 +73,12 @@ public static class ContractMonotonicity
                     : (CriterionStrength.Incomparable, "it looks for a text that does not include the old one");
 
             case TypedCriterionKind.EvidenceCoversAll:
-                // Other items, other results or another kind of evidence: not shown to be a superset (4.2).
+                // Other items, other results or another kind of evidence: not shown to be a superset (4.2). Nor one that now
+                // lets items be left out with a reason (a subset), or no longer does: a partition and a result per item
+                // ask different things.
                 return was.SourceStep == @is.SourceStep && was.SourceField == @is.SourceField
                        && was.ResultsStep == @is.ResultsStep && was.ResultsField == @is.ResultsField && was.Evidence == @is.Evidence
+                       && was.Subset == @is.Subset
                     ? (CriterionStrength.Same, "the same items, results and evidence")
                     : (CriterionStrength.Incomparable, "coverage of other items or by other evidence cannot be shown to cover as much");
 

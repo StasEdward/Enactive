@@ -136,13 +136,23 @@ internal sealed class LogWindowViewModel : ObservableObject
         ExportCommand = new RelayCommand(() => _ = ExportAsync());
         AnalyzeCommand = new RelayCommand(() => _ = AnalyzeAsync());
 
+        // Subscribed BEFORE the backlog is read, and the backlog's last Seq kept: the hub stores a line at once but hands it
+        // to subscribers later, from its pump. Read first and subscribed after, a line logged just before the view opened
+        // was in the backlog AND came again through the pump - shown twice (the service's log page on a slow CI runner,
+        // PR #58); subscribed after without the Seq, a line between the two was lost instead.
+        _hub.Entry += OnEntry;
         foreach (var entry in _hub.Snapshot().TakeLast(MaxRetained))
+        {
             _all.Add(new LogRow(entry));
+            _backlogUpTo = Math.Max(_backlogUpTo, entry.Seq);
+        }
         Rebuild();
 
         _drain = drain(DrainPending);
-        _hub.Entry += OnEntry;
     }
+
+    /// <summary>The last Seq the backlog held: a line the pump hands on that is not past it is already shown.</summary>
+    private long _backlogUpTo;
 
     /// <summary>Raised when rows were appended, so the view can scroll to the end if it wants to.</summary>
     public event Action? RowsAppended;
@@ -273,7 +283,9 @@ internal sealed class LogWindowViewModel : ObservableObject
         var added = new List<LogRow>();
         // Bound each dispatcher tick; a busy producer must not monopolise the UI.
         while (added.Count < 1000 && _pending.TryDequeue(out var entry))
-            added.Add(new LogRow(entry));
+            if (entry.Seq > _backlogUpTo)
+                added.Add(new LogRow(entry));
+        if (added.Count == 0) return;
         _all.AddRange(added);
         var trimmed = _all.Count > MaxRetained;
         if (trimmed) _all.RemoveRange(0, _all.Count - MaxRetained);

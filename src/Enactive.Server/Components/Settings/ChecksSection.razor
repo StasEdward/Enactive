@@ -1,0 +1,45 @@
+@using Enactive.Application
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ServerChecks Checks
+
+@* The window's AI · Checks (SettingsWindow.axaml): the service's global check manifests, in its data folder - the folder its
+   engine reads (ServerChecks.GlobalFolder) - listed over the workspace the person is in, so the list says what that
+   workspace shadows. Files, saved at once, which this page's Cancel does not undo; changed by an Admin as the person
+   (ServerChecks), audited. A workspace's own checks are on its Checks screen, from its card on the Runs screen. *@
+
+@if (_problem is { } problem)
+{
+    <p class="said">@problem</p>
+}
+else if (_list is { } list)
+{
+    <CascadingValue Value="list"><ChecksEditor /></CascadingValue>
+    @if (Workspace is { } ws)
+    {
+        <p class="hint"><a href="@Links.Checks(ws)">This workspace's own checks</a> are on its Checks screen.</p>
+    }
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The workspace the person is in, by its id - the one whose checks the global ones are listed over - or none.</summary>
+    [Parameter] public Guid? Workspace { get; set; }
+
+    /// <summary>That workspace's folder, or none.</summary>
+    [Parameter] public string? Root { get; set; }
+
+    private ChecksViewModel? _list;
+    private string? _problem;
+    private string? _shownFor;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_list is not null && _shownFor == Root)
+            return;
+        _shownFor = Root;
+        (_list, _problem) = Checks.Global((await Auth).User, Root);
+    }
+}

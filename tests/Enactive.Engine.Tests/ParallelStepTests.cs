@@ -1,5 +1,6 @@
 namespace Enactive.Engine.Tests;
 
+using Enactive.Agents;
 using Enactive.Core.Chat;
 using Enactive.Core.Events;
 using Enactive.Core.Permissions;
@@ -498,6 +499,58 @@ public sealed class ParallelStepTests
         }
 
         Assert.Equal(RunOutcomeKind.Failed, events.Last().Outcome());
+    }
+
+    /// <summary>
+    /// A step for each item that FAILS still lets its join start - a join waits for its items to end,
+    /// not to succeed - so the failure path is an unblocking too, and its StepCompleted must be in the
+    /// stream before anything that failure released. It used to mark the step failed first and say so
+    /// after, and the join's StepStarted could come in between.
+    ///
+    /// <para>Probabilistic, as a race is, so the run is repeated: with MarkFailed put back first, fifteen
+    /// invocations of this test all failed, the first offending run anywhere from the 2nd to the 16th of
+    /// 25; with the step reported first, every invocation passed.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_failing_item_is_reported_before_the_join_its_failure_releases_starts()
+    {
+        const int items = 8;
+        const string plan = """
+            {"disposition":"task","title":"review the wiki",
+             "steps":[{"title":"find pages","dependsOn":[],"output":{"pages":{"type":"path[]","description":"the pages"}}},
+                      {"title":"review page","dependsOn":[0],"forEach":{"step":0,"field":"pages"}},
+                      {"title":"write the report","dependsOn":[1]}]}
+            """;
+        var pages = Enumerable.Range(1, items).Select(i => $"wiki/p{i}.md").ToArray();
+
+        for (var run = 0; run < 25; run++)
+        {
+            using var fixture = new EngineFixture { StepOutputs = true, DynamicSteps = true };
+            foreach (var page in pages)
+                fixture.Write(page, "# page\n");
+
+            var provider = new ByStepChatProvider(plan)
+                .Step("find pages",
+                    Turn.Calls1(StepOutputContract.ToolName, $$"""{"pages":[{{string.Join(",", pages.Select(p => $"\"{p}\""))}}]}""", "s0"),
+                    Turn.Says("Found them."))
+                .Step("write the report", Turn.Says("Report written."));
+            foreach (var page in pages)
+                provider.Step($"review page: {page}", Turn.Says(""));       // an empty reply fails the step
+
+            var events = await fixture.RunAsync(
+                fixture.Build(provider, maxParallelSteps: 4), "review every wiki page");
+
+            var joinStarted = events.FindIndex(e => e.Kind == EventKind.StepStarted && e.Summary.Contains("(joining its items)"));
+            Assert.True(joinStarted >= 0, "the join never started");
+            foreach (var page in pages)
+            {
+                var item = events.FindIndex(e => e.Kind == EventKind.StepCompleted && e.Summary.Contains($"review page: {page} —"));
+                Assert.True(item >= 0, $"the step for {page} never finished");
+                Assert.Contains(events[item].StepOutcome(),
+                    new StepOutcomeKind?[] { StepOutcomeKind.Failed, StepOutcomeKind.Incomplete, StepOutcomeKind.ReviewRejected });
+                Assert.True(item < joinStarted, $"run {run}: the join started before the failed step for {page} was reported");
+            }
+        }
     }
 
     // ── N1, in the configuration it exists for ──────────────────────────────

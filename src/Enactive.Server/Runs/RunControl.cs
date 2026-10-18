@@ -29,7 +29,7 @@ internal sealed class ServerRun
         Workspace = workspace;
         Prompt = prompt;
         Ticket = ticket;
-        Session = new RunSession(workspace, owner, RunLauncher.Title(prompt), reachOf);
+        Session = new RunSession(workspace, owner, RunLauncher.Title(prompt), reachOf, pause: Pause);
         Questions.Changed += () => Listeners.Tell(Changed, "a run");
     }
 
@@ -69,6 +69,13 @@ internal sealed class ServerRun
     public RunSession Session { get; }
     public WebQuestions Questions { get; } = new();
     public CancellationTokenSource Cancellation { get; } = new();
+
+    /// <summary>
+    /// Its "Pause after this step" (Plan Phase 4.2): handed to the engine with its request (EngineExecutor.RequestFor),
+    /// beside the cancellation Stop uses, and asked by <see cref="RunControl.Pause"/>. Made with the run, so a resumed run -
+    /// a run of its own - has a fresh one: the paused run's had been asked for, and would have paused the resume at once.
+    /// </summary>
+    public Core.Execution.RunPause Pause { get; } = new();
 
     /// <summary>Why the run is not running yet, while it waits its turn; null once it runs.</summary>
     public string? Waiting => Ended.IsCompleted ? null : Ticket.Waiting;
@@ -184,6 +191,12 @@ internal interface IRunControl
     IReadOnlyList<ServerRun> List(ClaimsPrincipal user);
     ServerRun? Find(ClaimsPrincipal user, Guid id);
     string? Cancel(ClaimsPrincipal user, Guid id);
+
+    /// <summary>
+    /// "Pause after this step" (Plan Phase 4.2): the steps running now finish, nothing new starts, and the run ends Paused,
+    /// to be resumed from UNFINISHED. Whoever may cancel the run may pause it.
+    /// </summary>
+    string? Pause(ClaimsPrincipal user, Guid id);
     string? Answer(ClaimsPrincipal user, Guid id, Guid question, string choice);
 
     /// <summary>
@@ -462,6 +475,10 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
                 }
                 finally
                 {
+                    // Over, whether it ran or not. A run cancelled in the line, or refused as it was composed, never drained -
+                    // and the drain is where the session says its pause is over: its page kept a greyed "Pause after this
+                    // step" for a run that was gone.
+                    run.Session.PauseOffer.Ended();
                     run.End();
                 }
             }
@@ -570,6 +587,40 @@ internal sealed class RunControl(UserStore users, RunQueue queue, IRunExecutor e
         run.CancelledBy = account.Name;
         users.Audit(account.Name, "run cancelled", $"{run.Workspace}: {run.Prompt}" + (account.Name == run.Owner ? "" : $" (started by {run.Owner})"));
         run.Cancellation.Cancel();
+        return null;
+    }
+
+    /// <summary>
+    /// The run's owner or any Operator, as for <see cref="Cancel"/>, and only where the run can take a pause (PauseOffer): a
+    /// planned run that does not stage its changes - a quick action and a staged run ignore one, and accepted it would be a
+    /// pause that never happens. Audited as a stop is, once: asked again, it is still pending, and that is not refused.
+    /// </summary>
+    public string? Pause(ClaimsPrincipal user, Guid id)
+    {
+        if (Allowed(user, Role.Operator) is not { } account)
+            return NotAllowed(user, "pause a run");
+        if (Find(user, id) is not { } run)
+            return "There is no such run.";
+        if (run.Ended.IsCompleted)
+            return "The run has already ended.";
+
+        var offer = run.Session.PauseOffer;
+        bool first;
+        string? refused;
+        // Two people pressing at once: one of them asked for it, and only that one is audited.
+        lock (_gate)
+        {
+            first = offer.Standing == PauseStanding.Offered;
+            refused = offer.Request();
+        }
+        if (refused is not null)
+            return refused;
+        if (first)
+        {
+            users.Audit(account.Name, "run pause asked", $"{run.Workspace}: {run.Prompt}" + (account.Name == run.Owner ? "" : $" (started by {run.Owner})"));
+            // Every page with the run open says it is pending, not only the one that pressed.
+            run.Notify();
+        }
         return null;
     }
 
@@ -701,17 +752,20 @@ internal sealed class EngineExecutor(ServerEngine engine, ServerStaging staging)
     internal static RunRequest RequestFor(ServerRun run, WorkspaceInfo workspace, WorkspaceEntry saved, string? keepProposalsIn)
     {
         // The service account's own run, like the console's tick: no principal, its unwatched approvals.
+        // Every run with its own pause (ServerRun.Pause), whoever started it: its page offers "Pause after this step" to
+        // whoever may stop it, a schedule's and a background run's included.
         if (run.Scheduled is not null)
-            return new RunRequest(workspace, run.Prompt, IntentSource.Schedule, Spec: run.Spec) { Defaults = saved.Defaults };
+            return new RunRequest(workspace, run.Prompt, IntentSource.Schedule, Spec: run.Spec) { Defaults = saved.Defaults, Pause = run.Pause };
         if (run.Background)
-            return BackgroundRequest(workspace, run.Prompt, run.Owner, saved, run.TaskId, run.Resume, run.Spec);
+            return BackgroundRequest(workspace, run.Prompt, run.Owner, saved, run.TaskId, run.Resume, run.Spec) with { Pause = run.Pause };
         // A run from the browser (IntentSource.Web): attended, with the shell when the folder's level allows it, and
         // the person who started it named - whose remembered approvals answer for it (RunComposer, ApprovalStore rule 5).
         return new RunRequest(workspace, run.Prompt, IntentSource.Web, run.TaskId, run.Resume, run.Spec,
             Stage: saved.StageChanges, Principal: run.Owner)
         {
             Defaults = saved.Defaults,
-            KeepProposalsIn = keepProposalsIn
+            KeepProposalsIn = keepProposalsIn,
+            Pause = run.Pause
         };
     }
 

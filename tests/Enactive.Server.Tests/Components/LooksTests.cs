@@ -39,6 +39,7 @@ public sealed class LooksTests
         classes.AddRange(Enum.GetValues<DiffLineKind>().Select(Looks.Diff));
         classes.AddRange(Enum.GetValues<Enactive.Core.Diagnostics.LogLevel>().Select(Looks.Log));
         classes.AddRange(Enum.GetValues<FeedEntryKind>().Select(Looks.Entry));
+        classes.AddRange(Enum.GetValues<CheckVerdict>().Select(Looks.Check));
         classes.AddRange(Enum.GetValues<TemplateEdge>().Select(Looks.Template));
         classes.AddRange(Enum.GetValues<ScheduleState>().Select(Looks.Schedule));
         classes.AddRange(new[] { true, false }.Select(Looks.Local));
@@ -47,6 +48,8 @@ public sealed class LooksTests
         classes.Add(Looks.Change(applied: false, rejected: false));
         classes.Add(Looks.Change(applied: true, rejected: false));
         classes.Add(Looks.Change(applied: false, rejected: true));
+        classes.AddRange(Enum.GetValues<CheckLineTone>().Select(Looks.CheckLine));
+        classes.AddRange(new[] { true, false }.Select(Looks.CheckRecord));
 
         Assert.All(classes, c => Assert.Matches(@"^(tone|tier|edge)-[\w-]+$", c));
         // A class Looks hands out that the stylesheet does not define draws as no colour at all.
@@ -60,6 +63,10 @@ public sealed class LooksTests
         Assert.Equal("tone-running", Looks.Card(FeedCardStatus.Running));
         Assert.Equal("tone-failed", Looks.Run(RunStandingKind.Failed));
         Assert.Equal("tier-3", Looks.Autonomy(3));
+        // A check record is "checked at its time", never a standing green: a PASS under it is plain, its edge amber or muted.
+        Assert.Equal("tone-plain", Looks.CheckLine(CheckLineTone.Passed));
+        Assert.DoesNotContain("tone-done", new[] { Looks.CheckRecord(true), Looks.CheckRecord(false) }
+            .Concat(Enum.GetValues<CheckLineTone>().Select(Looks.CheckLine)));
     }
 
     [Fact]
@@ -77,6 +84,7 @@ public sealed class LooksTests
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Diff((DiffLineKind)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Log((Enactive.Core.Diagnostics.LogLevel)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Entry((FeedEntryKind)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Check((CheckVerdict)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Template((TemplateEdge)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Schedule((ScheduleState)99));
         Assert.Throws<ArgumentOutOfRangeException>(() => Looks.Account((Enactive.Server.Accounts.AccountStanding)99));
@@ -171,6 +179,12 @@ public sealed class LooksTests
             [FeedEntryKind.Note] = "FeedEntryKind.Note",
             [FeedEntryKind.Refusal] = "FeedEntryKind.Refusal"
         }));
+        rows.AddRange(Rows(Looks.Check, new Dictionary<CheckVerdict, string>
+        {
+            [CheckVerdict.Pass] = "CheckVerdict.Pass",
+            [CheckVerdict.Fail] = "CheckVerdict.Fail",
+            [CheckVerdict.NotRun] = "CheckVerdict.NotRun"
+        }));
 
         rows.AddRange(Rows(Looks.Template, new Dictionary<TemplateEdge, string>
         {
@@ -198,6 +212,19 @@ public sealed class LooksTests
         rows.Add(("Change.Staged", Looks.Change(false, false), WindowHex("ChangeState.Staged")));
         rows.Add(("Change.Applied", Looks.Change(true, false), WindowHex("ChangeState.Applied")));
         rows.Add(("Change.Rejected", Looks.Change(false, true), WindowHex("ChangeState.Rejected")));
+
+        // A "Run checks now" record: its lines by what each check came to, its edge by whether it is outdated.
+        rows.AddRange(Rows(Looks.CheckLine, new Dictionary<CheckLineTone, string>
+        {
+            [CheckLineTone.Passed] = "CheckLineTone.Passed",
+            [CheckLineTone.Failed] = "CheckLineTone.Failed",
+            [CheckLineTone.NotRun] = "CheckLineTone.NotRun"
+        }));
+        var record = Regex.Match(File.ReadAllText(RepoRoot.Source("src", "Enactive.App.Ui", "Palette.cs")),
+            @"CheckRecord\s*=\s*Map<bool>\(outdated\s*=>\s*outdated\s*\?\s*Brand\.(?<old>\w+)\s*:\s*Brand\.(?<now>\w+)\)");
+        Assert.True(record.Success, "Palette.CheckRecord is not `Map<bool>(outdated => outdated ? Brand.X : Brand.Y)`, the shape this test reads.");
+        rows.Add(("CheckRecord.outdated", Looks.CheckRecord(true), BrandHex(record.Groups["old"].Value)));
+        rows.Add(("CheckRecord.current", Looks.CheckRecord(false), BrandHex(record.Groups["now"].Value)));
 
         // On this machine or not is a two-way Map in Palette.cs (Local), not an enum's arms: read as its own shape.
         var local = Regex.Match(File.ReadAllText(RepoRoot.Source("src", "Enactive.App.Ui", "Palette.cs")),
@@ -234,7 +261,7 @@ public sealed class LooksTests
         var arms = Regex.Matches(block, "\"(?<kind>\\w+)\"\\s*=>\\s*Brand\\.(?<member>\\w+)")
             .ToDictionary(m => m.Groups["kind"].Value, m => m.Groups["member"].Value);
         var other = Regex.Match(block, @"_\s*=>\s*Brand\.(?<member>\w+)");
-        Assert.Equal(["decision", "error", "result"], arms.Keys.Order());
+        Assert.Equal(["decision", "error", "paused", "result"], arms.Keys.Order());
         Assert.True(other.Success, "Palette.InboxKind has no `_ => Brand.X` arm in the shape this test reads.");
 
         var rows = arms.Select(a => (Kind: a.Key, Class: Looks.Inbox(a.Key), Window: BrandHex(a.Value)))

@@ -56,6 +56,19 @@ public sealed record PlanResult(
     public string? Unsettled { get; init; }
     public Enactive.Core.Tools.TaskActionPolicy? ActionPolicy { get; init; }
     public IReadOnlyList<Enactive.Core.Tools.TaskRestriction> Restrictions { get; init; } = [];
+
+    /// <summary>
+    /// What the plan still leaves uncovered of the lists its steps depend on after its one replan (Plan Phase 1.2): a
+    /// run obligation each, which keeps the run from Completed (RunOutcomeDecision.Settle). Not a stop: the plan can
+    /// run, and the partial result has value.
+    /// </summary>
+    public IReadOnlyList<string> CoverageObligations { get; init; } = [];
+
+    /// <summary>
+    /// A quick action the request asks to change protected files (Plan Phase 3.4), said beside its disposition - it has no
+    /// steps to mark, and without it a request to remove an obsolete test could only be sent back for removing it.
+    /// </summary>
+    public bool ChangesProtected { get; init; }
 }
 
 /// <summary>
@@ -117,11 +130,12 @@ public sealed class Planner
         CancellationToken ct, int? maxSteps = null, bool proposeChecks = false,
         int? turnCeiling = null, int outputBudget = 4096,
         Func<int, int, string?>? exhaustedAfter = null, bool stepOutputs = false, bool typedCriteria = false,
-        bool dynamicSteps = false, bool validateWaves = false, bool semanticCriteria = false)
+        bool dynamicSteps = false, bool validateWaves = false, bool semanticCriteria = false, bool protectsFiles = false)
     {
         var messages = new List<ChatMessage>
         {
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves, semanticCriteria)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves,
+                semanticCriteria, protectsFiles)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request))
         };
 
@@ -162,7 +176,8 @@ public sealed class Planner
     internal async Task<PlanResult> ReplanAsync(string request, WorkContext context, PlanResult invalid,
         string diagnostic, IChatProvider provider, string model, CancellationToken ct,
         int? maxSteps, bool proposeChecks, int turnCeiling, int outputBudget = 4096, bool stepOutputs = false,
-        bool typedCriteria = false, bool dynamicSteps = false, bool validateWaves = false, bool semanticCriteria = false)
+        bool typedCriteria = false, bool dynamicSteps = false, bool validateWaves = false, bool semanticCriteria = false,
+        bool protectsFiles = false)
     {
         var steps = invalid.Plan!.Steps;
         var indices = steps.Select((step, index) => (step.Id, index)).GroupBy(x => x.Id)
@@ -173,19 +188,27 @@ public sealed class Planner
             steps = steps.Select(s => new
             {
                 title = s.Title,
-                dependsOn = s.DependsOn.Select(id => indices.TryGetValue(id, out var index) ? index : -1).ToArray(),
+                // An order-only edge is said once, as "after": read back, "after" puts it in DependsOn again.
+                dependsOn = s.DependsOn.Where(id => s.OrderOnly?.Contains(id) != true)
+                    .Select(id => indices.TryGetValue(id, out var index) ? index : -1).ToArray(),
+                after = s.OrderOnly?.Select(id => indices.TryGetValue(id, out var index) ? index : -1).ToArray(),
+                consumes = s.Consumes?.Select(ConsumeJson).ToArray(),
                 complexity = s.Complexity.ToString().ToLowerInvariant(),
                 obligations = s.ObligationIds,
                 output = s.Output is { } declared ? OutputJson(declared) : null,
                 forEach = s.ForEach is { } each ? new { step = each.Step, field = each.Field } : null,
                 report = s.Report,
                 critical = s.Critical ? true : (bool?)null,
-                readOnly = s.ReadOnly ? true : (bool?)null
+                readOnly = s.ReadOnly ? true : (bool?)null,
+                // Given back as the planner wrote it (Plan Phase 3.4): a corrected plan that dropped it would send back the
+                // step the request asked to remove a test.
+                changesProtected = s.ChangesProtected ? true : (bool?)null
             })
         }, new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
         ChatMessage[] messages =
         [
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves, semanticCriteria)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves,
+                semanticCriteria, protectsFiles)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request)),
             ChatMessage.Assistant(prior),
             ChatMessage.User("The entire plan was rejected before execution: " + diagnostic
@@ -355,12 +378,17 @@ public sealed class Planner
                             specs.Add(new PlanStepSpec(stepTitle!, deps, ParseComplexity(el), declared)
                             {
                                 ObligationIds = obligationIds,
-                                Output = el.TryGetProperty("output", out var output) ? ParseOutput(output, specs.Count + 1) : null,
+                                Output = Partitioned(el.TryGetProperty("output", out var output) ? ParseOutput(output, specs.Count + 1) : null,
+                                    ParseConsumes(el), ParseForEach(el)),
                                 ForEach = ParseForEach(el),
+                                Consumes = ParseConsumes(el),
+                                After = ParseAfter(el),
                                 Report = el.TryGetProperty("report", out var report) && report.ValueKind == JsonValueKind.String
                                     && !string.IsNullOrWhiteSpace(report.GetString()) ? report.GetString() : null,
                                 Critical = el.TryGetProperty("critical", out var critical) && critical.ValueKind == JsonValueKind.True,
-                                ReadOnly = el.TryGetProperty("readOnly", out var readOnly) && readOnly.ValueKind == JsonValueKind.True
+                                ReadOnly = el.TryGetProperty("readOnly", out var readOnly) && readOnly.ValueKind == JsonValueKind.True,
+                                ChangesProtected = el.TryGetProperty("changesProtected", out var changesProtected)
+                                                   && changesProtected.ValueKind == JsonValueKind.True
                             });
                         }
                     }
@@ -381,7 +409,10 @@ public sealed class Planner
                 {
                     Checks = ParseChecks(root, fallbackTitle, notes),
                     PlannedCriteria = TypedCriteria.Read(root),
-                    ContractNotes = notes
+                    ContractNotes = notes,
+                    // Only a quick action's: a task's steps say it each for themselves.
+                    ChangesProtected = disposition == IntentDisposition.QuickAction
+                                       && root.TryGetProperty("changesProtected", out var whole) && whole.ValueKind == JsonValueKind.True
                 };
             }
             catch (JsonException)
@@ -503,6 +534,31 @@ public sealed class Planner
         return fields.Count == 0 ? null : new StepOutputSchema($"step{stepNo}", 1, fields);
     }
 
+    /// <summary>
+    /// A filtering step's output (a subset consume), with the two fields of its partition optional - its processed results
+    /// (the first results field that is not 'excluded', as UpstreamCoverage.Derive picks it) and its 'excluded' reasons. A
+    /// step that leaves nothing out has nothing to put in 'excluded', and one that leaves everything out nothing to
+    /// process; an empty results field is refused (StepOutputContract), so a required one could not be handed on at all
+    /// and the step would be sent back for a field it has no entry for. Whether every item is in one of the two is the
+    /// coverage check's to decide (EvidenceCoverage.PartitionProblems), not the output contract's. Any other field the
+    /// step declared is as required as the plan said.
+    /// </summary>
+    /// <param name="forEach">The step's forEach: done for each item of the list it filters, its processed result is its
+    /// first field of any type when it has no results field (the perItem case, as Derive reads it).</param>
+    internal static StepOutputSchema? Partitioned(StepOutputSchema? output, IReadOnlyList<ConsumeSpec>? consumes, ForEachSource? forEach = null)
+    {
+        if (output is null || consumes?.Any(c => c.Subset) != true) return output;
+        var excluded = EvidenceCoverage.ExcludedField;
+        var perItem = forEach is { } each && consumes.Any(c => c.Subset && c.Step == each.Step && c.Field == each.Field);
+        var processed = output.Fields.FirstOrDefault(f => f.Type == StepOutputFieldType.Results && f.Name != excluded)?.Name
+                        ?? (perItem ? output.Fields.FirstOrDefault(f => f.Name != excluded)?.Name : null);
+        return output with
+        {
+            Fields = output.Fields.Select(f => (f.Type == StepOutputFieldType.Results && f.Name == excluded) || f.Name == processed
+                ? f with { Required = false } : f).ToArray()
+        };
+    }
+
     /// <summary>A step's "forEach", read leniently; whether it can be honoured is the engine's to check (FanOut.Validate).</summary>
     internal static ForEachSource? ParseForEach(JsonElement step)
         => step.TryGetProperty("forEach", out var each) && each.ValueKind == JsonValueKind.Object
@@ -510,6 +566,50 @@ public sealed class Planner
            && each.TryGetProperty("field", out var f) && f.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(f.GetString())
             ? new ForEachSource(index, f.GetString()!)
             : null;
+
+    /// <summary>
+    /// A step's "consumes", read as leniently as its forEach: an entry without a step number and a field is dropped;
+    /// whether the rest can be honoured is PlanConsumes' to say. An evidence word the engine does not know is kept
+    /// as written - read as "mentioned", a typo would quietly ask for the weakest evidence there is.
+    /// </summary>
+    internal static IReadOnlyList<ConsumeSpec>? ParseConsumes(JsonElement step)
+    {
+        if (!step.TryGetProperty("consumes", out var consumes) || consumes.ValueKind != JsonValueKind.Array) return null;
+        var found = new List<ConsumeSpec>();
+        foreach (var c in consumes.EnumerateArray())
+        {
+            if (c.ValueKind != JsonValueKind.Object
+                || !c.TryGetProperty("step", out var s) || s.ValueKind != JsonValueKind.Number || !s.TryGetInt32(out var index)
+                || !c.TryGetProperty("field", out var f) || f.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(f.GetString()))
+                continue;
+            var consume = new ConsumeSpec(index, f.GetString()!)
+                { Subset = c.TryGetProperty("subset", out var subset) && subset.ValueKind == JsonValueKind.True };
+            if (c.TryGetProperty("evidence", out var e) && e.ValueKind != JsonValueKind.Null)
+            {
+                var word = e.ValueKind == JsonValueKind.String ? e.GetString()! : e.GetRawText();
+                consume = EvidenceCoverage.KindNamed(word) is { } kind ? consume with { Evidence = kind } : consume with { UnknownEvidence = word };
+            }
+            found.Add(consume);
+        }
+        return found.Count == 0 ? null : found;
+    }
+
+    /// <summary>A step's "after": the 0-based positions it only waits for. What is not a number is dropped.</summary>
+    internal static IReadOnlyList<int>? ParseAfter(JsonElement step)
+    {
+        if (!step.TryGetProperty("after", out var after) || after.ValueKind != JsonValueKind.Array) return null;
+        var found = after.EnumerateArray().Where(a => a.ValueKind == JsonValueKind.Number && a.TryGetInt32(out _))
+            .Select(a => a.GetInt32()).ToArray();
+        return found.Length == 0 ? null : found;
+    }
+
+    /// <summary>A consume as the planner wrote it, for a plan sent back to it to repair: an unknown word as written.</summary>
+    private static object ConsumeJson(ConsumeSpec c) => new
+    {
+        step = c.Step, field = c.Field,
+        evidence = c.UnknownEvidence ?? EvidenceCoverage.NameOf(c.Evidence),
+        subset = c.Subset ? true : (bool?)null
+    };
 
     /// <summary>A declared output as the planner wrote it, for a plan sent back to it to repair.</summary>
     private static Dictionary<string, object?> OutputJson(StepOutputSchema schema)
@@ -550,14 +650,15 @@ public sealed class Planner
     internal const string SemanticCriterionPrompt =
         " What only judgement can decide about a step's result - a report says what the work found, an explanation is right - "
         + "that step's criteria state as {\"kind\":\"semantic\",\"text\":\"<one checkable statement about the result>\","
-        + "\"evidence\":[\"file_read\"|\"command\"|\"call\"]}: the reviewer judges the step on these alone, citing evidence of "
+        + "\"evidence\":[\"file_read\"|\"file_write\"|\"command\"|\"call\"]}: the reviewer judges the step on these alone, citing evidence of "
         + "those kinds. What a check can decide (a file exists, tests pass) is not semantic.";
 
     internal const string CoverageCriterionPrompt =
         " When a step names items (path[] or string[]) and a later step must handle EACH of them, that later step declares "
         + "an output of TYPE results - \"output\":{\"notes\":{\"type\":\"results\"}} (one entry per item; not \"text\") - and the criteria add "
         + "{\"kind\":\"covers_all\",\"source\":{\"step\":0,\"field\":\"pages\"},\"results\":{\"step\":1,\"field\":\"notes\"},"
-        + "\"evidence\":\"file_read\"}; evidence: file_read (each file read whole), command, or call.";
+        + "\"evidence\":\"file_read\"}; evidence: file_read (each file read whole), file_write (each file changed by the step), "
+        + "command, or mentioned (named in a call that succeeded - which shows neither a read nor the work).";
 
     /// <summary>
     /// Steps done for each item (Phase 5.3); sent only with step outputs AND dynamic steps on, since the
@@ -576,6 +677,14 @@ public sealed class Planner
         + "such as a shared interface, a schema or a project file - may add \"critical\":true: it then runs alone and the "
         + "engine builds and tests right after it. Use it rarely; it takes the step out of parallel work.";
 
+    /// <summary>
+    /// Files the workspace's checks protect (Plan Phase 3.4): a step that removes one is sent back unless the plan says the
+    /// request asks for it. One sentence, sent only when a check protects files (SystemPromptFor).
+    /// </summary>
+    internal const string ProtectedFilesPrompt =
+        " This workspace protects some files (such as its tests): a step that removes or renames one is sent back, unless the "
+        + "request asks for that change - then that step adds \"changesProtected\":true (a quick_action puts it beside its disposition).";
+
     /// <summary>A result file the request names no path for: the step names it, and the check follows (run 68f92f).</summary>
     internal const string HandedPathPrompt =
         " When the request names no file for a result, do not invent a name: the step that makes it declares "
@@ -585,7 +694,16 @@ public sealed class Planner
         " A step whose RESULT later steps must use as data (pages to process, files found, names, counts) declares it: "
         + "\"output\":{\"<field>\":{\"type\":\"path[]\",\"description\":\"...\",\"maxItems\":12}}; types: text, string, integer, "
         + "boolean, path, path[], string[], results. The step hands the values on with a tool and its dependents receive them. "
-        + "Limits are this task's (maxItems, maxLength). Declare nothing when prose is enough.";
+        + "Limits are this task's (maxItems, maxLength). Declare nothing when prose is enough."
+        // Plan Phase 1.1: a dependency on a step that hands on a list is unclassified until the plan says which it is.
+        + " A step that depends on a step handing on a list (path[], string[]) says which way: it consumes it - "
+        + "\"consumes\":[{\"step\":0,\"field\":\"pages\"}] - and a list you consume is a list you must cover, every item; "
+        + "\"evidence\" says what proves an item (mentioned - named in a call - by default; file_read, file_write, command), "
+        + "and \"subset\":true marks a step that filters. "
+        // Task 6b: a filtering step is checked as a partition - processed, or left out with a reason - and refused without
+        // the field that holds the reasons.
+        + "A subset step also declares an \"excluded\" results output giving the reason for each item it leaves out. "
+        + "Or it only waits for that step: \"after\":[0].";
 
     // "A temporary change ... are ONE step": run bb77e810, 2026-10-09, planned "Break behaviour, confirm test fails" and
     // "Restore behaviour, confirm test passes" as two steps. The second, with nothing of its own to restore from, read
@@ -658,7 +776,7 @@ public sealed class Planner
     /// </param>
     internal static string SystemPromptFor(int? maxSteps, bool proposeChecks = false, int? turnCeiling = null,
         bool stepOutputs = false, bool typedCriteria = false, bool dynamicSteps = false, bool validateWaves = false,
-        bool semanticCriteria = false)
+        bool semanticCriteria = false, bool protectsFiles = false)
     {
         var prompt = SystemPrompt;
 
@@ -694,6 +812,11 @@ public sealed class Planner
 
         if (proposeChecks)
             prompt += ChecksPrompt;
+
+        // Sent only when a check of this workspace protects files: a sentence about protected files in every run's plan is
+        // one a planner may act on where nothing is protected. Last, so the prompt before it is the same either way.
+        if (protectsFiles)
+            prompt += ProtectedFilesPrompt;
 
         return prompt;
     }

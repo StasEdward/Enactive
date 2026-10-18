@@ -3,6 +3,7 @@ namespace Enactive.Tools;
 using System.Text;
 using System.Text.Json;
 using Enactive.Core.Artifacts;
+using Enactive.Core.Execution;
 using Enactive.Core.Permissions;
 using Enactive.Core.Tools;
 
@@ -137,7 +138,10 @@ public sealed class EditFileTool : ITool
                     ["path"] = path,
                     ["line"] = line,
                     ["byteDelta"] = delta,
-                    ["editedStagedVersion"] = staged is not null
+                    ["editedStagedVersion"] = staged is not null,
+                    // What it changed, for the reviewer - who was shown this call as the first 120 characters of its
+                    // arguments, which for an insertion after an anchor is the anchor (WrittenChange).
+                    [WrittenChange.MetadataKey] = WrittenChange.Of(before, after, path)
                 });
         }
         // A path WorkspacePaths would not resolve - it leaves the workspace, or it is not a path.

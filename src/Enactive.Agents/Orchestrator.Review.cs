@@ -37,7 +37,24 @@ public sealed partial class Orchestrator
     /// <summary>The engine's record, for the review, of a step's own report that it cannot go on.</summary>
     internal const string SaidBlockedTool = "engine_step_said_blocked";
 
-    private sealed record AttemptReview(ReviewResult Review);
+    /// <param name="ByGate">The verdict is the engine's coverage check's (StepCoverageGate), not a reviewer's: it is
+    /// retried on the gate's own budget.</param>
+    /// <param name="Coverage">What the gate found for the attempt the review judged, when it passed - its exclusions are
+    /// named if no verdict comes back to permit them.</param>
+    /// <param name="NotAskedAboutExclusions">Why the review could not judge the items the step left out - null when it
+    /// was asked about every one, or there were none. A pass from such a review does not approve them.</param>
+    private sealed record AttemptReview(ReviewResult Review, bool ByGate = false, StepCoverageGate.Outcome? Coverage = null,
+        string? NotAskedAboutExclusions = null)
+    {
+        /// <summary>The declared check whose failure the gate's verdict is (Plan Phase 3.2); null for the coverage check's.</summary>
+        public string? ByCheck { get; init; }
+
+        /// <summary>Which blocking declared checks did not run at the gate, and why: a pass then makes the step done, not confirmed.</summary>
+        public string? ChecksNotRun { get; init; }
+
+        /// <summary>Why <see cref="ChecksNotRun"/> leaves the step unconfirmed, as a code - see StepCheckVerdict.NotRunCause.</summary>
+        public Enactive.Core.Tasks.OutcomeCause ChecksNotRunCause { get; init; } = Enactive.Core.Tasks.OutcomeCause.CheckNotRun;
+    }
 
     /// <summary>
     /// Shared review/proof phase of an attempt. Callers own retries, rollback, checkpoints and
@@ -51,7 +68,8 @@ public sealed partial class Orchestrator
         RequestObligations? obligations = null, string? handedOn = null,
         IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null, System.Text.Json.Nodes.JsonObject? handedValues = null,
         IReadOnlyList<BuildBaseline>? measuredBefore = null, ReadLedger? reads = null,
-        IReadOnlyList<TaskRestriction>? restrictions = null, string? keptBack = null, string? saidBlocked = null)
+        IReadOnlyList<TaskRestriction>? restrictions = null, string? keptBack = null, string? saidBlocked = null,
+        StepCoverageGate.Outcome? coverage = null)
     {
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
         ValueTask Emit(EventKind kind, string summary) => publish(scope.Ev(kind, prefix + summary, stepNumber));
@@ -76,7 +94,11 @@ public sealed partial class Orchestrator
         // result that cited nothing leaves none). What the engine found for an earlier review is history, and said to be.
         // Run f45e14, 2026-09-29: the second review was shown the first review's "NOT in" beside the new ones, and the old
         // place again from the account of the fix, and read them all as the current citations.
-        journal.MarkHistorical(evidenceStart, CitedPlaces.ToolName, CitedPlaces.Historical);
+        //
+        // From the step's own start (stepStart), not where its evidence starts: steps one after the other share one journal
+        // (evidenceStart 0), and from the second step's review on, every earlier step's cited places were rewritten as "an
+        // earlier attempt of this step, since corrected" - the original output lost, the reviewer told something false.
+        journal.MarkHistorical(stepStart,CitedPlaces.ToolName, CitedPlaces.Historical);
         var cited = CitedPlaces.Observe(handedOn ?? LastAssistant(messages), _workspace.RootPath,
             () => CitedPlaces.Sweep(_workspace.RootPath));
         foreach (var (place, observed) in cited)
@@ -121,6 +143,20 @@ public sealed partial class Orchestrator
                 + string.Join("\n", checkedNow.Select(r => $"- {r.Name}: {(r.Outcome == CriterionOutcome.Passed ? "PASS" : r.Outcome == CriterionOutcome.Failed ? "FAIL" : "NOT CHECKED")}"
                     + (string.IsNullOrWhiteSpace(r.Detail) ? "" : $" - {r.Detail}"))),
                 WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
+        // What the step did for each item of the lists it consumes, as the gate found it (StepCoverageGate): a fact for the
+        // reviewer, item by item - the weakly backed ones in full - and not a judgement: the engine counted that evidence
+        // is there, the reviewer judges the work. A section of the reviewer's input with room of its own, taken out of the
+        // evidence budget: recorded as a call it was given a call's share and cut in the middle once a dozen reads filled
+        // the budget (StepCoverageGate.SectionHeading). The two together keep to the budget: the account gets half of it at
+        // most, and never so much that the calls are left less than the journal's minimum - below that their view cannot
+        // hold its own header, and a review without the calls cannot cite anything. So it is the account that gives way:
+        // under a budget too small for both (one set near the minimum) it is shortened, and left out when what is left
+        // could not hold more than its opening lines - the gate has already decided the count; the reviewer loses only
+        // the per-item detail, never the calls. Made for this attempt only, so no earlier account goes with it.
+        var accountRoom = Math.Min(_evidenceBudget / 2, _evidenceBudget - ExecutionJournal.MinimumBudget);
+        var itemAccount = coverage is null || accountRoom < StepCoverageGate.MinimumAccountChars ? null
+            : StepCoverageGate.ReviewerBlock(coverage, journal.Actions.Skip(stepStart).ToArray(), accountRoom);
+        var callBudget = _evidenceBudget - (itemAccount?.Length ?? 0);
         // The file this step handed on as the result a criterion checks: the engine decides that it is there,
         // the reviewer decides whether it is what was asked - so it is shown whole, as it is now, even when the
         // step wrote none of it (run 68f92f: an earlier run's report, handed on as this run's).
@@ -144,9 +180,9 @@ public sealed partial class Orchestrator
             ? (await CriteriaReview.RunAsync(
                     new CriteriaReviewInput(title, judgedNo, LastAssistant(messages), handedOn,
                         await StepFilesNowAsync(changes, before, journal, stepStart, store, ct),
-                        journal.Describe(evidenceStart, _evidenceBudget),
-                        obligations ?? RequestObligations.Create(request, title, stepNumber, planSteps)),
-                    judged, (action, kind) => Admits(action, kind, reads), models.ReviewProvider!, models.ReviewModel,
+                        journal.Describe(evidenceStart, callBudget),
+                        obligations ?? RequestObligations.Create(request, title, stepNumber, planSteps), itemAccount),
+                    judged, (action, kind) => Admits(action, kind, reads, judgedNo), models.ReviewProvider!, models.ReviewModel,
                     scope.Budget.TurnExhaustedAfter, ct),
                 ReviewMode.Criteria)
             // The user's model (2026-09-29): one short verdict per step - done, and its report true? - and the task is
@@ -157,10 +193,10 @@ public sealed partial class Orchestrator
                                 .Select(p => $"{p.i + 1}. {p.t}").ToArray() ?? [],
                             LastAssistant(messages), handedOn,
                             await StepFilesNowAsync(changes, before, journal, stepStart, store, ct),
-                            journal.Describe(evidenceStart, _evidenceBudget), obligations?.ScopeNote,
+                            journal.Describe(evidenceStart, callBudget), obligations?.ScopeNote,
                             obligations?.Owned().Select(o => $"{o.Unit.Id}: {o.Unit.Text.Trim()}"
                                 + (o.AlsoTo.Count > 0 ? $" (also given to step {string.Join(", ", o.AlsoTo.Select(scope => scope.TrimStart('S')))})" : "")).ToArray(),
-                            restrictions),
+                            restrictions, itemAccount),
                         models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct),
                     ReviewMode.Step);
         await Usage(review.Usage.Prompt, review.Usage.Completion, review.Usage.Cached, review.Usage.Created);
@@ -178,7 +214,16 @@ public sealed partial class Orchestrator
                 await Emit(EventKind.ReviewFailed, $"NOT REACHABLE within the request ({mode} review): {unreachable.Notes}");
                 break;
         }
-        return new(review);
+        // Whether the review could judge what a filtering step left out: only the step review, and only when the account
+        // put every exclusion to it in full under its question. A criteria review judges its criteria and nothing else,
+        // and an account left out for room (or cut short) asked nothing - a pass from either does not approve an omission.
+        // It does approve items with only a mention behind them: those the engine counted from calls the review read, and
+        // an omission is the step's word, which needs a review asked about it (StepCoverageGate.Approval says it in full).
+        string? notAsked = coverage?.Exclusions is not { Count: > 0 } left ? null
+            : mode == ReviewMode.Criteria ? "the step was judged on its semantic criteria alone, which do not ask about them"
+            : !StepCoverageGate.AsksAboutEvery(left, itemAccount) ? "the review that passed it was not shown them - the evidence budget left no room for them"
+            : null;
+        return new(review) { NotAskedAboutExclusions = notAsked };
     }
 
     /// <summary>
@@ -186,7 +231,8 @@ public sealed partial class Orchestrator
     /// engine's own observation, a command that ran, a call that succeeded. No tool is named: what a call is comes
     /// from its definition and its record.
     /// </summary>
-    private bool Admits(ExecutedAction action, EvidenceKind kind, ReadLedger? reads) => kind switch
+    /// <param name="step">The step under review: only its own calls are write evidence for it.</param>
+    private bool Admits(ExecutedAction action, EvidenceKind kind, ReadLedger? reads, int? step) => kind switch
     {
         EvidenceKind.Command => action.ExitCode is not null && action.Outcome != ActionOutcome.Refused,
         EvidenceKind.Call => action.Outcome == ActionOutcome.Succeeded,
@@ -194,6 +240,12 @@ public sealed partial class Orchestrator
             || (action.Outcome == ActionOutcome.Succeeded
                 && _tools.DefinitionOf(action.Tool)?.FileCoverage == FileCoverageBehavior.Read
                 && PathsIn(action.Arguments).Any(p => reads?.SeenWhole(p).Whole == true)),
+        // A call that succeeded and recorded which paths it changed: a write, an edit, a deletion, a rename. A command
+        // does not record its writes by file, so it is command evidence, never write evidence. And a call of THIS step:
+        // with one conversation for the whole plan the review is shown the earlier steps' calls too, and an earlier
+        // step's write is not the work of the step under review (as EvidenceCoverage.Gather counts only the step's own).
+        EvidenceKind.FileWrite => action.Outcome == ActionOutcome.Succeeded && action.ChangedPaths is { Count: > 0 }
+                                  && (step is null || action.Step == step),
         _ => false
     };
 

@@ -19,6 +19,7 @@ public sealed class RunRecorder
     private readonly Guid _workspaceId;
     private readonly RunSettings? _settings;
     private readonly string? _spec;
+    private readonly Enactive.Core.Checks.CheckSnapshot? _checks;
 
     /// <param name="spec">
     /// The resolved specification this run was started from, as its canonical JSON - null for a run
@@ -30,7 +31,7 @@ public sealed class RunRecorder
     /// </param>
     public RunRecorder(
         IRunStore store, IMemoryStore? memory = null, Guid workspaceId = default,
-        RunSettings? settings = null, string? spec = null)
+        RunSettings? settings = null, string? spec = null, Enactive.Core.Checks.CheckSnapshot? checks = null)
     {
         _store = store;
         _memory = memory;
@@ -39,6 +40,10 @@ public sealed class RunRecorder
         // moment it started, and the slider will have moved by the time anyone asks.
         _settings = settings;
         _spec = spec;
+        // The checks the run is judged by, as it was composed with them - or, resumed, as its checkpoint carried them.
+        // Handed in for the same reason as the settings: the manifests are files, and by the time anybody reads the
+        // record they may say something else.
+        _checks = checks;
     }
 
     public async IAsyncEnumerable<WorkEvent> RecordAsync(
@@ -90,13 +95,14 @@ public sealed class RunRecorder
 
             if (events.Count > 0)
             {
-                var record = Build(events, _settings, _spec);
+                var record = Build(events, _settings, _spec) with { CheckSnapshot = _checks };
                 await _store.SaveAsync(record, CancellationToken.None);
 
                 // Fold each resolved decision into the project's durable memory -
-                // but only what this project actually learned. See ProjectFacts: memory is read
-                // into the PROMPT of every step of every later run, so an entry that is not a fact
-                // about the project is a permanent tax on the window and on the bill.
+                // but only what this project actually learned. See ProjectFacts: memory is written for the
+                // timeline and the run history and is NOT given to the worker (since 2026-09-28), but an entry
+                // that is not a fact about the project is still noise there, and would be a tax on the window
+                // again if memory went back into the prompt.
                 if (_memory is not null && ProjectFacts.WorthRemembering(ToolsUsed(events), record.Artifacts))
                 {
                     // Read once, for the duplicate check below. Best-effort like everything else

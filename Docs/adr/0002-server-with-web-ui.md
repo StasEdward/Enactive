@@ -106,6 +106,10 @@ picker. Keeping operators apart would mean running tools in a separate process u
   one whose fingerprint the users check once). No plain HTTP listener.
 - It listens on configured addresses and answers only the configured subnets; the installer adds a Windows
   Firewall rule for the domain/private profiles, not the public one.
+- A first start with no `server.json` in the data folder writes one for the machine itself only: `127.0.0.1:8443`,
+  `127.0.0.0/8`, `localhost`, and a self-signed certificate for `localhost` (its password DPAPI-protected for the
+  service's account). Opening it to a network is still a person's edit, or the installer's (amended 2026-10-18: a
+  fresh machine's service did not start at all until the file and a certificate were made by hand).
 - Cookies are `Secure`, `HttpOnly`, `SameSite=Strict`; the sign-in page is static server-rendered, with
   anti-forgery.
 - **Authorization at the action, not only at the page.** Every `IRunControl` method takes the account and checks

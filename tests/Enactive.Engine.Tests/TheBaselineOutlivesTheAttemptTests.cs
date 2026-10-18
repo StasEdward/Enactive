@@ -318,7 +318,10 @@ public sealed class DotnetTestOutputTests
     public void A_build_error_is_not_a_test_run()
         => Assert.Null(new DotnetEcosystem().ParseTests("C:\\p\\A.cs(3,1): error CS0103: The name 'x' does not exist\n"));
 
-    /// <summary>Only what was seen twice is compared: a test missing from either run is not guessed about.</summary>
+    /// <summary>
+    /// Regressions are only what was seen in both runs: a test missing from either one is not a regression. (A test
+    /// that passed before and is gone now is reported separately, by <c>Disappeared</c>, when both runs name tests.)
+    /// </summary>
     [Fact]
     public void Regressions_are_tests_seen_passing_before_and_failing_now()
     {
@@ -327,5 +330,47 @@ public sealed class DotnetTestOutputTests
 
         Assert.Equal(["a"], now.Regressions(before));
         Assert.Equal(["d"], now.FailingAndNew(before));
+    }
+
+    /// <summary>A test that passed and is not named now is a regression too: deleting a failing test must not pass the check.</summary>
+    [Fact]
+    public void Disappeared_are_tests_that_passed_before_and_are_not_named_now()
+    {
+        var before = new TestRunReport([new("a", TestVerdict.Passed), new("b", TestVerdict.Passed), new("c", TestVerdict.Passed)], null);
+        var now = new TestRunReport([new("a", TestVerdict.Passed), new("c", TestVerdict.Failed)], null);
+
+        // c is still named (it fails now: a regression, not a disappearance); only b is gone.
+        Assert.Equal(["b"], now.Disappeared(before));
+    }
+
+    [Fact]
+    public void A_test_that_did_not_pass_before_has_not_disappeared()
+    {
+        var before = new TestRunReport([new("failed", TestVerdict.Failed), new("skipped", TestVerdict.Skipped), new("kept", TestVerdict.Passed)], null);
+        var now = new TestRunReport([new("kept", TestVerdict.Passed)], null);
+
+        Assert.Empty(now.Disappeared(before));
+    }
+
+    /// <summary>Totals without names say nothing about which tests ran, so absence of a name is not absence of a test.</summary>
+    [Fact]
+    public void Without_names_in_either_run_nothing_disappeared()
+    {
+        var named = new TestRunReport([new("a", TestVerdict.Passed)], null);
+        var totalsOnly = new TestRunReport([], new TestRunSummary(5, 0, 0, 5));
+
+        Assert.Empty(named.Disappeared(totalsOnly));
+        Assert.Empty(totalsOnly.Disappeared(named));
+    }
+
+    /// <summary>A rename is not matched up: the honest report is one gone and one new.</summary>
+    [Fact]
+    public void A_renamed_test_is_the_old_name_disappeared_and_the_new_one_new()
+    {
+        var before = new TestRunReport([new("old", TestVerdict.Passed), new("same", TestVerdict.Passed)], null);
+        var now = new TestRunReport([new("renamed", TestVerdict.Passed), new("same", TestVerdict.Passed)], null);
+
+        Assert.Equal(["old"], now.Disappeared(before));
+        Assert.DoesNotContain("renamed", now.Disappeared(before));
     }
 }

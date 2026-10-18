@@ -1,6 +1,7 @@
 namespace Enactive.Core.History;
 
 using System.Text;
+using Enactive.Core.Checks;
 using Enactive.Core.Events;
 
 /// <summary>Where a step card stands.</summary>
@@ -20,6 +21,19 @@ public sealed class FeedEntry(FeedEntryKind kind, string label)
 }
 
 /// <summary>
+/// One result of a check a person declared (Plan Phase 3.5), as its criterion event says it in values: which check, where
+/// it fired, how it came out, and the event's sentence - the reason a check that did not run gives is in it, and nowhere
+/// else. Words for it are the hosts' projection's (Enactive.Application CheckLines), one for the window and the service.
+/// </summary>
+/// <param name="Outcome">The criterion's outcome by name: Passed, Failed or Unknown.</param>
+/// <param name="Times">How many results this one stands for: a write check is folded to its latest.</param>
+public sealed record FeedCheck(CheckFiring Firing, string Outcome, int? ExitCode, string Summary, int Times = 1)
+{
+    /// <summary>Why it did not run, as the payload says it (<c>reason</c>); null when it ran, and for one recorded before it was kept.</summary>
+    public string? Reason { get; init; }
+}
+
+/// <summary>
 /// One step card as the events have made it: what the step is, where it stands, what it is doing now and
 /// what it has done. A view draws it; nothing here knows how.
 /// </summary>
@@ -27,6 +41,7 @@ public sealed class FeedCard
 {
     private readonly StringBuilder _noteBuffer = new();
     private readonly List<FeedEntry> _entries = new();
+    private readonly List<FeedCheck> _checks = new();
     private int _tools, _commands, _files, _notes, _refused;
 
     internal FeedCard(string title, FeedCard? parent = null)
@@ -48,6 +63,34 @@ public sealed class FeedCard
     public string Activity { get; private set; } = "Waiting…";
 
     public IReadOnlyList<FeedEntry> Entries => _entries;
+
+    /// <summary>
+    /// The declared checks that fired for this step - after its writes and at its end - in the order they first came. Kept
+    /// apart from <see cref="Entries"/>: they are not something the step did, and its tally does not count them.
+    /// </summary>
+    public IReadOnlyList<FeedCheck> Checks => _checks;
+
+    internal void AddCheck(FeedCheck check)
+    {
+        _checks.Add(check);
+        Version++;
+    }
+
+    /// <summary>
+    /// A write check's latest result in place of its earlier one on this card. A write check runs after every turn that
+    /// writes what it covers: listed whole, an edit loop of thirty turns put thirty lines about one linter on the card. And
+    /// its detail file is written over each turn, so only the latest result's link opens what that result said.
+    /// </summary>
+    internal void FoldWriteCheck(FeedCheck check)
+    {
+        var at = _checks.FindIndex(c => c.Firing.FiredOn == CheckBoundary.Write
+                                        && string.Equals(c.Firing.CheckId, check.Firing.CheckId, StringComparison.OrdinalIgnoreCase));
+        if (at < 0)
+            _checks.Add(check);
+        else
+            _checks[at] = check with { Times = _checks[at].Times + 1 };
+        Version++;
+    }
 
     /// <summary>What the card holds, in words - the line a person reads to decide whether to open it.</summary>
     public string Tally => new StepTally(_tools, _commands, _files, _refused, _notes).Words();
@@ -208,6 +251,7 @@ public sealed class RunFeed
     private const string QuickActionMarker = "Quick action: ";
     private const string StepsMarker = " steps: ";
     private const string NeverFinished = "Never finished — the run ended here";
+    private const string PausedBefore = "Not started — the run was paused before it; resume the run to do it";
 
     // Numbering order: a plan's step N is _cards[_planOffset + N - 1]; cards made before the plan come first.
     private readonly List<FeedCard> _cards = new();
@@ -233,6 +277,16 @@ public sealed class RunFeed
 
     /// <summary>The cards in the order they are shown.</summary>
     public IReadOnlyList<FeedCard> Cards => _shown;
+
+    private readonly List<FeedCheck> _runChecks = new();
+
+    /// <summary>
+    /// The declared checks that fired for the run as a whole (Plan Phase 3.5): at a wave's end, at the run's end, and those
+    /// owed when a staged run's files are applied - in the order they came. Not on a step's card: a check deferred to a
+    /// wave judges what the wave's steps made together, and putting its failure on one of them blamed a step it may not be
+    /// about.
+    /// </summary>
+    public IReadOnlyList<FeedCheck> RunChecks => _runChecks;
 
     /// <summary>
     /// Folds one event in. Returns the cards it added, each with the position it was shown at - in the order a
@@ -332,8 +386,13 @@ public sealed class RunFeed
             case EventKind.ReviewFailed:
                 var reviewed = CardFor(step) ?? EnsureCurrent(added);
                 reviewed.AddNote(ev.Summary);
+                // The engine's own coverage check gives its verdict as a ReviewFailed too - and no reviewer saw the step. So
+                // does a declared workspace check (Plan Phase 3.2), named by its id.
                 reviewed.SetActivity(ev.Kind == EventKind.ReviewRequested ? "Reviewing…"
-                    : ev.Kind == EventKind.ReviewPassed ? "Review passed" : "Review flagged an issue…");
+                    : ev.Kind == EventKind.ReviewPassed ? "Review passed"
+                    : ev.EngineCheckId() is { Length: > 0 } checkId ? $"The engine's check '{checkId}' sent it back…"
+                    : ev.EngineCheckId() is not null ? "An engine check sent it back…"
+                    : ev.ByEngineCheck() ? "The engine's coverage check sent it back…" : "Review flagged an issue…");
                 break;
 
             case EventKind.DecisionRequested:
@@ -363,6 +422,29 @@ public sealed class RunFeed
             case EventKind.ContextTrimmed:
             case EventKind.ArtifactReverted:
                 (CardFor(step) ?? EnsureCurrent(added)).AddNote(ev.Summary);
+                break;
+
+            // A check a person declared (Plan Phase 3.5): on the card of the step it fired for, or on the run's own list. A
+            // criterion without a check's values - the engine's own, a template's, or one recorded before checks had them -
+            // is not drawn on a card, as it never was.
+            case EventKind.CriterionEvaluated when ev.CriterionCheck() is { } firing:
+                var result = new FeedCheck(firing, ev.CriterionOutcomeName() ?? "Unknown", ev.CriterionExitCode(), ev.Summary)
+                {
+                    Reason = ev.CriterionReason()
+                };
+                switch (firing.FiredOn)
+                {
+                    case CheckBoundary.Write:
+                        (CardFor(firing.Step ?? step) ?? EnsureCurrent(added)).FoldWriteCheck(result);
+                        break;
+                    // A quick action's step check has no step number: it is its one card's.
+                    case CheckBoundary.Step:
+                        (CardFor(firing.Step ?? step) ?? EnsureCurrent(added)).AddCheck(result);
+                        break;
+                    default:
+                        _runChecks.Add(result);
+                        break;
+                }
                 break;
 
             // What the engine DECIDED, from the typed outcome rather than from which of the two kinds arrived.
@@ -431,12 +513,18 @@ public sealed class RunFeed
             RunOutcomeKind.Completed => StepOutcomeKind.Succeeded,
             RunOutcomeKind.Incomplete or RunOutcomeKind.NeedsUser => StepOutcomeKind.Incomplete,
             RunOutcomeKind.Blocked => StepOutcomeKind.Blocked,
+            // Stopped at a boundary on purpose (Plan Phase 4.2): what ran finished, the rest is still to do.
+            RunOutcomeKind.Paused => StepOutcomeKind.Incomplete,
             _ => StepOutcomeKind.Failed
         };
 
         foreach (var card in _cards.Where(c => !c.Ended).ToArray())
         {
-            if (!IsPlanStep(card))
+            // A paused run's step that never started did not end wrongly: it is still to come, on the resume. Every
+            // step that was running when the pause came finished before the run ended, so none is cut off here.
+            if (outcome == RunOutcomeKind.Paused && IsPlanStep(card) && card.Status == FeedCardStatus.Pending)
+                card.SetActivity(PausedBefore);
+            else if (!IsPlanStep(card))
                 // A completed run's reason is what must be added to "done" - the checks that overruled the steps,
                 // or one of the engine's own that failed (RunOutcomeDecision.Settle) - and the card says it.
                 Finish(card, step, reason);
@@ -473,7 +561,7 @@ public sealed class RunFeed
             : ev.OutcomeReason() ?? TailOf(ev.Summary);
 
         if (card is not null)
-            Finish(card, outcome, reason);
+            Finish(card, outcome, reason, ev.ByEngineCheck(), ev.EngineCheckId());
         if (card is not null)
             _running.Remove(card);
         _current = _running.Count == 1 ? _running[0] : null;
@@ -484,7 +572,9 @@ public sealed class RunFeed
     /// A card's end, in the words a person reads (RunOutcomeWords): the step's REASON when it recorded one, and the
     /// outcome word alone otherwise. Never an enum's name, and never the word twice.
     /// </summary>
-    private static void Finish(FeedCard card, StepOutcomeKind outcome, string? reason)
+    /// <param name="byEngineCheck">The step was rejected by the engine's coverage check, not a reviewer (its payload says so).</param>
+    /// <param name="checkId">The declared check that rejected it, when one did (Plan Phase 3.2) - see RunOutcomeWords.StepActivity.</param>
+    private static void Finish(FeedCard card, StepOutcomeKind outcome, string? reason, bool byEngineCheck = false, string? checkId = null)
     {
         card.SetStatus(outcome switch
         {
@@ -501,7 +591,7 @@ public sealed class RunFeed
         });
         card.SetActivity(outcome == StepOutcomeKind.Succeeded
             ? string.IsNullOrWhiteSpace(reason) ? "Done" : reason
-            : RunOutcomeWords.StepActivity(outcome, reason));
+            : RunOutcomeWords.StepActivity(outcome, reason, byEngineCheck, checkId));
     }
 
     /// <summary>The tail of "[1/2] Title — INCOMPLETE: &lt;reason&gt;", for records written before the reason was a value.</summary>

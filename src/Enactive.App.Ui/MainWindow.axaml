@@ -272,6 +272,11 @@
 
 
                     <TextBlock Classes="hint" Text="{Binding EnvironmentSummary}" />
+
+                    <!-- The checks that judge runs here, this workspace's own and those it inherits. -->
+                    <Button Content="Checks…" FontSize="11" Padding="8,1" HorizontalAlignment="Left"
+                            Command="{Binding ChecksCommand}"
+                            ToolTip.Tip="The checks that judge runs in this workspace: its own, the global ones, and the engine's build and test." />
                 </StackPanel>
 
                 <!-- The line between "where" and "what happened there". -->
@@ -573,10 +578,23 @@
                              the run underneath does not move when the request is long. -->
                         <TextBox Classes="taskIntent" Text="{Binding TaskIntent}" />
                     </StackPanel>
-                    <Border Grid.Column="1" Classes="pill" HorizontalAlignment="Right" Background="{Binding StatusPhase, Converter={x:Static local:Palette.PhaseFill}}">
-                        <TextBlock Text="{Binding StatusPhase}"
-                                   Foreground="{Binding StatusPhase, Converter={x:Static local:Palette.PhaseText}}" />
-                    </Border>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right"
+                                VerticalAlignment="Center">
+                        <!-- Pause after this step: the steps running now finish and the run ends Paused, to be
+                             resumed from UNFINISHED - unlike Stop, which cancels them. Here, beside the phase it
+                             changes, and only for a run that can pause: a planned one that does not stage. Not
+                             destructive and not the action you came for, so the plain button. -->
+                        <Button x:Name="PauseAfterThisStep" FontSize="11" VerticalAlignment="Center"
+                                Content="{Binding PauseLabel}"
+                                Command="{Binding PauseCommand}"
+                                ToolTip.Tip="{Binding PauseTip}"
+                                ToolTip.ShowOnDisabled="True"
+                                IsVisible="{Binding IsPauseShown}" />
+                        <Border Classes="pill" Background="{Binding StatusPhase, Converter={x:Static local:Palette.PhaseFill}}">
+                            <TextBlock Text="{Binding StatusPhase}"
+                                       Foreground="{Binding StatusPhase, Converter={x:Static local:Palette.PhaseText}}" />
+                        </Border>
+                    </StackPanel>
                 </Grid>
             </Border>
 
@@ -609,20 +627,33 @@
                     <ScrollViewer IsVisible="{Binding IsExecutionTab}"
                                   HorizontalScrollBarVisibility="Disabled"
                                   VerticalScrollBarVisibility="Auto">
-                        <ItemsControl ItemsSource="{Binding Steps}" Margin="16,12,10,12">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:StepCardViewModel">
-                                    <local:StepCardView />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                        <StackPanel Margin="16,12,10,12">
+                            <ItemsControl ItemsSource="{Binding Steps}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:StepCardViewModel">
+                                        <local:StepCardView />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <!-- The checks that fired for the run as a whole, not for one step. -->
+                            <StackPanel IsVisible="{Binding RunChecks.HasLines}" Margin="0,4,0,0">
+                                <TextBlock Classes="panelHeader" Text="RUN CHECKS" Margin="0" />
+                                <local:CheckLinesView DataContext="{Binding RunChecks}" />
+                            </StackPanel>
+                        </StackPanel>
                     </ScrollViewer>
 
                     <!-- Artifacts: what the run wrote, and what is waiting on you. -->
                     <ScrollViewer IsVisible="{Binding IsArtifactsTab}"
                                   HorizontalScrollBarVisibility="Disabled"
                                   VerticalScrollBarVisibility="Auto">
-                        <ItemsControl ItemsSource="{Binding Artifacts}" Margin="16,12,10,12">
+                        <StackPanel Margin="16,12,10,12">
+                        <!-- A staged run's "Run checks now", above its proposals once it has ended (Plan Phase 3.2): its
+                             checks read the files as they are decided, which they could not while it ran. -->
+                        <Panel IsVisible="{Binding HasLiveChecks}">
+                            <local:CheckRecordsView x:Name="LiveRunChecks" DataContext="{Binding LiveChecks}" />
+                        </Panel>
+                        <ItemsControl ItemsSource="{Binding Artifacts}">
                             <ItemsControl.DataTemplates>
 
                                 <!-- A file written straight to disk. -->
@@ -700,6 +731,7 @@
 
                             </ItemsControl.DataTemplates>
                         </ItemsControl>
+                        </StackPanel>
                     </ScrollViewer>
 
                     <!-- Log: this run only. The whole log, across every run and with
@@ -993,6 +1025,11 @@
                     </Grid>
                 </Border>
 
+                <!-- A staged run's "Run checks now" and its records (Plan Phase 3.2), on the run: they are the run's,
+                     kept in its history. The view shows nothing for a run it is not offered on that has no records. -->
+                <local:CheckRecordsView x:Name="PastRunChecks" DockPanel.Dock="Top" Margin="16,0"
+                                        DataContext="{Binding PastRun.Checks}" />
+
                 <Border DockPanel.Dock="Top" Height="36" Padding="16,0"
                         BorderBrush="{DynamicResource Brand.Line}" BorderThickness="0,0,0,1">
                     <StackPanel Orientation="Horizontal">
@@ -1031,6 +1068,10 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
+                                <StackPanel IsVisible="{Binding PastRun.RunChecks.HasLines}" Margin="0,4,0,0">
+                                    <TextBlock Classes="panelHeader" Text="RUN CHECKS" Margin="0" />
+                                    <local:CheckLinesView DataContext="{Binding PastRun.RunChecks}" />
+                                </StackPanel>
                             </StackPanel>
                         </ScrollViewer>
 

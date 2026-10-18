@@ -128,7 +128,11 @@ public sealed record TypedCriterion(
     int? PathFromStep = null,
     string? PathFromField = null,
     // Semantic: the kinds of evidence a verdict on it may cite (5.2). Null or empty: any of them.
-    IReadOnlyList<Enactive.Core.Tasks.EvidenceKind>? Kinds = null)
+    IReadOnlyList<Enactive.Core.Tasks.EvidenceKind>? Kinds = null,
+    // EvidenceCoversAll over a step that filters (a subset consume, Plan Phase 1.2): it may leave items out, each with a
+    // reason in its "excluded" results field, instead of handing a result on for every one - so the items are checked as
+    // a partition of the list, not as a result each. Last and defaulted: a criterion stored before it reads as not one.
+    bool Subset = false)
 {
     /// <summary>Whether the engine decides it itself from the workspace, rather than by running a command.</summary>
     public bool InEngine => Kind is TypedCriterionKind.FileExists or TypedCriterionKind.FileContains;

@@ -185,6 +185,12 @@ internal sealed class RunHistoryService(Func<int> keepRuns)
 
         try
         {
+            // What the run's checks left behind (Plan Phase 3.3) goes with it when nothing else will take it: a run that was
+            // interrupted may never have been recorded, and no deletion of a record would ever reach its folder. A run that
+            // was recorded keeps it - its history still lists it, and its deletion removes the folder. First, so a folder that
+            // cannot be removed leaves the run here to be forgotten again.
+            if (await RunStoreFactory.Create(workspace).LoadAsync(checkpoint.RunId, ct) is null)
+                Enactive.Core.Checks.CheckRecords.RemoveRun(root, checkpoint.RunId);
             await new JsonCheckpointStore(workspace).DeleteAsync(checkpoint.RunId, ct);
             return (kept, null);
         }

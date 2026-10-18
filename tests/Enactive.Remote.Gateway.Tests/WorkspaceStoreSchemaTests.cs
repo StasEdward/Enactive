@@ -107,11 +107,84 @@ public sealed class WorkspaceStoreSchemaTests : IAsyncLifetime
 
         var columns = await _database.StringsAsync(
             "SELECT CONCAT(TABLE_NAME, '.', COLUMN_NAME) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()");
-        foreach (var expected in new[] { "runs.settings_json", "runs.usage_json", "runs.spec_json", "runs.workspace_id", "inbox.schedule_id" })
+        foreach (var expected in new[] { "runs.settings_json", "runs.usage_json", "runs.spec_json", "runs.checks_json", "runs.workspace_id", "inbox.schedule_id", "check_records.record_json" })
             Assert.Contains(expected, columns);
 
         Assert.Equal(1, await _database.ScalarLongAsync(
             "SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS "
             + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'runs' AND INDEX_NAME = 'ix_runs_workspace'"));
+    }
+
+    /// <summary>
+    /// Plan Phase 3.1: a run's checks travel whole through the MySQL store - by name for their enums - and a run recorded
+    /// without them reads back without them.
+    /// </summary>
+    [Fact]
+    public async Task A_run_record_keeps_its_checks_through_mysql()
+    {
+        var store = new MySqlRunStore(_database.ConnectionString, _workspace.Id);
+        var lint = new Enactive.Core.Checks.CheckDefinition("lint", "Lints", "npm run lint", ["src/**/*.ts"],
+            Enactive.Core.Checks.CheckFire.Step, Enactive.Core.Checks.CheckSeverity.Blocking, 45, ["tests/**"]);
+        var checks = new Enactive.Core.Checks.CheckSnapshot(
+            [new Enactive.Core.Checks.ResolvedCheck(lint, Enactive.Core.Checks.CheckOrigin.Workspace)],
+            [new Enactive.Core.Checks.CheckManifestHash("lint.json", new string('a', 64))]);
+        Enactive.Core.History.RunRecord Record() => new(Guid.NewGuid(), Guid.NewGuid(), "a run", "model",
+            DateTimeOffset.Now.AddMinutes(-1), DateTimeOffset.Now, "Completed", [], [], []);
+        var with = Record() with { CheckSnapshot = checks };
+        var without = Record();
+
+        await store.SaveAsync(with, CancellationToken.None);
+        await store.SaveAsync(without, CancellationToken.None);
+
+        var back = (await store.LoadAsync(with.RunId, CancellationToken.None))!.CheckSnapshot!;
+        Assert.Equal(lint, Assert.Single(back.Checks).Definition);
+        Assert.Equal("lint.json", Assert.Single(back.Manifests).File);
+        Assert.Null((await store.LoadAsync(without.RunId, CancellationToken.None))!.CheckSnapshot);
+        Assert.Contains("\"Blocking\"", await _database.StringsAsync(
+            $"SELECT checks_json FROM runs WHERE run_id = '{with.RunId}'") is [var json] ? json : "", StringComparison.Ordinal);
+    }
+
+    /// <summary>Deleting a run from MySQL removes what its checks left on the workspace's disk (Plan Phase 3.3), as the other stores do.</summary>
+    [Fact]
+    public async Task Deleting_a_run_through_mysql_removes_its_check_records()
+    {
+        var store = new MySqlRunStore(_database.ConnectionString, _workspace.Id, _workspace.RootPath);
+        var run = new Enactive.Core.History.RunRecord(Guid.NewGuid(), Guid.NewGuid(), "a run", "model",
+            DateTimeOffset.Now.AddMinutes(-1), DateTimeOffset.Now, "Completed", [], [], []);
+        await store.SaveAsync(run, CancellationToken.None);
+        var folder = Path.Combine(_workspace.RootPath, ".enactive", "checks", "runs", run.RunId.ToString("D"));
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "step-1-lint.txt"), "output");
+
+        await store.DeleteAsync(run.RunId, CancellationToken.None);
+
+        Assert.False(Directory.Exists(folder));
+        Assert.Null(await store.LoadAsync(run.RunId, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Plan Phase 3.2: "Run checks now" records through MySQL - kept beside the run, per workspace, read back whole and gone
+    /// with the run. A database made before them (the upgrade test above) gains their table on opening.
+    /// </summary>
+    [Fact]
+    public async Task Check_records_are_kept_through_mysql_and_go_with_their_run()
+    {
+        Enactive.Core.History.IRunStore store = new MySqlRunStore(_database.ConnectionString, _workspace.Id, _workspace.RootPath);
+        var run = new Enactive.Core.History.RunRecord(Guid.NewGuid(), Guid.NewGuid(), "a run", "model",
+            DateTimeOffset.Now.AddMinutes(-1), DateTimeOffset.Now, "Incomplete", [], [], []);
+        await store.SaveAsync(run, CancellationToken.None);
+        var record = new Enactive.Core.Checks.CheckRecord(Guid.NewGuid(), run.RunId, "alice", DateTimeOffset.Now,
+            [new Enactive.Core.Checks.CheckDefinition("lint", null, "npm run lint", [], Enactive.Core.Checks.CheckFire.Run,
+                Enactive.Core.Checks.CheckSeverity.Blocking, 45, null)],
+            [new Enactive.Core.Checks.CheckResultLine("lint", Enactive.Core.Templates.CriterionOutcome.Failed, true, "npm run lint", 1, "no")],
+            new Enactive.Core.Checks.StateFingerprint(Enactive.Core.Checks.FingerprintKind.Git, new string('b', 64)) { Head = "abc" });
+
+        await store.AddCheckRecordAsync(record, CancellationToken.None);
+
+        var back = Assert.Single(await store.LoadCheckRecordsAsync(run.RunId, CancellationToken.None));
+        Assert.Equal(record.Results, back.Results);
+        Assert.Empty(await new MySqlRunStore(_database.ConnectionString, Guid.NewGuid()).LoadCheckRecordsAsync(run.RunId, CancellationToken.None));
+        await store.DeleteAsync(run.RunId, CancellationToken.None);
+        Assert.Empty(await store.LoadCheckRecordsAsync(run.RunId, CancellationToken.None));
     }
 }

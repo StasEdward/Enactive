@@ -206,7 +206,10 @@ public sealed class APlanGrowsFromWhatItFindsTests
         var events = await fx.RunAsync(fx.Build(worker), "review every wiki page");
 
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
-        Assert.Contains(events, e => e.Kind == EventKind.StepCompleted && e.Summary.Contains("review page — DONE, NOT VERIFIED: 1 of 2", StringComparison.Ordinal));
+        // The join counts the coverage its plan owes first (Task 6b), then names the item step that did not finish.
+        Assert.Contains(events, e => e.Kind == EventKind.StepCompleted
+                                     && e.Summary.Contains("review page — DONE, NOT VERIFIED: covered 1 of 2; not covered: wiki/a.md (no result). "
+                                                           + "1 of 2 item step(s) did not finish", StringComparison.Ordinal));
         Assert.Contains("Proceed with this step of the plan: summarise", string.Join("\n", worker.Requests.Last().Messages.Select(m => m.Content ?? "")),
             StringComparison.Ordinal);
         Assert.Contains(events, e => e.IsCheck() && e.Summary.Contains("wiki/a.md (no result)", StringComparison.Ordinal));

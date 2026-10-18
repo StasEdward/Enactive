@@ -99,6 +99,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     private readonly List<StepCardViewModel> _cardViews = new();
     private string? _shownPhase;
     private (int Done, int Total) _shownProgress;
+    /// <summary>How many of the run's own checks (RunFeed.RunChecks) the run's list shows: they are only ever added.</summary>
+    private int _shownRunChecks;
     private readonly Stopwatch _runStopwatch = new();
     private DispatcherTimer? _elapsedTimer;
 
@@ -165,6 +167,12 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     private DiskArtifactStore? _disk;
     private int _stagedShown;
 
+    /// <summary>The run id of the live run, while it stages - for its "Run checks now" once it has ended (Plan Phase 3.2).</summary>
+    private Guid? _stagedRunId;
+
+    /// <summary>The folder that run ran in - its proposals' and its checks' - whatever folder is on screen when it ends.</summary>
+    private string? _stagedRunRoot;
+
     public MainWindow()
     {
         _log = new LogHub(minLevel: LogLevel.Debug, downstream: new ILogSink[] { _logFile });
@@ -205,6 +213,16 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         _vm.RunRequested += () => _ = RunAsync(background: false);
         _vm.BackgroundRunRequested += () => _ = RunAsync(background: true);
         _vm.StopRequested += () => _foreground.Stop();
+        _vm.CheckDetailRequested += path => ShowCheckDetail(_liveWorkspace, path);
+        // A workspace's checks, from its card - over the folder on screen, refused while any run holds it.
+        // Modal: a list left open behind the window would go on describing a workspace the card no longer shows.
+        _vm.ChecksRequested += () =>
+        {
+            if (WorkspaceRootOrNull() is not { } root)
+                return;
+            _ = new ChecksWindow(DesktopChecks.For(root, Enactive.Core.Checks.CheckScope.Workspace), _vm.WorkspaceName)
+                .ShowDialog(this);
+        };
         _vm.TimelineRequested += () => _ = ShowTimelineAsync();
         _vm.LogRequested += ShowLogWindow;
         _vm.EnvironmentRequested += () => _ = ShowEnvironmentAsync();
@@ -700,7 +718,9 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                     remoteCheck: CheckRemoteAsync,
                     remoteConnect: ConnectRemoteAsync,
                     remoteDevices: RemoteDeviceAccess,
-                    onSaved: SaveSettings);
+                    onSaved: SaveSettings,
+                    // The global checks, listed over the workspace open here so the list says which of them it shadows.
+                    checks: DesktopChecks.For(WorkspaceRootOrNull(), Enactive.Core.Checks.CheckScope.Global));
                 window.Closed += (_, _) => _settingsWindow.Closed(window);
                 window.Show(this);
                 return window;
@@ -853,6 +873,10 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         {
             _vm.IsBusy = true;
             ClearRunView();
+            // "Pause after this step" in the header is this run's: its own pause, made beside the cancellation Stop uses
+            // (ForegroundRunSlot), offered once the run turns out to be planned and not staged (PauseOffer).
+            var pause = _foreground.Pause;
+            _vm.Pause = new PauseOffer(pause);
 
             // The command bar clears, so the request moves into the header - otherwise what you asked
             // for survives only in the log.
@@ -907,16 +931,30 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 await using var composed = await RunComposer.ComposeAsync(
                     CurrentEngine(),
                     new RunRequest(workspace, text, IntentSource.CommandBar, taskId, resume, spec, Stage: _vm.StageChanges)
-                        { Defaults = DefaultsOnScreen() },
+                        { Defaults = DefaultsOnScreen(), Pause = pause },
                     _decisions, runCancellation.Token);
 
                 _staging = composed.Artifacts as StagingArtifactStore;
                 _disk = composed.Artifacts as DiskArtifactStore;
                 _stagedShown = 0;
+                _stagedRunId = null;
+                _stagedRunRoot = fullPath;
+                // The last run's "Run checks now" goes with its proposals: this run's are about to be shown.
+                await Dispatcher.UIThread.InvokeAsync(() => _vm.LiveChecks = null);
                 _files.Stages = _staging is not null;
 
                 var envLine = composed.Intent.Context.Environment?.OneLine();
-                await Dispatcher.UIThread.InvokeAsync(() => _vm.EnvironmentSummary = envLine ?? "(no environment data)");
+                var staged = _staging is not null;
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    _vm.EnvironmentSummary = envLine ?? "(no environment data)";
+                    // A run that stages its changes ignores a pause (it cannot be resumed), so it is not offered one.
+                    if (staged)
+                    {
+                        _vm.Pause?.Staging();
+                        _vm.PauseChanged();
+                    }
+                });
 
                 await RunEventPump.RunAsync(
                     composed.Events(runCancellation.Token),
@@ -953,10 +991,16 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 {
                     if (_liveAttached)
                         _vm.StatusElapsed = finalElapsed;
+                    // Over, however it ended: nothing left to pause.
+                    _vm.Pause = null;
                     // The row goes BEFORE the history is re-read, so the moment it stops running is the
                     // moment it stops being listed as running. RunColumn.Live is the belt to this
                     // brace: if the two ever cross, the run is not shown twice.
                     EndLive(endedRow);
+                    // A staged run that ended: its checks can be run now, against the files as its proposals are decided
+                    // (Plan Phase 3.2). Beside the proposals, as long as they are on screen; its records are in its history too.
+                    if (_staging is not null && _stagedRunId is { } stagedRun && _stagedRunRoot is { Length: > 0 } stagedRoot)
+                        _ = ShowLiveChecksAsync(stagedRoot, stagedRun);
                     // The run that just ended belongs at the top of the history under the workspace.
                     // Only when that workspace is the one on screen - LoadRunsAsync reads whichever is
                     // current, and a run ending elsewhere is not a reason to re-read this one.
@@ -981,8 +1025,12 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 // event rather than being told in advance. So does the live row, which needs it to be
                 // matched against the history when the run ends.
                 _vm.RunLog?.SetRun(ev.RunId);
+                if (_staging is not null)
+                    _stagedRunId ??= ev.RunId;
                 // The panel of model figures is this run's, and starts again with the next (ModelPerformance).
                 _vm.Performance.ShowRun(ev.RunId);
+                // The header's "Pause after this step": offered once the plan is here, gone with a quick action or the end.
+                _vm.ApplyToPause(ev);
                 // A step that ended has changed what it changes: the repository strip is read again then, not only when
                 // the run is over (2026-10-09).
                 if (ev.Kind == EventKind.StepCompleted)
@@ -995,9 +1043,10 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
                 // The cards, the title, the phase and the step count: folded by RunFeed, exactly as a run reopened
                 // from the history is, so the two cannot disagree. New cards are shown where the feed put them.
+                var liveRoot = _liveWorkspace;
                 foreach (var (card, at) in _feed.Apply(ev))
                 {
-                    var view = new StepCardViewModel(card);
+                    var view = new StepCardViewModel(card, path => ShowCheckDetail(liveRoot, path));
                     _cardViews.Add(view);
                     Live(() => _vm.Steps.Insert(Math.Min(at, _vm.Steps.Count), view));
                 }
@@ -1080,6 +1129,28 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 _shownProgress = (_feed.StepsDone, _feed.StepsTotal);
                 UpdateProgress();
             }
+
+            // The checks that fired for the run as a whole, under its steps - journalled like the cards, so a run watched
+            // again from another workspace shows them too.
+            if (_feed.RunChecks.Count != _shownRunChecks)
+            {
+                _shownRunChecks = _feed.RunChecks.Count;
+                var lines = CheckLines.Of(_feed.RunChecks);
+                Live(() => _vm.RunChecks.Show(lines));
+            }
+        }
+
+        /// <summary>
+        /// A check's detail file (Plan Phase 3.3), in the viewer: only a file under the workspace, and never through a link -
+        /// the checks' folder is the engine's, and a run's command could have put one there (WorkspaceFiles).
+        /// </summary>
+        private void ShowCheckDetail(string root, string relative)
+        {
+            var (text, problem) = WorkspaceFiles.Read(root, relative);
+            if (text is null)
+                ShowViewer(relative, problem ?? "The file cannot be shown.");
+            else
+                ViewerWindow.Show(this, relative, text, relative);
         }
 
         /// <summary>
@@ -1329,6 +1400,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             _cardViews.Clear();
             _shownPhase = null;
             _shownProgress = default;
+            _shownRunChecks = 0;
             _liveTitle = string.Empty;
             _liveJournal.Clear();
             _activity = new RunActivity();
@@ -1344,6 +1416,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             _vm.TaskTitle = string.Empty;
 
             _vm.Steps.Clear();
+            _vm.RunChecks.Clear();
             _vm.Artifacts.Clear();
 
             _vm.ToolCalls = 0;
@@ -1479,6 +1552,9 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             // A library left open across the switch would go on offering the previous project's
             // templates for a project that has never heard of them.
             _templatesWindow?.FollowWorkspace(WorkspaceRootOrNull(), PolicyFor(_vm.AutonomyTier));
+            // Settings' Checks list is read over the open workspace - what it shadows, its implicit build and test - and
+            // left on the previous one it said those things about a folder no longer open.
+            _settingsWindow.Open?.FollowWorkspace(DesktopChecks.For(WorkspaceRootOrNull(), Enactive.Core.Checks.CheckScope.Global));
 
             // And a schedules window left open would offer Delete and Disable for schedules belonging
             // to a project it is no longer looking at.
@@ -2003,11 +2079,91 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                 ? null
                 : ResolvedTaskSpec.Parse(record.Spec) is { } s
                     ? new TemplateStore(root).Find(s.TemplateId)
-                    : null);
+                    : null,
+            path => ShowCheckDetail(root, path));
 
         past.RetryRequested += Retry;
         past.RunAgainRequested += RunAgain;
+        Wire(past.Checks, root, record.RunId);
         return past;
+    }
+
+    // ── "Run checks now" on a staged run (Plan Phase 3.2) ──────────────────────
+    // As on the service's pages (ServerHistory), with the window's own rule for who: its one person, as for applying a
+    // proposal. The checks run under the slider of the folder on screen - the permissions of now - against its files now.
+
+    /// <summary>The live run's action, once the staged run that just ended is in the history and has checks to run.</summary>
+    private async Task ShowLiveChecksAsync(string root, Guid runId)
+    {
+        RunRecord? record;
+        try { record = await RunStoreFactory.Create(WorkspaceInfo.For(root)).LoadAsync(runId, CancellationToken.None); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return; }
+        // Another run may have started meanwhile: its proposals are on screen now, not these.
+        if (ChecksNow.Refusal(record) is not null || _stagedRunId != runId)
+            return;
+        var checks = new CheckRecordsViewModel(offered: true);
+        Wire(checks, root, runId);
+        _vm.LiveChecks = checks;
+    }
+
+    /// <summary>
+    /// The level the checks of a run in <paramref name="root"/> run under: that FOLDER's - the slider when it is the folder on
+    /// screen, else what is saved against it. The slider is about the folder on screen; a staged run that ended in another
+    /// folder ran its checks at whatever level an unrelated folder sat at. Saved for neither: the slider, as a run's start.
+    /// </summary>
+    internal static int ChecksAutonomy(string root, string onScreen, int slider, Func<string, int?> saved)
+        // One folder by WorkspaceActivity's rule - the one the checks are kept apart by: a trailing separator or a case
+        // difference on Windows must not send the folder on screen to its saved level instead of the slider.
+        => onScreen.Length > 0 && Enactive.Core.Storage.WorkspaceActivity.SameFolder(root, onScreen)
+            ? slider
+            : saved(root) ?? slider;
+
+    /// <summary>The window runs what the view asks, and shows the run's records.</summary>
+    private void Wire(CheckRecordsViewModel checks, string root, Guid runId)
+    {
+        checks.RunRequested += c => _ = RunChecksNowAsync(c, root, runId);
+        _ = LoadChecksAsync(checks, root, runId);
+    }
+
+    private static async Task LoadChecksAsync(CheckRecordsViewModel checks, string root, Guid runId)
+    {
+        try { checks.Show(await Task.Run(() => CheckRecordViews.ForRunAsync(root, runId, CancellationToken.None))); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { checks.Said = "The check records could not be read: " + ex.Message; }
+    }
+
+    private async Task RunChecksNowAsync(CheckRecordsViewModel checks, string root, Guid runId)
+    {
+        if (checks.Busy)
+            return;
+        // Not while a run of this window is going: the workspace lease keeps out other processes, not this one's own run, and
+        // the checks would read files it is in the middle of changing.
+        if (_vm.IsBusy)
+        {
+            checks.Said = "A run is going; run the checks when it has ended, so they see the files as you left them.";
+            return;
+        }
+        checks.Busy = true;
+        try
+        {
+            var engine = CurrentEngine();
+            var autonomy = ChecksAutonomy(root, WorkspaceRegistry.Normalise(_vm.WorkspacePath), _vm.AutonomyTier,
+                folder => _registry.Find(folder)?.Autonomy);
+            // Off the window's thread: the commands and the hashing of the files take their time.
+            var (record, problem) = await Task.Run(() => ChecksNow.RunAsync(engine, WorkspaceInfo.For(root), runId,
+                Environment.UserName, autonomy, CancellationToken.None));
+            checks.Said = record is null
+                ? problem ?? "The checks were not run."
+                : $"Checked: {CheckRecordViews.Counts(record.Results)}. The record is kept with the run; it does not change how the run ended.";
+            checks.Show(await Task.Run(() => CheckRecordViews.ForRunAsync(root, runId, CancellationToken.None)));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            checks.Said = "The checks could not be run: " + ex.Message;
+        }
+        finally
+        {
+            checks.Busy = false;
+        }
     }
 
     /// <summary>

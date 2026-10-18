@@ -366,10 +366,38 @@ public sealed class LiveRunTests : ComponentHost
     }
 
     /// <summary>
+    /// While the run goes, Review shows what it changed: the copy its store kept is filed under the run's id in its
+    /// record (the engine's, from its events) - not the page's run (RunSession.Id), under which Review found none.
+    /// </summary>
+    [Fact]
+    public async Task Review_of_a_live_run_s_file_shows_what_the_run_changed()
+    {
+        var run = await StartedAsync();
+        File.WriteAllText(Path.Combine(run.Workspace, "report.md"), "# The disks\nnot checked\n");
+        var store = new Enactive.Workspace.DiskArtifactStore(Enactive.Core.Context.WorkspaceInfo.For(run.Workspace));
+        store.BeginRun(Script.RunId, null);
+        await store.BeginStep().CreateAsync("report.md", Enactive.Core.Artifacts.ArtifactKind.FileSet, "report.md",
+            s => s.WriteAsync(System.Text.Encoding.UTF8.GetBytes("# The disks\nall well\n")).AsTask(), default);
+        _script.Emit(Script.Ev(EventKind.ArtifactProduced, "Wrote: report.md", WorkEventPayload.ArtifactPayload("document", "report.md")));
+        await WaitUntil(() => run.Session.Seq == 1);
+        var page = Open("vera", run);
+
+        page.WaitForAssertion(() => Assert.Equal("Artifacts (1)", page.FindAll("[role=tab]")[1].TextContent.Trim()));
+        page.FindAll("[role=tab]")[1].Click();
+        page.WaitForAssertion(() => Assert.Equal("report.md", page.Find(".artifact .path").TextContent.Trim()));
+        page.FindAll(".artifact button").Single(b => b.TextContent.Trim() == "Review").Click();
+
+        var dialog = page.WaitForElement("[role=dialog]");
+        Assert.Contains(dialog.QuerySelectorAll(".diff-line"), l => l.TextContent == "- not checked");
+        Assert.Contains(dialog.QuerySelectorAll(".diff-line"), l => l.TextContent == "+ all well");
+    }
+
+    /// <summary>
     /// A file the run wrote can be deleted from its card, as the window's live run offers (MainWindow.axaml 634-644) -
     /// after the window's question, by an Operator; the card says what became of it. Delete and not the window's Undo:
-    /// the service keeps no copy of what a run overwrote to put back (the window's DiskArtifactStore.Undo), and the
-    /// question says so - it deletes the file as it is now. A Viewer is offered Review only.
+    /// the service does not put a file back (the window's DiskArtifactStore.Undo) - the copy the run's store kept is
+    /// what Review compares with - and the question says so: it deletes the file as it is now. A Viewer is offered
+    /// Review only.
     /// </summary>
     [Fact]
     public async Task A_written_file_is_deleted_from_its_card_after_the_window_s_question()
@@ -396,6 +424,119 @@ public sealed class LiveRunTests : ComponentHost
 
         page.WaitForAssertion(() => Assert.Equal("deleted", page.Find(".artifact-status").TextContent.Trim()));
         Assert.False(File.Exists(Path.Combine(run.Workspace, "report.md")));
+    }
+
+    // ── Pause after this step (Plan Phase 4.2) ─────────────────────────────
+
+    private static WorkEvent Plan()
+        => Script.Ev(EventKind.PlanCreated, "Disks — 2 steps", WorkEventPayload.PlanPayload("Disks", ["check the disks", "write the report"]));
+
+    private static AngleSharp.Dom.IElement? PauseButton(IRenderedComponent<LiveRun> page)
+        => page.FindAll(".task-header button.pause").SingleOrDefault();
+
+    /// <summary>
+    /// In the run's header, beside its phase, as the window's: pressed, the service is asked to pause THIS run, and the
+    /// button says the pause is pending and greys - the steps running now finish, and Stop still cancels at once.
+    /// </summary>
+    [Fact]
+    public async Task An_operator_pauses_the_run_from_its_header_and_is_told_it_is_pending()
+    {
+        var run = await StartedAsync();
+        _script.Emit(Plan());
+        await WaitUntil(() => run.Session.Seq == 1);
+
+        var page = Open("alice", run);
+
+        page.WaitForAssertion(() => Assert.Equal("Pause after this step", PauseButton(page)?.TextContent.Trim()));
+        Assert.False(PauseButton(page)!.HasAttribute("disabled"));
+        PauseButton(page)!.Click();
+
+        Assert.True(run.Pause.IsRequested);
+        page.WaitForAssertion(() => Assert.Equal("Pausing after the steps running now…", PauseButton(page)?.TextContent.Trim()));
+        Assert.True(PauseButton(page)!.HasAttribute("disabled"));
+        Assert.Contains(Users.AuditTrail(), e => e is { Account: "alice", Action: "run pause asked" });
+    }
+
+    /// <summary>
+    /// Another page with the run open - another Operator's, or another tab - says the pause is pending too: a press makes no
+    /// event of the run's, so without being told that page kept offering a pause that was already asked for.
+    /// </summary>
+    [Fact]
+    public async Task Every_page_with_the_run_open_says_the_pause_is_pending()
+    {
+        var run = await StartedAsync();
+        _script.Emit(Plan());
+        await WaitUntil(() => run.Session.Seq == 1);
+        var pressing = Open("alice", run);
+        var watching = Render<LiveRun>(p => p.Add(l => l.RunId, run.Id));
+        watching.WaitForAssertion(() => Assert.Equal("Pause after this step", PauseButton(watching)?.TextContent.Trim()));
+
+        pressing.WaitForAssertion(() => Assert.NotNull(PauseButton(pressing)));
+        PauseButton(pressing)!.Click();
+
+        watching.WaitForAssertion(() => Assert.Equal("Pausing after the steps running now…", PauseButton(watching)?.TextContent.Trim()));
+        Assert.True(PauseButton(watching)!.HasAttribute("disabled"));
+    }
+
+    /// <summary>A run cancelled while it waited in the line never ran: its page offers no pause, greyed or not.</summary>
+    [Fact]
+    public async Task A_run_cancelled_in_the_line_offers_no_pause()
+    {
+        await StartedAsync();
+        var waiting = Runs.Start(As("alice"), Known("project"), "write the report").Run!;
+        Assert.NotNull(waiting.Waiting);
+        Assert.Null(Runs.Cancel(As("alice"), waiting.Id));
+        await waiting.Ended.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var page = Open("alice", waiting);
+
+        page.WaitForAssertion(() => Assert.Equal("Not started", page.Find(".task-header .pill").TextContent.Trim()));
+        Assert.Null(PauseButton(page));
+    }
+
+    /// <summary>A Viewer may not stop a run, so is not offered its pause either; the service refuses one anyway.</summary>
+    [Fact]
+    public async Task A_viewer_is_not_offered_the_pause()
+    {
+        var run = await StartedAsync();
+        _script.Emit(Plan());
+        await WaitUntil(() => run.Session.Seq == 1);
+
+        var page = Open("vera", run);
+
+        page.WaitForAssertion(() => Assert.Equal("Disks", page.Find(".task-title").TextContent.Trim()));
+        Assert.Null(PauseButton(page));
+    }
+
+    /// <summary>Before its plan a run has no step boundary yet: the pause is shown greyed and says when it comes.</summary>
+    [Fact]
+    public async Task Before_the_plan_the_pause_is_greyed_and_comes_with_the_plan()
+    {
+        var run = await StartedAsync();
+        _script.Emit(Script.Ev(EventKind.IntentReceived, "Intent: check the disks"));
+        await WaitUntil(() => run.Session.Seq == 1);
+
+        var page = Open("alice", run);
+
+        page.WaitForAssertion(() => Assert.True(PauseButton(page)?.HasAttribute("disabled")));
+        Assert.Contains("once the run has a plan", PauseButton(page)!.GetAttribute("title"));
+        _script.Emit(Plan());
+        page.WaitForAssertion(() => Assert.False(PauseButton(page)?.HasAttribute("disabled") ?? true));
+    }
+
+    /// <summary>A run that stages its changes ignores a pause, so its page offers none.</summary>
+    [Fact]
+    public async Task A_staging_run_offers_no_pause()
+    {
+        _script.Stages = true;
+        var run = await StartedAsync();
+        _script.Emit(Plan());
+        await WaitUntil(() => run.Session.Seq == 1);
+
+        var page = Open("alice", run);
+
+        page.WaitForAssertion(() => Assert.Equal("Disks", page.Find(".task-title").TextContent.Trim()));
+        Assert.Null(PauseButton(page));
     }
 
     /// <summary>

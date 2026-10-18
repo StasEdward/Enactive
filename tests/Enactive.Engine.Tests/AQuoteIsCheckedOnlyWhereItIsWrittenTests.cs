@@ -184,6 +184,62 @@ public sealed class AQuoteIsCheckedOnlyWhereItIsWrittenTests
     }
 
     /// <summary>
+    /// Steps one after the other share one journal (evidence starts at 0): the second step's review makes history only of
+    /// ITS earlier attempts' cited places - the first step's stay as the engine recorded them, not "an earlier attempt of
+    /// this step, since corrected" of a step that was never corrected.
+    /// </summary>
+    [Fact]
+    public async Task A_later_steps_review_leaves_an_earlier_steps_cited_places_as_they_were()
+    {
+        using var fx = Workspace();
+        var worker = new FakeChatProvider(
+            [Turn.Says("""{"disposition":"task","title":"wiki","steps":[{"title":"Find the settings","dependsOn":[]},{"title":"Find the pages","dependsOn":[0]}]}"""),
+             Turn.Says("The settings are loaded at core/Settings.cs:2."),
+             Turn.Says("The pages come from hosts/desk/Program.cs:3.")]) { WhenExhausted = Turn.Says("Done.") };
+        var reviewer = new FakeChatProvider(
+            Turn.Says("""{"verdict":"pass","reason":"the settings are there","calls":[1],"files":[]}"""),
+            Turn.Says("""{"verdict":"pass","reason":"the pages are there","calls":[2],"files":[]}"""));
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer), "check the settings page of the wiki");
+
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+        Assert.Equal(2, reviewer.Requests.Count);
+        var second = string.Join("\n", reviewer.Requests[1].Messages.Select(m => m.Content));
+        Assert.Contains("""engine_opened_cited_place {"cited":"core/Settings.cs:2"}""", second, StringComparison.Ordinal);
+        Assert.Contains("""engine_opened_cited_place {"cited":"hosts/desk/Program.cs:3"}""", second, StringComparison.Ordinal);
+        Assert.DoesNotContain(CitedPlaces.Historical, second, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The other side of it: a retried attempt of the SAME step still makes history of its own earlier attempt's places,
+    /// in a run where an earlier step's stay as they were.
+    /// </summary>
+    [Fact]
+    public async Task A_retried_step_still_makes_history_of_its_own_earlier_cited_places_only()
+    {
+        using var fx = Workspace();
+        var worker = new FakeChatProvider(
+            [Turn.Says("""{"disposition":"task","title":"wiki","steps":[{"title":"Find the settings","dependsOn":[]},{"title":"Find the pages","dependsOn":[0]}]}"""),
+             Turn.Says("The settings are loaded at core/Settings.cs:2."),
+             Turn.Says("The pages come from core/Settings.cs:3."),
+             Turn.Says("The pages come from hosts/desk/Program.cs:3.")]) { WhenExhausted = Turn.Says("Done.") };
+        var reviewer = new FakeChatProvider(
+            Turn.Says("""{"verdict":"pass","reason":"the settings are there","calls":[1],"files":[]}"""),
+            Turn.Says("""{"verdict":"fail","reason":"the pages are not in Settings.cs","calls":[],"files":[]}"""),
+            Turn.Says("""{"verdict":"pass","reason":"the pages are there","calls":[3],"files":[]}"""));
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer), "check the settings page of the wiki");
+
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+        Assert.Equal(3, reviewer.Requests.Count);
+        var third = string.Join("\n", reviewer.Requests[2].Messages.Select(m => m.Content));
+        // Step 1's place: as recorded. Step 2's first attempt's place: history.
+        Assert.Matches(@"engine_opened_cited_place \{""cited"":""core/Settings.cs:2""\}\r?\n(?!<- HISTORICAL)", third);
+        Assert.Matches(@"engine_opened_cited_place \{""cited"":""core/Settings.cs:3""\}\r?\n<- HISTORICAL", third);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(third, System.Text.RegularExpressions.Regex.Escape(CitedPlaces.Historical)));
+    }
+
+    /// <summary>
     /// A first result that cited nothing leaves no finding behind to tell a correction by. The result handed on is what
     /// is checked at every attempt, so the account of the fix - naming an old place - is still not opened as a claim.
     /// </summary>

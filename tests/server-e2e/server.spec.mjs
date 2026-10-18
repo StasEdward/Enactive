@@ -317,6 +317,23 @@ test('a past run is tried again from its page, and deleted after its question', 
   const retry = await past.getByRole('button', { name: 'Retry' }).boundingBox();
   const status = await past.locator('.past-buttons .pill').boundingBox();
   expect(Math.abs(status.height - retry.height)).toBeLessThanOrEqual(1);
+  // And beside the column of Retry and Run again, level with its top: in one row with them, it moved with each.
+  expect(Math.abs(status.y - retry.y)).toBeLessThanOrEqual(1);
+  expect(status.x).toBeGreaterThan(retry.x + retry.width);
+  // The run's facts on the tabs' line, after the tabs, not a line of the header; the header's request box takes the
+  // room they left, down to the header's foot.
+  const line = await past.evaluate((run) => {
+    const meta = run.querySelector('.tabs-row > .task-meta').getBoundingClientRect();
+    const tabs = [...run.querySelectorAll('[role=tab]')].map((t) => t.getBoundingClientRect());
+    const header = run.querySelector('.task-header');
+    const intent = run.querySelector('.task-intent')?.getBoundingClientRect();
+    return { meta: { left: meta.left, bottom: meta.bottom }, tabsRight: Math.max(...tabs.map((t) => t.right)),
+      tabsBottom: tabs[0].bottom, intentBottom: intent?.bottom,
+      headerFoot: header.getBoundingClientRect().bottom - parseFloat(getComputedStyle(header).paddingBottom) };
+  });
+  expect(line.meta.left).toBeGreaterThan(line.tabsRight + 40);
+  expect(Math.abs(line.meta.bottom - line.tabsBottom)).toBeLessThanOrEqual(12);
+  if (line.intentBottom !== undefined) expect(Math.abs(line.intentBottom - line.headerFoot)).toBeLessThanOrEqual(2);
 
   // Retry: a run of the same task starts, opens at its own address, and asks its question again.
   await past.getByRole('button', { name: 'Retry' }).click();
@@ -470,6 +487,15 @@ test('a run fills the screen beside the column, its repository strip at the foot
   expect(Math.abs(box.bar.left - box.area.left)).toBeLessThanOrEqual(1);
   expect(Math.abs(box.bar.right - box.area.right)).toBeLessThanOrEqual(1);
   expect(Math.abs(box.bar.bottom - box.height)).toBeLessThanOrEqual(1);
+  // And the column's run count is a foot bar on the strip's line: the same height, at the bottom of the window - left
+  // under the last card, it floated a screen away from the strip beside it.
+  const foot = await page.evaluate(() => {
+    const count = document.querySelector('.runs-column .column-status').getBoundingClientRect();
+    const bar = document.querySelector('.repo-bar').getBoundingClientRect();
+    return { top: count.top, bottom: count.bottom, barTop: bar.top, barBottom: bar.bottom };
+  });
+  expect(Math.abs(foot.top - foot.barTop)).toBeLessThanOrEqual(1);
+  expect(Math.abs(foot.bottom - foot.barBottom)).toBeLessThanOrEqual(1);
 
   await answerWhateverWaits(page);
 
@@ -590,6 +616,43 @@ test('settings show their short values in short boxes, six to a row on a wide sc
   await context.close();
 });
 
+test('a template edited from Settings is edited over Settings, and closing it comes back there', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'ada');
+  const menu = page.getByRole('navigation', { name: 'Settings sections' });
+  const editor = page.getByRole('dialog', { name: 'Template' });
+  const card = page.getByRole('list', { name: 'Templates' }).getByRole('listitem').filter({ hasText: 'Code Review' });
+  await page.goto('/settings/ai-templates');
+
+  // Edit: the editor over Settings, its menu beside it on Templates - not the Templates screen behind it.
+  await card.getByRole('link', { name: 'Edit Code Review' }).click();
+  await expect(editor).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/ai-templates\/code-review\?ws=/);
+  await expect(menu.getByRole('link', { name: 'Templates' })).toHaveAttribute('aria-current', 'page');
+  // Cancel, and Escape on a duplicate: Settings › Templates again, with its menu.
+  await editor.getByRole('button', { name: 'Cancel' }).click();
+  await expect(editor).toBeHidden();
+  await expect(page).toHaveURL(/\/settings\/ai-templates$/);
+  await expect(menu.getByRole('link', { name: 'Templates' })).toHaveAttribute('aria-current', 'page');
+  await card.getByRole('link', { name: 'Duplicate Code Review' }).click();
+  await expect(editor).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page).toHaveURL(/\/settings\/ai-templates$/);
+
+  // New, saved: back on Settings › Templates, the template in its list and the save said.
+  const name = `From settings ${Date.now()}`;
+  await page.getByRole('link', { name: 'New template' }).click();
+  await editor.getByLabel('Id', { exact: true }).fill(`from-settings-${Date.now()}`);
+  await editor.getByLabel('Name', { exact: true }).fill(name);
+  await editor.locator('#t-goal').fill('Say hello.');
+  await editor.getByLabel('Kept in').selectOption('Workspace');
+  await editor.getByRole('button', { name: 'Save' }).click();
+  await expect(page).toHaveURL(/\/settings\/ai-templates$/);
+  await expect(page.getByRole('list', { name: 'Templates' }).getByText(name, { exact: true })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: `Saved '${name}'` })).toBeVisible();
+  await expect(menu).toBeVisible();
+  await context.close();
+});
+
 test('the team member editor is wider and in two columns, and a template id, name and category share a row', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'ada');
   await page.setViewportSize({ width: 1600, height: 900 });
@@ -622,6 +685,12 @@ test('the team member editor is wider and in two columns, and a template id, nam
   expect(description.y).toBeGreaterThan(id.y + id.height);
   expect(Math.abs(description.x - id.x)).toBeLessThanOrEqual(1);
   expect(description.x + description.width).toBeGreaterThanOrEqual(category.x + category.width - 1);
+  // The form as wide as its dialog: the same inset on the right as on the left. Held to a reading width, it stopped
+  // 170 px short of the dialog's right edge, and the dialog looked wider than what was in it.
+  const editor = await box(page.getByRole('dialog', { name: 'Template' }));
+  const leftInset = description.x - editor.x;
+  const rightInset = editor.x + editor.width - (description.x + description.width);
+  expect(Math.abs(leftInset - rightInset)).toBeLessThanOrEqual(2);
   // Its comment is the "?" beside the name, not a line under the box.
   await expect(page.getByLabel('About Id')).toHaveAttribute('title', /The id is the file name/);
   await context.close();
@@ -636,6 +705,10 @@ test('the command bar buttons are no taller than the box beside them, Run in bac
   // As tall as Run - one line, not two - and the two rows end where the box does, or above.
   expect(Math.abs(background.height - run.height)).toBeLessThanOrEqual(1);
   expect(background.y + background.height).toBeLessThanOrEqual(task.y + task.height + 1);
+  // Run and Stop one size: the two halves of one control, not a big button and a small one.
+  const stopButton = await page.getByRole('button', { name: 'Stop', exact: true }).boundingBox();
+  expect(Math.abs(stopButton.width - run.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(stopButton.height - run.height)).toBeLessThanOrEqual(1);
   await context.close();
 });
 
@@ -1157,6 +1230,9 @@ test('on a phone the runs screen stacks and a run can be started and answered', 
   await page.getByRole('button', { name: 'Add workspace…' }).click();
   const browse = page.getByRole('dialog', { name: 'Add workspace' });
   await expect(browse).toBeVisible();
+  // The dialog takes the focus once it has arrived (Dialog.razor.js), not as it is drawn: an Escape pressed before that
+  // went to the drawer, and on a slower CI runner the dialog stayed open (PR #58).
+  await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[role=dialog]'))).toBe(true);
   await page.keyboard.press('Escape');
   await expect(browse).toBeHidden();
   await expect(runsColumn(page)).toBeVisible();

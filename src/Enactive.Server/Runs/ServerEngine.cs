@@ -63,7 +63,14 @@ internal sealed class ServerEngine : IDisposable
             // "Allow for this session" outlives a rebuilt engine, as the window's does a saved settings. Each model call's
             // figures go to the run whose flow made it (ServerRunScope): the engine is one, the runs on it several.
             engine = EngineComposition.Build(settings, _http, _log, Current?.Session ?? new SessionApprovals(),
-                metrics: ServerRunScope.Report) with { Approvals = Approvals };
+                metrics: ServerRunScope.Report) with
+                {
+                    Approvals = Approvals,
+                    // The machine's check manifests next to the service's settings.json, as the desktop keeps its own next
+                    // to its own: the service runs as its account and reads its data folder, never whoever's %APPDATA%
+                    // the process happens to resolve to (and a test's service reads its own temporary folder).
+                    GlobalChecks = ServerFolders.ChecksOf(Path.GetDirectoryName(SettingsFile)!)
+                };
         lock (_gate)
             _now = (engine, problem, settings);
     }

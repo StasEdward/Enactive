@@ -20,6 +20,10 @@
                        Foreground="{Binding Tone, Converter={x:Static local:Palette.CardTone}}"
                        TextWrapping="Wrap" Margin="0,3,0,0" />
 
+            <!-- The declared checks that fired for this step, each with its verdict and its file: not behind the
+                 disclosure, which holds what the step DID. -->
+            <local:CheckLinesView DataContext="{Binding Checks}" />
+
             <!-- Disclosure: hidden until the step has logged something, and the summary is computed
                  from what it logged rather than written by the caller. -->
             <Button Classes="disclosure"

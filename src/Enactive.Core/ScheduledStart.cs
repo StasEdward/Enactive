@@ -33,15 +33,30 @@ public static class ScheduledStart
             return null;
         }
 
+        // And this process's own "Run checks now" there (WorkspaceActivity): the lease counts this process's takes, so it
+        // let the schedule through, its occurrence was spent, and the composer then refused the run - the day skipped.
+        // Held with the rest, so the checks wait for this run as it waits for them.
+        if (WorkspaceActivity.TryRun(workspaceRoot, out var checking) is not { } activity)
+        {
+            lease.Dispose();
+            claim.Dispose();
+            busy = checking + " It is still due, and runs on the next tick the folder is free.";
+            return null;
+        }
+
         busy = null;
-        return new Both(claim, lease);
+        return new Both(claim, lease, activity);
     }
 
-    private sealed class Both(IDisposable claim, IDisposable lease) : IDisposable
+    private sealed class Both(IDisposable claim, IDisposable lease, IDisposable activity) : IDisposable
     {
         public void Dispose()
         {
-            try { lease.Dispose(); }
+            try
+            {
+                activity.Dispose();
+                lease.Dispose();
+            }
             finally { claim.Dispose(); }
         }
     }

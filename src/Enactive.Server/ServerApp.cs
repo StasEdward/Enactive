@@ -172,6 +172,7 @@ internal static class ServerApp
         services.AddSingleton<AccountAdmin>();
         services.AddSingleton<Runs.ServerSettings>();
         services.AddSingleton<Runs.ServerLibrary>();
+        services.AddSingleton<Runs.ServerChecks>();
         services.AddSingleton<Runs.ServerLogs>();
         // The Timeline and Environment pages (ServerReports): the environment is the service's own machine, probed as the
         // window probes its own.
@@ -294,4 +295,14 @@ internal sealed record ServerFolders(string Data)
     /// </summary>
     public static string Default()
         => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Enactive");
+
+    /// <summary>
+    /// The service's global check manifests: next to its settings.json, in its data folder - the one its engine reads
+    /// (ServerEngine) and its settings page edits (ServerChecks). One rule for both: the page once edited the account's
+    /// %APPDATA% (CheckStore.DefaultGlobalFolder), which a service started with --data does not read.
+    /// </summary>
+    public static string ChecksOf(string dataFolder) => Path.Combine(dataFolder, "checks");
+
+    /// <inheritdoc cref="ChecksOf"/>
+    public string Checks => ChecksOf(Data);
 }

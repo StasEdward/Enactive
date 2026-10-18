@@ -19,7 +19,8 @@ public sealed class RunStandingTests
         [RunOutcomeKind.Incomplete] = (RunStandingKind.Open, "not finished"),
         [RunOutcomeKind.Cancelled] = (RunStandingKind.Idle, "cancelled"),
         [RunOutcomeKind.NeedsUser] = (RunStandingKind.Open, "waiting for you"),
-        [RunOutcomeKind.Blocked] = (RunStandingKind.Open, "blocked")
+        [RunOutcomeKind.Blocked] = (RunStandingKind.Open, "blocked"),
+        [RunOutcomeKind.Paused] = (RunStandingKind.Open, "paused")
     };
 
     [Fact]

@@ -42,6 +42,18 @@ internal static class Palette
         _ => throw Unknown(tone)
     });
 
+    /// <summary>
+    /// A declared check's verdict on a card (CheckLines): green passed, red failed, amber did not run - not red, nothing it
+    /// checks was found wrong; not grey either, because a check that could not run verified nothing and must be seen.
+    /// </summary>
+    public static readonly IValueConverter CheckVerdict = Map<CheckVerdict>(verdict => verdict switch
+    {
+        Enactive.Application.Projections.CheckVerdict.Pass => Brand.Success,
+        Enactive.Application.Projections.CheckVerdict.Fail => Brand.Danger,
+        Enactive.Application.Projections.CheckVerdict.NotRun => Brand.Warning,
+        _ => throw new ArgumentOutOfRangeException(nameof(verdict), verdict, "A check's verdict with no colour.")
+    });
+
     public static readonly IValueConverter EntryIcon = Map<FeedEntryKind>(kind => kind switch
     {
         FeedEntryKind.Command => Brand.Info,
@@ -102,6 +114,22 @@ internal static class Palette
         ChangeState.Rejected => Brand.Danger,
         _ => throw Unknown(state)
     });
+
+    /// <summary>One check's line in a "Run checks now" record: what it came to (the service's Looks.CheckLine).</summary>
+    public static readonly IValueConverter CheckLine = Map<CheckLineTone>(tone => tone switch
+    {
+        // Plain, never green: a record is "checked at its time", and a green PASS under it reads as a standing pass.
+        CheckLineTone.Passed => Brand.TextBody,
+        CheckLineTone.Failed => Brand.Danger,
+        CheckLineTone.NotRun => Brand.Warning,
+        _ => throw Unknown(tone)
+    });
+
+    /// <summary>
+    /// A "Run checks now" record's edge: amber while the workspace still matches it - checked at its time, never a standing
+    /// green - and muted once it is outdated (the service's Looks.CheckRecord).
+    /// </summary>
+    public static readonly IValueConverter CheckRecord = Map<bool>(outdated => outdated ? Brand.TextMuted : Brand.Amber);
 
     public static readonly IValueConverter DiffLine = Map<DiffLineKind>(kind => kind switch
     {
@@ -204,12 +232,14 @@ internal static class Palette
 
     // ── what came back while nobody was watching ────────────────────────────
 
-    /// <summary>An Inbox item's kind - a result, a question nobody was there to answer, an error - in the Inbox and in a schedule's past.</summary>
+    /// <summary>An Inbox item's kind - a result, a question nobody was there to answer, an error, a paused run - in the Inbox and in a schedule's past.</summary>
     public static readonly IValueConverter InboxKind = Map<string>(kind => kind.ToLowerInvariant() switch
     {
         "result" => Brand.Success,
         "decision" => Brand.Amber,
         "error" => Brand.Danger,
+        // Paused by somebody, resumed from where it stopped (Plan Phase 4.2): neither done nor wrong - open, as its run is.
+        "paused" => Brand.Amber,
         _ => Brand.TextMuted
     });
 

@@ -10,8 +10,10 @@ using Enactive.Server.Accounts;
 using Enactive.Workspace;
 
 /// <summary>A staged run's proposals as a list shows them.</summary>
+/// <param name="RunId">The run's id in the workspace's history - where its "Run checks now" records are kept - once the run
+/// has ended and said it; null while it runs, and for a set kept before it was written down.</param>
 public sealed record StagedSet(string Workspace, string Id, string Owner, string Prompt, DateTimeOffset Started,
-    int Pending, int Total, bool Running);
+    int Pending, int Total, bool Running, Guid? RunId = null);
 
 /// <summary>One proposal: a file's next content, and the difference from what it builds on - null when not text.</summary>
 public sealed record StagedFile(Guid Id, string Path, bool IsNew, bool Applied, bool Rejected, long Bytes, string? Diff);
@@ -31,7 +33,19 @@ internal sealed class ServerStaging(UserStore users, KnownWorkspaces workspaces)
 {
     private const string HeaderName = "run.json";
 
-    private sealed record Header(string Owner, string Prompt, DateTimeOffset Started);
+    /// <param name="RunId">
+    /// The run's id in the history, written when the run ends: the folder is named for the service's run, not the engine's,
+    /// and the proposals page offers "Run checks now" on the run's history (Plan Phase 3.2). Null in a header written
+    /// before the run ended, or before this was kept.
+    /// </param>
+    private sealed record Header(string Owner, string Prompt, DateTimeOffset Started, Guid? RunId = null);
+
+    /// <summary>
+    /// Who may apply or reject proposed changes - and so who may run a staged run's checks now (ServerHistory), the plan's
+    /// "limited to the roles that may apply proposals": one rule, so the two cannot drift apart. The owner or any Operator,
+    /// and only Operators start runs, so it is the Operators, the owner among them while their role still includes it.
+    /// </summary>
+    public static bool MayDecide(Role role) => role >= Role.Operator;
 
     /// <summary>Folders a run of this process is still writing: not to be applied from under it.</summary>
     private readonly ConcurrentDictionary<string, byte> _running = new(StringComparer.OrdinalIgnoreCase);
@@ -74,11 +88,31 @@ internal sealed class ServerStaging(UserStore users, KnownWorkspaces workspaces)
             Listeners.Tell(Changed, "the proposed changes");
             return;
         }
+        if (runId is { } id)
+            RememberRun(folder, id);
         var info = WorkspaceInfo.For(workspace);
         await InboxStoreFactory.Create(info).AppendAsync(new InboxItem(Guid.NewGuid(), info.Id, "result",
             title, $"{pending} proposed change(s) wait to be applied or rejected", runId ?? Guid.Empty,
             "unread", DateTimeOffset.UtcNow), CancellationToken.None);
         Listeners.Tell(Changed, "the proposed changes");
+    }
+
+    /// <summary>
+    /// Writes the run's history id into the set's header, for the proposals page's "Run checks now". Not a reason to lose
+    /// the proposals: a header that cannot be written again leaves the set as it was, without the action on its page - the
+    /// run's history still has it.
+    /// </summary>
+    private static void RememberRun(string folder, Guid runId)
+    {
+        var file = Path.Combine(folder, HeaderName);
+        try
+        {
+            if (JsonSerializer.Deserialize<Header>(File.ReadAllText(file)) is { } header)
+                AtomicWrite.Replace(file, JsonSerializer.Serialize(header with { RunId = runId }));
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+        }
     }
 
     /// <summary>Every known workspace's kept proposals, newest first. Anybody signed in reads them, as the history.</summary>
@@ -144,9 +178,7 @@ internal sealed class ServerStaging(UserStore users, KnownWorkspaces workspaces)
     {
         if (ServerAuth.StillValid(users, user) is not { } account)
             return ("Your session has ended. Sign in again.", false);
-        // The owner or any Operator - and only Operators start runs, so it is the Operators, the owner among them
-        // while their role still includes it.
-        if (account.Role < Role.Operator)
+        if (!MayDecide(account.Role))
             return ("Your role does not include applying or rejecting proposed changes.", false);
         if (Locate(workspace, id) is not { } found)
             return ("These proposals are no longer kept.", false);
@@ -271,7 +303,7 @@ internal sealed class ServerStaging(UserStore users, KnownWorkspaces workspaces)
                 return running ? new StagedSet(workspace, id, header.Owner, header.Prompt, header.Started, 0, 0, true) : null;
             using var store = StagingArtifactStore.Reopen(workspace, folder);
             return new StagedSet(workspace, id, header.Owner, header.Prompt, header.Started,
-                store.Changes.Count(c => c.Pending), store.Changes.Count, running);
+                store.Changes.Count(c => c.Pending), store.Changes.Count, running, header.RunId);
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {

@@ -39,7 +39,8 @@ internal sealed class StepFrame(
     ToolDefinition? submitTool = null,
     WriteBoundary? boundary = null,
     IWorkspaceChanges? changes = null,
-    WorkspaceSnapshot? stepStart = null)
+    WorkspaceSnapshot? stepStart = null,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? owedItems = null)
 {
     private readonly IReadOnlyList<ToolDefinition> _definitions = definitions;
 
@@ -76,6 +77,13 @@ internal sealed class StepFrame(
     public WriteBoundary? Boundary { get; } = boundary;
     public IWorkspaceChanges? Changes { get; } = changes;
     public WorkspaceSnapshot? StepStart { get; } = stepStart;
+
+    /// <summary>
+    /// The items each results field is to be keyed by, as the step's coverage gate counts them (EvidenceCoverage.Owed);
+    /// null for a step that consumes no list - its keys are its own. A step for particular items is held to its items by
+    /// the output contract instead (StepOutputContract.Results), which refuses any other key.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>>? OwedItems { get; } = owedItems;
 
     /// <summary>
     /// A handover replaced the conversation: the step's record of what it has done starts over, and the reads it can no

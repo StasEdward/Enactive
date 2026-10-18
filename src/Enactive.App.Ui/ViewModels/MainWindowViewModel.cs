@@ -204,6 +204,11 @@ internal sealed class MainWindowViewModel : ObservableObject
         RunCommand = new RelayCommand(() => RunRequested?.Invoke(), () => !IsBusy);
         RunBackgroundCommand = new RelayCommand(() => BackgroundRunRequested?.Invoke(), () => !IsBusy);
         StopCommand = new RelayCommand(() => StopRequested?.Invoke(), () => IsBusy);
+        PauseCommand = new RelayCommand(() =>
+        {
+            _pause?.Request();
+            PauseChanged();
+        }, () => _pause?.Standing == PauseStanding.Offered);
         TimelineCommand = new RelayCommand(() => TimelineRequested?.Invoke());
         LogCommand = new RelayCommand(() => LogRequested?.Invoke());
         EnvironmentCommand = new RelayCommand(() => EnvironmentRequested?.Invoke());
@@ -278,6 +283,46 @@ internal sealed class MainWindowViewModel : ObservableObject
     public RelayCommand RunBackgroundCommand { get; }
 
     public RelayCommand StopCommand { get; }
+
+    /// <summary>
+    /// "Pause after this step" in the run header (Plan Phase 4.2): the steps running now finish, nothing new starts, and
+    /// the run ends Paused for UNFINISHED to resume. Offered by the run's own <see cref="Pause"/> (PauseOffer), which says
+    /// when - a planned run that does not stage its changes. Pressed, it says it is pending and greys; Stop stays.
+    /// </summary>
+    public RelayCommand PauseCommand { get; }
+
+    private PauseOffer? _pause;
+
+    /// <summary>The foreground run's pause control, handed over as the run starts; null when no run is going.</summary>
+    public PauseOffer? Pause
+    {
+        get => _pause;
+        set
+        {
+            _pause = value;
+            PauseChanged();
+        }
+    }
+
+    public bool IsPauseShown => (_pause?.Standing ?? PauseStanding.Hidden) != PauseStanding.Hidden;
+    public string PauseLabel => _pause?.Text ?? PauseOffer.Label;
+    public string PauseTip => _pause?.Why ?? string.Empty;
+
+    /// <summary>An event of the foreground run, as it is drawn: the plan, a quick action, the end move the control.</summary>
+    public void ApplyToPause(Enactive.Core.Events.WorkEvent ev)
+    {
+        if (_pause?.Apply(ev) == true)
+            PauseChanged();
+    }
+
+    /// <summary>The control's standing may have changed - the run turned out to stage its changes, or it was pressed.</summary>
+    public void PauseChanged()
+    {
+        OnPropertyChanged(nameof(IsPauseShown));
+        OnPropertyChanged(nameof(PauseLabel));
+        OnPropertyChanged(nameof(PauseTip));
+        PauseCommand.RaiseCanExecuteChanged();
+    }
 
     // ── Left panel ────────────────────────────────────────────────────────────
     /// <summary>
@@ -456,8 +501,26 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     public RelayCommand SettingsCommand { get; }
 
+    /// <summary>The workspace's own checks (Plan Phase 3.5), from its card: the window opens their list.</summary>
+    public RelayCommand ChecksCommand => _checksCommand ??= new RelayCommand(() => ChecksRequested?.Invoke());
+
+    private RelayCommand? _checksCommand;
+
+    public event Action? ChecksRequested;
+
     // ── Centre: the plan-step feed ────────────────────────────────────────────
     public ObservableCollection<StepCardViewModel> Steps { get; } = new();
+
+    /// <summary>
+    /// The declared checks that fired for the live run as a whole (Plan Phase 3.5) - at a wave's end, at its end, owed at
+    /// apply - under its steps. Open asks the window (<see cref="CheckDetailRequested"/>), which knows the run's workspace.
+    /// </summary>
+    public CheckLinesViewModel RunChecks => _runChecks ??= new CheckLinesViewModel(path => CheckDetailRequested?.Invoke(path));
+
+    private CheckLinesViewModel? _runChecks;
+
+    /// <summary>Open on one of <see cref="RunChecks"/>: its detail file, by its workspace-relative path.</summary>
+    public event Action<string>? CheckDetailRequested;
 
     // ── Right: status, decision, artifacts ────────────────────────────────────
     /// <summary>
@@ -512,6 +575,24 @@ internal sealed class MainWindowViewModel : ObservableObject
     /// reading history never interrupts work - and Back returns to it.
     /// </summary>
     public PastRunViewModel? PastRun { get => _pastRun; private set => Set(ref _pastRun, value); }
+
+    private CheckRecordsViewModel? _liveChecks;
+
+    /// <summary>
+    /// The live run's "Run checks now" (Plan Phase 3.2), beside its proposals: set when a staged run has ended - its checks
+    /// read the files as a person applies them, which they cannot while it runs - and cleared when the next run starts.
+    /// </summary>
+    public CheckRecordsViewModel? LiveChecks
+    {
+        get => _liveChecks;
+        set
+        {
+            if (Set(ref _liveChecks, value))
+                OnPropertyChanged(nameof(HasLiveChecks));
+        }
+    }
+
+    public bool HasLiveChecks => _liveChecks is not null;
 
     /// <summary>The workspace's repository, at the foot of the window (RepoBar).</summary>
     public RepoBar Repo { get; } = new();

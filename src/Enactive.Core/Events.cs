@@ -122,7 +122,15 @@ public enum RunOutcomeKind
     /// that says it cannot go on (Phase 7). Each blocked step is named with its cause; the checkpoint and the
     /// answers given so far are kept, and once the cause is removed the SAME run carries on from the blocked steps.
     /// </summary>
-    Blocked
+    Blocked,
+
+    /// <summary>
+    /// Stopped at a step boundary because somebody asked it to (Plan Phase 4.2, <c>RunPause</c>): the steps that were
+    /// running finished, nothing new started, and the checkpoint, the answers given and the baseline are kept. Resumed,
+    /// it runs exactly the steps that are left. Not an ending, and nothing about the work is known to be wrong. Last,
+    /// although outcomes are stored by name: the place does not matter, the consumers that must place it do.
+    /// </summary>
+    Paused
 }
 
 /// <summary>How one unit of work ended. Aggregated into a <see cref="RunOutcomeKind"/>.</summary>
@@ -609,6 +617,38 @@ public static class WorkEventPayload
     private sealed record ArtifactPayloadShape(string Kind, string Path, int? Step);
 
     /// <summary>
+    /// The payload of a verdict the ENGINE's own check gave (StepCoverageGate) - a ReviewFailed no reviewer gave. Said in
+    /// the payload, not only in the words, so the log, a step's card and the activity pill can tell it from a review.
+    /// </summary>
+    /// <param name="checkId">
+    /// The declared workspace check whose failure this is (Plan Phase 3.2), when it is one and not the coverage count -
+    /// so a card says which check sent the step back. Empty when it is a check whose id is not known any more.
+    /// </param>
+    public static string EngineCheckPayload(int? stepNo, string? checkId = null)
+    {
+        var parts = new List<string>(3);
+        if (stepNo is { } n) parts.Add($"\"step\":{n}");
+        parts.Add("\"engineCheck\":true");
+        if (checkId is not null) parts.Add($"\"checkId\":{Quote(checkId)}");
+        return "{" + string.Join(',', parts) + "}";
+    }
+
+    /// <summary>
+    /// The declared check the engine's verdict came from (Plan Phase 3.2), or null when it was the coverage check or no
+    /// engine check at all. Empty when the event says it was a declared check and not which.
+    /// </summary>
+    public static string? EngineCheckId(this WorkEvent ev)
+        => ev.ByEngineCheck() ? StringField(ev, "checkId") : null;
+
+    /// <summary>
+    /// Whether the event is the engine's own check's verdict, not a reviewer's: a ReviewFailed of the coverage check, or
+    /// the StepCompleted of a step it rejected (see <see cref="EngineCheckPayload"/>, <see cref="StepPayload"/>). An
+    /// event recorded without the flag reads as before - a reviewer's.
+    /// </summary>
+    public static bool ByEngineCheck(this WorkEvent ev)
+        => ev.PayloadJson?.Contains("\"engineCheck\":true", StringComparison.Ordinal) == true;
+
+    /// <summary>
     /// Builds the payload of a <see cref="EventKind.StepCompleted"/> event: the step number, how
     /// that step ended, and WHY when it did not simply succeed. The UI used to decide whether a card
     /// goes green by searching the summary for "FAILED:" and "skipped (dependency failed)", so
@@ -624,12 +664,21 @@ public static class WorkEventPayload
     /// sentence the card does not parse — so the one card a person opens the run to look at was the
     /// one that would not say what happened.</para>
     /// </param>
-    public static string StepPayload(int? stepNo, StepOutcomeKind outcome, string? reason = null)
+    /// <param name="engineCheck">
+    /// The step was rejected by the engine's coverage check, not by a reviewer (OutcomeCause.CoverageGateRejected): its
+    /// card says so. Only written when true, so every other payload is as it was.
+    /// </param>
+    /// <param name="checkId">The declared check that rejected it (Plan Phase 3.2), with <paramref name="engineCheck"/>; see
+    /// <see cref="EngineCheckPayload"/>.</param>
+    public static string StepPayload(int? stepNo, StepOutcomeKind outcome, string? reason = null, bool engineCheck = false,
+        string? checkId = null)
     {
-        var parts = new List<string>(3);
+        var parts = new List<string>(5);
         if (stepNo is { } n) parts.Add($"\"step\":{n}");
         parts.Add($"\"stepOutcome\":\"{outcome}\"");
         if (!string.IsNullOrWhiteSpace(reason)) parts.Add($"\"reason\":{Quote(reason)}");
+        if (engineCheck) parts.Add("\"engineCheck\":true");
+        if (engineCheck && checkId is not null) parts.Add($"\"checkId\":{Quote(checkId)}");
         return "{" + string.Join(',', parts) + "}";
     }
 
@@ -757,9 +806,23 @@ public static class WorkEventPayload
     /// One success criterion's result, as VALUES. The panel that will show a run's checks reads
     /// these; nothing has to take the sentence apart.
     /// </summary>
+    /// <param name="check">
+    /// The declared workspace check this is the result of (Plan Phase 3.3): its id, where it fired (write, step, wave, apply,
+    /// run), the step or wave it belongs to, why it waited, and the file its whole output is in. Only written for one - every
+    /// other criterion's payload is byte for byte what it was, and an event recorded before reads as it did
+    /// (<see cref="CheckIn"/> is null for it).
+    /// </param>
+    /// <param name="reason">
+    /// For a declared check that did not run only: why, as the engine said it (CriterionResult.Detail) - "not run: needs
+    /// permission - ...", "staged: needs the applied files - ...". A value, so a reader does not take the sentence apart: a
+    /// command with a line break in it moved the reason the sentence put on its second line. Not kept for one that ran:
+    /// what it printed is in its detail file, and a copy in every event would only make the record bigger.
+    /// </param>
     public static string CriterionPayload(
-        string name, string outcome, bool required, int? exitCode, string origin = "Declared")
-        => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object?>
+        string name, string outcome, bool required, int? exitCode, string origin = "Declared",
+        Enactive.Core.Checks.CheckFiring? check = null, string? reason = null)
+    {
+        var values = new Dictionary<string, object?>
         {
             ["criterion"] = name,
             ["outcome"] = outcome,
@@ -768,7 +831,68 @@ public static class WorkEventPayload
             // Who asked for the check. Without it a reader of the values could not tell the engine's
             // own look at the files from a check a person or the planner wrote.
             ["origin"] = origin
-        }, PayloadJson);
+        };
+        if (check is not null)
+        {
+            values["checkId"] = check.CheckId;
+            values["firedOn"] = Enactive.Core.Checks.CheckRecords.NameOf(check.FiredOn);
+            // "step" as every other event names it, so a step's card places the check on it.
+            if (check.Step is { } step) values["step"] = step;
+            if (check.Wave is { } wave) values["wave"] = wave;
+            if (check.Attempt is { } attempt) values["attempt"] = attempt;
+            if (check.Deferred is { Length: > 0 } deferred) values["deferred"] = deferred;
+            if (check.DetailPath is { Length: > 0 } detailPath) values["detailPath"] = detailPath;
+            if (reason is { Length: > 0 }) values["reason"] = reason;
+        }
+        return System.Text.Json.JsonSerializer.Serialize(values, PayloadJson);
+    }
+
+    /// <summary>A criterion's result as its event's payload: the one way the engine publishes one (RunScope, write checks).</summary>
+    public static string CriterionPayload(Enactive.Core.Templates.CriterionResult result)
+        => CriterionPayload(result.Name, result.Outcome.ToString(), result.Required, result.ExitCode, result.Origin.ToString(),
+            result.Check, result.Check is null || result.Outcome != Enactive.Core.Templates.CriterionOutcome.Unknown ? null : result.Detail);
+
+    /// <summary>Why a declared check did not run (the payload's <c>reason</c>); null for any other, and for one recorded before it was kept.</summary>
+    public static string? CriterionReason(this WorkEvent ev) => StringField(ev, "reason");
+
+    /// <summary>The declared check a criterion event is the result of (Plan Phase 3.3), or null when it is none.</summary>
+    public static Enactive.Core.Checks.CheckFiring? CriterionCheck(this WorkEvent ev) => CheckIn(ev.PayloadJson);
+
+    /// <summary>
+    /// The same, from a stored event's payload. Null for a payload without a check - any other criterion, and every
+    /// criterion recorded before checks had records - and for one that cannot be read.
+    /// </summary>
+    public static Enactive.Core.Checks.CheckFiring? CheckIn(string? payloadJson)
+    {
+        if (string.IsNullOrEmpty(payloadJson))
+            return null;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(payloadJson);
+            var root = doc.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object
+                || !root.TryGetProperty("checkId", out var id) || id.ValueKind != System.Text.Json.JsonValueKind.String
+                || !root.TryGetProperty("firedOn", out var fired) || fired.ValueKind != System.Text.Json.JsonValueKind.String
+                || !Enum.TryParse<Enactive.Core.Checks.CheckBoundary>(fired.GetString(), ignoreCase: true, out var boundary))
+                return null;
+
+            int? Number(string field) => root.TryGetProperty(field, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.Number
+                                         && v.TryGetInt32(out var n) ? n : null;
+            string? Text(string field) => root.TryGetProperty(field, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String
+                ? v.GetString() : null;
+
+            return new Enactive.Core.Checks.CheckFiring(id.GetString()!, boundary)
+            {
+                Step = Number("step"), Wave = Number("wave"), Attempt = Number("attempt"), Deferred = Text("deferred"),
+                DetailPath = Text("detailPath")
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     /// <summary>The criterion outcome this event carries, or null when it carries none.</summary>
     public static string? CriterionOutcomeName(this WorkEvent ev)
@@ -777,6 +901,26 @@ public static class WorkEventPayload
     /// <summary>The criterion's name, when the event is a criterion result.</summary>
     public static string? CriterionName(this WorkEvent ev)
         => StringField(ev, "criterion");
+
+    /// <summary>The exit code a criterion's command gave, or null when it gave none (it did not run) or the event has none.</summary>
+    public static int? CriterionExitCode(this WorkEvent ev)
+    {
+        if (string.IsNullOrEmpty(ev.PayloadJson))
+            return null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(ev.PayloadJson);
+            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("exitCode", out var value)
+                   && value.ValueKind == System.Text.Json.JsonValueKind.Number && value.TryGetInt32(out var code)
+                ? code
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     private static string? StringField(WorkEvent ev, string field)
     {

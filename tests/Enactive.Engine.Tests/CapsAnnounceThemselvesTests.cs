@@ -74,6 +74,13 @@ public sealed class CapsAnnounceThemselvesTests
         ["WorkspaceChanges.MaxDiffCharsKept"] = "A_huge_diff_is_kept_to_a_limit_and_says_so",
         // The user's own request, quoted for the reviewer - see TheReviewerSeesTheRequestTests.
         ["SuccessEvaluator.MaxDetailChars"] = nameof(A_criterions_output_says_how_much_of_it_is_shown),
+        // A write-time check's finding, added to the result of the write the worker reads next.
+        ["WriteChecks.WorkerOutputChars"] = nameof(WriteChecksTellTheWorkerTests.A_long_finding_is_told_to_the_worker_in_part_and_says_so),
+        // A check's whole output kept beside the run (Plan Phase 3.3), and the files a run protects (Plan Phase 3.4).
+        ["CheckRecords.MaxDetailChars"] = nameof(CheckRecordsTests.A_check_record_past_its_size_is_cut_and_says_so),
+        ["ProtectedFiles.MaxFiles"] = nameof(ProtectedFilesTests.Protected_files_past_the_most_that_are_hashed_say_so),
+        ["StateFingerprints.MaxFiles"] = nameof(RunChecksNowTests.A_fingerprint_past_the_most_files_it_hashes_says_so),
+        ["Orchestrator.ProtectedDiffChars"] = nameof(ProtectedFilesTests.A_long_diff_of_a_protected_file_is_shown_in_part_and_says_so),
         ["ProcessExec.MaxOutputChars"] = nameof(Command_output_past_the_cap_says_it_was_truncated),
         ["ReadFilesTool.MaxFiles"] = nameof(More_paths_than_read_files_takes_says_how_many),
         ["FilePreview.MaxInputChars"] = nameof(BoundedFilePreviewTests.Large_preview_bounds_allocations_and_announces_the_input_limit),
@@ -133,7 +140,17 @@ public sealed class CapsAnnounceThemselvesTests
         // Literals until they were named, which is when this census saw them.
         ["FeedCard.NoteChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked),
         ["FeedCard.DetailChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked),
-        ["FeedCard.CommandChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked)
+        ["FeedCard.CommandChars"] = nameof(RunFeedTests.A_line_too_long_for_the_card_is_cut_and_marked),
+        // Not a cut of anything shown: a string longer than this - a file's content - is not kept as what a call named.
+        // An item it would have named is reported as having no mention behind it, by name, at the step's gate.
+        ["EvidenceCoverage.MaxNamedChars"] = nameof(EvidenceCoversAllTests.A_mention_is_read_from_the_full_arguments_not_the_cut_record),
+        // A floor, not a cut: under it the reviewer's item account is left out whole, and the calls keep the budget.
+        ["StepCoverageGate.MinimumAccountChars"] = nameof(CoverageAtTheStepGateTests.A_small_evidence_budget_is_kept_to_and_the_account_gives_way),
+        // What a write changed, as the reviewer is shown it: the diff kept per write, a line of it, and the floor each
+        // write's diff has in a shared evidence budget - each cut says how many lines it leaves out.
+        ["WrittenChange.MaxChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.A_long_change_is_kept_to_its_bound_and_says_how_much_is_not_kept),
+        ["WrittenChange.MaxLineChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.A_long_line_of_a_diff_is_clipped_and_says_how_long_it_is),
+        ["ExecutionJournal.MinChangeChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.An_edit_cut_to_fit_keeps_its_first_changed_lines_and_counts_the_lines_it_leaves_out)
     };
 
     /// <summary>

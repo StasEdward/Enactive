@@ -723,16 +723,21 @@ internal sealed class CallAdmission(
         string handed;
         if (checkedOutput.Accepted)
         {
+            // Keyed by the items the step's gate counts, before anything reads the values (EvidenceCoverage.KeyByItems).
+            var keying = EvidenceCoverage.KeyByItems(frame.OutputSchema, checkedOutput.Values!, frame.OwedItems);
             frame.OutputSlot.Accept(checkedOutput);
-            frame.OutputSlot.LastRefused = null;
             trail.Leave(() => frame.Open.HandedOn());
             // What the step had shown for each item it hands a result on for, recorded now
             // and by the engine (Phase 5.1): later, only this counts as coverage.
             frame.OutputSlot.Items = EvidenceCoverage.Gather(frame.OutputSchema, checkedOutput.Values!, frame.Reads, frame.Journal.Actions, tools.Definitions,
-                frame.Boundary is { ForItem: true } ? frame.Boundary.Items : null);
-            var unbacked = EvidenceCoverage.Unbacked(frame.OutputSlot.Items);
+                frame.Boundary is { ForItem: true } ? frame.Boundary.Items : null, frame.StepNo);
+            var unbacked = EvidenceCoverage.Unbacked(frame.OutputSlot.Items, keying);
+            var notItems = EvidenceCoverage.NotItems(keying, frame.OwedItems);
+            var taken = EvidenceCoverage.TakenAsItems(keying);
             handed = $"Accepted as this step's output (revision {frame.OutputSlot.Revision}); the steps after it receive "
                 + "these values." + (checkedOutput.Notes.Count > 0 ? " " + string.Join(" ", checkedOutput.Notes) : "")
+                + (taken is null ? "" : " " + taken)
+                + (notItems is null ? "" : " " + notItems)
                 + (unbacked is null ? "" : " " + unbacked)
                 // Said to the step when it is answered; with a note, the note is what carries on.
                 + (answered ? " Finish the step with a short closing message." : " Handed on with the handover note.");
@@ -745,7 +750,9 @@ internal sealed class CallAdmission(
             // does not say so changes nothing about what the model does next.
             handed = (sameAgain ? "This is the same submission as the last one, unchanged - the problems below still stand. " : "")
                 + string.Join(" ", checkedOutput.Errors) + " Nothing was stored; send the corrected submission.";
-            frame.OutputSlot.LastRefused = TaskProgress.Canonical(call.ArgumentsJson);
+            // What was missing and what was wrong, as values beside the message (Plan Phase 2): the accepted result, if
+            // there is one, is left as it was.
+            frame.OutputSlot.Refuse(checkedOutput, TaskProgress.Canonical(call.ArgumentsJson));
             trail.Leave(() => frame.Journal.Record(frame.StepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, handed, WorkspaceEffect.None));
             yield return Ev(EventKind.ToolResult, $"{call.Name} -> failed: {handed}");
         }

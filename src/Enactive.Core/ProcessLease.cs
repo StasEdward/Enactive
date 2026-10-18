@@ -93,6 +93,25 @@ public sealed class ProcessLease : IDisposable
         return IsHeldElsewhere(full) ? ReadHolder(full) : null;
     }
 
+    /// <summary>
+    /// Whether anybody holds the lease at this path now - a run of this process, or another process - and, when another
+    /// holds it, who (null when it has not written its name). Unlike <see cref="HolderOf"/>, this process's own counts.
+    /// </summary>
+    public static bool IsHeld(string path, out LeaseHolder? elsewhere)
+    {
+        var full = Path.GetFullPath(path);
+        elsewhere = null;
+        lock (Gate)
+        {
+            if (HeldHere.ContainsKey(full))
+                return true;
+        }
+        if (!IsHeldElsewhere(full))
+            return false;
+        elsewhere = ReadHolder(full);
+        return true;
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _released, 1) != 0)

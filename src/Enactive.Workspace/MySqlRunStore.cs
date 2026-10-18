@@ -3,6 +3,7 @@ namespace Enactive.Workspace;
 using System.Globalization;
 using System.Text.Json;
 using MySqlConnector;
+using Enactive.Core.Checks;
 using Enactive.Core.History;
 
 /// <summary>
@@ -23,10 +24,19 @@ public sealed class MySqlRunStore : IRunStore
     private readonly SemaphoreSlim _gate = new(1, 1);
     private bool _initialized;
 
-    public MySqlRunStore(string connectionString, Guid workspaceId)
+    /// <summary>The workspace's folder, for what a run's checks leave on its disk (Plan Phase 3.3); null when not known here.</summary>
+    private readonly string? _root;
+
+    /// <param name="workspaceRoot">
+    /// The workspace's folder: the database holds the run, the workspace's disk holds what its checks left behind
+    /// (CheckRecords), and deleting the run removes both. Null for a caller with no workspace on this machine - then only
+    /// the row is deleted.
+    /// </param>
+    public MySqlRunStore(string connectionString, Guid workspaceId, string? workspaceRoot = null)
     {
         _connectionString = connectionString;
         _workspaceId = workspaceId;
+        _root = workspaceRoot is null ? null : Path.GetFullPath(workspaceRoot);
     }
 
     public async Task SaveAsync(RunRecord record, CancellationToken ct)
@@ -40,14 +50,14 @@ public sealed class MySqlRunStore : IRunStore
         command.CommandText =
             """
             INSERT INTO runs
-              (run_id, workspace_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json)
+              (run_id, workspace_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json, checks_json)
             VALUES
-              (@run_id, @workspace_id, @task_id, @title, @model, @started_at, @finished_at, @status, @events, @artifacts, @decisions, @settings, @usage, @spec)
+              (@run_id, @workspace_id, @task_id, @title, @model, @started_at, @finished_at, @status, @events, @artifacts, @decisions, @settings, @usage, @spec, @checks)
             ON DUPLICATE KEY UPDATE
               workspace_id=@workspace_id, task_id=@task_id, title=@title, model=@model,
               started_at=@started_at, finished_at=@finished_at,
               status=@status, events_json=@events, artifacts_json=@artifacts, decisions_json=@decisions,
-              settings_json=@settings, usage_json=@usage, spec_json=@spec;
+              settings_json=@settings, usage_json=@usage, spec_json=@spec, checks_json=@checks;
             """;
         command.Parameters.AddWithValue("@run_id", record.RunId.ToString());
         command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
@@ -60,6 +70,9 @@ public sealed class MySqlRunStore : IRunStore
         // Verbatim, not re-serialized: the snapshot's value is that it is byte-for-byte what the run
         // started from, so two runs can be compared by comparing their specifications.
         command.Parameters.AddWithValue("@spec", (object?)record.Spec ?? DBNull.Value);
+        // The checks the run was judged by, whole (Plan Phase 3.1) - see SqliteRunStore.
+        command.Parameters.AddWithValue("@checks",
+            record.CheckSnapshot is null ? DBNull.Value : JsonSerializer.Serialize(record.CheckSnapshot, Json));
         command.Parameters.AddWithValue("@events", JsonSerializer.Serialize(record.Events, Json));
         command.Parameters.AddWithValue("@artifacts", JsonSerializer.Serialize(record.Artifacts, Json));
         command.Parameters.AddWithValue("@decisions", JsonSerializer.Serialize(record.Decisions, Json));
@@ -75,16 +88,21 @@ public sealed class MySqlRunStore : IRunStore
     /// Scoped to THIS workspace, like every other query here. One database can hold several
     /// workspaces' runs, and a delete that matched on run id alone would reach into another
     /// workspace's history from a window that is not showing it.
+    ///
+    /// <para>What the run's checks left on the workspace's disk goes first (CheckRecords.RemoveRun), as in the other stores.</para>
     /// </summary>
     public async Task DeleteAsync(Guid runId, CancellationToken ct)
     {
         await EnsureSchemaAsync(ct);
+        if (_root is not null) CheckRecords.RemoveRun(_root, runId);
 
         await using var connection = new MySqlConnection(_connectionString);
         await connection.OpenAsync(ct);
 
         using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM runs WHERE run_id = @run_id AND workspace_id = @workspace_id;";
+        // Its "Run checks now" records with it (see SqliteRunStore), scoped to this workspace like the run.
+        command.CommandText = "DELETE FROM check_records WHERE run_id = @run_id AND workspace_id = @workspace_id; "
+                              + "DELETE FROM runs WHERE run_id = @run_id AND workspace_id = @workspace_id;";
         command.Parameters.AddWithValue("@run_id", runId.ToString());
         command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
         await command.ExecuteNonQueryAsync(ct);
@@ -137,7 +155,7 @@ public sealed class MySqlRunStore : IRunStore
     /// expects them. One string, so a query and its reader cannot drift apart.</summary>
     private const string RecordColumns =
         "run_id, task_id, title, model, started_at, finished_at, status, "
-        + "events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json";
+        + "events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json, checks_json";
 
     /// <summary>One run, whole - what opening a row costs, paid only by the row that was opened.</summary>
     public async Task<RunRecord?> LoadAsync(Guid runId, CancellationToken ct)
@@ -192,7 +210,48 @@ public sealed class MySqlRunStore : IRunStore
             JsonSerializer.Deserialize<List<string>>(reader.GetString(9), Json) ?? new(),
             reader.IsDBNull(10) ? null : JsonSerializer.Deserialize<RunSettings>(reader.GetString(10), Json),
             reader.IsDBNull(11) ? null : JsonSerializer.Deserialize<RunUsage>(reader.GetString(11), Json),
-            reader.IsDBNull(12) ? null : reader.GetString(12));
+            reader.IsDBNull(12) ? null : reader.GetString(12))
+        {
+            CheckSnapshot = reader.IsDBNull(13) ? null : JsonSerializer.Deserialize<CheckSnapshot>(reader.GetString(13), Json)
+        };
+
+    public async Task AddCheckRecordAsync(CheckRecord record, CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+
+        await using var connection = new MySqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "INSERT INTO check_records (id, run_id, workspace_id, at, record_json) VALUES (@id, @run_id, @workspace_id, @at, @record);";
+        command.Parameters.AddWithValue("@id", record.Id.ToString());
+        command.Parameters.AddWithValue("@run_id", record.RunId.ToString());
+        command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
+        command.Parameters.AddWithValue("@at", record.At.ToString("o"));
+        command.Parameters.AddWithValue("@record", JsonSerializer.Serialize(record, Json));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<CheckRecord>> LoadCheckRecordsAsync(Guid runId, CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+
+        await using var connection = new MySqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT record_json FROM check_records WHERE run_id = @run_id AND workspace_id = @workspace_id;";
+        command.Parameters.AddWithValue("@run_id", runId.ToString());
+        command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
+
+        var records = new List<CheckRecord>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            if (JsonSerializer.Deserialize<CheckRecord>(reader.GetString(0), Json) is { } record)
+                records.Add(record);
+        return records.OrderBy(r => r.At).ToArray();
+    }
 
     private async Task EnsureSchemaAsync(CancellationToken ct)
     {
@@ -225,7 +284,8 @@ public sealed class MySqlRunStore : IRunStore
                   decisions_json LONGTEXT,
                   settings_json  LONGTEXT,
                   usage_json     LONGTEXT,
-                  spec_json      LONGTEXT
+                  spec_json      LONGTEXT,
+                  checks_json    LONGTEXT
                 );
                 """;
             await command.ExecuteNonQueryAsync(ct);
@@ -234,6 +294,7 @@ public sealed class MySqlRunStore : IRunStore
             await MySqlColumns.AddIfMissingAsync(connection, "runs", "settings_json", "LONGTEXT", ct);
             await MySqlColumns.AddIfMissingAsync(connection, "runs", "usage_json", "LONGTEXT", ct);
             await MySqlColumns.AddIfMissingAsync(connection, "runs", "spec_json", "LONGTEXT", ct);
+            await MySqlColumns.AddIfMissingAsync(connection, "runs", "checks_json", "LONGTEXT", ct);
 
             // Rows written before this column existed keep workspace_id NULL and are therefore not
             // listed by any workspace. They are NOT backfilled to whichever folder happens to be open:
@@ -242,6 +303,22 @@ public sealed class MySqlRunStore : IRunStore
             // reassign them with a deliberate UPDATE.
             await MySqlColumns.AddIfMissingAsync(connection, "runs", "workspace_id", "CHAR(36)", ct);
             await MySqlColumns.IndexIfMissingAsync(connection, "runs", "ix_runs_workspace", "workspace_id, started_at", ct);
+
+            // "Run checks now" records (Plan Phase 3.2) - a table of their own beside the runs, as in SqliteRunStore, and
+            // scoped by workspace like every run here. IF NOT EXISTS: a database made before them gains it, its runs have none.
+            using var checks = connection.CreateCommand();
+            checks.CommandText =
+                """
+                CREATE TABLE IF NOT EXISTS check_records (
+                  id           CHAR(36) PRIMARY KEY,
+                  run_id       CHAR(36) NOT NULL,
+                  workspace_id CHAR(36),
+                  at           VARCHAR(40),
+                  record_json  LONGTEXT
+                );
+                """;
+            await checks.ExecuteNonQueryAsync(ct);
+            await MySqlColumns.IndexIfMissingAsync(connection, "check_records", "ix_check_records_run", "workspace_id, run_id", ct);
 
             _initialized = true;
         }

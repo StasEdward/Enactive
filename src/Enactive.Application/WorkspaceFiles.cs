@@ -32,7 +32,17 @@ internal static class WorkspaceFiles
         if (file.Length > MaxBytes)
             return (null, $"The file is {Invariant.Format(file.Length / 1024 / 1024.0, "0.#")} MB; a page shows files up to {MaxBytes / 1024 / 1024} MB.");
 
-        var bytes = File.ReadAllBytes(full);
+        return Decode(File.ReadAllBytes(full));
+    }
+
+    /// <summary>
+    /// Bytes as text a page can show, or why not - the same rules for a file on disk and for a copy of how it was before a
+    /// run (WrittenFileReview), so the two sides of a diff are held to one standard.
+    /// </summary>
+    public static (string? Text, string? Problem) Decode(byte[] bytes)
+    {
+        if (bytes.Length > MaxBytes)
+            return (null, $"The file is {Invariant.Format(bytes.Length / 1024 / 1024.0, "0.#")} MB; a page shows files up to {MaxBytes / 1024 / 1024} MB.");
         // A zero byte in the first few kilobytes is the cheap, reliable sign of a binary file; text formats do not use it.
         if (bytes.AsSpan(0, Math.Min(bytes.Length, 8192)).IndexOf((byte)0) >= 0)
             return (null, "The file is not text.");

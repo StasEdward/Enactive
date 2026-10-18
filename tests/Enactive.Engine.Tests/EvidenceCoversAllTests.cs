@@ -92,6 +92,43 @@ public sealed class EvidenceCoversAllTests
         Assert.Equal(CriterionOutcome.Passed, result.Outcome);
     }
 
+    /// <summary>
+    /// A pass says what it stood on: "every file read whole" only for reads; under "mentioned", that every item is
+    /// accounted for - and that a mention shows neither a read nor the work (Plan Phase 1.2).
+    /// </summary>
+    [Fact]
+    public void A_pass_says_every_file_read_only_when_reads_back_it()
+    {
+        var pages = Pages(2);
+        Assert.Equal("covered 2 of 2: every file read whole.", Decide(pages, pages, Read).Detail);
+
+        var mentioned = EvidenceCoverage.Evaluate(Criterion() with { Typed = Coverage with { Evidence = EvidenceKind.Call } },
+        [
+            Output(1, new { pages }),
+            Output(2, new { notes = pages.ToDictionary(p => p, _ => "ok") }, pages.Select(p => new ItemEvidence("notes", p, [EvidenceKind.Call], null)).ToArray())
+        ]);
+        Assert.Equal(CriterionOutcome.Passed, mentioned.Outcome);
+        Assert.StartsWith("covered 2 of 2: every item accounted for", mentioned.Detail, StringComparison.Ordinal);
+        Assert.Contains("mentioned", mentioned.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("read whole", mentioned.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>A mention is not a read and not a write: an item only named in a call covers neither.</summary>
+    [Theory]
+    [InlineData(EvidenceKind.FileRead, "no file_read evidence")]
+    [InlineData(EvidenceKind.FileWrite, "no file_write evidence")]
+    public void A_mention_satisfies_neither_a_read_nor_a_write(EvidenceKind required, string why)
+    {
+        var pages = Pages(1);
+        var result = EvidenceCoverage.Evaluate(Criterion() with { Typed = Coverage with { Evidence = required } },
+        [
+            Output(1, new { pages }),
+            Output(2, new { notes = pages.ToDictionary(p => p, _ => "ok") }, [new ItemEvidence("notes", pages[0], [EvidenceKind.Call], null)])
+        ]);
+        Assert.Equal(CriterionOutcome.Failed, result.Outcome);
+        Assert.Contains($"{pages[0]} ({why})", result.Detail, StringComparison.Ordinal);
+    }
+
     /// <summary>What backed each item is kept with the output, so a resumed run decides coverage the same way.</summary>
     [Fact]
     public void What_backed_each_item_survives_a_checkpoint()
@@ -134,6 +171,92 @@ public sealed class EvidenceCoversAllTests
         reads.ForgetDiscardedReads();
         Assert.True(reads.SeenWhole("a.md").Whole);
         Assert.Equal((false, "never read"), reads.SeenWhole("b.md"));
+    }
+
+    // ── write evidence ───────────────────────────────────────────────────────────────────
+
+    private static readonly StepOutputSchema NotesSchema = new("s", 1, [new StepOutputField("notes", StepOutputFieldType.Results, "notes")]);
+
+    private static Enactive.Core.Execution.ExecutedAction Did(string tool, string arguments, string[]? changed = null, int? step = 2,
+        Enactive.Core.Execution.ActionOutcome outcome = Enactive.Core.Execution.ActionOutcome.Succeeded)
+        => new(DateTimeOffset.UtcNow, step, tool, arguments, outcome, "ok",
+            changed is null ? Enactive.Core.Tools.WorkspaceEffect.None : Enactive.Core.Tools.WorkspaceEffect.Changed, changed);
+
+    private static IReadOnlyList<EvidenceKind> Found(IReadOnlyList<ItemEvidence> items, string item)
+        => items.Single(i => i.Item == item).Complete;
+
+    /// <summary>
+    /// A write, an edit, a deletion and a rename - from it or to it - are this step's recorded changes to the item's path,
+    /// and each is write evidence. A path written the other way round is the same item.
+    /// </summary>
+    [Fact]
+    public void A_recorded_change_to_the_items_path_by_this_step_is_write_evidence()
+    {
+        string[] items = ["wiki/a.md", "wiki/b.md", "wiki/c.md", "wiki/d.md", "wiki/e.md"];
+        var values = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(new { notes = items.ToDictionary(i => i, _ => "fixed") }))!.AsObject();
+        var gathered = EvidenceCoverage.Gather(NotesSchema, values, new ReadLedger(),
+        [
+            Did("write_file", """{"path":"wiki/a.md","content":"x"}""", ["wiki/a.md"]),
+            Did("edit_file", """{"path":"wiki\\b.md"}""", ["wiki\\b.md"]),
+            Did("delete_file", """{"path":"./wiki/c.md"}""", ["./wiki/c.md"]),
+            Did("move_file", """{"from":"wiki/d.md","to":"old/d.md"}""", ["wiki/d.md", "old/d.md"]),
+            Did("move_file", """{"from":"draft/e.md","to":"wiki/e.md"}""", ["draft/e.md", "wiki/e.md"])
+        ], [], step: 2);
+
+        Assert.All(items, i => Assert.Contains(EvidenceKind.FileWrite, Found(gathered, i)));
+        // A write names the item as surely as its arguments: it is a mention too.
+        Assert.All(items, i => Assert.Contains(EvidenceKind.Call, Found(gathered, i)));
+    }
+
+    /// <summary>A recorded write is a mention even where nothing readable is left of its arguments (an older record).</summary>
+    [Fact]
+    public void A_write_is_a_mention_even_when_its_recorded_arguments_name_nothing()
+    {
+        var values = System.Text.Json.Nodes.JsonNode.Parse("""{"notes":{"wiki/a.md":"fixed"}}""")!.AsObject();
+        var gathered = EvidenceCoverage.Gather(NotesSchema, values, new ReadLedger(),
+            [Did("write_file", """{"path":"wiki/a.md","content":"# a very long fi…""", ["wiki/a.md"])], [], step: 2);
+
+        Assert.Equal([EvidenceKind.Call, EvidenceKind.FileWrite], Found(gathered, "wiki/a.md"));
+    }
+
+    /// <summary>
+    /// A mention is read from what the call's FULL arguments named, kept with the record - not from the arguments as
+    /// recorded for reading, which are cut at 120 characters and no longer parse.
+    /// </summary>
+    [Fact]
+    public void A_mention_is_read_from_the_full_arguments_not_the_cut_record()
+    {
+        var pages = Pages(12);
+        var full = JsonSerializer.Serialize(new { paths = pages });
+        var values = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(new { notes = pages.ToDictionary(i => i, _ => "seen") }))!.AsObject();
+        var cut = Did("list_dir", full[..120] + "…") with { Named = EvidenceCoverage.NamesIn(full) };
+
+        var gathered = EvidenceCoverage.Gather(NotesSchema, values, new ReadLedger(), [cut], [], step: 2);
+
+        Assert.All(pages, p => Assert.Equal([EvidenceKind.Call], Found(gathered, p)));
+        // What is kept is short: a file's content names no item.
+        Assert.Empty(EvidenceCoverage.NamesIn(JsonSerializer.Serialize(new { content = new string('x', 2000) })));
+    }
+
+    /// <summary>A mention, a whole read, a refused or failed write, or another step's write is no write by this step.</summary>
+    [Fact]
+    public void A_mention_a_read_a_write_that_did_not_succeed_or_another_steps_write_is_not_write_evidence()
+    {
+        string[] items = ["wiki/named.md", "wiki/read.md", "wiki/refused.md", "wiki/failed.md", "wiki/earlier.md"];
+        var values = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(new { notes = items.ToDictionary(i => i, _ => "fixed") }))!.AsObject();
+        var reads = new ReadLedger();
+        reads.Saw(Call("wiki/read.md"), ReadResult("wiki/read.md", 1, 3, 3), Reader);
+        var gathered = EvidenceCoverage.Gather(NotesSchema, values, reads,
+        [
+            Did("list_dir", """{"paths":["wiki/named.md"]}"""),
+            Did("read_file", """{"path":"wiki/read.md"}"""),
+            Did("write_file", """{"path":"wiki/refused.md"}""", ["wiki/refused.md"], outcome: Enactive.Core.Execution.ActionOutcome.Refused),
+            Did("write_file", """{"path":"wiki/failed.md"}""", ["wiki/failed.md"], outcome: Enactive.Core.Execution.ActionOutcome.Failed),
+            Did("write_file", """{"path":"wiki/earlier.md"}""", ["wiki/earlier.md"], step: 1)
+        ], [], step: 2);
+
+        Assert.All(items, i => Assert.DoesNotContain(EvidenceKind.FileWrite, Found(gathered, i)));
+        Assert.Equal([EvidenceKind.Call], Found(gathered, "wiki/named.md"));
     }
 
     // ── what the planner may state ───────────────────────────────────────────────────────
@@ -231,9 +354,10 @@ public sealed class EvidenceCoversAllTests
         var events = await fx.RunAsync(fx.Build(worker), "review every wiki page");
 
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
-        Assert.Contains(events, e => e.IsCheck() && e.Summary.StartsWith("FAIL", StringComparison.Ordinal)
-                                     && e.Summary.Contains("covered 1 of 2", StringComparison.Ordinal)
-                                     && e.Summary.Contains("wiki/b.md (never read)", StringComparison.Ordinal));
+        // Decided at the step's own gate (Plan Phase 1.3), and not first at the run's end: the step is rejected on it.
+        var step = events.Last(e => e.Kind == EventKind.StepCompleted);
+        Assert.Equal(StepOutcomeKind.ReviewRejected, step.StepOutcome());
+        Assert.Equal("covered 1 of 2; not covered: wiki/b.md (never read).", step.OutcomeReason());
         Assert.Contains(events, e => e.Kind == EventKind.ToolResult
                                      && e.Summary.Contains("not counted as covered: wiki/b.md (never read)", StringComparison.Ordinal));
     }

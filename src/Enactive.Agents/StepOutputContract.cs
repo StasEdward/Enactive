@@ -21,7 +21,17 @@ internal sealed class StepOutputSlot
     public DateTimeOffset At { get; private set; }
     public Guid AttemptId { get; private set; }
     public string? LastRefused { get; set; }
-    public bool Nudged { get; set; }
+
+    /// <summary>
+    /// The required fields the last refused submission left out, and the fields it sent that were refused - kept apart
+    /// from <see cref="Values"/>, which a refusal never touches (Plan Phase 2). Empty once a submission is accepted. The
+    /// position the obligation loop reads: a step that sent four of six fields stands somewhere else than one that sent
+    /// nothing, and a step that then sends five has moved.
+    /// </summary>
+    public IReadOnlyList<string> MissingFields { get; private set; } = [];
+
+    /// <inheritdoc cref="MissingFields"/>
+    public IReadOnlyList<string> InvalidFields { get; private set; } = [];
 
     public void Accept(StepOutputContract.Verdict verdict)
     {
@@ -31,6 +41,18 @@ internal sealed class StepOutputSlot
         Revision++;
         At = DateTimeOffset.UtcNow;
         AttemptId = Guid.NewGuid();
+        LastRefused = null;
+        MissingFields = [];
+        InvalidFields = [];
+    }
+
+    /// <summary>A submission refused: what was wrong with it is kept, and what was accepted before stays as it was.</summary>
+    /// <param name="canonical">The submission as it was sent, in the form a repeat of it is recognised by (amendment C.5).</param>
+    public void Refuse(StepOutputContract.Verdict verdict, string canonical)
+    {
+        LastRefused = canonical;
+        MissingFields = verdict.Missing;
+        InvalidFields = verdict.Invalid;
     }
 
     /// <summary>The step's output with its provenance (Phase 2.3), or null when it handed nothing on.</summary>
@@ -183,6 +205,15 @@ internal static class StepOutputContract
     internal sealed record Verdict(JsonObject? Values, IReadOnlyList<int> Evidence, IReadOnlyList<string> Errors, IReadOnlyList<string> Notes)
     {
         public bool Accepted => Values is not null && Errors.Count == 0;
+
+        /// <summary>The required fields a refused submission left out - the same names its error says, as values.</summary>
+        public IReadOnlyList<string> Missing { get; init; } = [];
+
+        /// <summary>
+        /// The fields a refused submission sent and that were refused - wrong type, empty, over a limit, a path not there,
+        /// a name this step does not hand on, evidence that cites no call - as values.
+        /// </summary>
+        public IReadOnlyList<string> Invalid { get; init; } = [];
     }
 
     /// <summary>
@@ -213,8 +244,16 @@ internal static class StepOutputContract
         }
         catch (JsonException)
         {
-            return new(null, [], ["The arguments are not a JSON object. Send the fields as one object."], []);
+            return new(null, [], ["The arguments are not a JSON object. Send the fields as one object."], [])
+            {
+                // Nothing was read, so every required field is as missing as if it had been left out.
+                Missing = schema.Fields.Where(f => f.Required).Select(f => f.Name).ToArray()
+            };
         }
+
+        // Which fields the errors below are about, as values (Plan Phase 2): a refusal was only its message, and "four of
+        // six fields" was nowhere the engine could read it.
+        var invalid = new List<string>();
 
         var known = schema.Fields.Select(f => f.Name).Append("evidence").ToHashSet(StringComparer.Ordinal);
 
@@ -233,7 +272,10 @@ internal static class StepOutputContract
         }
 
         foreach (var name in submitted.Select(p => p.Key).Where(k => !known.Contains(k)))
+        {
             errors.Add($"'{name}' is not a field of this step's output (its fields: {string.Join(", ", schema.Fields.Select(f => f.Name))}).");
+            invalid.Add(name);
+        }
 
         var missing = schema.Fields.Where(f => f.Required && submitted[f.Name] is null).Select(f => f.Name).ToArray();
         if (missing.Length > 0)
@@ -241,21 +283,32 @@ internal static class StepOutputContract
 
         var values = new JsonObject();
         foreach (var field in schema.Fields)
-            if (submitted[field.Name] is { } value && Field(field, value, exists, errors, notes, items) is { } kept)
+        {
+            if (submitted[field.Name] is not { } value) continue;
+            var before = errors.Count;
+            if (Field(field, value, exists, errors, notes, items) is { } kept)
                 values[field.Name] = kept;
+            if (errors.Count > before)
+                invalid.Add(field.Name);
+        }
 
         var evidence = new List<int>();
         if (submitted["evidence"] is { } cited)
         {
+            var before = errors.Count;
             if (cited is not JsonArray list || list.Any(i => i is not JsonValue v || !v.TryGetValue<int>(out _)))
                 errors.Add("evidence: expected a list of call numbers.");
             else
                 foreach (var id in list.Select(i => i!.GetValue<int>()))
                     if (callExists(id)) evidence.Add(id);
                     else errors.Add($"evidence: call {id} does not exist - cite the [n] that begins a call.");
+            if (errors.Count > before)
+                invalid.Add("evidence");
         }
 
-        return errors.Count > 0 ? new(null, [], errors, notes) : new(values, evidence, [], notes);
+        return errors.Count > 0
+            ? new(null, [], errors, notes) { Missing = missing, Invalid = invalid }
+            : new(values, evidence, [], notes);
     }
 
     /// <summary>The fields the run-wide tool lists - every step's - read from the tool the model was shown.</summary>
@@ -435,7 +488,39 @@ internal static class StepOutputContract
 
     /// <summary>What the steps after this one are shown: the accepted values, as data.</summary>
     internal static string ForDependents(IEnumerable<StepOutput> outputs)
+        => ForDependents(outputs.Select(o => (o, (StepOutputSchema?)null)), null);
+
+    /// <summary>
+    /// The same, for a step that declared what it consumes (Plan Phase 1.4): of a step it consumes a list from, the
+    /// LISTS it does not consume are withheld - named, one line each, without their values - and everything else that
+    /// step handed on (text, numbers, results, the lists it consumes) is shown as before. A consume says which lists the
+    /// step owes coverage for; it is not a reason to starve it of the step's other values, which it could not declare
+    /// anyway - a consume can only name a list. Only a consume of a list the source declares counts: a consume naming
+    /// a field that is not one (a typo, a text field) would otherwise withhold every list, so that source is shown
+    /// whole. A step it consumes nothing of, and every step when <paramref name="consumes"/> is null, as before.
+    /// </summary>
+    internal static string ForDependents(IEnumerable<(StepOutput Output, StepOutputSchema? Schema)> handed,
+        IReadOnlyList<ConsumeSpec>? consumes)
         => "Results handed on by the steps this one depends on - values checked by the engine; use them, "
            + "not a retelling of them:\n"
-           + string.Join("\n", outputs.Select(o => $"- step {o.StepNo} \"{o.Step}\": {o.ValuesJson}"));
+           + string.Join("\n", handed.Select(h => Consumed(h.Output, h.Schema, consumes)));
+
+    private static string Consumed(StepOutput output, StepOutputSchema? schema, IReadOnlyList<ConsumeSpec>? consumes)
+    {
+        var line = $"- step {output.StepNo} \"{output.Step}\": ";
+        var lists = schema?.Fields.Where(f => f.Type is StepOutputFieldType.PathList or StepOutputFieldType.StringList)
+            .Select(f => f.Name).ToHashSet(StringComparer.Ordinal) ?? [];
+        // A consume names its source by plan position, from 0; an output carries it from 1.
+        var consumed = consumes?.Where(c => c.Step == output.StepNo - 1 && lists.Contains(c.Field)).Select(c => c.Field)
+            .ToHashSet(StringComparer.Ordinal) ?? [];
+        if (consumed.Count == 0 || JsonNode.Parse(output.ValuesJson) is not JsonObject values)
+            return line + output.ValuesJson;
+        var kept = new JsonObject();
+        var withheld = new List<string>();
+        foreach (var (name, value) in values)
+            if (lists.Contains(name) && !consumed.Contains(name)) withheld.Add(name);
+            else kept[name] = value?.DeepClone();
+        return line + kept.ToJsonString()
+               + string.Concat(withheld.Select(name => $"\n  - '{name}' is handed on too; this step does not consume that list, so its items are not shown."));
+    }
 }

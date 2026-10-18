@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Enactive.Core.Storage;
 using Enactive.Secrets;
 using Enactive.Server;
@@ -12,8 +13,9 @@ using Enactive.Server.Accounts;
 //   Enactive.Server --add-user <name> [--role Admin|Operator|Viewer], --reset-password, --set-role, --disable-user,
 //                   --enable-user, --list-users     the accounts, on this machine only (AccountCommands)
 //
-// Everything that keeps it from starting safely is said and it exits: no settings, a setting that would open it to
-// more than it should answer, no certificate it can use, another service on the same data folder.
+// Everything that keeps it from starting safely is said and it exits: settings that cannot be read, a setting that
+// would open it to more than it should answer, no certificate it can use, another service on the same data folder.
+// No server.json in the data folder at all is a first start: it writes one for this machine only (FirstStart).
 
 const int ConfigProblem = 78;   // EX_CONFIG
 const int Busy = 75;            // EX_TEMPFAIL
@@ -26,7 +28,19 @@ var dataFolder = ArgumentAfter("--data") is { } data ? Path.GetFullPath(data) : 
 if (AccountCommands.Verbs.Any(v => args.Contains(v, StringComparer.OrdinalIgnoreCase)))
     return AccountCommands.Run(args, new UserStore(dataFolder), AccountCommands.ReadHidden, Console.Out, Console.Error);
 
-var configPath = ArgumentAfter("--config") ?? Path.Combine(dataFolder, "server.json");
+var namedConfig = ArgumentAfter("--config");
+var configPath = namedConfig ?? Path.Combine(dataFolder, "server.json");
+
+// A first start on a machine: settings for this machine only and a certificate of its own (FirstStart).
+try
+{
+    if (FirstStart.IfMissing(namedConfig, dataFolder, configPath) is { } written)
+        Note(written);
+}
+catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CryptographicException or SecretProtectionException)
+{
+    return Refuse($"There is no server.json at {configPath}, and one could not be written for this machine: {ex.Message}", ConfigProblem);
+}
 
 var options = ServerOptions.Load(configPath, out var unreadable);
 if (options is null)
@@ -61,14 +75,27 @@ string? ArgumentAfter(string name)
 int Refuse(string why, int code)
 {
     Console.Error.WriteLine("Enactive.Server did not start. " + why);
+    StartLog("did not start. " + why);
+    return code;
+}
+
+// What the service did for itself before starting, said where a refusal would be: a service account nobody watches
+// start would otherwise have new settings and a certificate it was never told about.
+void Note(string what)
+{
+    Console.WriteLine(what);
+    StartLog(what);
+}
+
+void StartLog(string line)
+{
     try
     {
         var logs = Path.Combine(dataFolder, "logs", "server");
         Directory.CreateDirectory(logs);
-        File.AppendAllText(Path.Combine(logs, "start.log"), $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz} did not start. {why}{Environment.NewLine}");
+        File.AppendAllText(Path.Combine(logs, "start.log"), $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz} {line}{Environment.NewLine}");
     }
-    catch { /* stderr has it */ }
-    return code;
+    catch { /* the console has it */ }
 }
 
 // Read from the keyboard, never from an argument: an argument stays in the shell's history and the process list.

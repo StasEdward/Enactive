@@ -396,11 +396,20 @@ public sealed class EngineFixture : IDisposable
     public bool ReportBlocked { get; set; }
     public bool SemanticCriteria { get; set; }
 
+    /// <summary>The host's "pause after this step" for the runs built here (Plan Phase 4.2); none unless a test is about it.</summary>
+    public RunPause? Pause { get; set; }
+
+    /// <summary>The declared checks the runs built here are composed with (Plan Phase 3.1); none unless a test is about them.</summary>
+    public Enactive.Core.Checks.CheckSnapshot? Checks { get; set; }
+
     /// <summary>Where wave captures are kept: beside this fixture's folder, never in the machine's own store.</summary>
     public string WaveStore => Root + "-waves";
 
     /// <summary>Phase 5.4 limits; the shipped defaults unless a test sets its own.</summary>
     public FanOutLimits? FanOut { get; set; }
+
+    /// <summary>Plan Phase 2: how often a step is told what it owes; the shipped defaults unless a test sets its own.</summary>
+    public ObligationNudges? ObligationNudges { get; set; }
 
     /// <summary>
     /// Invokes a tool the way the engine does: a fresh context over this fixture's workspace, with
@@ -580,7 +589,9 @@ public sealed class EngineFixture : IDisposable
             SuccessCriteria = successCriteria ?? [],
             Limits = limits ?? ExecutionLimits.None,
             Checkpoints = checkpoints,
-            Settings = settings
+            Settings = settings,
+            Pause = Pause,
+            Checks = Checks
         },
         EngineOptions.Default with
         {
@@ -595,7 +606,8 @@ public sealed class EngineFixture : IDisposable
             SuccessRetries = successRetries,
             StepOutputs = StepOutputs, TypedCriteria = TypedCriteria, DynamicSteps = DynamicSteps,
             FanOut = FanOut ?? FanOutLimits.Default, ValidateWaves = ValidateWaves,
-            ReportBlocked = ReportBlocked, SemanticCriteria = SemanticCriteria
+            ReportBlocked = ReportBlocked, SemanticCriteria = SemanticCriteria,
+            ObligationNudges = ObligationNudges ?? Enactive.Agents.ObligationNudges.Default
         });
     }
 

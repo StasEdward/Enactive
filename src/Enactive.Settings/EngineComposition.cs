@@ -56,6 +56,12 @@ public sealed record ComposedEngine(
     /// <summary>The approvals given "for this workspace"; null for the store every host shares. Set by tests only.</summary>
     public ApprovalStore? Approvals { get; init; }
 
+    /// <summary>
+    /// Where the machine's global check manifests are (CheckStore); null for %APPDATA%/Enactive/checks. Set by tests only:
+    /// without it a test's run would be judged by whatever checks the person running it keeps.
+    /// </summary>
+    public string? GlobalChecks { get; init; }
+
     /// <summary>The settings' own section, as it stood when the engine was built: a record, so the editor's later changes are a new one.</summary>
     public EngineOptions EngineOptions { get; } = Settings.Engine;
 

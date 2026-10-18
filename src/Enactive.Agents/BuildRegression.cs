@@ -122,15 +122,18 @@ internal static class BuildRegression
     /// Whether the engine may run a command of its own without asking anybody. The success-check
     /// command tool, allowed outright by the policy; anything short of that is a no.
     /// </summary>
-    internal static string? WhyNotAllowed(IToolRegistry tools, IPermissionEngine permissions, PermissionPolicy policy)
+    /// <param name="refusal">What is said when the policy would ask or refuses: why the engine does not ask for this kind of
+    /// check. Its own build is a check nobody asked for; a declared workspace check (Plan Phase 3.2) is one a person did ask
+    /// for, and is not run on a question in the middle of a step either.</param>
+    internal static string? WhyNotAllowed(IToolRegistry tools, IPermissionEngine permissions, PermissionPolicy policy,
+        string refusal = "running it would need an approval, and the engine does not interrupt anybody for a check nobody asked for")
     {
-        var candidates = tools.Definitions.Where(d => d.Kind == ToolKind.Command && d.RunsSuccessChecks).ToArray();
-        if (candidates.Length != 1) return "no single command tool runs checks in this workspace";
         try
         {
-            return permissions.Evaluate(policy, candidates[0].Name, tools.RequiredLevelOf(candidates[0].Name)) == PermissionDecision.Allow
-                ? null
-                : "running it would need an approval, and the engine does not interrupt anybody for a check nobody asked for";
+            var gate = CheckCommandGate.Of(tools, permissions, policy);
+            if (gate.Tool is null) return "no single command tool runs checks in this workspace";
+            if (gate.Unavailable is { } why) return "the command tool is not available: " + why;
+            return gate.Decision == PermissionDecision.Allow ? null : refusal;
         }
         catch (Exception ex) { return "the command tool is not available: " + ex.Message; }
     }
@@ -172,7 +175,9 @@ internal static class BuildRegression
 
     /// <summary>
     /// Whether a result is worth a second run before it is believed: tests that passed and fail now can be
-    /// flaky. A build is not run twice - what it prints is the same both times.
+    /// flaky, and tests that passed and are not named now may only have been missed by one run. The second run
+    /// confirms both - a failure stands only if it fails again, a test is gone only if it is not named again
+    /// (CompareTests). A build is not run twice - what it prints is the same both times.
     /// </summary>
     internal static bool WorthRunningAgain(BuildBaseline before, CriterionResult compared)
         => before.Kind == BaselineKind.Test && compared.Outcome == CriterionOutcome.Failed;
@@ -292,13 +297,83 @@ internal static class BuildRegression
                         : "it skipped them or did not name them")
                     + "): " + Named(unconfirmed) + ".";
         }
+
+        // A test that passed before and is not named now is a regression too: a worker that deletes a failing test
+        // must not make this check pass. Reported in the same finding at the same severity - it may be deliberate (a
+        // test retired with the code it covered), so it is advisory like the rest.
+        //
+        // Believed like a failure is: not on one run. The second run (WorthRunningAgain asks for one whenever the first
+        // came out Failed) is what confirms it - a test is gone only if the second run does not name it either. That
+        // guards against a first run that crashed or was cut short, and means the second run is never spent on a result
+        // it cannot change. A second run that did not happen, or names no tests, confirms nothing.
+        var gone = now.Disappeared(was);
+        var goneUnconfirmed = Array.Empty<string>();
+        if (gone.Count > 0 && again is not null)
+        {
+            var second = again.ExitCode is null ? null : before.Ecosystem.ParseTests(again.Output ?? "");
+            if (second is null || second.Cases.Count == 0)
+            {
+                goneUnconfirmed = gone.ToArray();
+                gone = [];
+                flakyNote += $" {goneUnconfirmed.Length} test(s) that passed before {span} were not run now and were not "
+                    + "confirmed by a second run ("
+                    + (again.ExitCode is null
+                        ? "it did not run" + (string.IsNullOrWhiteSpace(again.Detail) ? "" : ": " + again.Detail)
+                        : "nothing it printed names a test")
+                    + "): " + Named(goneUnconfirmed) + ".";
+            }
+            else
+            {
+                var back = gone.Where(t => second.VerdictOf(t) is not null).ToArray();
+                gone = gone.Where(t => second.VerdictOf(t) is null).ToArray();
+                if (back.Length > 0)
+                    flakyNote += $" {back.Length} test(s) that passed before {span} were not run the first time and ran when "
+                        + "run again - not counted: " + Named(back) + ".";
+            }
+        }
+        var goneNote = gone.Count == 0 ? ""
+            : $"{gone.Count} test(s) passed before {span} and were not run now (deleted, renamed or no longer run): "
+              + Named(gone) + ".";
+
         if (broken.Count > 0)
             return result(CriterionOutcome.Failed, $"{broken.Count} test(s) passed before {span} and fail now: "
-                + Named(broken) + (again is null ? "" : ", both times it ran") + $". ({totals}){newNote}{flakyNote}");
+                + Named(broken) + (again is null ? "" : ", both times it ran") + "."
+                + (goneNote.Length == 0 ? "" : " " + goneNote) + $" ({totals}){newNote}{flakyNote}");
+        if (gone.Count > 0)
+            return result(CriterionOutcome.Failed, $"{goneNote} ({totals}){newNote}{flakyNote}");
         if (unconfirmed.Length > 0)
             return result(CriterionOutcome.Unknown, $"no test that passed before {span} failed twice, and not every failure "
                 + $"could be checked again ({totals}).{newNote}{flakyNote}");
+        if (goneUnconfirmed.Length > 0)
+            return result(CriterionOutcome.Unknown, $"no test that passed before {span} fails now, but not every test missing "
+                + $"from the run could be checked again ({totals}).{newNote}{flakyNote}");
 
         return result(CriterionOutcome.Passed, $"no test that passed before {span} fails now ({totals}).{newNote}{flakyNote}");
+    }
+}
+
+/// <summary>
+/// The one command tool that runs checks (ToolDefinition.RunsSuccessChecks), and what the policy says of running it. One
+/// lookup for every place that runs a check - the success evaluator, the engine's own build, a write-time check - which
+/// each wrote it out; each still says the answer in its own words.
+/// </summary>
+/// <param name="Tool">The tool, or null when there is not exactly one (<paramref name="Found"/> says how many there are).</param>
+/// <param name="Decision">What the policy says of it; null when there is no tool, or it is not available.</param>
+/// <param name="Unavailable">Why the tool could not be resolved (its required level could not be read), or null.</param>
+internal sealed record CheckCommandGate(string? Tool, int Found, PermissionDecision? Decision, string? Unavailable)
+{
+    /// <summary>
+    /// Finds the tool and asks the policy. Only resolving the tool is caught (said as <see cref="Unavailable"/>): what the
+    /// permission engine throws goes to the caller, as it did from each copy.
+    /// </summary>
+    public static CheckCommandGate Of(IToolRegistry tools, IPermissionEngine permissions, PermissionPolicy policy)
+    {
+        var candidates = tools.Definitions.Where(d => d.Kind == ToolKind.Command && d.RunsSuccessChecks).ToArray();
+        if (candidates.Length != 1) return new(null, candidates.Length, null, null);
+        var name = candidates[0].Name;
+        PermissionLevel required;
+        try { required = tools.RequiredLevelOf(name); }
+        catch (Exception ex) { return new(name, 1, null, ex.Message); }
+        return new(name, 1, permissions.Evaluate(policy, name, required), null);
     }
 }

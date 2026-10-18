@@ -2,6 +2,10 @@
 
 @* A page with nobody signed in yet (sign-in): no top bar, which would name nobody, and no rail, which offers sections to
    a role nobody has yet. The page draws its own brand. *@
+@using Enactive.Server.Components.Shell
+
 <main class="bare">
+    @* The colour theme can be chosen before signing in: the page is the first one a person reads. *@
+    <div class="bare-tools"><ThemeToggle /></div>
     @Body
 </main>

@@ -481,6 +481,7 @@ public sealed class CommandBarTests : ComponentHost
         public Task<StartResult> ContinueAsync(System.Security.Claims.ClaimsPrincipal user, string workspace, Enactive.Agents.ParkedDecision parked, string title) => inner.ContinueAsync(user, workspace, parked, title);
         public IReadOnlyList<ServerRun> List(System.Security.Claims.ClaimsPrincipal user) => inner.List(user);
         public string? Cancel(System.Security.Claims.ClaimsPrincipal user, Guid id) => inner.Cancel(user, id);
+        public string? Pause(System.Security.Claims.ClaimsPrincipal user, Guid id) => inner.Pause(user, id);
         public string? Answer(System.Security.Claims.ClaimsPrincipal user, Guid id, Guid question, string choice) => inner.Answer(user, id, question, choice);
     }
 

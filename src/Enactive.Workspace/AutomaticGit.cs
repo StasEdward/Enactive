@@ -6,7 +6,12 @@ using System.Text;
 /// <summary>Git used for observation, never as authority to execute repository helpers.</summary>
 internal static class AutomaticGit
 {
-    internal static ProcessStartInfo StartInfo(string root, IEnumerable<string> args, string? index = null)
+    /// <param name="worktree">
+    /// The work tree git is held to; null for <paramref name="root"/>. A caller that found the repository's top above a
+    /// workspace that is one of its folders gives it, or git would read the folder as the whole tree (StateFingerprints).
+    /// Never taken from the repository's own configuration: a core.worktree there could point git anywhere.
+    /// </param>
+    internal static ProcessStartInfo StartInfo(string root, IEnumerable<string> args, string? index = null, string? worktree = null)
     {
         var psi = new ProcessStartInfo("git")
         {
@@ -24,14 +29,14 @@ internal static class AutomaticGit
         psi.Environment["GIT_OPTIONAL_LOCKS"] = "0";
         if (index is not null) psi.Environment["GIT_INDEX_FILE"] = index;
         foreach (var option in new[] { "--no-pager", "-c", "core.fsmonitor=false", "-c",
-                     "core.hooksPath=" + empty, "-c", "core.attributesFile=" + empty, "-c", "core.worktree=" + Path.GetFullPath(root) })
+                     "core.hooksPath=" + empty, "-c", "core.attributesFile=" + empty, "-c", "core.worktree=" + Path.GetFullPath(worktree ?? root) })
             psi.ArgumentList.Add(option);
         foreach (var arg in args) psi.ArgumentList.Add(arg);
         return psi;
     }
 
     public static async Task<(int Exit, string Output)> RunAsync(string root, IReadOnlyList<string> args,
-        CancellationToken ct, int timeoutMs = 30000, string? index = null)
+        CancellationToken ct, int timeoutMs = 30000, string? index = null, string? worktree = null)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
         lifetime.CancelAfter(timeoutMs);
@@ -40,9 +45,9 @@ internal static class AutomaticGit
             // Reading config does not execute its values. Follow includes/worktree config too.
             // Fail closed on filters/drivers rather than trying to reconstruct their semantics.
             var config = await RunProcessAsync(StartInfo(root,
-                ["config", "--includes", "--name-only", "--get-regexp", "^(filter\\.|diff\\.external$|diff\\..*\\.(command|textconv)$)"], index), lifetime.Token);
+                ["config", "--includes", "--name-only", "--get-regexp", "^(filter\\.|diff\\.external$|diff\\..*\\.(command|textconv)$)"], index, worktree), lifetime.Token);
             if (config.Exit != 1) return (-1, ""); // 1 = no matching keys; any error also refuses.
-            return await RunProcessAsync(StartInfo(root, args, index), lifetime.Token);
+            return await RunProcessAsync(StartInfo(root, args, index, worktree), lifetime.Token);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return (-1, ""); }
         catch (OperationCanceledException) { throw; }

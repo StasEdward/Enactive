@@ -199,7 +199,9 @@ internal sealed class PastRunViewModel : ObservableObject
         // whole history; a run cannot know its siblings from inside itself. Headers, because all
         // this needs of a sibling is that it exists and when it started.
         IReadOnlyList<IRunHeader>? attempts = null,
-        Func<TaskTemplate?>? currentTemplate = null)
+        Func<TaskTemplate?>? currentTemplate = null,
+        // Opens a check's detail file by its workspace-relative path; null, the cards offer none.
+        Action<string>? openDetail = null)
     {
         Record = record;
         // The head of the page - title, what was asked, attempt, the figures, what it was allowed - is the run's, and
@@ -226,8 +228,12 @@ internal sealed class PastRunViewModel : ObservableObject
         Meta = digest.Meta;
 
         // Folded from the record exactly as the live window folds the events as they arrive (RunFeed).
-        foreach (var card in RunFeed.Replay(record).Cards)
-            Steps.Add(new StepCardViewModel(card));
+        var feed = RunFeed.Replay(record);
+        foreach (var card in feed.Cards)
+            Steps.Add(new StepCardViewModel(card, openDetail));
+        // The checks that fired for the run as a whole - at a wave's end, at its end, owed at apply - under its steps.
+        RunChecks = new CheckLinesViewModel(openDetail);
+        RunChecks.Show(CheckLines.Of(feed.RunChecks));
         foreach (var row in RunTimeline.Fold(record))
             Events.Add(row);
         foreach (var path in digest.Artifacts)
@@ -262,7 +268,13 @@ internal sealed class PastRunViewModel : ObservableObject
         // send a person to two different places.
         NoStepsReason = digest.NoStepsReason;
         SelectedTab = PastRunTabs.Opening(Steps.Count);
+
+        // A staged run's "Run checks now" (Plan Phase 3.2): offered by the rule the service's page offers it by.
+        Checks = new CheckRecordsViewModel(Enactive.Settings.ChecksNow.Refusal(record) is null);
     }
+
+    /// <summary>"Run checks now" and the records it kept - for a staged run; shown on any run that has records.</summary>
+    public CheckRecordsViewModel Checks { get; }
 
     public RunRecord Record { get; }
     public string Title { get; }
@@ -272,6 +284,9 @@ internal sealed class PastRunViewModel : ObservableObject
     /// <summary>The plan's steps, rebuilt from the record. Empty for a run stored before the step
     /// number was, in which case the timeline is the whole story.</summary>
     public ObservableCollection<StepCardViewModel> Steps { get; } = new();
+
+    /// <summary>The declared checks that fired for the run, not for one step (Plan Phase 3.5).</summary>
+    public CheckLinesViewModel RunChecks { get; }
 
     public bool HasSteps => Steps.Count > 0;
     public bool HasNoSteps => Steps.Count == 0;

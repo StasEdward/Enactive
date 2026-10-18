@@ -16,6 +16,9 @@ internal sealed class OneAtATime<T> where T : class
 {
     private T? _open;
 
+    /// <summary>The one open now, or null - for a host that tells it something while it is open.</summary>
+    public T? Open => _open;
+
     /// <summary>
     /// Opens one with <paramref name="open"/>, or hands the one already open to
     /// <paramref name="bringForward"/>.

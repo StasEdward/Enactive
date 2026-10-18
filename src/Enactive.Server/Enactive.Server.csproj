@@ -3,6 +3,12 @@
   <PropertyGroup>
     <RootNamespace>Enactive.Server</RootNamespace>
     <AssemblyName>Enactive.Server</AssemblyName>
+    <!-- A statically rendered page (sign-in) redirects by NavigateTo, which by default THROWS NavigationException for
+         the framework to catch and turn into a 302. Nothing was wrong, but a debugger stopped on every sign-in
+         ("NavigationException ... SignIn.razor:70", 2026-10-18) and the exception is the control flow. Off, NavigateTo
+         only sets the redirect, so code after it runs: every static NavigateTo here is followed by a return
+         (SignIn.razor, RedirectToSignIn.razor; SignInTests). -->
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
   </PropertyGroup>
 
   <!--
