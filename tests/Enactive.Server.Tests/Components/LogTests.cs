@@ -76,26 +76,16 @@ public sealed class LogTests : ComponentHost
     private static string[] Lines(IRenderedComponent<LogScreen> log) => log.FindAll(".log-line").Select(l => l.TextContent).ToArray();
 
     /// <summary>
-    /// Does something to the page, found again if it was drawn anew meanwhile: the page redraws as it drains the lines that
-    /// arrive, and a control found a redraw ago has a handler the page no longer has.
+    /// Does something to the page, found and done on the page's own dispatcher: the page redraws as it drains the lines
+    /// that arrive, and a control found a redraw ago has a handler the page no longer has. Retrying the click was not
+    /// enough - bUnit keeps the stale click's exception and the next WaitForAssertion throws it (CI, PR #58: Clear failed
+    /// on a slower runner) - so the find and the click are one step no redraw can come between.
     /// </summary>
-    private static void Act(Action act)
-    {
-        for (var attempt = 0; ; attempt++)
-        {
-            try
-            {
-                act();
-                return;
-            }
-            catch (Bunit.Rendering.UnknownEventHandlerIdException) when (attempt < 10)
-            {
-            }
-        }
-    }
+    private static void Act(IRenderedComponent<LogScreen> log, Action act)
+        => log.InvokeAsync(act).GetAwaiter().GetResult();
 
     private static void Press(IRenderedComponent<LogScreen> log, string button)
-        => Act(() => log.FindAll("button").Single(b => b.TextContent.Trim() == button).Click());
+        => Act(log, () => log.FindAll("button").Single(b => b.TextContent.Trim() == button).Click());
 
     private static string[] Offered(IRenderedComponent<LogScreen> log)
         => log.FindAll("button, label").Select(b => b.TextContent.Trim()).ToArray();
@@ -116,12 +106,12 @@ public sealed class LogTests : ComponentHost
         var log = Log("ada");
         log.WaitForAssertion(() => Assert.Contains(Offered(log), o => o.StartsWith("Capture raw wire")));
         Assert.Equal(LogLevel.Debug, Hub.MinLevel);
-        Act(() => log.Find(".log-check input[type=checkbox]").Change(true));
+        Act(log, () => log.Find(".log-check input[type=checkbox]").Change(true));
 
         Assert.Equal(LogLevel.Trace, Hub.MinLevel);
         Assert.Contains(Users.AuditTrail(10), a => a.Account == "ada" && a.Action == "raw wire capture on");
 
-        Act(() => log.Find(".log-check input[type=checkbox]").Change(false));
+        Act(log, () => log.Find(".log-check input[type=checkbox]").Change(false));
         Assert.Equal(LogLevel.Debug, Hub.MinLevel);
         Assert.Contains(Users.AuditTrail(10), a => a.Account == "ada" && a.Action == "raw wire capture off");
     }
@@ -139,7 +129,7 @@ public sealed class LogTests : ComponentHost
         Assert.Null(Users.Add("another-admin", "another long password", Role.Admin));
         Assert.Null(Users.SetRole("ada", Role.Operator));
 
-        Act(() => log.Find(".log-check input[type=checkbox]").Change(true));
+        Act(log, () => log.Find(".log-check input[type=checkbox]").Change(true));
 
         Assert.Equal(LogLevel.Debug, Hub.MinLevel);
         Assert.DoesNotContain(Users.AuditTrail(10), a => a.Action == "raw wire capture on");
@@ -186,7 +176,7 @@ public sealed class LogTests : ComponentHost
         var log = Log("vera");
         log.WaitForAssertion(() => Assert.Contains(Lines(log), l => l.EndsWith("response")));
 
-        Act(() => log.FindAll(".log-line").Single(l => l.TextContent.EndsWith("response")).Click());
+        Act(log, () => log.FindAll(".log-line").Single(l => l.TextContent.EndsWith("response")).Click());
 
         log.WaitForAssertion(() => Assert.Contains("the whole reply", log.Find("textarea.log-detail").GetAttribute("value")));
     }

@@ -73,8 +73,14 @@ public sealed class SettingsTests : ComponentHost
         return screen;
     }
 
+    /// <summary>
+    /// Found and pressed on the page's own dispatcher: a section redraws after a save, and a button found a redraw ago
+    /// has a handler the page no longer has - bUnit keeps that stale click's exception for the next WaitForAssertion
+    /// (CI, PR #58: a stored password test failed on a slower runner).
+    /// </summary>
     private static void Press(IRenderedComponent<SettingsScreen> screen, string button)
-        => screen.FindAll("button").Single(b => b.TextContent.Trim() == button).Click();
+        => screen.InvokeAsync(() => screen.FindAll("button").Single(b => b.TextContent.Trim() == button).Click())
+            .GetAwaiter().GetResult();
 
     /// <summary>Opens another section as the rail's link would: the same page, another address.</summary>
     private static void Go(IRenderedComponent<SettingsScreen> screen, string section)
