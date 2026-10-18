@@ -25,7 +25,7 @@ internal sealed record SettingsSection(string Slug, string Label, bool UnderAi, 
         new("ai-team", "Team", true, vm => vm.ShowAiTeamCommand),
         new("ai-phases", "Phases", true, vm => vm.ShowAiPhasesCommand),
         new("ai-mcp", "MCP", true, vm => vm.ShowMcpCommand),
-        new("ai-templates", "Templates", true, vm => vm.ShowTemplatesCommand),
+        new(Links.TemplatesSettingsSlug, "Templates", true, vm => vm.ShowTemplatesCommand),
         new("ai-checks", "Checks", true, vm => vm.ShowChecksCommand),
     ];
 

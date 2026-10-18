@@ -24,7 +24,8 @@
    parse keeps its tab and changes nothing. ServerLibrary refuses a draft to anybody but an Operator.
    It opens in a window over the library (TemplatesScreen, at /templates/{id}), as the window's opens over its Settings:
    a page of its own took the library away while a template was being written. Its address names a template by its id
-   (Links.Template); a new one is "New", which no id can be. *@
+   (Links.Template); a new one is "New", which no id can be. Settings › Templates opens the same editor over itself
+   (TemplatesSection, Links.SettingsTemplate) and takes it back with Closed. *@
 
 @if (_problem is { } problem)
 {
@@ -181,6 +182,13 @@ else if (_editor is { } t)
     /// <summary>The workspace, by its id - read as text and parsed, as the library's (TemplatesScreen).</summary>
     [SupplyParameterFromQuery(Name = "ws")] private string? Ws { get; set; }
 
+    /// <summary>
+    /// The host's way back, given what the save said (null for a cancel): none, and Save or Cancel go to the library on
+    /// the template. Settings › Templates hosts the editor too, and going to the library from there took the settings'
+    /// menu away and left the person on another screen.
+    /// </summary>
+    [Parameter] public EventCallback<string?> Closed { get; set; }
+
     /// <summary>A copy of the template under an id nothing uses, rather than the template (the window's Duplicate).</summary>
     [SupplyParameterFromQuery(Name = "copy")] private bool? Copy { get; set; }
 
@@ -231,11 +239,22 @@ else if (_editor is { } t)
         _saved = (template.Id, said);
     }
 
-    /// <summary>Saved or cancelled: back to the library, on what was saved - or on the template the editor was opened on.</summary>
+    /// <summary>
+    /// Saved or cancelled: back where it was opened from - the host's Closed, or the library, on what was saved or on the
+    /// template the editor was opened on.
+    /// </summary>
     private void Close()
-        => Navigation.NavigateTo(_saved is { } saved
+    {
+        if (Closed.HasDelegate)
+        {
+            var said = _saved?.Said;
+            _ = InvokeAsync(() => Closed.InvokeAsync(said));
+            return;
+        }
+        Navigation.NavigateTo(_saved is { } saved
             ? Links.Templates(_workspaceId, saved.Id)
             : Links.Templates(_workspaceId, Id == Links.NewTemplateId ? null : Id), Links.Saying(_saved?.Said));
+    }
 
     private void LevelChanged(ChangeEventArgs e)
     {

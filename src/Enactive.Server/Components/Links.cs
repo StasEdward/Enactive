@@ -57,6 +57,21 @@ internal static class Links
 
     public static string NewTemplate(Guid workspace) => $"templates/{NewTemplateId}?ws={workspace}";
 
+    /// <summary>Settings › Templates' address (SettingsSection).</summary>
+    public const string TemplatesSettingsSlug = "ai-templates";
+
+    /// <summary>
+    /// The template editor over Settings › Templates (TemplatesSection) rather than over the library: on a template, a copy
+    /// of it, or a new one (<see cref="NewTemplateId"/>). Closing it goes back to Settings › Templates - opened from there,
+    /// the library's address took the settings' menu away and left the person on the Templates screen.
+    ///
+    /// <para>The template in the path, as the library's editor has it, not in the query: a section reading ?edit= drew the
+    /// editor while Blazor was still telling the page's components of the new query, the editor's own query values joined
+    /// that list as it was walked, and the navigation failed ("Collection was modified") - the editor never opened.</para>
+    /// </summary>
+    public static string SettingsTemplate(Guid workspace, string id, bool copy = false)
+        => $"{Settings(TemplatesSettingsSlug)}/{Uri.EscapeDataString(id)}?ws={workspace}" + (copy ? "&copy=true" : "");
+
     /// <summary>
     /// The Schedules screen on a workspace, named by its id (WorkspaceIds) - with none, the one used last - opened on a
     /// schedule when <paramref name="schedule"/> names one.

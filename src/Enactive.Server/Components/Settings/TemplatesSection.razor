@@ -1,16 +1,19 @@
 @using Enactive.Core.Templates
 @using Enactive.Workspace
 @using Enactive.Server.Runs
+@using Enactive.Server.Components.Pages
 @using Microsoft.AspNetCore.Components.Authorization
 @inject ServerLibrary Library
+@inject NavigationManager Navigation
 
 @* The window's AI · Templates (SettingsWindow.axaml): the templates as cards, each edged by where it comes from
    (Looks.Template), and the window's hints - templates are FILES, saved by their editor at once, which this page's
-   Cancel does not undo. They are edited where the service edits them, the Templates screen's editor: each card leads
-   there, as New template does, rather than a second editor here.
+   Cancel does not undo. They are edited by the Templates screen's editor - the one editor, not a second here - opened
+   in a window over this section (Links.SettingsTemplate, the template under this address), as the window's opens over its
+   Settings: each card leads there, as New template does, and closing it comes back here with the list read again. At
+   the library's address instead, the settings' menu went away under the editor and did not come back when it closed.
 
-   Each card has the window's row icons: Edit and Duplicate lead to the editor's addresses (on the template, on a copy
-   of it), and Remove - "Reset to the built-in" for a file that replaced one - is asked first in the window's words
+   Each card has the window's row icons: Edit and Duplicate open the editor (on the template, on a copy of it), and Remove - "Reset to the built-in" for a file that replaced one - is asked first in the window's words
    (TemplateDrafts.Remove) and done by the service as the person (ServerLibrary.DeleteTemplate), audited. The view model
    here edits no file (editsFilesHere). With no workspace there is no editor address and no library to delete from, and
    the icons are not offered. *@
@@ -28,7 +31,7 @@
             <span class="settings-card-text">
                 @if (Workspace is { } ws)
                 {
-                    <a class="card-title" href="@Links.Template(ws, row.Template.Id)">@row.Name</a>
+                    <a class="card-title" href="@Links.SettingsTemplate(ws, row.Template.Id)">@row.Name</a>
                 }
                 else
                 {
@@ -43,13 +46,13 @@
             @if (Workspace is { } id && Root is { Length: > 0 })
             {
                 <span class="row-icons">
-                    <a class="row-icon template-edit" href="@Links.Template(id, row.Template.Id)" title="Edit" aria-label="@($"Edit {row.Name}")">
+                    <a class="row-icon template-edit" href="@Links.SettingsTemplate(id, row.Template.Id)" title="Edit" aria-label="@($"Edit {row.Name}")">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
                             <path d="M 4,20 L 4,16 L 15.5,4.5 L 19.5,8.5 L 8,20 Z" />
                             <path d="M 13.5,6.5 L 17.5,10.5" />
                         </svg>
                     </a>
-                    <a class="row-icon template-duplicate" href="@Links.Template(id, row.Template.Id, copy: true)" title="Duplicate" aria-label="@($"Duplicate {row.Name}")">
+                    <a class="row-icon template-duplicate" href="@Links.SettingsTemplate(id, row.Template.Id, copy: true)" title="Duplicate" aria-label="@($"Duplicate {row.Name}")">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
                             <path d="M 8,3 L 20,3 L 20,15 M 4,7 L 16,7 L 16,21 L 4,21 Z" />
                         </svg>
@@ -73,8 +76,19 @@
     <p class="hint settings-templates-said" role="status">@said</p>
 }
 <div class="settings-section-actions">
-    <a class="btn" href="@(Workspace is { } newIn ? Links.NewTemplate(newIn) : Links.Templates(null))">New template</a>
+    <a class="btn" href="@(Workspace is { } newIn ? Links.SettingsTemplate(newIn, Links.NewTemplateId) : Links.Templates(null))">New template</a>
 </div>
+
+@* The editor over this section. Closed - saved, cancelled, Escape or outside it - it is this section again, its list
+   read again from the files. With no workspace there is no editor address to be at. *@
+@if (Edit is { Length: > 0 } edited && Workspace is not null && Root is { Length: > 0 })
+{
+    <Dialog Title="Template" Class="dialog-wide" OnClose="() => CloseEditor(null)">
+        <ChildContent>
+            <TemplateEditor Id="@edited" Closed="CloseEditor" />
+        </ChildContent>
+    </Dialog>
+}
 
 @if (_question is { } question)
 {
@@ -99,6 +113,9 @@
 
     /// <summary>That workspace's folder, whose library a template is deleted from (ServerLibrary), or none.</summary>
     [Parameter] public string? Root { get; set; }
+
+    /// <summary>The template open in the editor over this section (Links.SettingsTemplate), or "New"; null with none open.</summary>
+    [Parameter] public string? Edit { get; set; }
 
     private Question? _question;
     private StoredTemplate? _removing;
@@ -126,6 +143,17 @@
             _busy = false;
             Dismiss();
         }
+    }
+
+    /// <summary>
+    /// The editor closed: what its save said (null for a cancel) said here, the list read again - a saved or new template
+    /// is in it - and this section's own address, without the editor's.
+    /// </summary>
+    private void CloseEditor(string? said)
+    {
+        _said = said;
+        Vm.RefreshTemplates();
+        Navigation.NavigateTo(Links.Settings(Links.TemplatesSettingsSlug));
     }
 
     private void Dismiss()

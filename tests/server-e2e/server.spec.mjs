@@ -590,6 +590,43 @@ test('settings show their short values in short boxes, six to a row on a wide sc
   await context.close();
 });
 
+test('a template edited from Settings is edited over Settings, and closing it comes back there', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'ada');
+  const menu = page.getByRole('navigation', { name: 'Settings sections' });
+  const editor = page.getByRole('dialog', { name: 'Template' });
+  const card = page.getByRole('list', { name: 'Templates' }).getByRole('listitem').filter({ hasText: 'Code Review' });
+  await page.goto('/settings/ai-templates');
+
+  // Edit: the editor over Settings, its menu beside it on Templates - not the Templates screen behind it.
+  await card.getByRole('link', { name: 'Edit Code Review' }).click();
+  await expect(editor).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/ai-templates\/code-review\?ws=/);
+  await expect(menu.getByRole('link', { name: 'Templates' })).toHaveAttribute('aria-current', 'page');
+  // Cancel, and Escape on a duplicate: Settings › Templates again, with its menu.
+  await editor.getByRole('button', { name: 'Cancel' }).click();
+  await expect(editor).toBeHidden();
+  await expect(page).toHaveURL(/\/settings\/ai-templates$/);
+  await expect(menu.getByRole('link', { name: 'Templates' })).toHaveAttribute('aria-current', 'page');
+  await card.getByRole('link', { name: 'Duplicate Code Review' }).click();
+  await expect(editor).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page).toHaveURL(/\/settings\/ai-templates$/);
+
+  // New, saved: back on Settings › Templates, the template in its list and the save said.
+  const name = `From settings ${Date.now()}`;
+  await page.getByRole('link', { name: 'New template' }).click();
+  await editor.getByLabel('Id', { exact: true }).fill(`from-settings-${Date.now()}`);
+  await editor.getByLabel('Name', { exact: true }).fill(name);
+  await editor.locator('#t-goal').fill('Say hello.');
+  await editor.getByLabel('Kept in').selectOption('Workspace');
+  await editor.getByRole('button', { name: 'Save' }).click();
+  await expect(page).toHaveURL(/\/settings\/ai-templates$/);
+  await expect(page.getByRole('list', { name: 'Templates' }).getByText(name, { exact: true })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: `Saved '${name}'` })).toBeVisible();
+  await expect(menu).toBeVisible();
+  await context.close();
+});
+
 test('the team member editor is wider and in two columns, and a template id, name and category share a row', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'ada');
   await page.setViewportSize({ width: 1600, height: 900 });
