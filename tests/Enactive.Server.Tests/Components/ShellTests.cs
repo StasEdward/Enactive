@@ -364,6 +364,28 @@ public sealed class ShellTests : ComponentHost
         Assert.Equal("Sign out", signOut.QuerySelector("button")!.TextContent.Trim());
     }
 
+    /// <summary>
+    /// The colour theme is chosen in the top bar, signed in or not, by a plain button that wwwroot/theme.js answers: the
+    /// choice is the browser's, so the button posts nothing and asks the service for nothing - it is not a submit (in a
+    /// form it would sign out) and has no handler of the page's.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("alice")]
+    public void The_top_bar_offers_the_colour_theme(string? who)
+    {
+        if (who is not null)
+            SignIn(who);
+
+        var bar = Render<TopBar>();
+
+        var toggle = bar.Find("button[data-theme-toggle]");
+        Assert.Equal("button", toggle.GetAttribute("type"));
+        Assert.False(string.IsNullOrEmpty(toggle.GetAttribute("aria-label")));
+        Assert.Null(toggle.Closest("form"));
+        Assert.Equal(3, toggle.QuerySelectorAll("svg[aria-hidden='true']").Length);
+    }
+
     [Fact]
     public void The_top_bar_with_nobody_signed_in_has_the_mark_and_no_way_out()
     {
