@@ -61,9 +61,12 @@ public static class SettingsAdvice
 
     public const string EvidenceBudget =
         "How many characters of tool output the reviewer sees, shared between every call the step "
-        + "made. It is divided, not per call: three reads get a usable slice each, thirteen get "
+        + "made. It is divided, not per call: at 6,000 three reads get a usable slice each, thirteen get "
         + "about 320 characters each — too little to check anything quoted from a source file. "
-        + "Raise it for work that reads a lot; it is paid on every review call.";
+        + "Blank is automatic: each review gets a quarter of the room its model's context window leaves "
+        + "after the review's own prompt and answer, between 1,500 and 72,000 characters, and 6,000 when "
+        + "the provider declares no window. A number here is used for every review instead; it is paid "
+        + "on every review call.";
 
     public const string ShellCommands =
         "Controls run_command, run_powershell and git. Git can also execute external programs through "

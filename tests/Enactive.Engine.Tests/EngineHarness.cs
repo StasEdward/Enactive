@@ -534,7 +534,8 @@ public sealed class EngineFixture : IDisposable
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
         ExecutionLimits? limits = null,
         int maxParallelSteps = 1,
-        int evidenceBudget = ExecutionJournal.DefaultBudget,
+        // Null: automatic, as a new installation runs - the reviewer's window decides, and the old default where it states none.
+        int? evidenceBudget = null,
         IDecisionHandler? decisions = null,
         int successRetries = 0,
         IRunCheckpointStore? checkpoints = null,
@@ -563,7 +564,8 @@ public sealed class EngineFixture : IDisposable
         // shipped covered by nothing: every test in the suite ran the maxParallel == 1 branch
         // because that was the only branch this harness could reach.
         int maxParallelSteps = 1,
-        int evidenceBudget = ExecutionJournal.DefaultBudget,
+        // Null: automatic, as a new installation runs - the reviewer's window decides, and the old default where it states none.
+        int? evidenceBudget = null,
         // 0 by default here, not the shipping 1: a test that says nothing about repair should get
         // the shape it was written for - check the criteria once and stop. The repair loop has its
         // own tests, which ask for it.

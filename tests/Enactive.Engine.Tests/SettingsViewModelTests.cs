@@ -90,6 +90,45 @@ public sealed class SettingsViewModelTests : IDisposable
     }
 
     /// <summary>
+    /// The evidence budget is automatic unless a person set one: the box is blank for it and says what blank comes to -
+    /// from the window the provider bound to Review declares, and again whenever Review changes - and blank is saved back
+    /// as automatic, a number as that number.
+    /// </summary>
+    [Fact]
+    public async Task A_blank_evidence_budget_says_what_it_comes_to_and_is_saved_as_automatic()
+    {
+        var settings = new AppSettings();
+        settings.Providers.Add(new ProviderConfig { Id = "cloud", Kind = ProviderKind.Anthropic, BaseUrl = "https://api.example.com", Models = ["big"], ContextWindowTokens = 1_000_000 });
+        settings.Providers.Add(new ProviderConfig { Id = "local", Kind = ProviderKind.OllamaNative, BaseUrl = "http://localhost:11434", Models = ["small"] });
+        var vm = Open(settings);
+        var changed = new List<string?>();
+        vm.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        Assert.Equal("", vm.EvidenceBudgetText);
+        Assert.Equal("auto - no model is bound to Review", vm.EvidenceBudgetAuto);
+        vm.Review = "cloud/big";
+        Assert.Contains(nameof(SettingsViewModel.EvidenceBudgetAuto), changed);
+        Assert.Equal("auto - up to 72,000 characters, from cloud/big's 1,000,000-token window", vm.EvidenceBudgetAuto);
+        vm.Review = "local/small";
+        Assert.Equal("auto - 6,000 characters: local declares no context window for small", vm.EvidenceBudgetAuto);
+
+        var plain = Open(new AppSettings());
+        await plain.SaveCommand.ExecuteAsync();
+        Assert.Null(_saved!.Engine.EvidenceBudget);
+
+        var set = Open(new AppSettings());
+        set.EvidenceBudgetText = "9000";
+        await set.SaveCommand.ExecuteAsync();
+        Assert.Equal(9000, _saved!.Engine.EvidenceBudget);
+
+        var reopened = Open(_saved);
+        Assert.Equal("9000", reopened.EvidenceBudgetText);
+        reopened.EvidenceBudgetText = "";
+        await reopened.SaveCommand.ExecuteAsync();
+        Assert.Null(_saved!.Engine.EvidenceBudget);
+    }
+
+    /// <summary>
     /// A host with no start-up of its own (the service) is offered none, and is not told that "only Windows" starts
     /// programs this way - the line the window shows on a desktop that cannot, which on the service's page was the note
     /// under every Save.

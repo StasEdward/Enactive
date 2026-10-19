@@ -280,6 +280,29 @@ public sealed class SettingsTests : ComponentHost
         Assert.Contains(Users.AuditTrail(), e => e is { Account: "ada", Action: "settings saved" });
     }
 
+    /// <summary>
+    /// The evidence budget is automatic unless a person set one: the box is blank, says "auto", and says what auto comes
+    /// to; a number typed is saved, and the box cleared again is saved back as automatic - not as the old 6000.
+    /// </summary>
+    [Fact]
+    public void The_evidence_budget_box_is_blank_for_automatic_and_saves_it_back()
+    {
+        var screen = Screen("ada", "ai-general");
+        var box = screen.Find("#ai-evidence");
+        Assert.Equal("", box.GetAttribute("value") ?? "");
+        Assert.Equal("auto", box.GetAttribute("placeholder"));
+        Assert.StartsWith("auto - ", box.GetAttribute("title"));
+
+        box.Change("9000");
+        Press(screen, "Save");
+        screen.WaitForAssertion(() => Assert.StartsWith("Saved.", screen.Find(".settings-said").TextContent.Trim()));
+        Assert.Equal(9000, AppSettings.Load(Engine.SettingsFile).Engine.EvidenceBudget);
+
+        screen.InvokeAsync(() => screen.Find("#ai-evidence").Change("")).GetAwaiter().GetResult();
+        Press(screen, "Save");
+        screen.WaitForAssertion(() => Assert.Null(AppSettings.Load(Engine.SettingsFile).Engine.EvidenceBudget));
+    }
+
     /// <summary>Cancel drops every change and opens the settings again, as they are on disk.</summary>
     [Fact]
     public void Cancel_discards_the_changes_and_reopens_the_stored_settings()

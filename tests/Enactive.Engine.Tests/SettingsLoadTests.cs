@@ -124,7 +124,7 @@ public sealed class SettingsLoadTests : IDisposable
             .Replace("\"Tools\": [ \"*\" ]", "\"Tools\": [ \"run_command\", \"read_file\" ]")));
 
         Assert.Contains("run_tests", settings.Workers.Single().Tools);
-        Assert.Equal(8, settings.SchemaVersion);
+        Assert.Equal(AppSettings.CurrentSchemaVersion, settings.SchemaVersion);
     }
 
     [Fact]

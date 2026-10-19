@@ -147,11 +147,18 @@ public sealed record EngineOptions
     public int MaxParallelSteps { get; init; } = 1;
 
     /// <summary>
-    /// How many characters of tool evidence the reviewer is shown, shared between every call the step made. Raise it
-    /// for work that reads many files: the budget is divided, so thirteen reads under the default leave about 320
-    /// characters of each - too little to check anything quoted from one.
+    /// How many characters of tool evidence the reviewer is shown, shared between every call the step made - or null,
+    /// the default: automatic, worked out for each review from the reviewer's context window (<see cref="ReviewEvidence"/>).
+    /// A number set here is used for every review instead.
+    ///
+    /// <para>Not written to settings.json while null (WhenWritingNull): a build from before "automatic" reads this as an
+    /// int, and a null there would fail the whole file for it - the settings unreadable, the build on its defaults. Left
+    /// out, that build runs on its own default, 6,000, which is what it always did. A file such a build wrote held its
+    /// default written out as 6000, which is not somebody's choice: schema 9 reads that as automatic (AppSettings
+    /// MigrateSchemaVersion) - the one migration of a switch, because here the old default is the value in the file.</para>
     /// </summary>
-    public int EvidenceBudget { get; init; } = ExecutionJournal.DefaultBudget;
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public int? EvidenceBudget { get; init; }
 
     /// <summary>
     /// Plan Phase 2: how many times a step is told of what it still owes before it ends - a call it described instead of

@@ -40,18 +40,28 @@ internal static class CriteriaReview
         One entry for every criterion, by id. A fail says what is wrong, concretely enough to be put right.
         """;
 
+    /// <summary>The tokens this review asks to answer in for so many criteria, its reasoning aside.</summary>
+    internal static int AnswerTokens(int criteria) => 4096 + 512 * criteria;
+
+    /// <summary>How long this review's prompt is without its evidence - see StepVerdictReview.PromptChars.</summary>
+    internal static int PromptChars(CriteriaReviewInput input, IReadOnlyList<SuccessCriterionDefinition> criteria)
+        => Instruction.Length + Prompt(input, Numbered(criteria)).Length - input.Evidence.Text.Length;
+
+    private static (string Id, SuccessCriterionDefinition C)[] Numbered(IReadOnlyList<SuccessCriterionDefinition> criteria)
+        => criteria.Select((c, i) => ($"C{i + 1}", c)).ToArray();
+
     /// <param name="budget">Why the reviewer may not be asked (again), given what this review has spent - or null when it may.</param>
     public static async Task<ReviewResult> RunAsync(CriteriaReviewInput input, IReadOnlyList<SuccessCriterionDefinition> criteria,
         Func<ExecutedAction, EvidenceKind, bool> admits, IChatProvider provider, string model,
         Func<int, int, string?>? budget, CancellationToken ct)
     {
-        var numbered = criteria.Select((c, i) => ($"C{i + 1}", c)).ToArray();
+        var numbered = Numbered(criteria);
         // A cut-off answer, or one that called a tool, is refused before it is read - as the step's review always did.
         // This one used to read either as a finished verdict, and a cut-off JSON that happened to parse was one.
         var round = await StructuredAnswer.AskAsync(provider,
             [ChatMessage.System(Instruction), ChatMessage.User(Prompt(input, numbered))],
             messages => new ChatRequest(model, messages, Temperature: 0, Purpose: GenerationPurpose.Review,
-                OutputTokenLimit: 4096 + 512 * numbered.Length),
+                OutputTokenLimit: AnswerTokens(numbered.Length)),
             (answer, _) => Read(answer, input, numbered, admits),
             errors => StructuredAnswer.Listed(errors, "Return the complete corrected JSON object."),
             budget, requireComplete: true, ct);

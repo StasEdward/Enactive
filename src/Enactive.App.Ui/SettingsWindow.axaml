@@ -544,7 +544,7 @@
                                 <local:HintView Text="{x:Static core:SettingsAdvice.EvidenceBudget}"
                                                 VerticalAlignment="Center" />
                             </StackPanel>
-                            <TextBox Text="{Binding EvidenceBudgetText}" PlaceholderText="6000 = the default" />
+                            <TextBox Text="{Binding EvidenceBudgetText}" PlaceholderText="{Binding EvidenceBudgetAuto}" />
 
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <TextBlock Classes="label" Text="Shell commands" />

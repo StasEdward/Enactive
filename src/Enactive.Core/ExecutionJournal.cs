@@ -24,6 +24,9 @@ public sealed class EvidenceView
         HasPriorTranscript = hasPriorTranscript;
     }
 
+    /// <summary>No evidence at all: what a review prompt is measured with before its evidence budget is known.</summary>
+    public static EvidenceView Empty { get; } = new("", [], []);
+
     public string Text { get; }
     public IReadOnlySet<int> VisibleActionIds { get; }
     public bool ActionsOmitted => VisibleActionIds.Count < Actions.Count;
@@ -323,8 +326,9 @@ public sealed class ExecutionJournal
     /// <para>A DEFAULT and not a rule: it is divided among the calls, so what it buys per call
     /// depends entirely on how many the step made. Three reads get a usable slice each; thirteen get
     /// about 320 characters each, which is less than a source file needs to settle anything quoted
-    /// from it. The setting that overrides it exists because that number is a property of the work,
-    /// not of the engine.</para>
+    /// from it. A review is given a budget from its reviewer's context window instead
+    /// (Enactive.Agents.ReviewEvidence), or the number a person set; this is what is left for a
+    /// reviewer whose window nobody stated, and for the worker's own command history.</para>
     /// </summary>
     public const int DefaultBudget = 6000;
 

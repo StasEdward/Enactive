@@ -43,7 +43,8 @@ internal sealed class EngineSwitches
         ReviewRetries = engine.ReviewRetries.ToString(),
         RevertRejectedSteps = engine.RevertRejectedSteps,
         MaxParallelSteps = engine.MaxParallelSteps.ToString(),
-        EvidenceBudget = engine.EvidenceBudget.ToString()
+        // Blank is automatic (EngineOptions.EvidenceBudget): the box shows a number only where a person set one.
+        EvidenceBudget = engine.EvidenceBudget?.ToString() ?? ""
     };
 
     /// <summary>
@@ -77,9 +78,11 @@ internal sealed class EngineSwitches
             ReviewRetries = Math.Clamp(NumberOr(ReviewRetries, engineDefault.ReviewRetries, _ => true), 0, 5),
             RevertRejectedSteps = RevertRejectedSteps,
             MaxParallelSteps = PositiveOr(MaxParallelSteps, engineDefault.MaxParallelSteps),
-            // Anything unparseable or below the floor falls back to the default rather than to the number typed: an
-            // evidence block too small to hold its header is not a smaller setting, it is a reviewer shown nothing.
-            EvidenceBudget = NumberOr(EvidenceBudget, engineDefault.EvidenceBudget, v => v >= ExecutionJournal.MinimumBudget)
+            // Blank is automatic - the budget follows each reviewer's window (ReviewEvidence) - and so is anything that is
+            // not a number, or is below the floor: an evidence block too small to hold its header is not a smaller
+            // setting, it is a reviewer shown nothing, and a number typed wrong is not a choice.
+            EvidenceBudget = int.TryParse(EvidenceBudget.Trim(), out var evidence) && evidence >= ExecutionJournal.MinimumBudget
+                ? evidence : null
         };
     }
 

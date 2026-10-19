@@ -154,7 +154,10 @@ public sealed class CapsAnnounceThemselvesTests
         // The files a read read, as the reviewer is shown them: named past a generous bound only by count.
         ["FileRead.MaxPathsChars"] = nameof(TheReviewerSeesWhatWasReadTests.Past_a_generous_bound_the_files_are_counted_not_named),
         // The least of a cut read's own text, once what is said beside its files is paid for.
-        ["ExecutionJournal.MinReadChars"] = nameof(TheReviewerSeesWhatWasReadTests.Many_reads_name_their_files_say_what_they_show_and_keep_to_the_budget)
+        ["ExecutionJournal.MinReadChars"] = nameof(TheReviewerSeesWhatWasReadTests.Many_reads_name_their_files_say_what_they_show_and_keep_to_the_budget),
+        // What the step review asks to answer in - named so its evidence budget keeps room for it. A review cut off at it is
+        // refused, never read as a verdict.
+        ["StepVerdictReview.AnswerTokens"] = nameof(AutomaticEvidenceBudgetTests.A_review_cut_off_at_its_answer_limit_is_refused_not_read)
     };
 
     /// <summary>

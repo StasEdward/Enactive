@@ -363,7 +363,14 @@ public sealed partial class AppSettings
     /// <summary>The newest settings.json schema this build writes. See <see cref="SchemaVersion"/>.</summary>
     // 7: restore_file reaches the saved teams (WorkerTools.WithImplied, run on every version bump).
     // 8: run_tests does.
-    public const int CurrentSchemaVersion = 8;
+    // 9: the evidence budget is automatic unless a person set one; an 8's written-out default is read as automatic.
+    public const int CurrentSchemaVersion = 9;
+
+    /// <summary>
+    /// The evidence budget every build before schema 9 wrote when nobody had set one: its default, written out as a
+    /// number. Frozen - it is what those files hold, whatever the journal's default becomes.
+    /// </summary>
+    internal const int EvidenceBudgetWrittenBefore9 = 6000;
 
     /// <summary>
     /// settings.json schema version. Files written before 2026-09-06 have no such field and read as 1,
@@ -768,8 +775,15 @@ public sealed partial class AppSettings
         var root = JsonSerializer.SerializeToNode(this, JsonOptions)!.AsObject();
         var engine = root[nameof(Engine)]!.AsObject();
         foreach (var (topLevel, inEngine) in TopLevelEngineFields)
+        {
+            var section = inEngine[..^1].Aggregate<string, System.Text.Json.Nodes.JsonNode?>(engine, (node, name) => node?[name]);
+            // A switch the section leaves out (an automatic evidence budget, EngineOptions.EvidenceBudget) is left out here
+            // too: the older build then keeps its own default, where a null would fail its read of the whole file.
+            if (section is not System.Text.Json.Nodes.JsonObject holding || !holding.ContainsKey(inEngine[^1]))
+                continue;
             // A switch whose value is null (NumCtx unset) is written as null, as the older build wrote it.
-            root[topLevel] = inEngine.Aggregate<string, System.Text.Json.Nodes.JsonNode?>(engine, (node, name) => node?[name])?.DeepClone();
+            root[topLevel] = holding[inEngine[^1]]?.DeepClone();
+        }
         return root.ToJsonString(JsonOptions);
     }
 
@@ -810,6 +824,17 @@ public sealed partial class AppSettings
                          w.Tools.Contains("write_file", StringComparer.OrdinalIgnoreCase)
                          && !w.Tools.Contains("edit_file", StringComparer.OrdinalIgnoreCase)))
                 w.Tools.Insert(w.Tools.IndexOf("write_file") + 1, "edit_file");
+        }
+
+        if (SchemaVersion < 9 && Engine.EvidenceBudget == EvidenceBudgetWrittenBefore9)
+        {
+            // Before 9 the evidence budget was one number with a default of 6000, and every save wrote the default out:
+            // a file holding 6000 is, all but always, a file nobody changed it in. Kept as 6000 it would read as a
+            // person's number and override the automatic budget for good - the fixed number that showed a
+            // 1,000,000-token reviewer about 1,000 of 14,500 characters of a read (run 2eedd5). So an
+            // older file's 6000 is automatic; any other number was typed by somebody and is kept. A 6000 typed on
+            // purpose before 9 cannot be told from the default and becomes automatic too; typed from 9 on, it is kept.
+            Engine = Engine with { EvidenceBudget = null };
         }
 
         // Deliberately "< CurrentSchemaVersion" rather than "< 4": every future tool added to the
