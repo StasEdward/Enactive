@@ -119,17 +119,31 @@ public static class Shortening
             : $"({text.Length - chars} characters of the start not shown; the end follows) " + text[^chars..];
 
     private static string OneHeadAndTail(string text, int budget, double headShare)
+        => HeadAndTail(text, budget, headShare, out _, out _);
+
+    /// <summary>
+    /// <see cref="HeadAndTail"/> of a text that is ONE piece - a read's, with no error stream to keep apart - and how much
+    /// of its start (<paramref name="head"/>) and of its end (<paramref name="tail"/>) the result shows: the whole text as
+    /// head when it is not cut. For a reader that has to say what of the text is shown - which lines of each file a read
+    /// result cut to fit still holds (ExecutionJournal, FileRead).
+    /// </summary>
+    public static string HeadAndTail(string text, int budget, double headShare, out int head, out int tail)
     {
+        head = text.Length;
+        tail = 0;
         if (text.Length <= budget)
             return text;
 
         // Enough head to recognise what this IS; the rest to the end, which for a command is where
         // the answer is and for a file is at least proof that there was an end.
-        var head = Math.Max(1, (int)(budget * Math.Clamp(headShare, 0.1, 0.9)));
-        var tail = budget - head;
+        var start = Math.Max(1, (int)(budget * Math.Clamp(headShare, 0.1, 0.9)));
+        var end = budget - start;
 
-        if (tail < SmallestTail)
+        if (end < SmallestTail)
+        {
+            head = budget;
             return text[..budget] + $"… ({Invariant.N0(budget)} of {Invariant.N0(text.Length)})";
+        }
 
         var notice = $"\n… ({Invariant.N0(text.Length - budget)} characters not shown here; the end follows) …\n";
 
@@ -141,6 +155,8 @@ public static class Shortening
         if (text.Length - budget <= notice.Length)
             return text;
 
-        return text[..head] + notice + text[^tail..];
+        head = start;
+        tail = end;
+        return text[..start] + notice + text[^end..];
     }
 }

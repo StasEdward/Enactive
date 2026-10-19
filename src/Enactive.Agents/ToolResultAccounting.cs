@@ -66,7 +66,13 @@ internal sealed class ToolResultAccounting(StepFrame frame, IToolRegistry tools,
             // through - one that failed or was refused changed nothing.
             change: outcome == ActionOutcome.Succeeded && !result.DidNotRun
                 && result.Metadata.TryGetValue(WrittenChange.MetadataKey, out var change) && change is WrittenChange written
-                    ? written : null);
+                    ? written : null,
+            // The files a read read and where each is in its result, as its tool reports it: the reviewer is shown every
+            // one by name, and under a shortened result which of its lines it is shown (FileRead). Only a read that went
+            // through - one that failed or found nothing read nothing.
+            filesRead: outcome == ActionOutcome.Succeeded && !result.DidNotRun
+                && result.Metadata.TryGetValue(FileRead.MetadataKey, out var read) && read is IReadOnlyList<FileRead> files
+                    ? files : null);
 
         // What the step may change, told of a change made within it - a result, so here and not in the loop.
         if (result.Success) frame.Boundary?.Succeeded(call);

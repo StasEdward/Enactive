@@ -133,6 +133,12 @@ public enum ToolCallOrigin
 /// successful write in place of its arguments, whose first 120 characters are an edit's anchor and not its change. Null
 /// for a call that changed no file it could compare, and for one that did not succeed: nothing was changed.
 /// </param>
+/// <param name="FilesRead">
+/// The files a read call read and where each one's text is in its result, as its tool reported it (<see cref="FileRead"/>) -
+/// what the evidence names a successful read by, every file in full, in place of its arguments cut at 120 characters, and
+/// what it says under a shortened result: which lines of each file are shown. Null for a call that read no file it could
+/// say this of, and for one that did not succeed.
+/// </param>
 public sealed record ExecutedAction(
     DateTimeOffset At,
     int? Step,
@@ -146,7 +152,8 @@ public sealed record ExecutedAction(
     bool FileDeletion = false,
     ToolCallOrigin Origin = ToolCallOrigin.Native,
     IReadOnlyList<string>? Named = null,
-    WrittenChange? Change = null);
+    WrittenChange? Change = null,
+    IReadOnlyList<FileRead>? FilesRead = null);
 
 /// <summary>
 /// What a step actually did, written down when it did it.
@@ -221,12 +228,14 @@ public sealed class ExecutionJournal
     public void Record(int? step, string tool, string arguments, ActionOutcome outcome, string? output,
         WorkspaceEffect workspaceEffect = WorkspaceEffect.Unknown, IReadOnlyList<string>? changedPaths = null,
         int? exitCode = null, bool fileDeletion = false,
-        ToolCallOrigin origin = ToolCallOrigin.Native, IReadOnlyList<string>? named = null, WrittenChange? change = null)
+        ToolCallOrigin origin = ToolCallOrigin.Native, IReadOnlyList<string>? named = null, WrittenChange? change = null,
+        IReadOnlyList<FileRead>? filesRead = null)
     {
         lock (_gate)
             _actions.Add(new ExecutedAction(DateTimeOffset.UtcNow, step, tool, arguments, outcome, output,
                 workspaceEffect, changedPaths is null ? null : Array.AsReadOnly(changedPaths.ToArray()), exitCode, fileDeletion,
-                origin, named is null ? null : Array.AsReadOnly(named.ToArray()), change));
+                origin, named is null ? null : Array.AsReadOnly(named.ToArray()), change,
+                filesRead is null ? null : Array.AsReadOnly(filesRead.ToArray())));
     }
 
     /// <summary>
@@ -403,6 +412,13 @@ public sealed class ExecutionJournal
                          + "lines starting '+ ' were added, '- ' removed, and '  ' are unchanged lines around them; each @@ "
                          + "gives the lines it covers, in the file before and after. A diff too long to show is not cut "
                          + "in the middle like a result: it keeps its first changed lines and says how many it leaves out."
+                       : "")
+                   // Said once, and only when there is such a call: a file whose text a cut left out read as a file never
+                   // read (FileRead).
+                   + (slice.Any(ShownAsRead)
+                       ? " A call that read files is shown by the files it read, each named; when its result is shortened, "
+                         + "a line per file under it says which of that file's lines are shown here - a file with none shown "
+                         + "was read all the same."
                        : "");
 
         // Numbered from 1 WITHIN THIS SLICE, not within the run. The number is a handle for a
@@ -410,7 +426,7 @@ public sealed class ExecutionJournal
         // it was shown. A number that meant a position in the whole journal would refer to calls
         // this evidence does not contain, and an audit checking it would be checking the wrong list.
         var calls = slice.Select((a, i) => Call(a, i + 1, manySteps)).ToArray();
-        var floors = slice.Select(ChangeFloor).ToArray();
+        var floors = slice.Select(a => ChangeFloor(a) + ReadFloor(a)).ToArray();
 
         // How many can be shown AT ALL. Each costs its call line plus the floor under its output -
         // budgeting the call lines alone was the first version of this and it overran by a factor of
@@ -459,7 +475,7 @@ public sealed class ExecutionJournal
             sb.AppendLine(calls[i]);
             sb.Append("<- ").AppendLine(Render(i, texts[i], allowance[i], out var shortened));
             outputsTruncated |= shortened;
-            argumentsTruncated |= !Changed(slice[i]) && slice[i].Arguments?.Length > MaxArguments;
+            argumentsTruncated |= !Changed(slice[i]) && !ShownAsRead(slice[i]) && slice[i].Arguments?.Length > MaxArguments;
         }
 
         return new EvidenceView(sb.ToString().TrimEnd(), slice,
@@ -471,6 +487,7 @@ public sealed class ExecutionJournal
         // changed lines from the end, and how many are not shown is said.
         string Render(int i, string text, int budget, out bool truncated)
         {
+            if (ShownAsRead(slice[i]) && text == whole[i]) return ReadRendered(slice[i], text, budget, out truncated);
             if (!Changed(slice[i]) || text != whole[i]) return Answer(text, budget, out truncated);
             truncated = text.Length > budget;
             if (!truncated) return text;
@@ -506,6 +523,39 @@ public sealed class ExecutionJournal
     /// </summary>
     private static int ChangeFloor(ExecutedAction action)
         => Changed(action) ? Math.Min(MinChangeChars, action.Change!.Body().Length + 1) : 0;
+
+    /// <summary>
+    /// A call shown by the files it read (<see cref="ExecutedAction.FilesRead"/>) rather than by its arguments. Only one that
+    /// succeeded: a read that failed or found nothing read nothing, and keeps the presentation it always had.
+    /// </summary>
+    private static bool ShownAsRead(ExecutedAction action)
+        => action.FilesRead is { Count: > 0 } && action.Outcome == ActionOutcome.Succeeded && !Changed(action);
+
+    /// <summary>
+    /// The room a read's line per file has of its own (<see cref="FileRead.ShownLength"/>), paid for in <see cref="Cost"/>
+    /// like a diff's floor - the lines that say a file was read are counted, not slipped in past the budget. Only what a
+    /// result can be cut by: one no longer than the least a result is shown in is never cut, and is charged nothing.
+    /// </summary>
+    private static int ReadFloor(ExecutedAction action)
+        => ShownAsRead(action)
+            ? Math.Clamp(AnswerText(action).Length - MinOutputChars, 0, FileRead.ShownLength(action.FilesRead!) + 1)
+            : 0;
+
+    /// <summary>
+    /// A read's result in <paramref name="budget"/>: whole when it fits, else its start and its end as any result - cut
+    /// as ONE text, since a file has no error stream to keep apart - with a line per file under it saying which of the
+    /// file's lines are shown. Run 2eedd5: a read of five files reached the reviewer as the first one's opening lines and
+    /// a note appended after the last, and two files shown in neither were judged never read.
+    /// </summary>
+    private static string ReadRendered(ExecutedAction action, string text, int budget, out bool truncated)
+    {
+        truncated = text.Length > budget;
+        if (!truncated) return text;
+        var files = action.FilesRead!;
+        var cut = Shortening.HeadAndTail(text, Math.Max(MinOutputChars, budget - FileRead.ShownLength(files) - 1),
+            Shortening.CommandHead, out var head, out var tail);
+        return cut + "\n" + FileRead.Shown(files, text, [(0, head), (text.Length - tail, text.Length)]);
+    }
 
     /// <summary>
     /// How the step's calls ended, as a count.
@@ -602,6 +652,10 @@ public sealed class ExecutionJournal
             // Not the arguments: compacted, they are the first 120 characters of the call, and for an edit that inserts
             // after an anchor that is the anchor - what the edit kept, read as what it changed (WrittenChange).
             arguments = "changed " + action.Change!.Summary;
+        else if (ShownAsRead(action))
+            // Not the arguments either: cut at 120 characters, a call reading five files named two and a half of them,
+            // and the reviewer failed a step for files "never read" that were (FileRead).
+            arguments = "read " + FileRead.Summary(action.FilesRead!);
         else if (arguments.Length > MaxArguments)
             arguments = arguments[..MaxArguments] + $"… ({Invariant.N0(arguments.Length)} characters of arguments)";
 

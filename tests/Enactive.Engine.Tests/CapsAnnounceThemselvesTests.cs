@@ -150,7 +150,9 @@ public sealed class CapsAnnounceThemselvesTests
         // write's diff has in a shared evidence budget - each cut says how many lines it leaves out.
         ["WrittenChange.MaxChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.A_long_change_is_kept_to_its_bound_and_says_how_much_is_not_kept),
         ["WrittenChange.MaxLineChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.A_long_line_of_a_diff_is_clipped_and_says_how_long_it_is),
-        ["ExecutionJournal.MinChangeChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.An_edit_cut_to_fit_keeps_its_first_changed_lines_and_counts_the_lines_it_leaves_out)
+        ["ExecutionJournal.MinChangeChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.An_edit_cut_to_fit_keeps_its_first_changed_lines_and_counts_the_lines_it_leaves_out),
+        // The files a read read, as the reviewer is shown them: named past a generous bound only by count.
+        ["FileRead.MaxPathsChars"] = nameof(TheReviewerSeesWhatWasReadTests.Past_a_generous_bound_the_files_are_counted_not_named)
     };
 
     /// <summary>
