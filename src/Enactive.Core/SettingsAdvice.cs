@@ -63,7 +63,7 @@ public static class SettingsAdvice
         "How many characters of tool output the reviewer sees, shared between every call the step "
         + "made. It is divided, not per call: at 6,000 three reads get a usable slice each, thirteen get "
         + "about 320 characters each — too little to check anything quoted from a source file. "
-        + "Blank is automatic: each review gets a quarter of the room its model's context window leaves "
+        + "Blank is automatic: each review gets a quarter of the room its model's context window - or its working size, where the provider sets one - leaves "
         + "after the review's own prompt and answer, between 1,500 and 72,000 characters, and 6,000 when "
         + "the provider declares no window. A number here is used for every review instead; it is paid "
         + "on every review call.";

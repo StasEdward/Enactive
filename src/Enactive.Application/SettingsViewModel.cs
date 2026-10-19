@@ -451,12 +451,16 @@ internal sealed partial class SettingsViewModel : ObservableObject
         {
             if (AppSettings.ParseRef(FromSelection(Review)) is not { } reviewer)
                 return "auto - no model is bound to Review";
-            var window = _working.Providers.FirstOrDefault(p => p.Id == reviewer.ProviderId)?.ContextWindowTokens;
-            var chars = ReviewEvidence.UpTo(window).ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
+            static string N(int n) => n.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
+            var provider = _working.Providers.FirstOrDefault(p => p.Id == reviewer.ProviderId);
+            var window = provider?.ContextWindowTokens;
+            // The same inputs the review's own budget reads from the provider (ReviewEvidence.For): the window, and the
+            // working size and handover share that hold a review below it.
+            var upTo = ReviewEvidence.For(null, window, 0, 0, provider?.WorkingContextTokens, provider?.HandoverAtPercent);
             return window is { } tokens
-                ? $"auto - up to {chars} characters, from {reviewer.ProviderId}/{reviewer.Model}'s "
-                  + $"{tokens.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}-token window"
-                : $"auto - {chars} characters: {reviewer.ProviderId} declares no context window for {reviewer.Model}";
+                ? $"auto - up to {N(upTo.Chars)} characters, from {reviewer.ProviderId}/{reviewer.Model}'s {N(tokens)}-token window"
+                  + (upTo.WorkingTokens is { } worked ? $", worked at {N(worked)} tokens" : "")
+                : $"auto - {N(upTo.Chars)} characters: {reviewer.ProviderId} declares no context window for {reviewer.Model}";
         }
     }
     public string LogRetentionDaysText { get => _logRetentionDaysText; set => Set(ref _logRetentionDaysText, value); }

@@ -100,6 +100,8 @@ public sealed class SettingsViewModelTests : IDisposable
         var settings = new AppSettings();
         settings.Providers.Add(new ProviderConfig { Id = "cloud", Kind = ProviderKind.Anthropic, BaseUrl = "https://api.example.com", Models = ["big"], ContextWindowTokens = 1_000_000 });
         settings.Providers.Add(new ProviderConfig { Id = "local", Kind = ProviderKind.OllamaNative, BaseUrl = "http://localhost:11434", Models = ["small"] });
+        settings.Providers.Add(new ProviderConfig { Id = "slow", Kind = ProviderKind.OllamaNative, BaseUrl = "http://localhost:11435", Models = ["gemma"],
+            ContextWindowTokens = 131_072, WorkingContextTokens = 32_768 });
         var vm = Open(settings);
         var changed = new List<string?>();
         vm.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
@@ -111,6 +113,9 @@ public sealed class SettingsViewModelTests : IDisposable
         Assert.Equal("auto - up to 72,000 characters, from cloud/big's 1,000,000-token window", vm.EvidenceBudgetAuto);
         vm.Review = "local/small";
         Assert.Equal("auto - 6,000 characters: local declares no context window for small", vm.EvidenceBudgetAuto);
+        // A provider that works its model at a smaller size than its window holds the review to it, as the review will be.
+        vm.Review = "slow/gemma";
+        Assert.Equal("auto - up to 24,576 characters, from slow/gemma's 131,072-token window, worked at 32,768 tokens", vm.EvidenceBudgetAuto);
 
         var plain = Open(new AppSettings());
         await plain.SaveCommand.ExecuteAsync();

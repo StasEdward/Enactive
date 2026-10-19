@@ -52,7 +52,9 @@ public static class ReviewEvidence
     /// <param name="Chars">Characters of evidence, the item account included.</param>
     /// <param name="Automatic">Worked out from the reviewer's window (or the default, when it has none); false when a person set it.</param>
     /// <param name="WindowTokens">The reviewer's window, when it states one.</param>
-    public readonly record struct Budget(int Chars, bool Automatic, int? WindowTokens)
+    /// <param name="WorkingTokens">The prompt size the reviewer's provider says its model works at, when that, and not the
+    /// window, bound the budget (<see cref="WorkingSize"/>).</param>
+    public readonly record struct Budget(int Chars, bool Automatic, int? WindowTokens, int? WorkingTokens = null)
     {
         /// <summary>One line for the run's log: the number, and whether it was automatic and from what.</summary>
         public string Describe()
@@ -63,8 +65,11 @@ public static class ReviewEvidence
             if (WindowTokens is not { } window)
                 return $"Evidence for the review: {chars} characters, automatic - the review model states no context window, "
                     + "so the fixed default.";
+            var worked = WorkingTokens is { } working
+                ? $", worked at {working.ToString("N0", CultureInfo.InvariantCulture)} tokens"
+                : "";
             return $"Evidence for the review: {chars} characters, automatic - from the review model's "
-                + $"{window.ToString("N0", CultureInfo.InvariantCulture)}-token window (a quarter of what its prompt and "
+                + $"{window.ToString("N0", CultureInfo.InvariantCulture)}-token window{worked} (a quarter of what its prompt and "
                 + $"answer leave, between {ExecutionJournal.MinimumBudget.ToString("N0", CultureInfo.InvariantCulture)} "
                 + $"and {Ceiling.ToString("N0", CultureInfo.InvariantCulture)}).";
         }
@@ -72,8 +77,8 @@ public static class ReviewEvidence
 
     /// <summary>The budget for a review of <paramref name="promptChars"/> characters before its evidence, sent as <paramref name="review"/>.</summary>
     /// <param name="set">What a person set (EngineOptions.EvidenceBudget); null for automatic.</param>
-    /// <param name="review">The request the review will send, without its messages: the window, the reasoning allowance and
-    /// the reserve are the provider's answers for it, as they are when the review is sent.</param>
+    /// <param name="review">The request the review will send, without its messages: the window, the working size, the
+    /// reasoning allowance and the reserve are the provider's answers for it, as they are when the review is sent.</param>
     public static Budget For(int? set, IChatProvider provider, ChatRequest review, int promptChars)
     {
         var scale = new TokenScale();
@@ -82,11 +87,18 @@ public static class ReviewEvidence
         var answer = Math.Max(
             GenerationAllowance.Total(review.OutputTokenLimit ?? 2048, provider.ReasoningAllowance(review)),
             provider.AnswerReserve(review) is int configured and > 0 ? configured : 0);
-        return For(set, provider.ContextWindow(review), scale.TokensFor(promptChars), answer);
+        return For(set, provider.ContextWindow(review), scale.TokensFor(promptChars), answer,
+            provider.WorkingContext(review), provider.HandoverAtPercent(review));
     }
 
-    /// <summary>The rule itself: a person's number, or a quarter of the room the window leaves, within the floor and the ceiling.</summary>
-    public static Budget For(int? set, int? windowTokens, int promptTokens, int answerTokens)
+    /// <summary>
+    /// The rule itself: a person's number, or a quarter of the room the window leaves - held to the provider's working size
+    /// where it states one - between the floor and the ceiling.
+    /// </summary>
+    /// <param name="workingTokens">ProviderConfig.WorkingContextTokens: the prompt size this model works steadily at.</param>
+    /// <param name="handoverPercent">ProviderConfig.HandoverAtPercent: the share of the window a step is handed over at.</param>
+    public static Budget For(int? set, int? windowTokens, int promptTokens, int answerTokens,
+        int? workingTokens = null, int? handoverPercent = null)
     {
         // A person's number is used as it is, raised to the floor as it always was: below it the evidence cannot hold its
         // own header. Not held to the ceiling - the ceiling is the engine's guess at what is worth paying for, and a person
@@ -98,15 +110,37 @@ public static class ReviewEvidence
         if (windowTokens is not (> 0 and var window))
             return new(ExecutionJournal.DefaultBudget, Automatic: true, null);
 
-        var room = Math.Max(0L, (long)window - Math.Max(0, promptTokens) - Math.Max(0, answerTokens));
+        // The prompt a review may grow to: the window less the answer - or less again, where the provider says its model
+        // works at a smaller size. That setting is somebody saying "no further than this" for this model, and the worker
+        // loop holds its steps to it (Orchestrator). For a slow or weak local reviewer it is the lever on prefill time and on
+        // attention spread thin; held to the window alone, a local reviewer on a mixed team was given a cloud model's share.
+        var bySize = (long)window - Math.Max(0, answerTokens);
+        var working = WorkingSize(window, workingTokens, handoverPercent);
+        var effective = working is { } w && w < bySize ? w : bySize;
+        var room = Math.Max(0L, effective - Math.Max(0, promptTokens));
         var chars = (long)new TokenScale().CharsFor((int)Math.Min(int.MaxValue, room / ShareOfRoom));
-        return new((int)Math.Clamp(chars, ExecutionJournal.MinimumBudget, Ceiling), Automatic: true, window);
+        return new((int)Math.Clamp(chars, ExecutionJournal.MinimumBudget, Ceiling), Automatic: true, window,
+            effective < bySize ? (int)effective : null);
     }
 
     /// <summary>
-    /// The most the automatic budget can be for a reviewer with this window - what the settings say "automatic" will be,
-    /// before any step's prompt is known (a step whose own files fill the window gets less). The default when no window is
-    /// stated.
+    /// The prompt size a provider says its model works at, in tokens: its working size, or its handover share of the window,
+    /// the nearer when both are set - the two settings the worker loop reads for the same thing, each somebody saying "no
+    /// further than this". Null when neither is set.
     /// </summary>
-    public static int UpTo(int? windowTokens) => For(null, windowTokens, promptTokens: 0, answerTokens: 0).Chars;
+    private static long? WorkingSize(int window, int? workingTokens, int? handoverPercent)
+    {
+        long? working = workingTokens is > 0 and var wanted ? wanted : null;
+        // Read as the worker loop reads it: a percentage strictly between 0 and 100, or nothing.
+        long? byShare = handoverPercent is > 0 and < 100 and var pct ? (long)window * pct / 100 : null;
+        return working is { } a && byShare is { } b ? Math.Min(a, b) : working ?? byShare;
+    }
+
+    /// <summary>
+    /// The most the automatic budget can be for a reviewer with this window and working size - what the settings say
+    /// "automatic" will be, before any step's prompt is known (a step whose own files fill the window gets less). The
+    /// default when no window is stated.
+    /// </summary>
+    public static int UpTo(int? windowTokens, int? workingTokens = null, int? handoverPercent = null)
+        => For(null, windowTokens, promptTokens: 0, answerTokens: 0, workingTokens, handoverPercent).Chars;
 }

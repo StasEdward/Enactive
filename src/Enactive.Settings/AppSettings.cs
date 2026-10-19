@@ -833,7 +833,9 @@ public sealed partial class AppSettings
             // person's number and override the automatic budget for good - the fixed number that showed a
             // 1,000,000-token reviewer about 1,000 of 14,500 characters of a read (run 2eedd5). So an
             // older file's 6000 is automatic; any other number was typed by somebody and is kept. A 6000 typed on
-            // purpose before 9 cannot be told from the default and becomes automatic too; typed from 9 on, it is kept.
+            // purpose before 9 cannot be told from the default and becomes automatic too; typed from 9 on, it is kept -
+            // until a build from before 9 saves the file again: that save writes it as schema 8, and the next load here
+            // reads it as that build's written-out default, which is automatic.
             Engine = Engine with { EvidenceBudget = null };
         }
 

@@ -79,10 +79,11 @@ internal sealed class EngineSwitches
             RevertRejectedSteps = RevertRejectedSteps,
             MaxParallelSteps = PositiveOr(MaxParallelSteps, engineDefault.MaxParallelSteps),
             // Blank is automatic - the budget follows each reviewer's window (ReviewEvidence) - and so is anything that is
-            // not a number, or is below the floor: an evidence block too small to hold its header is not a smaller
-            // setting, it is a reviewer shown nothing, and a number typed wrong is not a choice.
-            EvidenceBudget = int.TryParse(EvidenceBudget.Trim(), out var evidence) && evidence >= ExecutionJournal.MinimumBudget
-                ? evidence : null
+            // not a number: a number typed wrong is not a choice. A number below the floor is raised to it: somebody who
+            // typed 1000 wanted LESS, and read as automatic it could have given them up to 72,000. Raised, not kept: an
+            // evidence block too small to hold its header is not a smaller setting, it is a reviewer shown nothing.
+            EvidenceBudget = int.TryParse(EvidenceBudget.Trim(), out var evidence)
+                ? Math.Max(ExecutionJournal.MinimumBudget, evidence) : null
         };
     }
 

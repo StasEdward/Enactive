@@ -81,6 +81,60 @@ public sealed class AutomaticEvidenceBudgetTests
         Assert.Equal(ExecutionJournal.MinimumBudget, ReviewEvidence.For(500, null, PromptTokens, AnswerTokens).Chars);
     }
 
+    /// <summary>
+    /// A provider that says its model works at a smaller prompt than its window (ProviderConfig.WorkingContextTokens) holds
+    /// the review to that size, as it holds the worker's steps: a quarter of what the working size leaves after the prompt.
+    /// A working size left blank changes nothing - a 1,000,000-token reviewer still gets the ceiling.
+    /// </summary>
+    [Theory]
+    [InlineData(32_768, 22_176)]
+    [InlineData(49_152, 34_464)]
+    [InlineData(65_536, 46_752)]
+    public void A_declared_working_size_lowers_the_budget(int working, int expected)
+    {
+        var budget = ReviewEvidence.For(null, 1_000_000, PromptTokens, AnswerTokens, workingTokens: working);
+
+        Assert.Equal(new ReviewEvidence.Budget(expected, true, 1_000_000, working), budget);
+        Assert.Contains($", worked at {working.ToString("N0", CultureInfo.InvariantCulture)} tokens", budget.Describe());
+    }
+
+    [Fact]
+    public void A_working_size_left_blank_or_above_the_window_changes_nothing()
+    {
+        Assert.Equal(new ReviewEvidence.Budget(ReviewEvidence.Ceiling, true, 1_000_000),
+            ReviewEvidence.For(null, 1_000_000, PromptTokens, AnswerTokens, workingTokens: null));
+        // Past what the window leaves after the answer, a working size is never reached: the window decides, as it does in
+        // the worker loop, which clamps the working size to the window less the answer.
+        Assert.Equal(ReviewEvidence.For(null, 32_768, PromptTokens, AnswerTokens),
+            ReviewEvidence.For(null, 32_768, PromptTokens, AnswerTokens, workingTokens: 40_000));
+        // A person's number is still the person's.
+        Assert.Equal(9_000, ReviewEvidence.For(9_000, 1_000_000, PromptTokens, AnswerTokens, workingTokens: 32_768).Chars);
+    }
+
+    /// <summary>The handover share bounds the review too, alone or with a working size - the nearer of the two wins.</summary>
+    [Fact]
+    public void A_handover_share_bounds_the_budget_too()
+    {
+        // 5% of 1,000,000 is 50,000 tokens: a quarter of 46,800 after the prompt, at 3 characters a token.
+        Assert.Equal(35_100, ReviewEvidence.For(null, 1_000_000, PromptTokens, AnswerTokens, handoverPercent: 5).Chars);
+        Assert.Equal(22_176, ReviewEvidence.For(null, 1_000_000, PromptTokens, AnswerTokens, workingTokens: 32_768, handoverPercent: 5).Chars);
+        // Read as the worker loop reads it: 0 and 100 are no share.
+        Assert.Equal(ReviewEvidence.Ceiling, ReviewEvidence.For(null, 1_000_000, PromptTokens, AnswerTokens, handoverPercent: 100).Chars);
+    }
+
+    /// <summary>The review asks its provider for the working size and the handover share, as it asks for the window.</summary>
+    [Fact]
+    public void The_review_reads_its_provider_s_working_size()
+    {
+        var request = new Enactive.Core.Chat.ChatRequest("m", [], OutputTokenLimit: 2_048);
+        static ReviewEvidence.Budget Of(FakeChatProvider provider, Enactive.Core.Chat.ChatRequest request)
+            => ReviewEvidence.For(null, provider, request, promptChars: 9_600);
+
+        Assert.Equal(ReviewEvidence.Ceiling, Of(new FakeChatProvider { Window = 1_000_000 }, request).Chars);
+        Assert.Equal(22_176, Of(new FakeChatProvider { Window = 1_000_000, Working = 32_768 }, request).Chars);
+        Assert.Equal(35_100, Of(new FakeChatProvider { Window = 1_000_000, HandoverAt = 5 }, request).Chars);
+    }
+
     /// <summary>The settings' advice says the rule in numbers; they are written in Core, which cannot see the rule's own.</summary>
     [Fact]
     public void The_advice_says_the_numbers_the_rule_uses()
@@ -285,12 +339,16 @@ public sealed class AutomaticEvidenceBudgetTests
         Assert.Null(EngineOptions.Default.EvidenceBudget);
     }
 
-    /// <summary>The box: blank is automatic, both ways; a number is a number; what is not one, or is below the floor, is automatic.</summary>
+    /// <summary>
+    /// The box: blank is automatic, both ways; what is not a number is automatic; a number is that number, raised to the
+    /// floor - somebody who typed 1000 wanted less, and automatic could give them up to 72,000.
+    /// </summary>
     [Theory]
     [InlineData("", null)]
     [InlineData("  ", null)]
     [InlineData("auto", null)]
-    [InlineData("1499", null)]
+    [InlineData("1499", 1500)]
+    [InlineData("1000", 1500)]
     [InlineData("1500", 1500)]
     [InlineData(" 9000 ", 9000)]
     public void The_box_reads_blank_as_automatic(string typed, int? expected)
