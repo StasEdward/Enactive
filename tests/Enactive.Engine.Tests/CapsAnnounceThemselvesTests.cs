@@ -152,7 +152,9 @@ public sealed class CapsAnnounceThemselvesTests
         ["WrittenChange.MaxLineChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.A_long_line_of_a_diff_is_clipped_and_says_how_long_it_is),
         ["ExecutionJournal.MinChangeChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.An_edit_cut_to_fit_keeps_its_first_changed_lines_and_counts_the_lines_it_leaves_out),
         // The files a read read, as the reviewer is shown them: named past a generous bound only by count.
-        ["FileRead.MaxPathsChars"] = nameof(TheReviewerSeesWhatWasReadTests.Past_a_generous_bound_the_files_are_counted_not_named)
+        ["FileRead.MaxPathsChars"] = nameof(TheReviewerSeesWhatWasReadTests.Past_a_generous_bound_the_files_are_counted_not_named),
+        // The least of a cut read's own text, once what is said beside its files is paid for.
+        ["ExecutionJournal.MinReadChars"] = nameof(TheReviewerSeesWhatWasReadTests.Many_reads_name_their_files_say_what_they_show_and_keep_to_the_budget)
     };
 
     /// <summary>

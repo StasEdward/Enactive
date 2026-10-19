@@ -65,24 +65,23 @@ public sealed class TheReviewerSeesWhatWasReadTests
             "identify the least-covered behaviour in the tests");
 
         var sent = string.Join("\n", reviewer.Requests[0].Messages.Select(m => m.Content)).Replace("\r\n", "\n");
-        Assert.Contains("-> read_files read 5 files: " + string.Join(", ", RunPaths), sent, StringComparison.Ordinal);
-        // Five files of about 2,300 characters are more than the call's share of the evidence: it is cut, and says per file
-        // what it shows - the two the run's reviewer called unread included, as read.
+        var call = Regex.Match(sent, @"-> read_files read 5 files: [^\n]*").Value;
+        // Five files of about 2,300 characters are more than the call's share of the evidence: it is cut, and each file says
+        // beside its name what of it is shown - the two the run's reviewer called unread included, as read.
         Assert.Contains("characters not shown here", sent, StringComparison.Ordinal);
-        Assert.Contains("Shown here of the files this call read:", sent, StringComparison.Ordinal);
         foreach (var path in RunPaths)
-            Assert.Matches(new Regex($@"\n  {Regex.Escape(path)}: (no whole line|lines? [\d,]+.*) of 91\n?"), sent);
+            Assert.Matches(new Regex($@"{Regex.Escape(path)} \((read; none of its 91 lines shown here|lines? [\d,]+[^)]* of 91 shown)\)"), call);
         // The middle one: neither the start of the result nor its end reaches it - read, and said to be.
-        Assert.Contains("  TicTacToe.Tests/ComputerAI_PriorityTests.cs: no whole line of 91", sent, StringComparison.Ordinal);
+        Assert.Contains("TicTacToe.Tests/ComputerAI_PriorityTests.cs (read; none of its 91 lines shown here)", call, StringComparison.Ordinal);
         Assert.DoesNotContain("{\"paths\"", sent, StringComparison.Ordinal);
     }
 
     // ── what is said is what is shown ──────────────────────────────────────────────────
 
-    /// <summary>The lines a note claims for <paramref name="path"/>, from the evidence text.</summary>
+    /// <summary>The lines the call line claims shown for <paramref name="path"/>, from the evidence text.</summary>
     private static HashSet<int> Claimed(string text, string path)
     {
-        var line = Regex.Match(text, $@"\n  {Regex.Escape(path)}: (?:no whole line|lines? (?<r>[\d,\-]+(?: and [\d,\-]+)*)) of ");
+        var line = Regex.Match(text, $@"{Regex.Escape(path)} \((?:read; none of its [^)]+ lines shown here|lines? (?<r>[\d,\-]+(?: and [\d,\-]+)*) of [^)]+ shown)\)");
         Assert.True(line.Success, $"no note for {path} in:\n{text}");
         var claimed = new HashSet<int>();
         if (!line.Groups["r"].Success) return claimed;
@@ -94,9 +93,10 @@ public sealed class TheReviewerSeesWhatWasReadTests
         return claimed;
     }
 
-    /// <summary>The lines of a file whose whole text the evidence shows, as a line of its own - or as the first of a result.</summary>
+    /// <summary>The lines of a file whose whole text the evidence shows, as a line of its own - or as the first of a result,
+    /// or the last of the evidence.</summary>
     private static HashSet<int> Visible(string text, int file, IEnumerable<int> lines)
-        => lines.Where(n => Regex.IsMatch(text, $@"(\n|\n<- ){Regex.Escape(LineText(file, n))}\r?\n")).ToHashSet();
+        => lines.Where(n => Regex.IsMatch(text, $@"(\n|\n<- ){Regex.Escape(LineText(file, n))}(\r?\n|$)")).ToHashSet();
 
     /// <summary>
     /// Exact, not approximate: through the tool's own start-and-end preview of a long file and the evidence's cut of the
@@ -123,13 +123,16 @@ public sealed class TheReviewerSeesWhatWasReadTests
         var text = journal.Describe(maxChars: budget).Text.Replace("\r\n", "\n");
 
         Assert.True(text.Length <= budget, $"{text.Length} characters against {budget}");
-        Assert.Contains("-> read_files read 5 files: " + string.Join(", ", paths), text, StringComparison.Ordinal);
+        Assert.Contains("-> read_files read 5 files: " + paths[0] + " (", text, StringComparison.Ordinal);
+        // Each path named once: the lines shown are said beside it, not in a second list of every path.
+        foreach (var path in paths)
+            Assert.Single(Regex.Matches(text, Regex.Escape(path) + @" \((read; none|line)"));
         for (var f = 0; f < sizes.Length; f++)
         {
             var content = Enumerable.Range(1, sizes[f]).ToArray();
             Assert.Equal(Visible(text, f, content).Order(), Claimed(text, paths[f]).Intersect(content).Order());
-            Assert.Contains($"{paths[f]}: ", text, StringComparison.Ordinal);
-        }    }
+        }
+    }
 
     [Theory]
     [InlineData(1, 400, 1_500)]
@@ -151,7 +154,7 @@ public sealed class TheReviewerSeesWhatWasReadTests
         var text = journal.Describe(maxChars: budget).Text.Replace("\r\n", "\n");
 
         Assert.True(text.Length <= budget, $"{text.Length} characters against {budget}");
-        Assert.Contains("[1] -> read_file read " + path + "\n", text, StringComparison.Ordinal);
+        Assert.Contains("[1] -> read_file read " + path + " (", text, StringComparison.Ordinal);
         var content = Enumerable.Range(1, 600).ToArray();
         var claimed = Claimed(text, path);
         Assert.Equal(Visible(text, 7, content).Order(), claimed.Intersect(content).Order());
@@ -160,7 +163,7 @@ public sealed class TheReviewerSeesWhatWasReadTests
     }
 
     [Fact]
-    public async Task A_single_read_with_a_long_path_keeps_the_path_whole_and_a_short_result_has_no_note()
+    public async Task A_single_read_with_a_long_path_keeps_the_path_whole_and_says_nothing_beside_a_result_shown_whole()
     {
         using var fx = new EngineFixture();
         var path = string.Join("/", Enumerable.Range(1, 12).Select(i => $"folder{i}")) + "/a_file_with_a_long_name.cs";
@@ -174,7 +177,6 @@ public sealed class TheReviewerSeesWhatWasReadTests
 
         Assert.True(path.Length > 120);
         Assert.Contains("[1] -> read_file read " + path + "\n<- class A { }", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("Shown here of the files", text, StringComparison.Ordinal);
     }
 
     // ── the budget ─────────────────────────────────────────────────────────────────────
@@ -217,6 +219,97 @@ public sealed class TheReviewerSeesWhatWasReadTests
         Assert.Matches(@", and \d+ more not named here$", summary);
         Assert.True(summary.Length <= FileRead.MaxPathsChars + 40, $"{summary.Length} characters");
         Assert.Contains("File1.cs", summary, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Code review of task 21: the per-file account was a list of its own under the result that named every path again,
+    /// charged in full on top of a call line that already named them - the least a read cost went from about 340
+    /// characters to about 850, and a step of many reads lost more of them whole, names and all. Said beside each name,
+    /// and paid for out of the floor a result already has, a step of single-file reads - the read a step makes most - shows
+    /// as many of its reads as before (283dca7: the same calls recorded without what they read, shown by their arguments).
+    /// </summary>
+    [Theory]
+    [InlineData(ExecutionJournal.DefaultBudget)]
+    [InlineData(4_000)]
+    public async Task A_read_heavy_step_shows_no_fewer_of_its_reads_than_before(int budget)
+    {
+        using var fx = new EngineFixture();
+        var named = new ExecutionJournal();
+        var before = new ExecutionJournal();
+        for (var i = 0; i < 24; i++)
+        {
+            var path = $"src/Enactive.Agents/Orchestration/StepPart{i:D2}.cs";
+            fx.Write(path, Numbered(i, 40 + i * 9 % 70));
+            // Arguments of the path alone - the shortest a read's arguments are, and so the hardest case for this.
+            var arguments = JsonSerializer.Serialize(new { path });
+            var result = await new ReadFileTool().InvokeAsync(arguments, Context(fx), CancellationToken.None);
+            Record(named, "read_file", arguments, result);
+            before.Record(1, "read_file", Compacted(arguments), ActionOutcome.Succeeded, result.Output, WorkspaceEffect.None);
+        }
+        foreach (var journal in new[] { named, before })
+            journal.Record(1, "run_command", """{"command":"dotnet test"}""", ActionOutcome.Succeeded, "Passed!  - Failed: 0, Passed: 52", exitCode: 0);
+
+        var now = named.Describe(maxChars: budget);
+        var then = before.Describe(maxChars: budget);
+
+        Assert.True(then.ActionsOmitted, "the step is meant to be more than the budget holds");
+        Assert.True(now.Text.Length <= budget, $"{now.Text.Length} characters against {budget}");
+        Assert.True(now.VisibleActionIds.Count >= then.VisibleActionIds.Count,
+            $"{now.VisibleActionIds.Count} calls shown, against {then.VisibleActionIds.Count} before");
+    }
+
+    /// <summary>
+    /// Code review of task 21: what is said beside each file has a bound the caller keeps room for, and it has to hold for
+    /// the widest a note can be - every piece a range "from-to" at the file's highest line number. Written as single
+    /// numbers, the bound was some twenty characters short of a note for a window whose start and end are both kept.
+    /// </summary>
+    [Fact]
+    public void What_is_said_beside_each_file_is_never_longer_than_the_room_kept_for_it()
+    {
+        // One stretch: a window of 300 lines from line 1,000,001, its start and its end kept.
+        var window = string.Concat(Enumerable.Range(0, 300).Select(n => "abc\n"))[..^1];
+        var one = new FileRead("w.txt", 1_000_300, true, [new FileRead.Span(0, window.Length, 1_000_001, 1_000_300, true, true)]);
+        // Two stretches: a file shown as its start and its end around a marker, and the result cut inside both.
+        var marker = "\n… (900 characters not shown here; the end follows) …\n";
+        var preview = window + marker + window;
+        var two = new FileRead("p.txt", 1_000_300, true,
+        [
+            new FileRead.Span(0, window.Length, 1, 300, true, true),
+            new FileRead.Span(window.Length + marker.Length, window.Length, 1_000_001, 1_000_300, true, true)
+        ]);
+
+        foreach (var (file, text) in new[] { (one, window), (two, preview) })
+        {
+            (int, int)[] kept = [(0, 40), (text.Length / 2, text.Length / 2 + 2), (text.Length - 40, text.Length)];
+            foreach (var keep in new[] { kept[..1], new[] { kept[0], kept[2] } })
+            {
+                var said = FileRead.Summary([file], text, keep).Length - FileRead.Summary([file]).Length;
+                Assert.True(said <= FileRead.ShownLength([file]), $"{FileRead.Summary([file], text, keep)}: {said} > {FileRead.ShownLength([file])}");
+            }
+        }
+        Assert.Contains(" and ", FileRead.Summary([two], preview, [(0, 40), (preview.Length - 40, preview.Length)]), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Code review of task 21: a file asked for and not read - not there, or past what one call returns - was named only in
+    /// the tool's own line in the middle of its answer, which a cut to fit takes out. The call line says it.
+    /// </summary>
+    [Fact]
+    public async Task Files_asked_for_and_not_read_are_named_on_the_call_line_with_why()
+    {
+        using var fx = new EngineFixture();
+        var paths = Enumerable.Range(1, 5).Select(i => $"big{i}.md").Append("gone.md").ToArray();
+        foreach (var path in paths[..5]) fx.Write(path, new string('y', ReadFilesTool.MaxCharsPerFile));
+        var arguments = JsonSerializer.Serialize(new { paths });
+        var result = await new ReadFilesTool().InvokeAsync(arguments, Context(fx), CancellationToken.None);
+        Assert.True(result.Success, result.Error);
+        var journal = new ExecutionJournal();
+        Record(journal, "read_files", arguments, result);
+
+        var text = journal.Describe(maxChars: 2_000).Text;
+
+        Assert.Contains("-> read_files read 4 files: big1.md (", text, StringComparison.Ordinal);
+        Assert.Contains("; not read: big5.md (past the 16,000 characters one call returns), gone.md (not there)", text, StringComparison.Ordinal);
     }
 
     // ── what is not a read keeps its presentation ──────────────────────────────────────
@@ -320,8 +413,9 @@ public sealed class TheReviewerSeesWhatWasReadTests
     {
         var context = new WorkContext(fx.Workspace.Id, fx.Workspace.Name, null, null, null, [], []);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        await foreach (var _ in engine.SubmitIntentAsync(
-                           new Enactive.Core.Intents.Intent(taskId, "tidy up the notes", Enactive.Core.Intents.IntentSource.CommandBar, context,
-                               DateTimeOffset.UtcNow), cts.Token)) { }
+        var intent = new Enactive.Core.Intents.Intent(taskId, "tidy up the notes", Enactive.Core.Intents.IntentSource.CommandBar, context,
+            DateTimeOffset.UtcNow);
+        await foreach (var ev in engine.SubmitIntentAsync(intent, cts.Token))
+            _ = ev;
     }
 }

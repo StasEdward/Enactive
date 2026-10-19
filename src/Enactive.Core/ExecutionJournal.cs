@@ -412,14 +412,10 @@ public sealed class ExecutionJournal
                          + "lines starting '+ ' were added, '- ' removed, and '  ' are unchanged lines around them; each @@ "
                          + "gives the lines it covers, in the file before and after. A diff too long to show is not cut "
                          + "in the middle like a result: it keeps its first changed lines and says how many it leaves out."
-                       : "")
-                   // Said once, and only when there is such a call: a file whose text a cut left out read as a file never
-                   // read (FileRead).
-                   + (slice.Any(ShownAsRead)
-                       ? " A call that read files is shown by the files it read, each named; when its result is shortened, "
-                         + "a line per file under it says which of that file's lines are shown here - a file with none shown "
-                         + "was read all the same."
                        : "");
+                   // A read cut to fit explains itself beside each file it names ("none of its 91 lines shown here"), and is
+                   // not explained here: a sentence of 150 characters cost a step of single-file reads one of them
+                   // (code review of task 21).
 
         // Numbered from 1 WITHIN THIS SLICE, not within the run. The number is a handle for a
         // reviewer that is asked to point at a call - see StepVerdictReview - and it can only point at what
@@ -472,8 +468,12 @@ public sealed class ExecutionJournal
 
         foreach (var i in shown)
         {
-            sb.AppendLine(calls[i]);
-            sb.Append("<- ").AppendLine(Render(i, texts[i], allowance[i], out var shortened));
+            var output = Render(i, texts[i], allowance[i], out var shortened);
+            // A read cut to fit says, beside each file it names, which of the file's lines its result still shows.
+            sb.AppendLine(shortened && ShownAsRead(slice[i]) && texts[i] == whole[i]
+                ? Call(slice[i], i + 1, manySteps, ReadKept(slice[i], texts[i], allowance[i]))
+                : calls[i]);
+            sb.Append("<- ").AppendLine(output);
             outputsTruncated |= shortened;
             argumentsTruncated |= !Changed(slice[i]) && !ShownAsRead(slice[i]) && slice[i].Arguments?.Length > MaxArguments;
         }
@@ -487,7 +487,7 @@ public sealed class ExecutionJournal
         // changed lines from the end, and how many are not shown is said.
         string Render(int i, string text, int budget, out bool truncated)
         {
-            if (ShownAsRead(slice[i]) && text == whole[i]) return ReadRendered(slice[i], text, budget, out truncated);
+            if (ShownAsRead(slice[i]) && text == whole[i]) return ReadCut(slice[i], text, budget, out truncated, out _, out _);
             if (!Changed(slice[i]) || text != whole[i]) return Answer(text, budget, out truncated);
             truncated = text.Length > budget;
             if (!truncated) return text;
@@ -529,32 +529,51 @@ public sealed class ExecutionJournal
     /// succeeded: a read that failed or found nothing read nothing, and keeps the presentation it always had.
     /// </summary>
     private static bool ShownAsRead(ExecutedAction action)
-        => action.FilesRead is { Count: > 0 } && action.Outcome == ActionOutcome.Succeeded && !Changed(action);
+        => action.FilesRead is { Count: > 0 } files && FileRead.AnyRead(files) && action.Outcome == ActionOutcome.Succeeded
+           && !Changed(action);
 
     /// <summary>
-    /// The room a read's line per file has of its own (<see cref="FileRead.ShownLength"/>), paid for in <see cref="Cost"/>
-    /// like a diff's floor - the lines that say a file was read are counted, not slipped in past the budget. Only what a
+    /// The least of a cut read's result that is still its text, once what is said beside its files is paid for out of the
+    /// floor every result has (<see cref="MinOutputChars"/>): the start and the end of it, a line or two.
+    /// </summary>
+    private const int MinReadChars = MinOutputChars / 2;
+
+    /// <summary>
+    /// The room a read has of its own for what it says beside each file (<see cref="FileRead.ShownLength"/>), paid for in
+    /// <see cref="Cost"/> like a diff's floor so the budget is one the evidence obeys - but only what the floor every result
+    /// already has cannot hold with <see cref="MinReadChars"/> of text left. Charged on top in full, with the paths said a
+    /// second time in a list of their own, the least a read cost went from about 340 characters to about 850 in run 2eedd5's
+    /// step, and a step of many reads lost more of them whole, names and all (code review of task 21). And only what a
     /// result can be cut by: one no longer than the least a result is shown in is never cut, and is charged nothing.
     /// </summary>
     private static int ReadFloor(ExecutedAction action)
         => ShownAsRead(action)
-            ? Math.Clamp(AnswerText(action).Length - MinOutputChars, 0, FileRead.ShownLength(action.FilesRead!) + 1)
+            ? Math.Max(0, Math.Min(FileRead.ShownLength(action.FilesRead!) + MinReadChars - MinOutputChars,
+                AnswerText(action).Length - MinOutputChars))
             : 0;
 
     /// <summary>
     /// A read's result in <paramref name="budget"/>: whole when it fits, else its start and its end as any result - cut
-    /// as ONE text, since a file has no error stream to keep apart - with a line per file under it saying which of the
-    /// file's lines are shown. Run 2eedd5: a read of five files reached the reviewer as the first one's opening lines and
-    /// a note appended after the last, and two files shown in neither were judged never read.
+    /// as ONE text, since a file has no error stream to keep apart - in what is left once what its call line will say
+    /// beside each file is kept room for; <paramref name="kept"/> is what of it is shown, for that. Run 2eedd5: a read of
+    /// five files reached the reviewer as the first one's opening lines and a note appended after the last, and two files
+    /// shown in neither were judged never read.
     /// </summary>
-    private static string ReadRendered(ExecutedAction action, string text, int budget, out bool truncated)
+    private static string ReadCut(ExecutedAction action, string text, int budget, out bool truncated,
+        out int head, out int tail)
     {
         truncated = text.Length > budget;
+        (head, tail) = (text.Length, 0);
         if (!truncated) return text;
-        var files = action.FilesRead!;
-        var cut = Shortening.HeadAndTail(text, Math.Max(MinOutputChars, budget - FileRead.ShownLength(files) - 1),
-            Shortening.CommandHead, out var head, out var tail);
-        return cut + "\n" + FileRead.Shown(files, text, [(0, head), (text.Length - tail, text.Length)]);
+        return Shortening.HeadAndTail(text, Math.Max(1, budget - FileRead.ShownLength(action.FilesRead!)),
+            Shortening.CommandHead, out head, out tail);
+    }
+
+    /// <summary>The files a cut read read, each with which of its lines the cut result shows (<see cref="ReadCut"/>).</summary>
+    private static string ReadKept(ExecutedAction action, string text, int budget)
+    {
+        ReadCut(action, text, budget, out _, out var head, out var tail);
+        return FileRead.Summary(action.FilesRead!, text, [(0, head), (text.Length - tail, text.Length)]);
     }
 
     /// <summary>
@@ -645,7 +664,8 @@ public sealed class ExecutionJournal
 
     /// <summary>The call itself. Arguments are clipped because write_file carries a whole file.</summary>
     /// <param name="withStep">Whether to name the step, when the slice spans several steps.</param>
-    private static string Call(ExecutedAction action, int number, bool withStep = false)
+    /// <param name="read">A read's files as its cut result shows them (<see cref="ReadKept"/>), in place of their names alone.</param>
+    private static string Call(ExecutedAction action, int number, bool withStep = false, string? read = null)
     {
         var arguments = action.Arguments ?? "";
         if (Changed(action))
@@ -655,7 +675,7 @@ public sealed class ExecutionJournal
         else if (ShownAsRead(action))
             // Not the arguments either: cut at 120 characters, a call reading five files named two and a half of them,
             // and the reviewer failed a step for files "never read" that were (FileRead).
-            arguments = "read " + FileRead.Summary(action.FilesRead!);
+            arguments = "read " + (read ?? FileRead.Summary(action.FilesRead!));
         else if (arguments.Length > MaxArguments)
             arguments = arguments[..MaxArguments] + $"… ({Invariant.N0(arguments.Length)} characters of arguments)";
 

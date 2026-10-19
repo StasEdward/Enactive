@@ -3,9 +3,9 @@ namespace Enactive.Core.Execution;
 using System.Text;
 
 /// <summary>
-/// What a read call's result holds of one file it read: which file, how many lines it has, and where in the result its
-/// text is - so the step reviewer, shown that result cut to its share of the evidence, is told the file was read and which
-/// of its lines it is shown.
+/// What a read call's result holds of one file it was asked for: which file, how many lines it has, and where in the result
+/// its text is - so the step reviewer, shown that result cut to its share of the evidence, is told the file was read and
+/// which of its lines it is shown. A file asked for and not read says why instead (<see cref="NotRead"/>).
 ///
 /// <para><b>Why.</b> Run 2eedd5, 2026-10-20, step 1: the worker read five test files in one <c>read_files</c> call. The
 /// reviewer was shown the call as its arguments compacted to 120 characters - the first two paths and part of a third -
@@ -23,13 +23,16 @@ using System.Text;
 /// only the count in the part the tool scanned.</param>
 /// <param name="Spans">Where the file's own text is in the result, in order: one stretch for a file or a window shown
 /// whole, two for a file shown as its start and its end.</param>
-public sealed record FileRead(string Path, int TotalLines, bool TotalKnown, IReadOnlyList<FileRead.Span> Spans)
+/// <param name="NotRead">Why a file the call asked for was not read - "not there", or past what one call may return - and
+/// null for a file read. Said because the tool's own line saying so sits in the middle of its result, where a cut to fit
+/// takes it out (code review of task 21).</param>
+public sealed record FileRead(string Path, int TotalLines, bool TotalKnown, IReadOnlyList<FileRead.Span> Spans, string? NotRead = null)
 {
-    /// <summary>The key a tool's result carries the files it read under: an <c>IReadOnlyList&lt;FileRead&gt;</c>.</summary>
+    /// <summary>The key a tool's result carries the files it was asked for under: an <c>IReadOnlyList&lt;FileRead&gt;</c>.</summary>
     public const string MetadataKey = "filesRead";
 
     /// <summary>
-    /// The most of a call line spent naming the files a call read. Generous on purpose - read_files takes at most ten
+    /// The most of a call line spent naming the files a call asked for. Generous on purpose - read_files takes at most ten
     /// paths, and the names are what a reviewer checks "was it read" against - and a bound all the same, past which the
     /// rest are counted rather than named.
     /// </summary>
@@ -45,55 +48,63 @@ public sealed record FileRead(string Path, int TotalLines, bool TotalKnown, IRea
     /// all that follows of the line is blank.</param>
     public sealed record Span(int Start, int Length, int FirstLine, int LastLine, bool StartsLine, bool EndsLine);
 
-    /// <summary>One line, for the call it belongs to: the file it read, or how many and each by name.</summary>
-    public static string Summary(IReadOnlyList<FileRead> files)
+    /// <summary>Whether any file of <paramref name="files"/> was read - what a read is shown by its files for.</summary>
+    public static bool AnyRead(IReadOnlyList<FileRead> files) => files.Any(f => f.NotRead is null);
+
+    /// <summary>
+    /// One line, for the call it belongs to: the file it read, or how many and each by name, then those asked for and not
+    /// read, each with why. Given what of <paramref name="result"/> is shown (<paramref name="kept"/>, as [start, end) - its
+    /// start and its end when it is cut), each file read says beside its name which of its lines are: "a.cs (lines 1-40 of
+    /// 264 shown)". Beside the name and not in a list of its own under the result: such a list named every file a second
+    /// time, and doubled what the least of a read costs, so a step of many reads lost more of them from its evidence
+    /// whole, names and all (code review of task 21).
+    /// </summary>
+    public static string Summary(IReadOnlyList<FileRead> files, string? result = null, IReadOnlyList<(int Start, int End)>? kept = null)
     {
-        if (files.Count == 1) return files[0].Path;
-        var sb = new StringBuilder($"{Invariant.N0(files.Count)} files: ");
-        for (var k = 0; k < files.Count; k++)
+        var read = files.Where(f => f.NotRead is null).ToArray();
+        var sb = new StringBuilder(read.Length == 1 ? "" : $"{Invariant.N0(read.Length)} files: ");
+        // Which are named is decided on the names alone, so a call names the same files whatever is said beside them.
+        var plain = sb.Length;
+        var named = 0;
+        foreach (var (file, k) in read.Select((f, k) => (f, k)).Concat(files.Where(f => f.NotRead is not null).Select((f, k) => (f, -1 - k))))
         {
-            var part = (k > 0 ? ", " : "") + files[k].Path;
+            var part = (k == 0 ? "" : k == -1 ? (read.Length > 0 ? "; not read: " : "not read: ") : ", ") + file.Path
+                       + (file.NotRead is { } why ? $" ({why})" : "");
             // The first is named whatever its length: a call line that names no file is the defect this is here to end.
-            if (k > 0 && sb.Length + part.Length > MaxPathsChars)
-                return sb.Append($", and {Invariant.N0(files.Count - k)} more not named here").ToString();
+            if (named > 0 && plain + part.Length > MaxPathsChars)
+                return sb.Append($", and {Invariant.N0(files.Count - named)} more not named here").ToString();
             sb.Append(part);
+            plain += part.Length;
+            if (file.NotRead is null && result is not null && kept is not null)
+                sb.Append(file.Beside(file.LinesShown(result, kept)));
+            named++;
         }
         return sb.ToString();
     }
 
-    /// <summary>What a shortened result says above its lines of what is shown of each file.</summary>
-    private const string Lead = "Shown here of the files this call read:";
-
     /// <summary>
-    /// Which lines of each file are shown whole in <paramref name="result"/> when only <paramref name="kept"/> of it is
-    /// shown: a line under the result per file, said of the FILE - "lines 1-40 of 264" - so a file of which nothing is shown
-    /// reads as read and not shown, not as never read.
-    /// </summary>
-    /// <param name="kept">The stretches of <paramref name="result"/> that are shown, as [start, end) - its start and its
-    /// end when it is cut (Shortening.HeadAndTail).</param>
-    public static string Shown(IReadOnlyList<FileRead> files, string result, IReadOnlyList<(int Start, int End)> kept)
-        => Lead + string.Concat(files.Select(f => "\n  " + f.Line(f.LinesShown(result, kept))));
-
-    /// <summary>
-    /// The most <see cref="Shown"/> can take for a result kept as at most two stretches - its start and its end - each
-    /// number at its widest: the room a caller keeps for it, so the evidence stays within its budget whatever is cut.
+    /// The most that what <see cref="Summary"/> says beside each file can add to it, for a result kept as at most two
+    /// stretches - its start and its end: the room a caller keeps, so the evidence stays within its budget whatever is cut.
+    /// Two ordered stretches meet a file's stretches in at most one more piece than the file has stretches, and no line
+    /// number is past the last line a stretch holds (<see cref="Span.LastLine"/>) or the file's count; every piece is then
+    /// written at its widest, as "from-to".
     /// </summary>
     public static int ShownLength(IReadOnlyList<FileRead> files)
-        => Lead.Length + files.Sum(f =>
+        => files.Where(f => f.NotRead is null).Sum(f =>
         {
-            var widest = Math.Max(f.TotalLines, f.Spans.Select(s => Math.Max(s.LastLine, s.FirstLine + s.Length)).DefaultIfEmpty(0).Max());
-            var ranges = Enumerable.Repeat((widest, widest), Math.Max(1, 2 * f.Spans.Count)).ToArray();
-            return 3 + Math.Max(f.Line([]).Length, f.Line(ranges).Length);
+            var widest = Invariant.N0(Math.Max(f.TotalLines, f.Spans.Select(s => s.LastLine).DefaultIfEmpty(0).Max()));
+            var pieces = Enumerable.Repeat($"{widest}-{widest}", f.Spans.Count + 1);
+            return Math.Max(f.Beside([]).Length, $" (lines {string.Join(" and ", pieces)} of {f.Of} shown)".Length);
         });
 
-    private string Line(IReadOnlyList<(int From, int To)> ranges)
-    {
-        var of = TotalKnown ? Invariant.N0(TotalLines) : "at least " + Invariant.N0(TotalLines);
-        return ranges.Count == 0
-            ? $"{Path}: no whole line of {of}"
-            : ranges is [var one] && one.From == one.To ? $"{Path}: line {Invariant.N0(one.From)} of {of}"
-            : $"{Path}: lines {string.Join(" and ", ranges.Select(r => r.From == r.To ? Invariant.N0(r.From) : $"{Invariant.N0(r.From)}-{Invariant.N0(r.To)}"))} of {of}";
-    }
+    private string Of => TotalKnown ? Invariant.N0(TotalLines) : "at least " + Invariant.N0(TotalLines);
+
+    private string Beside(IReadOnlyList<(int From, int To)> ranges)
+        // "Here", and "read": what a file with none shown is, is a file read and not shown in this evidence - the
+        // difference the reviewer of run 2eedd5 was never told.
+        => ranges.Count == 0 ? $" (read; none of its {Of} lines shown here)"
+            : ranges is [var one] && one.From == one.To ? $" (line {Invariant.N0(one.From)} of {Of} shown)"
+            : $" (lines {string.Join(" and ", ranges.Select(r => r.From == r.To ? Invariant.N0(r.From) : $"{Invariant.N0(r.From)}-{Invariant.N0(r.To)}"))} of {Of} shown)";
 
     /// <summary>The lines of this file shown whole in <paramref name="result"/>, of which only <paramref name="kept"/> is shown.</summary>
     internal IReadOnlyList<(int From, int To)> LinesShown(string result, IReadOnlyList<(int Start, int End)> kept)

@@ -2,6 +2,7 @@ namespace Enactive.Tools;
 
 using System.Text;
 using System.Text.Json;
+using Enactive.Core;
 using Enactive.Core.Context;
 using Enactive.Core.Execution;
 using Enactive.Core.Tools;
@@ -307,14 +308,18 @@ internal static class FileReadService
             foreach (var (relative, full) in resolved)
             {
                 using var source = await WorkspaceReader.OpenAsync(ctx, relative, full, ct);
+                // Asked for and not read, and why: the line in the answer that says so sits between the files, where
+                // the reviewer's evidence, cut to fit, takes it out (FileRead.NotRead).
                 if (source is null)
                 {
                     missing.Add(relative);
+                    reads.Add(new FileRead(relative, 0, false, [], "not there"));
                     continue;
                 }
 
                 if (budget <= 0)
                 {
+                    reads.Add(new FileRead(relative, 0, false, [], $"past the {Invariant.N0(MaxCharsTotal)} characters one call returns"));
                     sb.AppendLine($"----- {relative} -----")
                       .AppendLine($"(not read: the {MaxCharsTotal} character budget for this call "
                                 + "was used by the files above. Ask for this one on its own.)")
