@@ -70,7 +70,7 @@
   --role-writer:    #FFB020;
 
   /* --- Applied roles (dark is the default theme) --------------------------- */
-  --bg:            var(--ink-900);
+  --bg:            var(--ink-950);
   --bg-elevated:   var(--ink-800);
   --bg-card:       var(--ink-700);
   --border:        var(--ink-600);

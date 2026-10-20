@@ -12,6 +12,7 @@ const out = path.join(site, 'wiki');
 const repo = 'https://github.com/StasEdward/Enactive/blob/master/';
 const pages = [
   ['README', 'index', 'Wiki home', 'Start here'],
+  ['What-Is-Enactive', 'what-is-enactive', 'What is Enactive?', 'Start here'],
   ['Overview', 'overview', 'Application overview', 'Start here'],
   ['Getting-Started', 'getting-started', 'Getting started', 'Start here'],
   ['Running-Tasks', 'running-tasks', 'Running tasks', 'Workflows'],
@@ -125,13 +126,38 @@ for (const [index, page] of pages.entries()) {
   const nav = pages.map((p,i)=>`${i===0 || p.group!==pages[i-1].group?`<p class="nav-group">${p.group}</p>`:''}<a href="${p.slug}.html"${p===page?' aria-current="page"':''}>${p.label}</a>`).join('');
   const tocHtml=toc.filter(t=>t.depth===2).map(t=>`<a href="#${t.id}">${escape(t.title)}</a>`).join('');
   const previous=pages[index-1], next=pages[index+1];
-  const description=page.file==='README'?'The product and engineering handbook for Enactive. Learn the application, run tasks, configure models, and build repeatable workflows.':`Enactive Wiki: ${title}. Practical workflows, configuration details, and implementation references.`;
+  // Search snippets need to describe each page's own intent; a shared fallback made every chapter look alike.
+  const descriptions={
+    README:'Official Enactive product and engineering documentation: learn the AI agent desktop workspace, run tasks, configure models, and use remote access.',
+    'What-Is-Enactive':'What Enactive does, which AI models and providers it supports, how task permissions and evidence work, and how local and remote execution are handled.',
+    Overview:'Explore Enactive, a desktop workspace for AI-assisted project work, with task planning, tool permissions, model routing, execution history, and review.',
+    'Getting-Started':'Build and run Enactive from source on Windows. Install the .NET 10 SDK, configure an AI provider, and start your first project task.',
+    'Running-Tasks':'Learn how to run and supervise AI agent tasks in Enactive, including approvals, staged changes, background runs, retries, and history.',
+    Console:'Use the Enactive command-line console for AI task execution, templates, run history, reports, exit codes, and scheduled workflows.',
+    Templates:'Create reusable Enactive task templates with parameters, permissions, workspace scope, and checks that define successful completion.',
+    'Remote-Access':'Connect to an Enactive computer from a browser, pair devices, start tasks remotely, and understand remote run permissions and limits.',
+    'Remote-Security':'Understand Enactive remote access security, end-to-end encryption, gateway visibility, device keys, and how to verify the web panel.',
+    Settings:'Configure Enactive AI providers, models, worker roles, execution phases, workspace behavior, and persisted settings.',
+    'Models-and-Phases':'Choose AI models for planning, tool execution, and review in Enactive; compare role routing and practical configuration patterns.',
+    Architecture:'Understand Enactive system architecture, task planning, tool execution, review, evidence, and how the desktop, console, and gateway fit together.',
+    Operations:'Troubleshoot Enactive runs, providers, MCP and web tools, logs, storage, backups, and common task execution problems.'
+  };
+  const description=descriptions[page.file];
+  const canonical=`https://enactive.dev/wiki/${page.slug}.html`;
+  const structuredData=JSON.stringify({
+    '@context':'https://schema.org', '@type':'TechArticle', headline:title,
+    description, url:canonical, inLanguage:'en', isPartOf:{'@type':'WebSite',name:'Enactive',url:'https://enactive.dev/'},
+    publisher:{'@type':'Organization',name:'Enactive',url:'https://enactive.dev/'}
+  }).replaceAll('<','\\u003c');
   const html=`<!doctype html>
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escape(page.file==='README'?title:title+' · Enactive Wiki')}</title><meta name="description" content="${escape(description)}">
-<link rel="canonical" href="https://enactive.dev/wiki/${page.slug}.html">
+<title>${escape(page.file==='README'?title:title+' · Enactive Wiki')}</title><meta name="description" content="${escape(description)}"><meta name="robots" content="index,follow,max-image-preview:large"><meta name="author" content="Enactive">
+<meta property="og:type" content="article"><meta property="og:site_name" content="Enactive"><meta property="og:locale" content="en_US"><meta property="og:title" content="${escape(page.file==='README'?title:title+' · Enactive Wiki')}"><meta property="og:description" content="${escape(description)}"><meta property="og:url" content="${canonical}"><meta property="og:image" content="https://enactive.dev/assets/og.png"><meta property="og:image:alt" content="Enactive, a desktop workspace for AI agents">
+<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escape(page.file==='README'?title:title+' · Enactive Wiki')}"><meta name="twitter:description" content="${escape(description)}"><meta name="twitter:image" content="https://enactive.dev/assets/og.png"><meta name="twitter:image:alt" content="Enactive, a desktop workspace for AI agents">
+<link rel="canonical" href="${canonical}"><link rel="sitemap" type="application/xml" href="https://enactive.dev/sitemap.xml">
+<script type="application/ld+json">${structuredData}</script>
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="assets/brand.css"><link rel="stylesheet" href="assets/fonts.css"><link rel="stylesheet" href="wiki.css">
 <script src="theme.js"></script><script src="search-index.js" defer></script><script src="wiki.js" defer></script>

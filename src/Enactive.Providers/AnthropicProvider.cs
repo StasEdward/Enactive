@@ -129,7 +129,18 @@ public sealed partial class AnthropicProvider : IChatProvider
         // 512 on Opus 5 - is simply processed without caching and costs nothing extra; there is no
         // error and no penalty, so a guess about the token count here would add a rule that only
         // ever gets it wrong.
-        MarkForCaching(wire.Count > 0 ? LastBlockOf(wire[^1]) : null);
+        //
+        // The end of the transcript is marked only where the conversation goes on: a request that
+        // carries tools is a turn of a tool loop, whose next request re-sends all of this, and one
+        // that already holds an assistant turn is a conversation being continued. A first, tool-less
+        // request - a plan, a review, a criteria check - is asked once and never re-sent, so a
+        // breakpoint at its end writes the whole prompt to the cache at the write price (1.25x the
+        // input price) for nothing ever to read it. Measured 2026-10-19 with Sonnet as planner and
+        // reviewer: 49,091 of 53,749 input tokens written in one run, at most 922 read by any call,
+        // and none at all in the next run. The system prompt keeps its own breakpoint: that is the
+        // part such requests DO share, and one review reads it from the one before.
+        if (request.Tools is { Count: > 0 } || request.Messages.Any(m => m.Role == ChatRole.Assistant))
+            MarkForCaching(wire.Count > 0 ? LastBlockOf(wire[^1]) : null);
 
             var payload = new Dictionary<string, object?>
             {

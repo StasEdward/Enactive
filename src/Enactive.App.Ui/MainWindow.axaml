@@ -914,11 +914,17 @@
                             <ItemsControl ItemsSource="{Binding Performance.Rows}" IsVisible="{Binding !Performance.IsExpanded}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="proj:ModelPerformanceRow">
-                                        <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,0" ToolTip.Tip="{Binding Provider}">
-                                            <TextBlock Text="{Binding Model}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Grid.Column="1" Text="{Binding Speed}" FontSize="11.5" FontWeight="SemiBold"
-                                                       Margin="8,0,0,0" VerticalAlignment="Center" />
-                                        </Grid>
+                                        <!-- The cache shares under the speed, folded too: one click away was where the
+                                             share went unseen while Sonnet wrote nearly all its input to the cache. -->
+                                        <StackPanel Margin="0,2,0,0" ToolTip.Tip="{Binding Provider}">
+                                            <Grid ColumnDefinitions="*,Auto">
+                                                <TextBlock Text="{Binding Model}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Column="1" Text="{Binding Speed}" FontSize="11.5" FontWeight="SemiBold"
+                                                           Margin="8,0,0,0" VerticalAlignment="Center" />
+                                            </Grid>
+                                            <TextBlock Classes="hint" Text="{Binding CacheShort}" FontSize="11"
+                                                       IsVisible="{Binding CacheShort, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        </StackPanel>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>

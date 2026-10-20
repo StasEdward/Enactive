@@ -10,6 +10,7 @@ This wiki covers the desktop application, its shared execution engine, the conso
 
 | Page | What you will learn |
 | --- | --- |
+| [What is Enactive?](What-Is-Enactive.md) | A concise product definition, capabilities, provider support, controls, evidence, platform, and remote execution model |
 | [Application overview](Overview.md) | Purpose, core concepts, interface, and supported workflows |
 | [Architecture and execution](Architecture.md) | Components, planning, tool execution, review, evidence, and outcomes |
 | [Getting started](Getting-Started.md) | Prerequisites, build commands, initial configuration, and a first run |

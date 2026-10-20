@@ -2,6 +2,7 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://enactive.dev/</loc></url>
   <url><loc>https://enactive.dev/wiki/index.html</loc></url>
+  <url><loc>https://enactive.dev/wiki/what-is-enactive.html</loc></url>
   <url><loc>https://enactive.dev/wiki/overview.html</loc></url>
   <url><loc>https://enactive.dev/wiki/getting-started.html</loc></url>
   <url><loc>https://enactive.dev/wiki/running-tasks.html</loc></url>

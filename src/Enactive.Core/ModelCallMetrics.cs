@@ -13,4 +13,13 @@ public sealed record TimingDelta(ModelTimings Timings) : ChatStreamEvent;
 /// </param>
 public sealed record ModelCallMetrics(string ProviderId, string Model, int? PromptTokens,
     int? CompletionTokens, int? CachedPromptTokens, double RequestSeconds,
-    double? FirstDeltaSeconds, ModelTimings? Timings, Guid? RunId = null);
+    double? FirstDeltaSeconds, ModelTimings? Timings, Guid? RunId = null)
+{
+    /// <summary>
+    /// Prompt tokens this call wrote to the provider's cache (Anthropic's cache_creation_input_tokens), already inside
+    /// <see cref="PromptTokens"/>; null where the provider does not say. Beside the read share because a read share alone
+    /// hid the bill: 2026-10-19 the panel said "Cache 0.0%" for Sonnet while nearly every input token was being written,
+    /// at 1.25x the input price, and never read. An init property so every call site already written still compiles.
+    /// </summary>
+    public int? CacheCreationPromptTokens { get; init; }
+}
