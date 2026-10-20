@@ -453,12 +453,19 @@ internal sealed partial class SettingsViewModel : ObservableObject
                 return "auto - no model is bound to Review";
             static string N(int n) => n.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
             var provider = _working.Providers.FirstOrDefault(p => p.Id == reviewer.ProviderId);
-            var window = provider?.ContextWindowTokens;
+            // The typed window, or the one the reviewer's server stated for this model, once a run has asked it
+            // (ServerWindow) - read, never asked: a settings screen does not wait on a server. Without it the hint said
+            // "declares no context window" and 6,000 for a reviewer whose reviews were getting the server's window.
+            var stated = provider is { ContextWindowTokens: null }
+                ? ServerWindow.Known(provider.Id, provider.Kind, provider.BaseUrl, reviewer.Model)
+                : null;
+            var window = provider?.ContextWindowTokens ?? stated;
             // The same inputs the review's own budget reads from the provider (ReviewEvidence.For): the window, and the
             // working size and handover share that hold a review below it.
             var upTo = ReviewEvidence.For(null, window, 0, 0, provider?.WorkingContextTokens, provider?.HandoverAtPercent);
             return window is { } tokens
                 ? $"auto - up to {N(upTo.Chars)} characters, from {reviewer.ProviderId}/{reviewer.Model}'s {N(tokens)}-token window"
+                  + (stated is not null ? ", as its server states it" : "")
                   + (upTo.WorkingTokens is { } worked ? $", worked at {N(worked)} tokens" : "")
                 : $"auto - {N(upTo.Chars)} characters: {reviewer.ProviderId} declares no context window for {reviewer.Model}";
         }

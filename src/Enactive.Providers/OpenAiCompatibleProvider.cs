@@ -42,10 +42,14 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
     /// a run that spent 12.4M.</para>
     ///
     /// <para>Null still means null. A number that is wrong in the generous direction costs a
-    /// failed request, which is why nothing is inferred from a model's name - the person says it
-    /// in the provider editor or nobody does.</para>
+    /// failed request, which is why nothing is inferred from a model's name. A person's number wins;
+    /// without one, a llama.cpp server is asked the context one request gets - its per-slot n_ctx
+    /// from /props (ModelFetch.LlamaCppWindowAsync), once per model for the process
+    /// (ServerWindow). Every other OpenAI-compatible server has no such endpoint and stays null.</para>
     /// </summary>
-    public int? ContextWindow(ChatRequest request) => _descriptor.ContextWindowTokens;
+    public int? ContextWindow(ChatRequest request)
+        => _descriptor.ContextWindowTokens
+           ?? ServerWindow.For(_http, _descriptor, request.Model, _log, "the server's /props (one slot's context)", ModelFetch.LlamaCppWindowAsync);
 
     public int? AnswerReserve(ChatRequest request) => _descriptor.AnswerReserveTokens;
 

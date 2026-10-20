@@ -34,6 +34,14 @@ public sealed class OllamaNativeProvider : IChatProvider
     /// num_ctx IS the window: Ollama gives prompt and generation one shared budget, and a prompt
     /// that fills it leaves the model no room to answer. Null when neither request nor descriptor sets it — the
     /// model then runs with whatever it was loaded with, which this side cannot see.
+    ///
+    /// <para>The server is not asked, unlike the other two adapters (ServerWindow). What Ollama states
+    /// about a model - /api/show's context_length - is the most the model was trained for, not what a
+    /// request runs with: Ollama runs it at the num_ctx sent, or at its own default (a few thousand
+    /// tokens) when none is. Taken as the window, a 131,072 from /api/show would let a prompt grow
+    /// far past the 4,096 the model was really given, and Ollama cuts the front off a prompt that does
+    /// not fit, silently. So the window here is the num_ctx the engine sends (Engine.NumCtx), or the
+    /// person's number, which this adapter then sends as num_ctx - both what a request really gets.</para>
     /// </summary>
     public int? ContextWindow(ChatRequest request) => request.NumCtx ?? _descriptor.ContextWindowTokens;
 

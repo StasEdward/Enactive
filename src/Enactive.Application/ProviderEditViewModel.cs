@@ -130,7 +130,7 @@ internal sealed class ProviderEditViewModel : ObservableObject
     public string ReasoningAllowanceText { get => _reasoningAllowanceText; set => Set(ref _reasoningAllowanceText, value); }
     public bool OpenAiReasoningProfile { get => _openAiReasoningProfile; set => Set(ref _openAiReasoningProfile, value); }
 
-    /// <summary>The CONTEXT window, which nothing can discover — see ProviderConfig.ContextWindowTokens.</summary>
+    /// <summary>The CONTEXT window; blank asks the server where it can say (ServerWindow) — see ProviderConfig.ContextWindowTokens.</summary>
     public string ContextWindowText { get => _contextWindowText; set => Set(ref _contextWindowText, value); }
 
     /// <summary>Tokens kept free for the answer — see ProviderConfig.AnswerReserveTokens.</summary>

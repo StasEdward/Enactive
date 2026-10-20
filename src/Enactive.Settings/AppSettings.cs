@@ -63,8 +63,11 @@ public sealed class ProviderConfig
     /// have fitted. Worse, the number it was given came from <c>NumCtx</c> — an OLLAMA setting —
     /// whichever provider was actually doing the work.</para>
     ///
-    /// <para>Blank keeps the guess. A number that is wrong in the generous direction costs a
-    /// failed request, which is why nothing infers one from a model's name.</para>
+    /// <para>Blank asks the provider's server what it states for each model, where the server can
+    /// say - Anthropic's model catalog, a llama.cpp server's /props (Enactive.Providers.ServerWindow) -
+    /// and keeps the guess where it cannot. A number here wins over the server's. A number that is
+    /// wrong in the generous direction costs a failed request, which is why nothing infers one from
+    /// a model's name.</para>
     /// </summary>
     public int? ContextWindowTokens { get; set; }
 
