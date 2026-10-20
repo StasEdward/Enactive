@@ -348,7 +348,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
         _reviewRetriesText = _working.Engine.ReviewRetries.ToString();
         _revertRejectedSteps = _working.Engine.RevertRejectedSteps;
         _maxParallelStepsText = _working.Engine.MaxParallelSteps.ToString();
-        _evidenceBudgetText = _working.Engine.EvidenceBudget.ToString();
+        // Blank is automatic (EngineOptions.EvidenceBudget); EvidenceBudgetAuto says what that comes to.
+        _evidenceBudgetText = _working.Engine.EvidenceBudget?.ToString() ?? string.Empty;
         _logRetentionDaysText = _working.LogRetentionDays.ToString();
         _logPromptBodies = _working.LogPromptBodies;
         _shellCommandsIndex = (int)_working.ShellCommands;
@@ -438,6 +439,37 @@ internal sealed partial class SettingsViewModel : ObservableObject
     public bool RevertRejectedSteps { get => _revertRejectedSteps; set => Set(ref _revertRejectedSteps, value); }
     public string MaxParallelStepsText { get => _maxParallelStepsText; set => Set(ref _maxParallelStepsText, value); }
     public string EvidenceBudgetText { get => _evidenceBudgetText; set => Set(ref _evidenceBudgetText, value); }
+
+    /// <summary>
+    /// What a blank evidence budget will be: automatic, from the window of the model the Review phase is bound to, as the
+    /// providers on this screen declare it now - the most it can be (ReviewEvidence.UpTo; a step whose own files fill
+    /// the window gets less). Shown where the box is blank, so "automatic" is never a number nobody can see.
+    /// </summary>
+    public string EvidenceBudgetAuto
+    {
+        get
+        {
+            if (AppSettings.ParseRef(FromSelection(Review)) is not { } reviewer)
+                return "auto - no model is bound to Review";
+            static string N(int n) => n.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
+            var provider = _working.Providers.FirstOrDefault(p => p.Id == reviewer.ProviderId);
+            // The typed window, or the one the reviewer's server stated for this model, once a run has asked it
+            // (ServerWindow) - read, never asked: a settings screen does not wait on a server. Without it the hint said
+            // "declares no context window" and 6,000 for a reviewer whose reviews were getting the server's window.
+            var stated = provider is { ContextWindowTokens: null }
+                ? ServerWindow.Known(provider.Id, provider.Kind, provider.BaseUrl, reviewer.Model)
+                : null;
+            var window = provider?.ContextWindowTokens ?? stated;
+            // The same inputs the review's own budget reads from the provider (ReviewEvidence.For): the window, and the
+            // working size and handover share that hold a review below it.
+            var upTo = ReviewEvidence.For(null, window, 0, 0, provider?.WorkingContextTokens, provider?.HandoverAtPercent);
+            return window is { } tokens
+                ? $"auto - up to {N(upTo.Chars)} characters, from {reviewer.ProviderId}/{reviewer.Model}'s {N(tokens)}-token window"
+                  + (stated is not null ? ", as its server states it" : "")
+                  + (upTo.WorkingTokens is { } worked ? $", worked at {N(worked)} tokens" : "")
+                : $"auto - {N(upTo.Chars)} characters: {reviewer.ProviderId} declares no context window for {reviewer.Model}";
+        }
+    }
     public string LogRetentionDaysText { get => _logRetentionDaysText; set => Set(ref _logRetentionDaysText, value); }
     public bool LogPromptBodies { get => _logPromptBodies; set => Set(ref _logPromptBodies, value); }
     public int ShellCommandsIndex { get => _shellCommandsIndex; set => Set(ref _shellCommandsIndex, value); }
@@ -515,7 +547,15 @@ internal sealed partial class SettingsViewModel : ObservableObject
     public ObservableCollection<string> ModelCatalog { get; } = new();
 
     public string Plan { get => _plan; set => Set(ref _plan, value); }
-    public string Review { get => _review; set => Set(ref _review, value); }
+    public string Review
+    {
+        get => _review;
+        set
+        {
+            if (Set(ref _review, value))
+                OnPropertyChanged(nameof(EvidenceBudgetAuto));
+        }
+    }
     public string ExecuteLight { get => _executeLight; set => Set(ref _executeLight, value); }
     public string ExecuteHeavy { get => _executeHeavy; set => Set(ref _executeHeavy, value); }
 
@@ -693,6 +733,9 @@ internal sealed partial class SettingsViewModel : ObservableObject
         for (var i = 0; i < wanted.Count; i++)
             if (!ModelCatalog.Contains(wanted[i]))
                 ModelCatalog.Insert(Math.Min(i, ModelCatalog.Count), wanted[i]);
+
+        // Run after every change to the providers: the reviewer's declared window is what the automatic budget follows.
+        OnPropertyChanged(nameof(EvidenceBudgetAuto));
     }
 
     private static string ToSelection(string bound) => string.IsNullOrWhiteSpace(bound) ? NoneLabel : bound;

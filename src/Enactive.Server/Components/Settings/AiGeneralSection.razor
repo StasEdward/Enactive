@@ -46,8 +46,9 @@
         <input id="ai-parallel" inputmode="numeric" placeholder="1" @bind="Vm.MaxParallelStepsText" />
     </div>
     <div class="short-field">
-        <span class="settings-label-row"><label class="settings-small" for="ai-evidence">Evidence for the reviewer</label><HintMark Text="@($"{SettingsAdvice.EvidenceBudget} 6000 = the default.")" Of="Evidence shown to the reviewer" /></span>
-        <input id="ai-evidence" inputmode="numeric" placeholder="6000" @bind="Vm.EvidenceBudgetText" />
+        <span class="settings-label-row"><label class="settings-small" for="ai-evidence">Evidence for the reviewer</label><HintMark Text="@($"{SettingsAdvice.EvidenceBudget} Blank now: {Vm.EvidenceBudgetAuto}.")" Of="Evidence shown to the reviewer" /></span>
+        @* "auto" in the box, and what auto comes to in its title and behind the "?": a short box holds no sentence. *@
+        <input id="ai-evidence" inputmode="numeric" placeholder="auto" title="@Vm.EvidenceBudgetAuto" @bind="Vm.EvidenceBudgetText" />
     </div>
     <div class="short-field">
         <span class="settings-label-row"><label class="settings-small" for="ai-repair-threshold">Failed repairs before advice</label><HintMark Text="Distinct failed repairs before the repair consultant is asked: 0 = off, minimum 2. Choose from observed runs; there is no calibrated default." Of="Failed repairs before advice" /></span>

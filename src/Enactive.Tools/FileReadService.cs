@@ -2,7 +2,9 @@ namespace Enactive.Tools;
 
 using System.Text;
 using System.Text.Json;
+using Enactive.Core;
 using Enactive.Core.Context;
+using Enactive.Core.Execution;
 using Enactive.Core.Tools;
 using static Enactive.Tools.ReadFileTool;
 using static Enactive.Tools.ReadFilesTool;
@@ -107,6 +109,7 @@ internal static class FileReadService
             var fullyShown = lastLine;      // the last line shown whole
             var midLine = false;            // the cut fell inside a line, not between two
             int? tooLong = null;            // a line read_file cannot show whole, however it is asked
+            var shown = body.Length;        // how much of the output is the file's own text
             if (clipped)
             {
                 var kept = body[..MaxChars];
@@ -122,6 +125,7 @@ internal static class FileReadService
 
                 var newlines = kept.Count(ch => ch == '\n');
                 cutLine = offset + newlines;
+                shown = kept.Length;
 
                 if (between)
                 {
@@ -190,7 +194,10 @@ internal static class FileReadService
                     ["truncated"] = clipped || lastLine < total,
                     // Say which version this is. "Proposed" and "on disk" are different facts, and a
                     // reviewer judging from evidence has to be able to tell them apart.
-                    ["staged"] = source.Staged
+                    ["staged"] = source.Staged,
+                    // The file read and where its lines are in this output, for the reviewer's evidence: it names the
+                    // file whole, and says which of these lines it shows when it shows this output cut (FileRead).
+                    [FileRead.MetadataKey] = new[] { new FileRead(path, total, true, [new(0, shown, offset, cutLine, true, !midLine)]) }
                 });
         }
         // A read refused for being the workspace's own state has ANSWERED: the model asked
@@ -293,20 +300,26 @@ internal static class FileReadService
         // excerpt is the loss it exists to stop, and this is now a common way to read.
         var coverage = new List<FileCoverage>();
         var stagedPaths = new List<string>();
+        // Each file read and where its text is in the answer, for the reviewer's evidence (FileRead).
+        var reads = new List<FileRead>();
 
         try
         {
             foreach (var (relative, full) in resolved)
             {
                 using var source = await WorkspaceReader.OpenAsync(ctx, relative, full, ct);
+                // Asked for and not read, and why: the line in the answer that says so sits between the files, where
+                // the reviewer's evidence, cut to fit, takes it out (FileRead.NotRead).
                 if (source is null)
                 {
                     missing.Add(relative);
+                    reads.Add(new FileRead(relative, 0, false, [], "not there"));
                     continue;
                 }
 
                 if (budget <= 0)
                 {
+                    reads.Add(new FileRead(relative, 0, false, [], $"past the {Invariant.N0(MaxCharsTotal)} characters one call returns"));
                     sb.AppendLine($"----- {relative} -----")
                       .AppendLine($"(not read: the {MaxCharsTotal} character budget for this call "
                                 + "was used by the files above. Ask for this one on its own.)")
@@ -340,8 +353,10 @@ internal static class FileReadService
                 coverage.Add(new FileCoverage(relative, lines,
                     preview.Complete && preview.Characters <= room ? lines : 0, preview.Complete));
 
-                sb.AppendLine($"----- {relative} ({(preview.Complete ? "" : "at least ")}{preview.Characters} characters) -----")
-                  .AppendLine(slice);
+                sb.AppendLine($"----- {relative} ({(preview.Complete ? "" : "at least ")}{preview.Characters} characters) -----");
+                reads.Add(new FileRead(relative, lines, preview.Complete,
+                    preview.Spans.Select(s => s with { Start = s.Start + sb.Length }).ToArray()));
+                sb.AppendLine(slice);
 
                 if (!preview.Complete)
                     sb.AppendLine($"... (input scan stopped at the {FilePreview.MaxInputChars} character limit "
@@ -375,11 +390,19 @@ internal static class FileReadService
         if (missing.Count > 0)
             sb.AppendLine("----- not there: " + string.Join(", ", missing) + " -----");
 
-        return ToolResults.Ok(sb.ToString().TrimEnd(),
+        var output = sb.ToString().TrimEnd();
+        return ToolResults.Ok(output,
             metadata: new Dictionary<string, object?>
             {
                 ["files"] = coverage,
-                ["stagedPaths"] = stagedPaths
+                ["stagedPaths"] = stagedPaths,
+                // The last file's text loses what TrimEnd took from it. That was blank - the rest of a line, and lines
+                // with nothing on them - so the lines the text ran to are still all of it there is to see.
+                [FileRead.MetadataKey] = reads.Select(r => r with
+                {
+                    Spans = r.Spans.Select(s => s.Start + s.Length <= output.Length ? s
+                        : s with { Length = Math.Max(0, output.Length - s.Start) }).ToArray()
+                }).ToArray()
             });
     }
 

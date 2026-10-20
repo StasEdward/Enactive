@@ -127,13 +127,24 @@ internal static class StepVerdictReview
         put in order by a call for the selection to be checked.
         """;
 
+    /// <summary>The tokens this review asks to answer in, its reasoning aside - what its evidence budget keeps free for it.</summary>
+    internal const int AnswerTokens = 2048;
+
+    /// <summary>
+    /// How long this review's prompt is without its evidence - the system message and the user message, the
+    /// <see cref="StepVerdictInput.Evidence"/> text left out: what the reviewer's window holds before any evidence
+    /// (ReviewEvidence).
+    /// </summary>
+    internal static int PromptChars(StepVerdictInput input)
+        => (Instruction + DerivedFigures).Length + Prompt(input).Length - input.Evidence.Text.Length;
+
     /// <param name="budget">Why the reviewer may not be asked (again), given what this review has spent - or null when it may.</param>
     public static async Task<ReviewResult> RunAsync(StepVerdictInput input, IChatProvider provider, string model,
         Func<int, int, string?>? budget, CancellationToken ct)
     {
         var round = await StructuredAnswer.AskAsync(provider,
             [ChatMessage.System(Instruction + DerivedFigures), ChatMessage.User(Prompt(input))],
-            messages => new ChatRequest(model, messages, Temperature: 0, Purpose: GenerationPurpose.Review, OutputTokenLimit: 2048),
+            messages => new ChatRequest(model, messages, Temperature: 0, Purpose: GenerationPurpose.Review, OutputTokenLimit: AnswerTokens),
             (answer, _) => Read(answer, input),
             errors => StructuredAnswer.Listed(errors, "Return the corrected JSON object."),
             budget, requireComplete: true, ct);

@@ -63,7 +63,7 @@
                 @* The model's numbers side by side in short boxes; what their long placeholders said is behind each "?". *@
                 <div class="short-fields">
                     <div class="short-field">
-                        <span class="settings-label-row"><label class="settings-small" for="provider-window">Context window (tokens)</label><HintMark Text="Blank = assume 16000 — nothing can ask the provider." Of="Context window" /></span>
+                        <span class="settings-label-row"><label class="settings-small" for="provider-window">Context window (tokens)</label><HintMark Text="Blank = what the server says for each model (Anthropic's model catalog, a llama.cpp server's /props), else assume 16000." Of="Context window" /></span>
                         <input id="provider-window" inputmode="numeric" placeholder="16000" @bind="Editor.ContextWindowText" />
                     </div>
                     <div class="short-field">

@@ -150,7 +150,14 @@ public sealed class CapsAnnounceThemselvesTests
         // write's diff has in a shared evidence budget - each cut says how many lines it leaves out.
         ["WrittenChange.MaxChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.A_long_change_is_kept_to_its_bound_and_says_how_much_is_not_kept),
         ["WrittenChange.MaxLineChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.A_long_line_of_a_diff_is_clipped_and_says_how_long_it_is),
-        ["ExecutionJournal.MinChangeChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.An_edit_cut_to_fit_keeps_its_first_changed_lines_and_counts_the_lines_it_leaves_out)
+        ["ExecutionJournal.MinChangeChars"] = nameof(TheReviewerSeesWhatAnEditChangedTests.An_edit_cut_to_fit_keeps_its_first_changed_lines_and_counts_the_lines_it_leaves_out),
+        // The files a read read, as the reviewer is shown them: named past a generous bound only by count.
+        ["FileRead.MaxPathsChars"] = nameof(TheReviewerSeesWhatWasReadTests.Past_a_generous_bound_the_files_are_counted_not_named),
+        // The least of a cut read's own text, once what is said beside its files is paid for.
+        ["ExecutionJournal.MinReadChars"] = nameof(TheReviewerSeesWhatWasReadTests.Many_reads_name_their_files_say_what_they_show_and_keep_to_the_budget),
+        // What the step review asks to answer in - named so its evidence budget keeps room for it. A review cut off at it is
+        // refused, never read as a verdict.
+        ["StepVerdictReview.AnswerTokens"] = nameof(AutomaticEvidenceBudgetTests.A_review_cut_off_at_its_answer_limit_is_refused_not_read)
     };
 
     /// <summary>

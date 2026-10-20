@@ -46,10 +46,15 @@ public sealed partial class AnthropicProvider : IChatProvider
     /// a run that spent 12.4M.</para>
     ///
     /// <para>Null still means null. A number that is wrong in the generous direction costs a
-    /// failed request, which is why nothing is inferred from a model's name - the person says it
-    /// in the provider editor or nobody does.</para>
+    /// failed request, which is why nothing is inferred from a model's name. A person's number wins;
+    /// without one, the server is asked what it accepts for THIS model - the Models API's
+    /// max_input_tokens (ModelFetch.AnthropicWindowAsync), once per model for the process
+    /// (ServerWindow). Before that, a provider nobody filled in stated no window, and a
+    /// 1,000,000-token reviewer was shown the fixed 6,000 characters of evidence.</para>
     /// </summary>
-    public int? ContextWindow(ChatRequest request) => _descriptor.ContextWindowTokens;
+    public int? ContextWindow(ChatRequest request)
+        => _descriptor.ContextWindowTokens
+           ?? ServerWindow.For(_http, _descriptor, request.Model, _log, "the server's model catalog", ModelFetch.AnthropicWindowAsync);
 
     public int? AnswerReserve(ChatRequest request) => _descriptor.AnswerReserveTokens;
 

@@ -81,7 +81,7 @@
 
                         <TextBlock Classes="label" Text="Context window (tokens)" />
                         <TextBox Text="{Binding ContextWindowText}"
-                                 PlaceholderText="blank = assume 16000 — nothing can ask the provider" />
+                                 PlaceholderText="blank = what the server says (Anthropic, llama.cpp), else assume 16000" />
 
                         <TextBlock Classes="label" Text="Hand a step over at" />
                         <TextBox Text="{Binding HandoverText}"
