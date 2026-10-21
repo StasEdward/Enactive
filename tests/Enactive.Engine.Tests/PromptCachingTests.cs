@@ -141,6 +141,44 @@ public sealed class PromptCachingTests
     }
 
     /// <summary>
+    /// A first request with no tools - a plan, a review - is asked once and never re-sent: a breakpoint at its end writes
+    /// the whole prompt at the write price for nothing to read it. 2026-10-19: 49,091 of 53,749 input tokens written in a
+    /// run where Sonnet only planned and reviewed, at most 922 read by any call. Its system prompt stays cached - that is
+    /// what one review shares with the next.
+    /// </summary>
+    [Fact]
+    public async Task A_one_shot_request_without_tools_puts_no_breakpoint_at_its_end()
+    {
+        var sent = await SentFor(Request(withTools: false));
+
+        var messages = sent.GetProperty("messages");
+        foreach (var message in messages.EnumerateArray())
+            foreach (var block in message.GetProperty("content").EnumerateArray())
+                Assert.False(IsCached(block));
+        Assert.True(IsCached(sent.GetProperty("system")[0]));
+    }
+
+    /// <summary>A conversation already holding an assistant turn is being continued, tools or not: its end stays the
+    /// breakpoint the next turn reads.</summary>
+    [Fact]
+    public async Task A_continued_conversation_without_tools_keeps_the_breakpoint_at_its_end()
+    {
+        var request = new ChatRequest("claude-sonnet-4-6", new[]
+        {
+            new ChatMessage(ChatRole.System, "You are a developer agent."),
+            new ChatMessage(ChatRole.User, "Read the file."),
+            new ChatMessage(ChatRole.Assistant, "Which file?"),
+            new ChatMessage(ChatRole.User, "README.md"),
+        });
+
+        var sent = await SentFor(request);
+
+        var messages = sent.GetProperty("messages");
+        var content = messages[messages.GetArrayLength() - 1].GetProperty("content");
+        Assert.True(IsCached(content[content.GetArrayLength() - 1]));
+    }
+
+    /// <summary>
     /// Four are allowed and three are used. Going over is a 400 from the API, so the count is worth
     /// pinning rather than trusting to the next person who adds one.
     /// </summary>

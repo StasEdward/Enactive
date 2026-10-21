@@ -2,9 +2,26 @@
 
 Date: 2026-10-16
 
-Status: proposal, nothing implemented. Written against `master` at `7dc8866`; the line numbers below are from
-that commit and will drift. Revised after two reviews (`aidlc-adoption-review.md`, `aidlc-adoption-resolution.md`);
-staged-run checks (Phase 3.2) and an unresolved coverage contract (Phase 1.2) are decided.
+Status (2026-10-19): PR 0, PR 0b and Phases 1, 2, 3 and 4.2 are built and on `master` (PR #58, merge `283dca7`);
+the bench measurements for Phases 1-3 are in `aidlc-adoption-bench.md`. Still open: Phase 1.5 (defaults - a second
+measurement is due), the bench follow-ups (section "Bench follow-ups" below), the deferred 4.0/4.1/4.3, and Phase 5,
+which is not started.
+
+| Part | Status | Commits |
+| --- | --- | --- |
+| PR 0 - a still-failing criterion is not `Succeeded` | Done | `47b7258` |
+| PR 0b - report a failed step before its join is released | Done | `c2d6f6d` |
+| Phase 1.1-1.4 - consumes, derived coverage, gate, filtered hand-off | Done | `ece18f5`..`7709dcb`; after the bench `01b40ea`, `9e23313` |
+| Phase 1.5 - defaults | Open: still opt-in; no toggles in the settings window yet | - |
+| Phase 2 - obligation loop | Done; `PerKind = 1` kept, as the bench advised | `9817187`, `4d47b74`, `3f72f23` |
+| Phase 3.1-3.3, 3.5 - check manifests, execution, records, UI | Done | `1f1fa0e`..`bbc728d` |
+| Phase 3.4 - disappeared tests, protected files | Done | `03526bc`, `86b90ce`, `0b47952`, `5bc3f12` |
+| Phase 4.0, 4.1, 4.3 | Deferred by design (state ownership not settled) | - |
+| Phase 4.2 - pause after the current step | Done | `ea7ecf3`..`f58d33c` |
+| Phase 5 - lessons confirmed by a person | Not started | - |
+
+Written against `master` at `7dc8866`; the line numbers below are from that commit and will drift.
+Revised after two reviews (`aidlc-adoption-review.md`, `aidlc-adoption-resolution.md`); staged-run checks (Phase 3.2) and an unresolved coverage contract (Phase 1.2) are decided.
 
 Source studied: [awslabs/aidlc-workflows](https://github.com/awslabs/aidlc-workflows) (MIT-0), in particular
 the [engine and skill system](https://github.com/awslabs/aidlc-workflows/blob/main/docs/reference/17-skill-system.md),
@@ -77,6 +94,8 @@ lists its PR-sized parts. Nothing is merged until the phase's bench measurement 
 
 ### PR 0 - a still-failing step criterion is not `Succeeded`
 
+**Status: done** (`47b7258`, 2026-10-16).
+
 `StepEnding.EndAsync` nudges once when a step's own criterion fails (`StepEnding.cs:195`). If the criterion still
 fails on the next turn it is not checked again, and the step ends `Succeeded` with no event;
 `StepEndingTests.cs:129-141` pins exactly that. The output nudge (`:215`) emits no event either.
@@ -91,6 +110,8 @@ fails on the next turn it is not checked again, and the step ends `Succeeded` wi
 
 ### PR 0b - the failure path releases a join before its step is reported
 
+**Status: done** (`c2d6f6d`, 2026-10-16).
+
 On Failed/ReviewRejected/Incomplete the commit tail calls `scheduler.MarkFailed` **before** publishing
 `StepCompleted` (`Orchestrator.cs:1737-1762`), and a join treats a Failed or Skipped item as ended
 (`DagScheduler.cs:312-313`). A join can start before the failing item's completion is published - the race the
@@ -100,6 +121,10 @@ path does, with a test that asserts the order. Phase 4.0 must not pin the curren
 ---
 
 ## Phase 1 - consumes, derived coverage, coverage at the step gate
+
+**Status: 1.1-1.4 done** (`ece18f5`..`7709dcb`, 2026-10-16). Measured: the hole is closed - no green run with
+uncovered items - at about +40% tokens in. The two false failures the bench found came from results keyed by
+something other than a consumed item, fixed in `01b40ea` and `9e23313`. **1.5 open** (below).
 
 ### 1.1 `Consumes` on the plan step
 
@@ -234,6 +259,11 @@ The default obligation and the required declaration are distinct: omission is an
 
 ### 1.5 Defaults
 
+**Status: open.** The flags are still opt-in (`EngineOptions` defaults them off), and the settings window has no
+toggles for them. The bench advised against turning them on until the results-key defect was fixed; it is fixed
+(`01b40ea`), but not measured since. Due: Phase 1 scenarios (`wiki-drift`, `test-coverage`) again, after `01b40ea`,
+with a strong planner and reviewer as well as the all-local setup.
+
 - `StepOutputs`, `TypedCriteria`, `DynamicSteps` stay opt-in until the bench shows no regression with them on; then
   one PR turns on `StepOutputs` + `TypedCriteria` together (derived coverage needs both). `DynamicSteps` is judged
   separately - fan-out multiplies model calls.
@@ -277,6 +307,9 @@ it before 1.5 turns the flags on.
 ---
 
 ## Phase 2 - an obligation loop that releases on no progress
+
+**Status: done** (`9817187`, `4d47b74`, `3f72f23`, 2026-10-17). Measured at limits 1, 2 and 3: no gain above 1, so
+`PerKind = 1` stays. Open question 2 is answered for the local setup only.
 
 ### Problem
 
@@ -352,6 +385,11 @@ Measured 2026-10-18 (`plans/aidlc-adoption-bench.md`): 3/3, 3/3, 2/3 completed; 
 ---
 
 ## Phase 3 - declarative workspace checks
+
+**Status: done**, 3.1-3.5 (2026-10-16..18; 3.4 in `03526bc`, `86b90ce`, `0b47952`, `5bc3f12`). Measured: raising
+`build`/`test` to blocking at step level works as built and stays opt-in. A blocking check that already failed
+before the step is now judged against the step's start (`4347e13`, `dd7e1ec`, `6a946d4`). Open question 3 is
+answered by what was built: a global layer exists beside the workspace one.
 
 ### Adaptation
 
@@ -534,6 +572,9 @@ opt-in, and a pre-existing failure needs saying to the worker.
 
 ## Phase 4 - a clean pause; step commit and directives deferred
 
+**Status: 4.2 done** (`ea7ecf3`..`f58d33c`, 2026-10-17). **4.0, 4.1 and 4.3 deferred**, as planned: open question
+4 (who owns state, what happens when persistence fails) is not answered.
+
 Ship pause/resume independently of the state refactor. Sections 4.0, 4.1 and 4.3 describe deferred work;
 they are not prerequisites for 4.2 and have no implementation commitment until the ownership design is settled.
 
@@ -615,6 +656,8 @@ and a second "parked" would be ambiguous in code, events and UI.
 
 ## Phase 5 - lessons confirmed by a person, applied from the next run
 
+**Status: not started.** Open question 5 (is Global enough, or is a per-team layer needed) is still open.
+
 ### Adaptation
 
 AI-DLC has the conductor (a strong model) keep a diary during every stage. A local worker writing a diary costs
@@ -694,6 +737,63 @@ Two bench runs of the same scenario with one confirmed rule that addresses the f
 should not repeat it. This is a measurement, not a guarantee - report it as such.
 
 ---
+
+## Bench follow-ups
+
+What `aidlc-adoption-bench.md` found besides the phases' own measurements, and where each stands (2026-10-19).
+
+| # | Found | Status |
+| --- | --- | --- |
+| 1 | Results keyed by something other than a consumed item were answered "never read", and right runs failed | Fixed: `01b40ea` (a key naming one item is resolved to it; a stranger key is said to be one, with the expected keys) |
+| 2 | A blocking step check failed the step for an error that predates it, and drove the worker at forbidden files | Fixed: `4347e13`, `dd7e1ec`, `6a946d4` (judged against the step's start; only a step with an old failure is told to leave it) |
+| 3 | A forbidden file rewritten through a shell command stayed changed after the step was rejected | **Partly fixed** - below |
+| 4 | `disk-report` truth wants `C:` where `C` is right | Not checked - a scenario fix, not an engine one |
+| 5 | The planner made a file the request forbids changing a write-evidence item (`test-coverage`, `20261017-231237`) | Open, not looked at |
+
+### 3. A forbidden file rewritten through a shell command
+
+**What the bench saw** (`build-error`, `20261018-012348`). Refused twice by the change limit on `edit_file`, the
+worker rewrote `Report.cs` with `powershell ... -replace ... | Set-Content`. The step review rejected the step for
+it; the next attempt got stuck, the step ended `Incomplete`, and the run ended with `Report.cs` still changed.
+
+**Fixed since** (`8d14857`, `c813d34`, `6a946d4`). The revert ran only for `ReviewRejected`. Now a step whose last
+verdict sent its work back and that then ends `Incomplete` or `Failed` with no verdict since is put back as a
+rejected step is, for a quick action too, and the revert's first line names what stopped it. Tests:
+`AStepSentBackThatEndsUnfinishedIsPutBackTests`.
+
+**Still open - two gaps, read from the code, not measured.**
+
+- **(a) A command's change is named, not put back.** The revert is the store's, and the store records only what the
+  file tools wrote. `LeftByCommandsAsync` (`Orchestrator.Attempt.cs`) finds the files the measurement shows changed
+  since the step began, past what the store put back, and names them as left: "Look at it before building on it".
+  Its reasons: outside git the measurement keeps a size, a time and a hash, not the bytes; in git the step-start
+  tree holds the file after the repository's line-ending conversion; and a change found between step start and step
+  end may be a person's or another program's. So the same run today ends with `Report.cs` changed and named, and
+  the scenario's truth (`broken-file-left-alone`) still fails.
+- **(b) The request's change limit does not see a shell.** `ChangeLimitGuard` asks about a call only through
+  `WriteBoundary.PathsOf`, that is, for tools that declare their paths; a shell, git or an MCP tool of unknown effect
+  is not asked about (`WriteBoundary`'s own remarks say so). The shell is exactly how the worker got around two
+  refusals. While the step runs, nothing holds a command's changes to the limit; only the step's review can.
+
+**Proposal - not decided.**
+
+- In a step under a change limit (`ChangeLimitsFor` is not null), measure the workspace right before and right
+  after each call of a tool that changes the workspace without naming its paths. What changed in that window is the
+  call's, not a person's - which answers the "whose change is it" objection for that window. Read-only steps already
+  measure around a call (`CallAdmission`, `madeByThisStep`), so the mechanism exists.
+- Each file the run found that such a call changed is put to the same `ChangeLimitGuard` question as an `edit_file`
+  would be. Refused: the call's result says the change goes against the request, as a refusal does.
+- Put the file back only where the engine can produce the bytes the measurement saw before the call: in git, the
+  step-start blob through the repository's own filters (`git cat-file --filters`), restored only if its hash equals
+  the one measured before the call; otherwise named, as today. Open: a clean tracked file has no hash of its own in
+  the git-mode measurement (it hashes what `git status` lists), so its "before" hash has to be taken another way.
+- Outside git there are no bytes to put back: the file is named, and the step is told, at the call rather than at
+  its end.
+- Cost: a measurement per such call, only in steps under a change limit; the fingerprint's file limit applies.
+
+**Tests (for the proposal):** a shell rewrite of a forbidden file is refused after the fact and, in git, put back
+byte for byte; an allowed shell change is left alone; a person's edit between two calls is left alone; outside
+git the file is named at the call; a restore whose bytes would not match the measured hash is not attempted.
 
 ## What is deliberately not taken
 

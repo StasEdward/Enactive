@@ -135,6 +135,11 @@ public static class ScheduleDrafts
                 yield return "Choose which day of the week it runs.";
                 break;
 
+            case ScheduleRepeat.Interval when !ScheduleTiming.CanRepeatEvery(timing.EveryMinutes):
+                yield return "Choose how often it repeats: every "
+                           + string.Join(", ", ScheduleTiming.Intervals.Select(ScheduleWords.Interval)) + ".";
+                break;
+
             case ScheduleRepeat.Once when timing.OnceAt is null:
                 yield return "Choose the date and time it runs.";
                 break;

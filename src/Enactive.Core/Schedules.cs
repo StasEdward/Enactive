@@ -2,8 +2,11 @@ namespace Enactive.Core.Schedules;
 
 using Enactive.Core.Permissions;
 
-/// <summary>How often a schedule comes round.</summary>
-public enum ScheduleRepeat { Once, Daily, Weekly }
+/// <summary>
+/// How often a schedule comes round. <see cref="Interval"/> is every few minutes or hours - see
+/// <see cref="ScheduleTiming.EveryMinutes"/>.
+/// </summary>
+public enum ScheduleRepeat { Once, Daily, Weekly, Interval }
 
 /// <summary>
 /// What to do about an occurrence the machine slept through.
@@ -61,13 +64,41 @@ public sealed record ScheduledWork(
 /// A Windows or IANA id - .NET accepts either on either platform. Stored rather than assumed,
 /// so a schedule made on a laptop that travels still means what it said.
 /// </param>
+/// <param name="EveryMinutes">
+/// For <see cref="ScheduleRepeat.Interval"/>: how many minutes apart, counted on the wall clock from
+/// <see cref="AtLocal"/> - every two hours from 01:30 is 01:30, 03:30, ... 23:30. See <see cref="CanRepeatEvery"/>
+/// for which numbers can be.
+/// </param>
 public sealed record ScheduleTiming(
     ScheduleRepeat Repeat,
     TimeOnly AtLocal,
     string TimeZoneId,
     DayOfWeek? OnDay = null,
-    DateTimeOffset? OnceAt = null)
+    DateTimeOffset? OnceAt = null,
+    int? EveryMinutes = null)
 {
+    /// <summary>
+    /// The shortest interval. A machine without the app open is woken by a tick expected every five minutes
+    /// (SchedulesViewModel.TickInterval, Docs/wiki/Console.md), so a schedule every minute would run every five
+    /// there while its words said every one.
+    /// </summary>
+    public const int ShortestInterval = 5;
+
+    /// <summary>The intervals a form offers, in minutes - each one <see cref="CanRepeatEvery"/> accepts.</summary>
+    public static IReadOnlyList<int> Intervals { get; } = [5, 10, 15, 20, 30, 60, 120, 180, 240, 360, 480, 720];
+
+    /// <summary>
+    /// Whether a schedule can come round every this many minutes: no shorter than the tick, and a whole number of
+    /// times a day. One that does not divide the day - every seven minutes - lands on different times of the clock
+    /// every day, and the times the schedule names would be true of the first day only.
+    /// </summary>
+    public static bool CanRepeatEvery(int? minutes)
+        => minutes is { } every && every >= ShortestInterval && every < 24 * 60 && 24 * 60 % every == 0;
+
+    /// <summary>Every <paramref name="minutes"/>, counted from <paramref name="from"/> (midnight when not given).</summary>
+    public static ScheduleTiming Every(int minutes, TimeOnly from = default, string? zone = null)
+        => new(ScheduleRepeat.Interval, from, zone ?? TimeZoneInfo.Local.Id, EveryMinutes: minutes);
+
     public static ScheduleTiming Once(DateTimeOffset at)
         => new(ScheduleRepeat.Once, TimeOnly.FromDateTime(at.DateTime), TimeZoneInfo.Local.Id, null, at);
 

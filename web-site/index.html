@@ -4,19 +4,56 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Enactive — A desktop environment for AI agents</title>
-  <meta name="description" content="Enactive is a desktop environment for AI agents. You assign a task; the agent plans, uses tools, produces an artifact and asks for a decision only when it must. Model-agnostic, local-first, .NET 10." />
+  <meta name="description" content="Enactive is a Windows desktop workspace for AI agents. Assign a task, then review its recorded actions and results. Supports local and hosted AI models." />
+  <meta name="robots" content="index,follow,max-image-preview:large" />
+  <meta name="author" content="Enactive" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Enactive" />
+  <meta property="og:locale" content="en_US" />
   <meta property="og:title" content="Enactive — A desktop environment for AI agents" />
   <meta property="og:description" content="You don't talk to the AI. You give it a task. Tasks, plans, workers, artifacts, timeline — not chat bubbles." />
-  <meta property="og:url" content="https://enactive.dev" />
+  <meta property="og:url" content="https://enactive.dev/" />
   <meta property="og:image" content="https://enactive.dev/assets/og.png" />
+  <meta property="og:image:alt" content="Enactive, a desktop workspace for AI agents" />
   <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Enactive — A desktop environment for AI agents" />
+  <meta name="twitter:description" content="Give an AI agent a task. Enactive plans, uses tools, records its work, and produces reviewable outcomes." />
+  <meta name="twitter:image" content="https://enactive.dev/assets/og.png" />
+  <meta name="twitter:image:alt" content="Enactive, a desktop workspace for AI agents" />
   <meta name="theme-color" content="#0A0B0D" />
   <link rel="canonical" href="https://enactive.dev/" />
+  <link rel="sitemap" type="application/xml" href="https://enactive.dev/sitemap.xml" />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": "https://enactive.dev/#website",
+        "url": "https://enactive.dev/",
+        "name": "Enactive",
+        "inLanguage": "en"
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://enactive.dev/#software",
+        "name": "Enactive",
+        "url": "https://enactive.dev/",
+        "description": "A desktop environment for AI agents to plan tasks, use tools, record actions, and produce reviewable outcomes.",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Windows",
+        "softwareRequirements": ".NET 10 SDK when running from source",
+        "sameAs": "https://github.com/StasEdward/Enactive"
+      }
+    ]
+  }
+  </script>
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="wiki/assets/fonts.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
 
   <!-- ====== NAV ====== -->
   <header class="nav">
@@ -35,6 +72,7 @@
       <nav class="nav__links">
         <a href="#how">How it works</a>
         <a href="#features">Features</a>
+        <a href="#about-enactive">About</a>
         <a href="#models">Models</a>
         <a href="#architecture">Architecture</a>
         <a href="#remote">Remote access</a>
@@ -45,25 +83,24 @@
     </div>
   </header>
 
+  <main id="main-content">
   <!-- ====== HERO ====== -->
   <section class="hero" id="top">
     <div class="container hero__grid">
       <div>
-        <p class="eyebrow">Desktop environment for AI agents</p>
-        <h1>You don't talk to the AI.<br /><span class="accent">You give it a task.</span></h1>
+        <h1>Give an AI agent a task.</h1>
         <p class="lead">
-          A modern model can plan, run code, edit projects and chain actions. A chat window turns that
-          into a terminal you hand-drive. Enactive is the environment the agent works in instead — the
-          model is the engine, this is the workspace.
+          Enactive is a Windows desktop workspace for AI-assisted project work. It plans and runs tasks
+          on your machine, then keeps the actions, decisions, and resulting files together for review.
         </p>
         <div class="hero__cta">
-          <a href="#how" class="btn">See how it works</a>
-          <a href="wiki/index.html" class="btn btn--ghost">Read the Wiki ↗</a>
+          <a href="#how" class="btn">See the workflow</a>
+          <a href="wiki/what-is-enactive.html" class="btn btn--ghost">Explore Enactive</a>
         </div>
         <ul class="hero__facts">
-          <li>Local models via Ollama</li>
-          <li>Anthropic &amp; OpenAI-compatible</li>
-          <li>Every action recorded</li>
+          <li>Windows desktop</li>
+          <li>Local and hosted models</li>
+          <li>Recorded task history</li>
         </ul>
       </div>
 
@@ -160,33 +197,28 @@
   <!-- ====== PRINCIPLES ====== -->
   <section id="how">
     <div class="container">
-      <p class="eyebrow">How it works</p>
-      <h2>Four entities replace the message thread</h2>
+      <h2>Work has a shape beyond the chat</h2>
       <p class="section-lead">
-        Workspace → Task → Worker → Artifact. Chat stays, as a side console for quick nudges —
-        it is no longer where the work happens.
+        A task belongs to a workspace, moves through named steps, and leaves results you can inspect.
+        The conversation is only one part of the run.
       </p>
 
       <div class="cards cards--4">
         <article class="card">
-          <div class="card__icon">01</div>
-          <h3>A task, not a message</h3>
-          <p>The unit of interaction has a real lifecycle: <em>New → Planning → Executing → Waiting for you → Completed</em>. You can close the laptop in the middle of it.</p>
+          <h3>A task with a lifecycle</h3>
+          <p>Follow work from planning through execution, a decision when needed, and a recorded outcome.</p>
         </article>
         <article class="card">
-          <div class="card__icon">02</div>
-          <h3>Work state, not thinking out loud</h3>
-          <p>Structured progress — <em>found 14 files → identified the bottleneck → 3 tests passed → changes ready</em>. Never raw chain-of-thought.</p>
+          <h3>Progress you can follow</h3>
+          <p>See the current step, its tool activity, and what the worker found along the way.</p>
         </article>
         <article class="card">
-          <div class="card__icon">03</div>
-          <h3>The artifact is the centre</h3>
-          <p>A run ends in a diff, a file set, a report — with <strong>Apply</strong>, <strong>Review</strong> and <strong>Reject</strong> on it. Not fifty chat bubbles you have to read.</p>
+          <h3>Results attached to the run</h3>
+          <p>Inspect changed files, reports, and other artifacts alongside the actions that produced them.</p>
         </article>
         <article class="card">
-          <div class="card__icon">04</div>
-          <h3>You are asked only at real forks</h3>
-          <p>The agent runs the plan end to end and stops where the autonomy tier says to ask — showing the whole action, never a summary of it.</p>
+          <h3>Decisions at clear boundaries</h3>
+          <p>Set tool permissions and autonomy. When an action needs approval, inspect the full request before answering.</p>
         </article>
       </div>
     </div>
@@ -195,8 +227,7 @@
   <!-- ====== FEATURES ====== -->
   <section id="features">
     <div class="container">
-      <p class="eyebrow">What's in it</p>
-      <h2>Built for agents that actually do the work</h2>
+      <h2>Tools, permissions, and evidence in one run</h2>
       <p class="section-lead">Everything below is implemented and running today, not a roadmap.</p>
 
       <div class="cards cards--3">
@@ -244,8 +275,7 @@
   <section>
     <div class="container decision__grid">
       <div>
-        <p class="eyebrow">The fork</p>
-        <h2>Autonomous by default.<br />Human where it matters.</h2>
+        <h2>Automation with a visible handoff</h2>
         <p class="section-lead">
           The agent scans, plans, writes and tests on its own. Where the tier says to ask, it stops and
           shows exactly what it is about to do — the whole command, the whole path — instead of guessing
@@ -286,7 +316,6 @@ mysql --host ate-db-02 -e "SHOW REPLICA STATUS\G"</pre>
   <section id="remote">
     <div class="container decision__grid">
       <div>
-        <p class="eyebrow">From anywhere</p>
         <h2>Start it from your phone.<br />It runs on your machine.</h2>
         <p class="section-lead">
           Sign in to the gateway — <a href="https://remote.enactive.dev">remote.enactive.dev</a>, or one you
@@ -311,7 +340,7 @@ mysql --host ate-db-02 -e "SHOW REPLICA STATUS\G"</pre>
           <li>No shell from the web, at any tier</li>
           <li>The whole action, before you allow it</li>
         </ul>
-        <p class="section-lead"><a class="btn btn--ghost" href="wiki/remote-access.html">How remote access works ↗</a>
+        <p class="section-lead remote__actions"><a class="btn btn--ghost" href="wiki/remote-access.html">How remote access works ↗</a>
         <a class="btn btn--ghost" href="wiki/remote-security.html">What the service can and cannot see ↗</a>
         <a class="btn" href="https://remote.enactive.dev">Connect to gateway ↗</a></p>
       </div>
@@ -360,8 +389,7 @@ README8.html</pre>
 
   <section id="models">
     <div class="container">
-      <p class="eyebrow">Team of models</p>
-      <h2>A team, not a model picker</h2>
+      <h2>Route work to the right model</h2>
       <p class="section-lead">
         Configure any number of providers and bind a model to each phase of a run. One local model
         doing everything is just the simplest case of the same setup.
@@ -401,8 +429,7 @@ README8.html</pre>
   <section id="architecture">
     <div class="container arch__grid">
       <div>
-        <p class="eyebrow">Architecture</p>
-        <h2>Light on dependencies, on purpose</h2>
+        <h2>A small engine with clear boundaries</h2>
         <p class="section-lead">
           Seven projects on <strong>.NET 10</strong>. Core, Providers, Tools, Agents and the console host
           pull in <strong>zero external NuGet packages</strong>. Only storage and the Avalonia UI have
@@ -506,6 +533,26 @@ dotnet run <span class="p">--project</span> src/Enactive.App.Console -- timeline
     </div>
   </section>
 -->
+  <section id="about-enactive">
+    <div class="container">
+      <h2>What is Enactive?</h2>
+      <p class="section-lead">
+        Enactive is a Windows desktop workspace for AI-assisted work in a project folder. It turns a
+        natural-language task into planned tool use, runs that work on your computer, and records the
+        actions, decisions, and artifacts so you can review the result.
+      </p>
+      <p class="section-lead">
+        Use local Ollama models or connect Anthropic and OpenAI-compatible providers. Configure worker
+        roles and tool permissions, then inspect the task history and its evidence. Remote access lets
+        a browser start a task on a paired computer; the task still runs on that computer.
+      </p>
+      <p class="section-lead about__actions">
+        <a class="btn btn--ghost" href="wiki/what-is-enactive.html">Product overview and common questions ↗</a>
+        <a class="btn btn--ghost" href="https://github.com/StasEdward/Enactive">Source and implementation ↗</a>
+      </p>
+    </div>
+  </section>
+  </main>
   <!-- ====== FOOTER ====== -->
   <footer class="footer">
     <div class="container footer__inner">

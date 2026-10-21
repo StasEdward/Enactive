@@ -12,11 +12,11 @@ public sealed class MeteredChatProvider(IChatProvider inner, string providerId, 
     public int? HandoverAtPercent(ChatRequest r) => inner.HandoverAtPercent(r);
     public int? WorkingContext(ChatRequest r) => inner.WorkingContext(r);
     public int ReasoningAllowance(ChatRequest request) => inner.ReasoningAllowance(request);
-    private void Report(ChatRequest r, int? prompt, int? output, int? cached, double seconds,
+    private void Report(ChatRequest r, int? prompt, int? output, int? cached, int? created, double seconds,
         double? first, ModelTimings? timings, Guid? run)
     {
         // A display subscriber must never turn a successful request into a failed operation.
-        try { report(new(providerId, r.Model, prompt, output, cached, seconds, first, timings, run)); }
+        try { report(new(providerId, r.Model, prompt, output, cached, seconds, first, timings, run) { CacheCreationPromptTokens = created }); }
         catch { }
     }
     public async Task<ChatCompletion> CompleteAsync(ChatRequest r, CancellationToken ct)
@@ -25,7 +25,7 @@ public sealed class MeteredChatProvider(IChatProvider inner, string providerId, 
         var run = Enactive.Core.Diagnostics.LogScope.Current?.Run;
         var watch = Stopwatch.StartNew();
         var result = await inner.CompleteAsync(r, ct);
-        Report(r, result.PromptTokens, result.CompletionTokens, result.CachedPromptTokens,
+        Report(r, result.PromptTokens, result.CompletionTokens, result.CachedPromptTokens, result.CacheCreationPromptTokens,
             watch.Elapsed.TotalSeconds, null, result.Timings, run);
         return result;
     }
@@ -44,7 +44,7 @@ public sealed class MeteredChatProvider(IChatProvider inner, string providerId, 
             if (delta is TimingDelta t) timings = t.Timings;
             yield return delta;
         }
-        Report(r, usage?.PromptTokens, usage?.CompletionTokens, usage?.CachedPromptTokens,
+        Report(r, usage?.PromptTokens, usage?.CompletionTokens, usage?.CachedPromptTokens, usage?.CacheCreationPromptTokens,
             watch.Elapsed.TotalSeconds, first, timings, run);
     }
 }

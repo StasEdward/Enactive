@@ -15,6 +15,26 @@
     var status = document.getElementById("demoStatus");
     var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+    if (!still && "IntersectionObserver" in window) {
+      var revealItems = document.querySelectorAll(
+        "section:not(.hero) h2, section:not(.hero) .section-lead, .cards, .card, .decision__grid > *, .arch__grid > *, .phase, .providers, .fineprint--note, .code, .status-note"
+      );
+      var revealObserver = new IntersectionObserver(function (entries, observer) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add("is-visible");
+          observer.unobserve(entry.target);
+        });
+      }, { threshold: 0.12, rootMargin: "0px 0px -36px 0px" });
+
+      revealItems.forEach(function (item, index) {
+        item.setAttribute("data-reveal", "");
+        item.style.setProperty("--reveal-delay", (index % 4) * 75 + "ms");
+        revealObserver.observe(item);
+      });
+      document.documentElement.classList.add("motion-ready");
+    }
+
     function paint(activeIndex) {
       steps.forEach(function (li, i) {
         var st = li.querySelector(".st");

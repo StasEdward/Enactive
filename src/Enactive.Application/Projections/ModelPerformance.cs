@@ -80,6 +80,10 @@ internal sealed class ModelPerformance : Mvvm.ObservableObject
         { t.RequestOutput += measuredOutput; t.MeasuredRequest += m.RequestSeconds; }
         if (m.CachedPromptTokens is { } c && m.PromptTokens is { } cp)
         { t.Cached += c; t.CacheInput += cp; }
+        // Each share over the input of the calls that reported it: a call that said nothing about writes is not a call
+        // that wrote nothing, and counting its input would dilute the share toward zero.
+        if (m.CacheCreationPromptTokens is { } w && m.PromptTokens is { } wp)
+        { t.Created += w; t.CreatedInput += wp; }
         if (m.FirstDeltaSeconds is { } f) { t.First += f; t.FirstCalls++; }
         if (m.Timings?.PromptSeconds is { } ps) { t.Prompt += ps; t.PromptCalls++; }
         if (m.Timings?.LoadSeconds is { } ls) { t.Load += ls; t.LoadCalls++; }
@@ -91,7 +95,7 @@ internal sealed class ModelPerformance : Mvvm.ObservableObject
             t.Generation > 0 || t.MeasuredRequest == 0 ? "Generation avg" : "Whole request avg",
             $"Prompt Σ  {Seconds(t.PromptCalls > 0 ? t.Prompt : null)}   ·   Decode Σ  {Seconds(t.TimedCalls > 0 ? t.Generation : null)}",
             $"Tokens  {(t.HasInput ? t.Input.ToString("N0", CultureInfo.InvariantCulture) : "—")} in / {(t.HasOutput ? t.Output.ToString("N0", CultureInfo.InvariantCulture) : "—")} out",
-            $"Cache  {(t.CacheInput > 0 ? (100.0 * t.Cached / t.CacheInput).ToString("N1", CultureInfo.InvariantCulture) + "%" : "—")}   ·   Load Σ  {Seconds(t.LoadCalls > 0 ? t.Load : null)}",
+            $"Cache  {CacheShares(t, folded: false)}   ·   Load Σ  {Seconds(t.LoadCalls > 0 ? t.Load : null)}",
             $"First delta avg  {Seconds(t.FirstCalls > 0 ? t.First / t.FirstCalls : null)}",
             Invariant($"Request avg  {Seconds(t.Request / t.Calls)}   ·   {t.Calls} calls"),
             Invariant($"Server timings: prompt {t.PromptCalls}/{t.Calls}, decode {t.TimedCalls}/{t.Calls}. ") +
@@ -99,11 +103,36 @@ internal sealed class ModelPerformance : Mvvm.ObservableObject
             "Without server decode timing, ≈ T/s = total reported output tokens / total duration of those requests, " +
             "including queue, prompt processing and network time; this is not server generation speed. " +
             "Prompt Σ (prompt_seconds_total) sums reported prompt time for completed calls this session; " +
-            "not a server-wide counter. First delta includes queue, transport and prefill. Missing values are unknown.");
+            "not a server-wide counter. First delta includes queue, transport and prefill. Missing values are unknown. " +
+            "Cache read = prompt tokens served from the provider's cache; written = prompt tokens written to it, which a " +
+            "provider such as Anthropic bills above the plain input price - a write nobody reads is paid for nothing.",
+            t.CacheInput > 0 || t.CreatedInput > 0 ? "cache " + CacheShares(t, folded: true) : "");
         var old = Rows.FirstOrDefault(x => x.Provider == m.ProviderId && x.Model == m.Model);
         if (old is null) Rows.Add(row); else Rows[Rows.IndexOf(old)] = row;
     }
     private static string Seconds(double? n) => n is { } v ? Invariant($"{v:N2} s") : "—";
+
+    /// <summary>
+    /// The read share, and the written share where the provider reports writes: "read 2.0% · written 97.9%", or "84.0%"
+    /// for a provider that only reports reads (llama.cpp, the OpenAI-compatible ones), or an em dash for one that reports
+    /// neither. The read share alone hid the bill (2026-10-19): Sonnet showed "Cache 0.0%" while it was writing nearly
+    /// every input token, at above the input price, for nothing to read.
+    /// </summary>
+    private static string CacheShares(Totals t, bool folded)
+    {
+        var format = folded ? "N0" : "N1";
+        string? Share(long part, long whole)
+            => whole > 0 ? (100.0 * part / whole).ToString(format, CultureInfo.InvariantCulture) + "%" : null;
+        var read = Share(t.Cached, t.CacheInput);
+        var written = Share(t.Created, t.CreatedInput);
+        return (read, written) switch
+        {
+            ({ } r, { } w) => folded ? $"{r} read · {w} written" : $"read {r} · written {w}",
+            ({ } r, null) => r,
+            (null, { } w) => folded ? $"{w} written" : $"written {w}",
+            _ => "—",
+        };
+    }
 
     // The same in every culture: the service draws these in the server's culture, not the reader's, and "1 000,0 T/s" on
     // one machine and "1,000.0 T/s" on another was one speed said two ways (as TokenCounts).
@@ -111,10 +140,13 @@ internal sealed class ModelPerformance : Mvvm.ObservableObject
     private sealed class Totals
     {
         public int Calls, FirstCalls, PromptCalls, TimedCalls, LoadCalls;
-        public long Input, Output, Cached, CacheInput, Generated, RequestOutput;
+        public long Input, Output, Cached, CacheInput, Created, CreatedInput, Generated, RequestOutput;
         public bool HasInput, HasOutput;
         public double Request, First, Prompt, Generation, Load, MeasuredRequest;
     }
 }
+/// <param name="CacheShort">The cache shares for the folded line, beside the speed: "cache 84%", "cache 2% read · 98%
+/// written"; empty where the provider reports nothing about its cache. The folded panel (2026-10-11) showed only the speed,
+/// and the share was one click away - which is where it was not seen.</param>
 internal sealed record ModelPerformanceRow(string Provider, string Model, string Speed, string SpeedLabel,
-    string Times, string Tokens, string Cache, string First, string Requests, string Explanation);
+    string Times, string Tokens, string Cache, string First, string Requests, string Explanation, string CacheShort = "");

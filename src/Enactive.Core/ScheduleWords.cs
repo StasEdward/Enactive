@@ -40,8 +40,27 @@ public static class ScheduleWords
                 => $"Every {day} at {at} ({zone})",
             ScheduleRepeat.Weekly => $"Every week at {at} ({zone}) — but no day was chosen",
 
+            // The first three times of the clock it lands on, so "every 2 hours" says WHICH two hours.
+            ScheduleRepeat.Interval when ScheduleTiming.CanRepeatEvery(timing.EveryMinutes)
+                => $"Every {(timing.EveryMinutes == 60 ? "hour" : Interval(timing.EveryMinutes!.Value))} — "
+                 + $"{string.Join(", ", FirstTimes(timing))} … ({zone})",
+            ScheduleRepeat.Interval => "Every so often — but not at an interval it can repeat at, so it will never run",
+
             _ => $"Every day at {at} ({zone})"
         };
+    }
+
+    /// <summary>An interval in words: "15 minutes", "1 hour", "2 hours" - minutes for anything not whole hours.</summary>
+    public static string Interval(int minutes)
+        => minutes % 60 != 0 ? $"{minutes} minutes"
+         : minutes == 60 ? "1 hour"
+         : $"{minutes / 60} hours";
+
+    private static IEnumerable<string> FirstTimes(ScheduleTiming timing)
+    {
+        var every = timing.EveryMinutes!.Value;
+        var start = (timing.AtLocal.Hour * 60 + timing.AtLocal.Minute) % every;
+        return Enumerable.Range(0, 3).Select(i => TimeOnly.MinValue.AddMinutes(start + i * every).ToString("HH\\:mm", Text));
     }
 
     /// <summary>
@@ -101,7 +120,9 @@ public static class ScheduleWords
 
         return ScheduleClock.Next(schedule, now) is { } next
             ? $"Next run: {next.ToLocalTime().ToString("dddd d MMMM 'at' HH:mm", Text)}"
-            : "It has no next run — a one-off whose time has passed.";
+            : schedule.Timing.Repeat == ScheduleRepeat.Interval
+                ? "It has no next run — its interval is not one it can repeat at."
+                : "It has no next run — a one-off whose time has passed.";
     }
 
     /// <summary>

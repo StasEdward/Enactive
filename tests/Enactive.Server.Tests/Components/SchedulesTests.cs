@@ -115,6 +115,34 @@ public sealed class SchedulesTests : ComponentHost
         Assert.Contains(Users.AuditTrail(), e => e is { Account: "alice", Action: "schedule added" });
     }
 
+    /// <summary>
+    /// Every few minutes or hours: "Interval" shows the Every field, and the schedule saved comes round on it - the
+    /// page's select sends the words the view model offers.
+    /// </summary>
+    [Fact]
+    public void An_interval_schedule_is_chosen_and_saved_from_the_page()
+    {
+        var screen = Screen("alice");
+
+        Press(screen, "New");
+        Assert.Empty(screen.FindAll("#s-every"));
+        screen.Find("#s-name").Input("inbox sweep");
+        var weekly = screen.FindAll("#s-work option").Single(o => o.TextContent.Trim() == "Template · Weekly");
+        screen.Find("#s-work").Change(weekly.GetAttribute("value"));
+        screen.Find("#s-repeat").Change("Interval");
+        screen.Find("#s-every").Change("15 minutes");
+        screen.Find("input[aria-label='Hour']").Change("0");
+        screen.Find("input[aria-label='Minute']").Change("0");
+
+        Assert.Contains("Every 15 minutes — 00:00, 00:15, 00:30", screen.Find(".schedule-draft-approval").TextContent);
+
+        Press(screen, "Save");
+
+        screen.WaitForAssertion(() => Assert.Single(screen.FindAll(".schedule-card")));
+        var saved = Assert.Single(Engine.Schedules.For(_root));
+        Assert.Equal((ScheduleRepeat.Interval, 15), (saved.Timing.Repeat, saved.Timing.EveryMinutes));
+    }
+
     /// <summary>The time is two digits a side, as the window's spinners show it (FormatString="00").</summary>
     [Fact]
     public void The_time_is_shown_in_two_digits_as_the_window_s()

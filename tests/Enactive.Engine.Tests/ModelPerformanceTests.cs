@@ -250,4 +250,78 @@ public sealed class ModelPerformanceTests
         Assert.Contains("IsVisible=\"{Binding Performance.IsExpanded}\"", xaml, StringComparison.Ordinal);
         Assert.Contains("IsVisible=\"{Binding !Performance.IsExpanded}\"", xaml, StringComparison.Ordinal);
     }
+
+    // ── the cache: what was read, and what was written ───────────────────
+
+    /// <summary>
+    /// A provider that reports writes gets both shares. 2026-10-19 the panel said "Cache 0.0%" for Sonnet while nearly
+    /// every input token was being written to the cache at above the input price - the read share alone hid the bill.
+    /// </summary>
+    [Fact]
+    public void A_provider_that_reports_writes_shows_the_written_share_beside_the_read_one()
+    {
+        var vm = new ModelPerformance(); vm.ShowRun(Run);
+        vm.Add(InRun(new("anthropic", "sonnet", 5_000, 1_000, 0, 10, null, null) { CacheCreationPromptTokens = 4_900 }));
+        vm.Add(InRun(new("anthropic", "sonnet", 5_000, 1_000, 100, 10, null, null) { CacheCreationPromptTokens = 4_800 }));
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Contains("Cache  read 1.0% · written 97.0%", row.Cache);
+        Assert.Equal("cache 1% read · 97% written", row.CacheShort);
+    }
+
+    /// <summary>A provider that reports only reads (llama.cpp, the OpenAI-compatible ones) shows the read share, and no
+    /// written share it never reported.</summary>
+    [Fact]
+    public void A_provider_that_reports_only_reads_shows_the_read_share_alone()
+    {
+        var vm = new ModelPerformance(); vm.ShowRun(Run);
+        vm.Add(InRun(new("local", "gemma", 10_000, 100, 8_400, 3, null, null)));
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Contains("Cache  84.0%", row.Cache);
+        Assert.Equal("cache 84%", row.CacheShort);
+    }
+
+    /// <summary>One that reports nothing about its cache shows nothing on the folded line - not a confident 0%.</summary>
+    [Fact]
+    public void A_provider_that_reports_nothing_about_its_cache_shows_nothing_folded()
+    {
+        var vm = new ModelPerformance(); vm.ShowRun(Run);
+        vm.Add(InRun(new("cloud", "model", 1_000, 100, null, 3, null, null)));
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Contains("Cache  —", row.Cache);
+        Assert.Equal("", row.CacheShort);
+    }
+
+    /// <summary>The written count reaches the panel from the provider's own answer, through the meter every call passes.</summary>
+    [Fact]
+    public async Task The_written_count_reaches_the_panel_from_the_provider_s_answer()
+    {
+        using var http = new HttpClient(new Handler("""
+            {"id":"m","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn",
+             "usage":{"input_tokens":10,"cache_read_input_tokens":90,"cache_creation_input_tokens":900,"output_tokens":5}}
+            """));
+        var reports = new List<ModelCallMetrics>();
+        var anthropic = new AnthropicProvider(http, new ProviderDescriptor("anthropic", "Anthropic", ProviderKind.Anthropic,
+            "https://api.anthropic.com", "key", new[] { "test" }));
+        await new MeteredChatProvider(anthropic, "anthropic", reports.Add).CompleteAsync(Request, default);
+
+        var m = Assert.Single(reports);
+        Assert.Equal(1_000, m.PromptTokens);
+        Assert.Equal(90, m.CachedPromptTokens);
+        Assert.Equal(900, m.CacheCreationPromptTokens);
+    }
+
+    /// <summary>The folded line carries the shares in the window and on the service alike.</summary>
+    [Fact]
+    public void The_folded_panel_shows_the_cache_shares_in_the_window_and_on_the_service()
+    {
+        var xaml = File.ReadAllText(Path.Combine(TestRepository.Root, "src", "Enactive.App.Ui", "MainWindow.axaml"));
+        Assert.Contains("Text=\"{Binding CacheShort}\"", xaml, StringComparison.Ordinal);
+
+        var server = Path.Combine(TestRepository.Root, "src", "Enactive.Server", "Components", "Runs");
+        Assert.Contains("@row.CacheShort", File.ReadAllText(Path.Combine(server, "StatusColumn.razor")), StringComparison.Ordinal);
+        Assert.Contains("r.CacheShort", File.ReadAllText(Path.Combine(server, "LiveRunView.cs")), StringComparison.Ordinal);
+    }
 }

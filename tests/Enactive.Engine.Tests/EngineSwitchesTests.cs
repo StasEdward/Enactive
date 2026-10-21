@@ -26,7 +26,7 @@ public sealed class EngineSwitchesTests
         var switches = EngineSwitches.Of(EngineOptions.Default);
         switches.MaxParallelSteps = "two";
         switches.GenerationAction = "0";
-        switches.EvidenceBudget = (ExecutionJournal.MinimumBudget - 1).ToString();
+        switches.EvidenceBudget = "a lot";
         switches.ReviewRetries = "12";
         switches.RepairThreshold = "1";
 
@@ -34,6 +34,7 @@ public sealed class EngineSwitchesTests
 
         Assert.Equal(EngineOptions.Default.MaxParallelSteps, engine.MaxParallelSteps);
         Assert.Equal(EngineOptions.Default.GenerationBudgets.Action, engine.GenerationBudgets.Action);
+        // Not a number: automatic, the default. (A number below the floor is raised to it - AutomaticEvidenceBudgetTests.)
         Assert.Equal(EngineOptions.Default.EvidenceBudget, engine.EvidenceBudget);
         Assert.Equal(5, engine.ReviewRetries);
         Assert.Equal(0, engine.RepairConsultation.FailedRepairs);

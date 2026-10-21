@@ -152,20 +152,20 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly int _maxParallelSteps;
 
     /// <summary>
-    /// How many characters of evidence the reviewer is shown, shared between every call's output.
+    /// How much of the run's command history a WORKER's prompt is given (ExecutionJournal.Describe's budget decides which
+    /// commands are in it): the evidence budget a person set, or the journal's default when the evidence budget is
+    /// automatic. Not the automatic number - that follows the REVIEWER's window, review by review (ReviewEvidence), and
+    /// the worker's window is another model's. The reviewer's budget is worked out where each review is assembled
+    /// (ReviewAttemptAsync).
     ///
-    /// <para>A setting because the right number depends on the work. It is divided among the calls,
-    /// so a step that reads three files can be shown a usable slice of each and one that reads
-    /// thirteen cannot: at 6,000 across thirteen calls each output gets about 320 characters, and a
-    /// source file cut to 320 characters cannot support or refute anything quoted from it.</para>
-    ///
-    /// <para>Reported 2026-09-08 17:31. An analysis step read eleven files, quoted a value out of
-    /// Directory.Build.props, and was failed - twice - because "the provided output for that file is
-    /// truncated and does not contain this value". It did contain it: 1,645 characters had been cut
-    /// from the middle, and the value was in them. The retry read more files, which made every share
-    /// smaller and the second verdict more certain than the first.</para>
+    /// <para>Why the evidence budget is a setting at all: it is divided among the calls, so a step that reads three
+    /// files can be shown a usable slice of each and one that reads thirteen cannot: at 6,000 across thirteen calls each
+    /// output gets about 320 characters, and a source file cut to 320 characters cannot support or refute anything quoted
+    /// from it. Reported 2026-09-08 17:31: an analysis step read eleven files, quoted a value out of
+    /// Directory.Build.props, and was failed - twice - because "the provided output for that file is truncated and does
+    /// not contain this value". It did contain it: 1,645 characters had been cut from the middle.</para>
     /// </summary>
-    private readonly int _evidenceBudget;
+    private readonly int _historyBudget;
     /// <summary>One approval card at a time, however many steps are running.</summary>
     private readonly SemaphoreSlim _decisionGate = new(1, 1);
     private readonly bool? _think;
@@ -272,7 +272,7 @@ public sealed partial class Orchestrator : IOrchestrator
         _successRetries = Math.Clamp(options.SuccessRetries, 0, 5);
         // 1 = the original behaviour: one step at a time on one shared conversation.
         _maxParallelSteps = Math.Max(1, options.MaxParallelSteps);
-        _evidenceBudget = Math.Max(ExecutionJournal.MinimumBudget, options.EvidenceBudget);
+        _historyBudget = Math.Max(ExecutionJournal.MinimumBudget, options.EvidenceBudget ?? ExecutionJournal.DefaultBudget);
         _successEvaluator = resources.Agents?.SuccessEvaluator ?? new SuccessEvaluator(resources.Ecosystems);
         _handover = resources.Agents?.Handover ?? new Handover();
         // Disable the local model's <think> phase by sending think:false; null leaves it to the model.
@@ -1783,7 +1783,7 @@ public sealed partial class Orchestrator : IOrchestrator
             // scope is appended here; handover keeps that preamble plus this step's instruction.
             if (ownConversation)
                 convo.Add(ChatMessage.User("Engine-owned history of earlier commands (history-local IDs, not review citations):\n"
-                    + session.RunEvidence().Describe(maxChars: _evidenceBudget).CommandHistory()
+                    + session.RunEvidence().Describe(maxChars: _historyBudget).CommandHistory()
                     + "\nUse these recorded facts when writing reports. Do not omit initial failures or replace them with a later success."));
             Guid[] completedSteps;
             Guid[] unverifiedSteps;
@@ -4115,7 +4115,7 @@ public sealed partial class Orchestrator : IOrchestrator
             messages.AddRange(parkedAt.Messages);
             foreach (var done in parkedAt.Actions)
                 journal.Record(done.Step, done.Tool, done.Arguments, done.Outcome, done.Output, done.WorkspaceEffect,
-                    done.ChangedPaths, done.ExitCode, done.FileDeletion, done.Origin, done.Named, done.Change);
+                    done.ChangedPaths, done.ExitCode, done.FileDeletion, done.Origin, done.Named, done.Change, done.FilesRead);
             foreach (var waiting in parkedAt.Pending)
                 messages.Add(ChatMessage.Tool(waiting.Id,
                     "NOT CARRIED OUT: the run stopped here to wait for a decision, and it has now been answered. "
@@ -4459,7 +4459,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 // handover) has lost it, and gets the whole history once more.
                 if (commandHistoryMessage is not null && !messages.Any(m => ReferenceEquals(m, commandHistoryMessage)))
                     commandHistoryShownTo = 0;
-                var view = journal.Describe(maxChars: _evidenceBudget);
+                var view = journal.Describe(maxChars: _historyBudget);
                 if (view.LastCommand() > commandHistoryShownTo)
                 {
                     var continued = commandHistoryShownTo > 0;

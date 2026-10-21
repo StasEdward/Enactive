@@ -41,7 +41,7 @@ public sealed record WorkLine(string Label, string Detail, string Tone);
 
 /// <summary>A MODEL PERFORMANCE row: the model's speed folded, every figure opened.</summary>
 public sealed record SpeedLine(string Provider, string Model, string Speed, string SpeedLabel, string Times, string Tokens,
-    string Cache, string First, string Requests, string Explanation);
+    string Cache, string First, string Requests, string Explanation, string CacheShort = "");
 
 /// <summary>
 /// The run's files as its Artifacts tab shows them (RunFiles): those it wrote, those of them a rejected step put back, and
@@ -118,7 +118,7 @@ internal sealed class LiveRunReader
             panel.Routing.Rows.Select(r => new RoutingLine(r.Phase, r.Model)).ToList(),
             panel.Work.Rows.Select(r => new WorkLine(r.Label, r.Detail, Looks.Reach(r.Reach))).ToList(),
             panel.Performance.Rows.Select(r => new SpeedLine(r.Provider, r.Model, r.Speed, r.SpeedLabel, r.Times, r.Tokens,
-                r.Cache, r.First, r.Requests, r.Explanation)).ToList(),
+                r.Cache, r.First, r.Requests, r.Explanation, r.CacheShort)).ToList(),
             seq)
         {
             RunChecks = CheckView.Of(feed.RunChecks)

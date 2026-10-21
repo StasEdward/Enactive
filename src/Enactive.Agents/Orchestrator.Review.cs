@@ -153,10 +153,9 @@ public sealed partial class Orchestrator
         // under a budget too small for both (one set near the minimum) it is shortened, and left out when what is left
         // could not hold more than its opening lines - the gate has already decided the count; the reviewer loses only
         // the per-item detail, never the calls. Made for this attempt only, so no earlier account goes with it.
-        var accountRoom = Math.Min(_evidenceBudget / 2, _evidenceBudget - ExecutionJournal.MinimumBudget);
-        var itemAccount = coverage is null || accountRoom < StepCoverageGate.MinimumAccountChars ? null
-            : StepCoverageGate.ReviewerBlock(coverage, journal.Actions.Skip(stepStart).ToArray(), accountRoom);
-        var callBudget = _evidenceBudget - (itemAccount?.Length ?? 0);
+        // Made below, once this review's budget is known - from the step's calls as they are here, before the engine adds
+        // the file it opens next.
+        var stepActions = journal.Actions.Skip(stepStart).ToArray();
         // The file this step handed on as the result a criterion checks: the engine decides that it is there,
         // the reviewer decides whether it is what was asked - so it is shown whole, as it is now, even when the
         // step wrote none of it (run 68f92f: an earlier run's report, handed on as this run's).
@@ -175,28 +174,50 @@ public sealed partial class Orchestrator
         // Phase 1.4: a step whose plan set semantic criteria is judged against those, and only those - its report is
         // a claim, and each verdict stands on evidence of a kind the criterion allows. A step without them is reviewed
         // as it always was.
-        var (review, mode) = _options.SemanticCriteria && stepNumber is { } judgedNo
-            && stepCriteria?.Where(c => c.Typed?.Kind == TypedCriterionKind.Semantic).ToArray() is { Length: > 0 } judged
+        var judged = _options.SemanticCriteria && stepNumber is not null
+            && stepCriteria?.Where(c => c.Typed?.Kind == TypedCriterionKind.Semantic).ToArray() is { Length: > 0 } semantic
+            ? semantic : null;
+        var files = await StepFilesNowAsync(changes, before, journal, stepStart, store, ct);
+        var criteriaObligations = judged is null ? null : obligations ?? RequestObligations.Create(request, title, stepNumber, planSteps);
+        CriteriaReviewInput CriteriaInput(EvidenceView evidence, string? account)
+            => new(title, stepNumber!.Value, LastAssistant(messages), handedOn, files, evidence, criteriaObligations!, account);
+        StepVerdictInput StepInput(EvidenceView evidence, string? account)
+            => new(request, title, stepNumber,
+                planSteps?.Select((t, i) => (t, i)).Where(p => stepNumber is not { } n || p.i != n - 1)
+                    .Select(p => $"{p.i + 1}. {p.t}").ToArray() ?? [],
+                LastAssistant(messages), handedOn, files, evidence, obligations?.ScopeNote,
+                obligations?.Owned().Select(o => $"{o.Unit.Id}: {o.Unit.Text.Trim()}"
+                    + (o.AlsoTo.Count > 0 ? $" (also given to step {string.Join(", ", o.AlsoTo.Select(scope => scope.TrimStart('S')))})" : "")).ToArray(),
+                restrictions, account);
+
+        // The evidence budget of THIS review: the number a person set, or one worked out from the window of the model this
+        // review goes to, after what its prompt holds without the evidence and what its answer is given (ReviewEvidence).
+        // Per review, not per run: the whole-run review and the step reviews can go to different models. Said once per
+        // review, so a log shows what the reviewer could have seen and why.
+        var budget = ReviewEvidence.For(_options.EvidenceBudget, models.ReviewProvider!,
+            new ChatRequest(models.ReviewModel, [], Temperature: 0, Purpose: GenerationPurpose.Review,
+                OutputTokenLimit: judged is null ? StepVerdictReview.AnswerTokens : CriteriaReview.AnswerTokens(judged.Length)),
+            judged is null
+                ? StepVerdictReview.PromptChars(StepInput(EvidenceView.Empty, null))
+                : CriteriaReview.PromptChars(CriteriaInput(EvidenceView.Empty, null), judged));
+        await Emit(EventKind.ContextAssembled, budget.Describe());
+
+        // The item account and the calls share this budget by the rule above.
+        var accountRoom = Math.Min(budget.Chars / 2, budget.Chars - ExecutionJournal.MinimumBudget);
+        var itemAccount = coverage is null || accountRoom < StepCoverageGate.MinimumAccountChars ? null
+            : StepCoverageGate.ReviewerBlock(coverage, stepActions, accountRoom);
+        var callBudget = budget.Chars - (itemAccount?.Length ?? 0);
+
+        var (review, mode) = judged is not null && stepNumber is { } judgedNo
             ? (await CriteriaReview.RunAsync(
-                    new CriteriaReviewInput(title, judgedNo, LastAssistant(messages), handedOn,
-                        await StepFilesNowAsync(changes, before, journal, stepStart, store, ct),
-                        journal.Describe(evidenceStart, callBudget),
-                        obligations ?? RequestObligations.Create(request, title, stepNumber, planSteps), itemAccount),
+                    CriteriaInput(journal.Describe(evidenceStart, callBudget), itemAccount),
                     judged, (action, kind) => Admits(action, kind, reads, judgedNo), models.ReviewProvider!, models.ReviewModel,
                     scope.Budget.TurnExhaustedAfter, ct),
                 ReviewMode.Criteria)
             // The user's model (2026-09-29): one short verdict per step - done, and its report true? - and the task is
             // done when every step is.
             : (await StepVerdictReview.RunAsync(
-                        new StepVerdictInput(request, title, stepNumber,
-                            planSteps?.Select((t, i) => (t, i)).Where(p => stepNumber is not { } n || p.i != n - 1)
-                                .Select(p => $"{p.i + 1}. {p.t}").ToArray() ?? [],
-                            LastAssistant(messages), handedOn,
-                            await StepFilesNowAsync(changes, before, journal, stepStart, store, ct),
-                            journal.Describe(evidenceStart, callBudget), obligations?.ScopeNote,
-                            obligations?.Owned().Select(o => $"{o.Unit.Id}: {o.Unit.Text.Trim()}"
-                                + (o.AlsoTo.Count > 0 ? $" (also given to step {string.Join(", ", o.AlsoTo.Select(scope => scope.TrimStart('S')))})" : "")).ToArray(),
-                            restrictions, itemAccount),
+                        StepInput(journal.Describe(evidenceStart, callBudget), itemAccount),
                         models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct),
                     ReviewMode.Step);
         await Usage(review.Usage.Prompt, review.Usage.Completion, review.Usage.Cached, review.Usage.Created);
