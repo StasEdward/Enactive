@@ -31,6 +31,17 @@ public static class ScheduleClock
         if (Zone(timing.TimeZoneId) is not { } zone)
             return null;
 
+        if (timing.Repeat == ScheduleRepeat.Interval)
+        {
+            // An interval is never longer than half a day, so the next one is today or tomorrow by the local clock;
+            // yesterday is in the window for an `after` late in a day the zone's offset has moved.
+            var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(after, zone).Date);
+            foreach (var at in Interval(timing, zone, today.AddDays(-1), today.AddDays(1)))
+                if (at > after)
+                    return at;
+            return null;
+        }
+
         // Walked forward a day at a time from the day BEFORE, so an occurrence earlier today that
         // has not happened yet is still found. 400 days covers a weekly schedule and any amount of
         // clock-shifting; running out means the timing is nonsense rather than far away.
@@ -73,6 +84,16 @@ public static class ScheduleClock
 
         if (Zone(timing.TimeZoneId) is not { } zone)
             return null;
+
+        if (timing.Repeat == ScheduleRepeat.Interval)
+        {
+            var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(at, zone).Date);
+            DateTimeOffset? latest = null;
+            foreach (var occurrence in Interval(timing, zone, today.AddDays(-1), today))
+                if (occurrence <= at)
+                    latest = occurrence;
+            return latest > notBefore ? latest : null;
+        }
 
         var local = TimeZoneInfo.ConvertTime(at, zone);
         for (var day = 0; day < 400; day++)
@@ -144,6 +165,45 @@ public static class ScheduleClock
         }
 
         return new DateTimeOffset(wanted, zone.GetUtcOffset(wanted));
+    }
+
+    /// <summary>
+    /// Every occurrence of an interval schedule on these local dates, earliest first: the wall times counted from
+    /// <see cref="ScheduleTiming.AtLocal"/> every <see cref="ScheduleTiming.EveryMinutes"/>, each read through the
+    /// zone. None for an interval the clock cannot repeat at (<see cref="ScheduleTiming.CanRepeatEvery"/>).
+    ///
+    /// <para><b>The two hours a year go the other way from <see cref="Occurrence"/>'s,</b> because an interval is a
+    /// length of real time, not a time of day. The hour that happens twice is run twice: taken once, an every-fifteen-
+    /// minutes job went quiet for an hour each autumn. The hour that does not exist is not run: no time passed for it,
+    /// and moved to the far side of the gap as a daily schedule's is, its four quarter hours would all start at 03:00.
+    /// Either way the occurrences stay the interval apart.</para>
+    /// </summary>
+    private static IEnumerable<DateTimeOffset> Interval(ScheduleTiming timing, TimeZoneInfo zone, DateOnly first, DateOnly last)
+    {
+        if (!ScheduleTiming.CanRepeatEvery(timing.EveryMinutes))
+            return [];
+
+        var every = timing.EveryMinutes!.Value;
+        var start = (timing.AtLocal.Hour * 60 + timing.AtLocal.Minute) % every;
+        var found = new List<DateTimeOffset>();
+
+        for (var date = first; date <= last; date = date.AddDays(1))
+            for (var minute = start; minute < 24 * 60; minute += every)
+            {
+                var wall = date.ToDateTime(TimeOnly.MinValue).AddMinutes(minute);
+
+                if (zone.IsInvalidTime(wall))
+                    continue;
+
+                if (zone.IsAmbiguousTime(wall))
+                    found.AddRange(zone.GetAmbiguousTimeOffsets(wall).Distinct().Select(offset => new DateTimeOffset(wall, offset)));
+                else
+                    found.Add(new DateTimeOffset(wall, zone.GetUtcOffset(wall)));
+            }
+
+        // Sorted, not in wall order: the second 02:15 comes after the first 02:45.
+        found.Sort();
+        return found;
     }
 
     /// <summary>

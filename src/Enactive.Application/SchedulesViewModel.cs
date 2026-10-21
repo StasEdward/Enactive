@@ -144,6 +144,7 @@ internal sealed class SchedulesViewModel : ObservableObject
     private WorkChoice? _draftWork;
     private string _draftRepeat = "Daily";
     private string _draftDay = nameof(DayOfWeek.Monday);
+    private string _draftEvery = ScheduleWords.Interval(60);
     // Decimal because that is what NumericUpDown binds: an int here compiles and then throws when
     // the control writes back, which is a failure that only a person opening the form would find.
     private decimal _draftHour = 3;
@@ -207,8 +208,11 @@ internal sealed class SchedulesViewModel : ObservableObject
     public ObservableCollection<WorkChoice> WorkChoices { get; } = new();
     public ObservableCollection<ZoneChoice> Zones { get; }
 
-    public IReadOnlyList<string> Repeats { get; } = new[] { "Once", "Daily", "Weekly" };
+    public IReadOnlyList<string> Repeats { get; } = new[] { "Once", "Daily", "Weekly", "Interval" };
     public IReadOnlyList<string> Days { get; } = Enum.GetNames<DayOfWeek>();
+
+    /// <summary>The intervals offered, in words ("15 minutes", "2 hours"), in the order ScheduleTiming.Intervals lists them.</summary>
+    public IReadOnlyList<string> Intervals { get; } = ScheduleTiming.Intervals.Select(ScheduleWords.Interval).ToArray();
     public IReadOnlyList<string> Tiers { get; } = AutonomyTiers.Names.ToArray();
 
     public string WorkspaceRoot => _workspace.RootPath;
@@ -311,6 +315,9 @@ internal sealed class SchedulesViewModel : ObservableObject
     public string DraftTier { get => _draftTier; set => Set(ref _draftTier, value); }
     public string DraftDay { get => _draftDay; set => Set(ref _draftDay, value); }
 
+    /// <summary>How often an interval schedule comes round, as one of <see cref="Intervals"/>.</summary>
+    public string DraftEvery { get => _draftEvery; set => Set(ref _draftEvery, value); }
+
     public string DraftRepeat
     {
         get => _draftRepeat;
@@ -321,11 +328,13 @@ internal sealed class SchedulesViewModel : ObservableObject
 
             OnPropertyChanged(nameof(IsWeekly));
             OnPropertyChanged(nameof(IsOnce));
+            OnPropertyChanged(nameof(IsInterval));
         }
     }
 
     public bool IsWeekly => string.Equals(_draftRepeat, "Weekly", StringComparison.OrdinalIgnoreCase);
     public bool IsOnce => string.Equals(_draftRepeat, "Once", StringComparison.OrdinalIgnoreCase);
+    public bool IsInterval => string.Equals(_draftRepeat, "Interval", StringComparison.OrdinalIgnoreCase);
 
     // ── loading ─────────────────────────────────────────────────────────────
 
@@ -437,6 +446,7 @@ internal sealed class SchedulesViewModel : ObservableObject
         _editedWork = null;
         DraftName = string.Empty;
         DraftRepeat = "Daily";
+        DraftEvery = ScheduleWords.Interval(60);
         DraftHour = 3;
         DraftMinute = 0;
         DraftDate = _now().Date.AddDays(1);
@@ -461,6 +471,7 @@ internal sealed class SchedulesViewModel : ObservableObject
         DraftName = schedule.Name;
         DraftRepeat = schedule.Timing.Repeat.ToString();
         DraftDay = (schedule.Timing.OnDay ?? DayOfWeek.Monday).ToString();
+        DraftEvery = ScheduleWords.Interval(schedule.Timing.EveryMinutes ?? 60);
         DraftHour = schedule.Timing.AtLocal.Hour;
         DraftMinute = schedule.Timing.AtLocal.Minute;
         DraftDate = schedule.Timing.OnceAt?.ToLocalTime() ?? _now().Date.AddDays(1);
@@ -569,9 +580,27 @@ internal sealed class SchedulesViewModel : ObservableObject
                 ScheduleRepeat.Once, at, DraftZone.Id, null, new DateTimeOffset(wall, offset));
         }
 
+        if (IsInterval)
+            return ScheduleTiming.Every(ChosenInterval, at, DraftZone.Id);
+
         return IsWeekly
             ? ScheduleTiming.Weekly(ChosenDay, at, DraftZone.Id)
             : ScheduleTiming.Daily(at, DraftZone.Id);
+    }
+
+    /// <summary>
+    /// The chosen interval in minutes, or an hour for words that are none of the offered ones - read for ChosenDay's
+    /// reason: a page's select can be sent anything, and this is read on every drawing of the form.
+    /// </summary>
+    private int ChosenInterval
+    {
+        get
+        {
+            for (var i = 0; i < Intervals.Count; i++)
+                if (Intervals[i] == DraftEvery)
+                    return ScheduleTiming.Intervals[i];
+            return 60;
+        }
     }
 
     private async Task ReloadAndSelectAsync(Guid id)

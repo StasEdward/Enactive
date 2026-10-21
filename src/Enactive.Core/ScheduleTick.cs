@@ -58,6 +58,9 @@ public static class ScheduleTick
     /// occurrence at 03:00 seen at 03:04 is that occurrence, not a missed one. It must be
     /// comfortably longer than the gap between ticks and comfortably shorter than the gap between
     /// occurrences — fifteen minutes is both for anything a person schedules by day and hour.</para>
+    ///
+    /// <para>An interval schedule's most recent occurrence is never more than one interval old, so one that comes
+    /// round every fifteen minutes or less is never missed - the latest is always the one to run.</para>
     /// </summary>
     public static readonly TimeSpan Grace = TimeSpan.FromMinutes(15);
 
@@ -115,6 +118,14 @@ public static class ScheduleTick
             return new(schedule, DueVerdict.Unschedulable, null,
                        $"this machine has no time zone called '{schedule.Timing.TimeZoneId}', so there is no "
                        + "way to say when local time this should run");
+
+        // The form refuses these (ScheduleDrafts); one in the file anyway - edited by hand - has no occurrence, and
+        // left to the clock it would sit as "not due" for ever.
+        if (schedule.Timing.Repeat == ScheduleRepeat.Interval && !ScheduleTiming.CanRepeatEvery(schedule.Timing.EveryMinutes))
+            return new(schedule, DueVerdict.Unschedulable, null,
+                       $"it repeats every {schedule.Timing.EveryMinutes?.ToString() ?? "(no number of)"} minutes, which the "
+                       + $"clock cannot keep - an interval is at least {ScheduleTiming.ShortestInterval} minutes and a whole "
+                       + "number of times a day");
 
         // From the last firing, so an occurrence is considered exactly once - and from CREATION
         // when there has not been one, so the first occurrence is found even if it has already gone

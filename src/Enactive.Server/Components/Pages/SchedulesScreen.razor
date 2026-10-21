@@ -121,6 +121,20 @@
                         </div>
                     }
 
+                    @if (vm.IsInterval)
+                    {
+                        <div class="schedule-field">
+                            <label class="label" for="s-every">Every</label>
+                            <p class="hint">Counted from the time below: every 2 hours from 01:30 runs at 01:30, 03:30, 05:30 and so on.</p>
+                            <select id="s-every" @bind="vm.DraftEvery">
+                                @foreach (var every in vm.Intervals)
+                                {
+                                    <option value="@every">@every</option>
+                                }
+                            </select>
+                        </div>
+                    }
+
                     @* Two numbers, as the window's two spinners: a time that cannot be typed wrongly needs no rule here to say
                        it was typed wrongly - the view model clamps each to its range. *@
                     <div class="schedule-field">

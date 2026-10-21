@@ -214,6 +214,11 @@ outcome lands in the Inbox under the schedule. For a machine where the app is no
 `--due-all` every few minutes from Windows Task Scheduler, cron, or a CI runner. Both take the same claim on a
 schedule, so the two on one machine do not start the same occurrence twice.
 
+A schedule repeats once, daily, weekly, or at an interval: every 5, 10, 15, 20 or 30 minutes, or every 1, 2, 3, 4,
+6, 8 or 12 hours, counted on the wall clock from the time the schedule names - every 2 hours from 01:30 runs at
+01:30, 03:30, 05:30 and so on. An interval is real time across a clock change: the hour that happens twice is run
+twice, the hour that is skipped is not run. For a five-minute interval, wake the console at least every five minutes.
+
 To run one template on a timetable of the scheduler's own instead, invoke the console with `--template`. For a
 file-only documentation workflow, a PowerShell wrapper can preserve the process outcome:
 

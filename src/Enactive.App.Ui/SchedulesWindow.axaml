@@ -179,6 +179,14 @@
                                 <DatePicker SelectedDate="{Binding DraftDate}" HorizontalAlignment="Stretch" />
                             </StackPanel>
 
+                            <StackPanel IsVisible="{Binding IsInterval}">
+                                <TextBlock Text="Every" FontWeight="SemiBold" />
+                                <TextBlock Classes="hint" TextWrapping="Wrap" Margin="0,1,0,3"
+                                           Text="Counted from the time below: every 2 hours from 01:30 runs at 01:30, 03:30, 05:30 and so on." />
+                                <ComboBox ItemsSource="{Binding Intervals}" SelectedItem="{Binding DraftEvery}"
+                                          HorizontalAlignment="Stretch" />
+                            </StackPanel>
+
                             <!-- Spinners, not a text box: a time that cannot be typed wrongly needs no
                                  rule out here to say it was typed wrongly. -->
                             <StackPanel>
