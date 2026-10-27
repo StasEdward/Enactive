@@ -102,7 +102,7 @@ public sealed class SendEmailTool(MailAccount account) : ITool
                 "No SMTP account is configured, so nothing can be sent. Fill in Settings → SMTP: "
                 + "a host and at least one allowed recipient.");
 
-        string? subject, body, to;
+        string? subject, body, to, format;
         List<string> attachments;
         try
         {
@@ -111,6 +111,7 @@ public sealed class SendEmailTool(MailAccount account) : ITool
             subject = Text(root, "subject");
             body = Text(root, "body");
             to = Text(root, "to");
+            format = Text(root, "format");
             attachments = Paths(root);
         }
         catch (JsonException ex)
@@ -120,6 +121,14 @@ public sealed class SendEmailTool(MailAccount account) : ITool
 
         if (string.IsNullOrWhiteSpace(subject))
             return ToolResults.Unreadable("'subject' is required.");
+
+        // Refused rather than guessed: markup sent as plain text arrives as a page of tags, and
+        // plain text sent as HTML loses its line breaks - either is a message nobody meant to send.
+        var html = string.Equals(format?.Trim(), "html", StringComparison.OrdinalIgnoreCase);
+        if (!html && !string.IsNullOrWhiteSpace(format)
+            && !string.Equals(format.Trim(), "text", StringComparison.OrdinalIgnoreCase))
+            return ToolResults.Unreadable(
+                $"'format' is \"{format}\", and it may be \"text\" (the default) or \"html\".");
 
         // Empty is allowed - a message that is only an attachment is a real thing to send - but
         // null and "" are the same to a reader, so neither is an error.
@@ -165,15 +174,7 @@ public sealed class SendEmailTool(MailAccount account) : ITool
             files.Add((relative, full));
         }
 
-        var message = new MimeMessage();
-        message.From.Add(MailboxAddress.Parse(account.Sender));
-        message.To.Add(MailboxAddress.Parse(recipient));
-        message.Subject = subject!.Trim();
-
-        var content = new BodyBuilder { TextBody = body };
-        foreach (var (_, full) in files)
-            await content.Attachments.AddAsync(full, ct);
-        message.Body = content.ToMessageBody();
+        var message = await Compose(account, recipient, subject!, body, html, files.Select(f => f.Full), ct);
 
         try
         {
@@ -201,8 +202,31 @@ public sealed class SendEmailTool(MailAccount account) : ITool
             {
                 ["to"] = recipient,
                 ["subject"] = message.Subject,
+                ["format"] = html ? "html" : "text",
                 ["attachments"] = files.Count
             });
+    }
+
+    /// <summary>
+    /// The message itself, built apart from the send so what goes out can be checked without a
+    /// server. <paramref name="html"/> puts the body in the HTML part alone: a plain-text copy
+    /// would have to be derived from the markup, and a crude one reads worse than none.
+    /// </summary>
+    internal static async Task<MimeMessage> Compose(
+        MailAccount account, string recipient, string subject, string body, bool html,
+        IEnumerable<string> attachments, CancellationToken ct)
+    {
+        var message = new MimeMessage();
+        message.From.Add(MailboxAddress.Parse(account.Sender));
+        message.To.Add(MailboxAddress.Parse(recipient));
+        message.Subject = subject.Trim();
+
+        var content = html ? new BodyBuilder { HtmlBody = body } : new BodyBuilder { TextBody = body };
+        foreach (var full in attachments)
+            await content.Attachments.AddAsync(full, ct);
+        message.Body = content.ToMessageBody();
+
+        return message;
     }
 
     /// <summary>
@@ -260,7 +284,8 @@ public sealed class SendEmailTool(MailAccount account) : ITool
       "type": "object",
       "properties": {
         "subject": { "type": "string", "description": "The subject line." },
-        "body": { "type": "string", "description": "The message text. Plain text, not HTML." },
+        "body": { "type": "string", "description": "The message text: plain text, or HTML when 'format' is \"html\"." },
+        "format": { "type": "string", "enum": ["text", "html"], "description": "How to read 'body'. Omit for plain text." },
         "to": { "type": "string", "description": "One of the configured recipients. Omit for the first of them." },
         "attachments": {
           "type": "array",

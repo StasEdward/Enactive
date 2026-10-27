@@ -205,6 +205,52 @@ public sealed class SendEmailTests
         Assert.False(result.Success);
     }
 
+    /// <summary>
+    /// A report with a table in it reads as a wall of pipes and dashes in plain text. Asked for
+    /// HTML, the body goes out as HTML, and a mail client renders it instead of showing the tags.
+    /// </summary>
+    [Fact]
+    public async Task A_body_asked_for_as_html_goes_out_as_html()
+    {
+        var message = await SendEmailTool.Compose(
+            Account("me@test"), "me@test", "report", "<p><b>All good</b></p>", html: true, [], CancellationToken.None);
+
+        Assert.Equal("<p><b>All good</b></p>", message.HtmlBody);
+        Assert.Null(message.TextBody);
+    }
+
+    /// <summary>And without asking it stays plain text, so every call written before HTML is unchanged.</summary>
+    [Fact]
+    public async Task A_body_not_asked_for_as_html_stays_plain_text()
+    {
+        var message = await SendEmailTool.Compose(
+            Account("me@test"), "me@test", "report", "<p>not markup</p>", html: false, [], CancellationToken.None);
+
+        Assert.Equal("<p>not markup</p>", message.TextBody);
+        Assert.Null(message.HtmlBody);
+    }
+
+    /// <summary>
+    /// A format it does not know is refused before anything is sent, not guessed at: sending the
+    /// markup as plain text, or the plain text as markup, is a message the person did not mean.
+    /// </summary>
+    [Fact]
+    public async Task An_unknown_format_is_refused_before_anything_is_sent()
+    {
+        using var fx = new EngineFixture();
+
+        var result = await fx.Invoke(
+            new SendEmailTool(Account("me@test")), """{"subject":"report","body":"x","format":"markdown"}""");
+
+        Assert.True(result.DidNotRun, "a call that did not parse, not a send that failed");
+        Assert.Contains("html", result.Error ?? "", StringComparison.Ordinal);
+    }
+
+    /// <summary>The schema tells the model the option is there, or it will never use it.</summary>
+    [Fact]
+    public void The_schema_offers_html()
+        => Assert.Contains("\"html\"", new SendEmailTool(Account("me@test")).Definition.JsonSchema, StringComparison.Ordinal);
+
     /// <summary>A subject is the one thing a message cannot do without.</summary>
     [Fact]
     public async Task Without_a_subject_nothing_is_attempted()
