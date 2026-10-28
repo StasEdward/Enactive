@@ -129,13 +129,15 @@ loaded on the server). **One run per side** - read it as a direction, not a resu
   and the right value, and the rejected report was put back (`RevertRejectedSteps`), so no `.md` was left. The flags
   did what they are for: the step handed its report on with `submit_step_output`, and the planner added
   `file_exists <step 3's report>` as a typed criterion. The engine's own word (Failed) was right.
-- **Environment:** the C# fixtures target `net8.0` and this machine has only .NET 10/11. Without a runtime the tests do
-  not start at all - the worker's, the engine's checks' (reported NOT CHECKED) and the truth's alike, so the truth
-  turns down the reference solution and the bench scores a FALSE PASS that is no one's (`20261028-220204`,
-  `test-coverage`, not counted above). Rerun with `DOTNET_ROLL_FORWARD=Major`; `--fixtures`/`--solutions` agree under
-  it. Two things worth a follow-up: the bench should judge the solution before a live run and refuse to score a
-  scenario whose truth turns it down; and a run whose request asks for passing tests ended Completed with the test
-  check NOT CHECKED and the step review passing "tests added".
+- **Environment:** the C# fixtures target `net8.0` and this machine has only .NET 10/11, so a plain `dotnet test`
+  does not start the tests. In the first `test-coverage` run (`20261028-220204`, not counted above) the run itself was
+  right: step 1's review rejected a coverage "measurement" read from the source and pointed at
+  `DOTNET_ROLL_FORWARD=Major`; the worker ran the tests with it from then on (20 passed, 0 failed, 16/16 lines), and
+  each review cited those calls. Only the checks run without it failed to start the tests - the engine's final
+  regression check (NOT CHECKED, which holds nothing back, rightly) and the bench's truth, which turned down the
+  reference solution as well. So the FALSE PASS was the bench's environment, not the engine's. Rerun with
+  `DOTNET_ROLL_FORWARD=Major`; `--fixtures`/`--solutions` agree under it. Follow-up, since done (PR #63): the bench
+  judges the solution before a live run and scores a scenario whose truth turns it down NOT RUN.
 
 Stamps: off `20261028-220204` (`wiki-drift`), `20261028-220935` (`test-coverage`); on `20261028-221352`.
 
