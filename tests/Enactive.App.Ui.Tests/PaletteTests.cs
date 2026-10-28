@@ -24,6 +24,7 @@ public sealed class PaletteTests
         { nameof(Palette.Agent), typeof(AgentKind) },
         { nameof(Palette.Change), typeof(ChangeState) },
         { nameof(Palette.DiffLine), typeof(DiffLineKind) },
+        { nameof(Palette.DiffRow), typeof(DiffLineKind) },
         { nameof(Palette.WorkspaceEdge), typeof(WorkspacePlace) },
         { nameof(Palette.Reach), typeof(ModelReach) },
         { nameof(Palette.Health), typeof(Enactive.Providers.ProviderHealth) },

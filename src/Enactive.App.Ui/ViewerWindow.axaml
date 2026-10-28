@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:Enactive.App.Ui"
+        xmlns:vm="using:Enactive.App.Ui.ViewModels"
         x:Class="Enactive.App.Ui.ViewerWindow"
         Title="Enactive"
         Width="820" Height="580"
@@ -32,9 +33,51 @@
                 <Button Grid.Column="2" x:Name="CopyButton" Content="Copy all" Padding="12,4" />
             </Grid>
 
+            <!-- Above the document, before it rather than after: what it is a reading of - for a review, what the
+                 diff is against, or why there is no diff (WrittenFileReview). -->
+            <TextBlock DockPanel.Dock="Top" x:Name="LeadText" Classes="hint" TextWrapping="Wrap"
+                       IsVisible="False" Margin="0,0,0,8" />
+
             <Panel>
                 <ScrollViewer x:Name="Rendered" IsVisible="False">
                     <ContentControl x:Name="Body" Margin="0,0,12,0" />
+                </ScrollViewer>
+
+                <!-- A review's diff (FileReviewViewModel): each line with its numbers in the file as it was and as it
+                     is, in a gutter beside it and never in it - the line is the diff's own text. An added or removed
+                     line is tinted across its row (Palette.DiffRow). Virtualized: a diff runs to thousands of lines
+                     (LineDiff compares files of up to two thousand each way), and a control per line for all of them
+                     made opening one wait on drawing what nobody had scrolled to. -->
+                <ScrollViewer x:Name="DiffPane" IsVisible="False"
+                              HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                              Background="{DynamicResource Brand.Scrim}">
+                    <ItemsControl x:Name="DiffRows" Margin="0,4">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <VirtualizingStackPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DiffRowViewModel">
+                                <Grid ColumnDefinitions="44,44,*"
+                                      Background="{Binding Kind, Converter={x:Static local:Palette.DiffRow}}">
+                                    <TextBlock Grid.Column="0" Text="{Binding Old}" TextAlignment="Right" Padding="0,0,6,0"
+                                               Foreground="{DynamicResource Brand.TextFaint}"
+                                               FontFamily="Consolas, Menlo, monospace" FontSize="11"
+                                               VerticalAlignment="Center" />
+                                    <Border Grid.Column="1" BorderBrush="{DynamicResource Brand.Line}" BorderThickness="0,0,1,0">
+                                        <TextBlock Text="{Binding New}" TextAlignment="Right" Padding="0,0,6,0"
+                                                   Foreground="{DynamicResource Brand.TextFaint}"
+                                                   FontFamily="Consolas, Menlo, monospace" FontSize="11"
+                                                   VerticalAlignment="Center" />
+                                    </Border>
+                                    <TextBlock Grid.Column="2" Text="{Binding Text}" Padding="10,1,12,1"
+                                               Foreground="{Binding Kind, Converter={x:Static local:Palette.DiffLine}}"
+                                               FontFamily="Consolas, Menlo, monospace" FontSize="12" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                 </ScrollViewer>
 
                 <TextBox x:Name="ContentBox" IsReadOnly="True" AcceptsReturn="True"

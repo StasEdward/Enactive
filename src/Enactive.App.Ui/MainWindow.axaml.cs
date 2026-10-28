@@ -1091,7 +1091,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
                         switch (_files.Apply(ev))
                         {
                             case FileNews.Written written:
-                                AddArtifact(written.Path);
+                                AddArtifact(written.Path, ev.RunId);
                                 break;
                             case FileNews.Staged:
                                 AddStagedArtifact();
@@ -1186,8 +1186,12 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
         private static string FormatElapsed(TimeSpan span) => RunElapsed.Format(span);
 
-        /// <summary>A card for a file the run wrote - once per file: RunFiles tells a path only the first time.</summary>
-        private void AddArtifact(string relative)
+        /// <summary>
+        /// A card for a file the run wrote - once per file: RunFiles tells a path only the first time. <paramref name="runId"/>
+        /// is the run's id in its record (the event's), under which its store kept how the file was before it: what Review
+        /// diffs against.
+        /// </summary>
+        private void AddArtifact(string relative, Guid runId)
         {
             var root = _currentWorkspaceRoot;
 
@@ -1200,7 +1204,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             // "reverted" is set on it later - and a second object would lose it.
             var item = new ArtifactItemViewModel(
                 relative,
-                card => ShowFile(root, card),
+                card => ShowFile(root, runId, card),
                 card => _ = UndoLiveArtifactAsync(root, card, createdByThisRun),
                 createdByThisRun ? "Delete" : "Undo");
 
@@ -2069,7 +2073,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
 
         var past = new PastRunViewModel(
             record,
-            item => ShowFile(root, item),
+            item => ShowFile(root, record.RunId, item),
             item => _ = DeletePastArtifactAsync(root, item),
             ReachOf,
             RunHistory.AttemptsOf(_vm.Runs.All, record),
@@ -2203,22 +2207,21 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         _ = RunAsync(background: false, again.Spec, again.TaskId);
     }
 
-    /// <summary>Opens an artifact in the viewer. Reading is safe at any age.</summary>
-    private async void ShowFile(string root, ArtifactItemViewModel item)
+    /// <summary>
+    /// Reviews an artifact in the viewer: what the run changed in it, as a diff against how it was before the run, or the
+    /// file as it is with why there is no diff - the service's review (WrittenFileReview), so the window and the browser
+    /// show one file the same way. Reading is safe at any age.
+    /// </summary>
+    private async void ShowFile(string root, Guid runId, ArtifactItemViewModel item)
     {
         try
         {
-            // Only a file under the workspace: a record naming one outside it is not this folder's to show.
-            var full = RunHistoryService.FileOf(root, item.RelativePath)
-                       ?? throw new InvalidOperationException("That path is not in this workspace.");
-
-            // The PATH goes with the text, because it is what decides how the file is shown -
+            // Only a file under the workspace, and never through a link: WorkspaceFiles, under the review, refuses the rest.
+            // The PATH goes with the text, because it is what decides how a file without a diff is shown -
             // see ArtifactViewerCatalog. A run's deliverable is often one Markdown document, and
             // every one of them used to arrive as monospaced source that does not wrap.
-            ViewerWindow.Show(
-                this, item.RelativePath,
-                await File.ReadAllTextAsync(full),
-                item.RelativePath);
+            var review = await WrittenFileReview.OfAsync(root, runId, item.RelativePath, CancellationToken.None);
+            ViewerWindow.ShowReview(this, item.RelativePath, item.RelativePath, new FileReviewViewModel(review));
         }
         catch (Exception ex)
         {
