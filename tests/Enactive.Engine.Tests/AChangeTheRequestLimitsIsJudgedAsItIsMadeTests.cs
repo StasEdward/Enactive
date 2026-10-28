@@ -171,6 +171,86 @@ public sealed class AChangeTheRequestLimitsIsJudgedAsItIsMadeTests
         Assert.Contains("went ahead unchecked", decision.Note, StringComparison.Ordinal);
     }
 
+    // ── after a command ───────────────────────────────────────────────────
+    //
+    // Bench build-error, 2026-10-18: refused twice on edit_file, the worker rewrote the file with PowerShell, which no
+    // question was put about. A command names no paths, so it is asked about after it ran, on what it changed.
+
+    private static readonly ToolCall Command = new("k1", "run_command", """{"command":"powershell -c \"(gc prices.txt) -replace 3,2 | sc prices.txt\""}""");
+
+    private static Task<ChangeLimitGuard.AfterTheFact> Made(ChangeLimitGuard guard, string path, int step = 1,
+        FileChangeKind kind = FileChangeKind.Modified)
+        => guard.CheckMadeAsync(step, "Correct the totals", "I will fix the price instead.", Command,
+            [new FileChange(path, kind, "-apple 3\n+apple 2", false)], default);
+
+    [Fact]
+    public async Task A_command_s_change_is_refused_after_the_fact()
+    {
+        var planner = new FakeChatProvider(Turn.Says("""{"allow":false,"reason":"the request says to leave the price list as it is"}"""));
+
+        var made = await Made(Guard(planner), "prices.txt");
+
+        Assert.Equal(["prices.txt"], made.Refused);
+        Assert.Equal("the request says to leave the price list as it is", made.Reason);
+        var question = string.Join("\n", planner.Requests[0].Messages.Select(m => m.Content));
+        Assert.Contains("-replace 3,2", question, StringComparison.Ordinal);   // the command
+        Assert.Contains("+apple 2", question, StringComparison.Ordinal);       // what it changed
+        Assert.Contains("A command a step of a plan ran has changed files", question, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_command_s_change_the_request_allows_stands()
+    {
+        var planner = new FakeChatProvider(Turn.Says("""{"allow":true,"reason":"correcting totals is the request"}"""));
+
+        Assert.Empty((await Made(Guard(planner), "orders.txt")).Refused);
+    }
+
+    /// <summary>An edit_file and a command share one allowance: a file allowed to the step is not asked about again.</summary>
+    [Fact]
+    public async Task A_file_allowed_by_an_edit_is_not_asked_about_after_a_command()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("orders.txt", "total 5");
+        var planner = new FakeChatProvider { WhenExhausted = Turn.Says("""{"allow":true,"reason":"correcting totals is the request"}""") };
+        var guard = Guard(planner);
+        Assert.Null((await Check(guard, fx, new DiskArtifactStore(fx.Workspace).BeginStep(), "orders.txt")).Refusal);
+
+        var made = await Made(guard, "orders.txt");
+
+        Assert.Empty(made.Refused);
+        Assert.Single(planner.Requests);
+    }
+
+    [Fact]
+    public async Task Refused_three_times_a_command_s_change_is_refused_without_asking()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("prices.txt", "apple 3");
+        var planner = new FakeChatProvider { WhenExhausted = Turn.Says("""{"allow":false,"reason":"leave the price list"}""") };
+        var guard = Guard(planner);
+        var store = new DiskArtifactStore(fx.Workspace).BeginStep();
+        for (var i = 0; i < ChangeLimitGuard.AsksPerFile; i++)
+            await Check(guard, fx, store, "prices.txt");
+
+        var made = await Made(guard, "prices.txt");
+
+        Assert.Equal(["prices.txt"], made.Refused);
+        Assert.Equal(ChangeLimitGuard.AsksPerFile, planner.Requests.Count);
+        Assert.Contains("not asked again", made.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Without_an_answer_a_command_s_change_stands_and_is_said()
+    {
+        var planner = new FakeChatProvider { WhenExhausted = Turn.Says("I cannot say.") };
+
+        var made = await Made(Guard(planner), "prices.txt");
+
+        Assert.Empty(made.Refused);
+        Assert.Contains("went ahead unchecked", made.Note, StringComparison.Ordinal);
+    }
+
     // ── a run ─────────────────────────────────────────────────────────────
 
     /// <summary>

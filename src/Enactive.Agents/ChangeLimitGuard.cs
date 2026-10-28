@@ -129,6 +129,62 @@ internal sealed class ChangeLimitGuard(
                   + "is put back as it was with restore_file.", round.Usage);
     }
 
+    /// <summary>What a question after a command decided: the files refused, the reason the step is told, and what it cost.</summary>
+    internal sealed record AfterTheFact(IReadOnlyList<string> Refused, string? Reason, TokenUsage Usage, string? Note = null)
+    {
+        public static AfterTheFact Stands { get; } = new([], null, TokenUsage.None);
+    }
+
+    /// <summary>
+    /// The same question about a change a command has already made. A command names no paths, so it cannot be asked
+    /// about before it runs: bench build-error, 2026-10-18, the worker refused twice on edit_file rewrote the file with
+    /// PowerShell, and no question was put. <paramref name="made"/> holds the files the run found that the command
+    /// changed; a deleted file and a rename's old path are removals. The allowance and the refusals are the ones
+    /// <see cref="CheckAsync"/> keeps: a file allowed to the step through an edit is not asked about again, and one
+    /// refused <see cref="AsksPerFile"/> times is refused without asking.
+    /// </summary>
+    public async Task<AfterTheFact> CheckMadeAsync(int? stepNo, string? stepTitle, string? saidByStep, ToolCall call,
+        IReadOnlyList<FileChange> made, CancellationToken ct)
+    {
+        static bool Removal(FileChange c) => c.Kind is FileChangeKind.Deleted or FileChangeKind.Renamed;
+        (int?, string, bool) Key(FileChange c) => (stepNo, ShellLookup.Normal(c.Path).ToLowerInvariant(), Removal(c));
+
+        List<FileChange> asked;
+        lock (_gate)
+        {
+            asked = made.Where(c => !_allowed.Contains(Key(c))).ToList();
+            if (asked.FirstOrDefault(c => _refused.GetValueOrDefault(Key(c)) >= AsksPerFile) is { } spent)
+                return new([.. asked.Select(c => c.Path)],
+                    $"this step's changes to '{spent.Path}' were refused {AsksPerFile} times against what the request says may "
+                    + "be changed, and it is not asked again", TokenUsage.None);
+        }
+        if (asked.Count == 0) return AfterTheFact.Stands;
+
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.System(AfterInstruction),
+            ChatMessage.User(MadeQuestion(stepTitle, saidByStep, call, asked))
+        };
+        var round = await StructuredAnswer.AskAsync(provider, messages,
+            current => new ChatRequest(model.Model, current, Temperature: 0, Purpose: GenerationPurpose.Planning,
+                OutputTokenLimit: Math.Max(1, outputBudget)),
+            (answer, _) => Read(answer),
+            errors => StructuredAnswer.Listed(errors, "Return ONLY JSON {\"allow\":true|false,\"reason\":\"...\"}."),
+            budget.TurnExhaustedAfter, requireComplete: true, ct);
+
+        if (round.Value is not { } verdict)
+            return new([], null, round.Usage, $"A command's change to {string.Join(", ", asked.Select(c => c.Path))} went ahead "
+                       + $"unchecked against the request's limit on changes: {round.Shortfall("the question")}.");
+
+        lock (_gate)
+            foreach (var change in asked)
+            {
+                if (verdict.Allow) _allowed.Add(Key(change));
+                else _refused[Key(change)] = _refused.GetValueOrDefault(Key(change)) + 1;
+            }
+        return verdict.Allow ? new([], null, round.Usage) : new([.. asked.Select(c => c.Path)], verdict.Reason, round.Usage);
+    }
+
     /// <summary>What asking cost, as the run counts it: against the run's budget, as a review.</summary>
     internal WorkEvent UsageEvent(Guid taskId, Guid runId, int? stepNo, TokenUsage usage)
     {
@@ -147,6 +203,40 @@ internal sealed class ChangeLimitGuard(
         one purpose the request asks for and not for another it forbids. A change the request itself asks for is allowed.
         Return ONLY JSON {"allow":true|false,"reason":"..."}; the reason is said to the step when the change is refused.
         """;
+
+    private const string AfterInstruction = """
+        A command a step of a plan ran has changed files that were in the workspace before the run. The request limits
+        what may be changed, in its own words below. Decide whether the request allows THESE changes, made in THIS step,
+        for what the step is doing. A limit forbids what it names - judge by what the change is for: the same file may be
+        changed for one purpose the request asks for and not for another it forbids. A change the request itself asks for
+        is allowed. Return ONLY JSON {"allow":true|false,"reason":"..."}; the reason is said to the step when the change
+        is refused.
+        """;
+
+    private string MadeQuestion(string? stepTitle, string? saidByStep, ToolCall call, IReadOnlyList<FileChange> asked)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("The request:").AppendLine(request).AppendLine();
+        sb.AppendLine("What the request says may be changed:");
+        foreach (var limit in limits) sb.AppendLine($"- \"{limit}\"");
+        sb.AppendLine();
+        sb.AppendLine("The step: " + (stepTitle ?? "(not a planned step)"));
+        if (!string.IsNullOrWhiteSpace(saidByStep))
+            sb.AppendLine("What the step said as it ran the command:").AppendLine(Cut(saidByStep.Trim()));
+        sb.AppendLine();
+        sb.AppendLine($"The command: {call.Name} {Cut(call.ArgumentsJson ?? "")}");
+        foreach (var change in asked)
+        {
+            sb.AppendLine().AppendLine(change.Kind switch
+            {
+                FileChangeKind.Deleted => $"It took {change.Path} away: the file is gone, whole.",
+                FileChangeKind.Renamed => $"It moved {change.Path} away from where it was.",
+                _ => $"It changed {change.Path}:"
+            });
+            sb.AppendLine(change.Diff is { Length: > 0 } diff ? Cut(diff) : "(no diff: the workspace is not under git)");
+        }
+        return sb.ToString();
+    }
 
     private string Question(string? stepTitle, string? saidByStep, ToolCall call, IReadOnlyList<(string Path, string? Now)> asked,
         IReadOnlySet<string> removed)
