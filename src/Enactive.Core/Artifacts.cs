@@ -93,6 +93,13 @@ public interface IArtifactStore
     /// <summary>How the workspace was when the run this one carries on began, as that run's record kept it - null when none was kept.</summary>
     WorkspaceSnapshot? StartCarriedOn => null;
 
+    /// <summary>
+    /// How the workspace was when this run began, as measured (<see cref="MeasuredFrom"/>) - null when it was not. Read
+    /// whole by what asks of many paths at once: asked path by path through <see cref="BeforeRunAsync"/>, each answer
+    /// takes the workspace again, and a formatter's 300 files took 300 snapshots (review of CommandEffect, 2026-10-28).
+    /// </summary>
+    WorkspaceSnapshot? MeasuredStart => null;
+
     /// <summary>A view for one step of the plan, whose writes are recorded as that step's - see <see cref="BeginStep()"/>.</summary>
     IArtifactScope BeginStep(Guid step) => BeginStep();
 
@@ -293,6 +300,7 @@ public sealed class ArtifactScope : IArtifactScope
     public IReadOnlyCollection<string> PendingPaths => _store.PendingBy(_owner);
     public bool CanRestore(string relativePath) => _store.CanRestore(relativePath);
     public Task<BeforeRun> BeforeRunAsync(string relativePath, CancellationToken ct) => _store.BeforeRunAsync(relativePath, ct);
+    public WorkspaceSnapshot? MeasuredStart => _store.MeasuredStart;
     public IArtifactScope BeginStep(Guid step) => _store.BeginStep(step);
 
     // Steps do not nest, so a scope opened from a scope is a scope on the store beneath it.
@@ -339,6 +347,7 @@ internal sealed class UnownedScope : IArtifactScope
     public IReadOnlyCollection<string> PendingPaths => _store.PendingPaths;
     public bool CanRestore(string relativePath) => _store.CanRestore(relativePath);
     public Task<BeforeRun> BeforeRunAsync(string relativePath, CancellationToken ct) => _store.BeforeRunAsync(relativePath, ct);
+    public WorkspaceSnapshot? MeasuredStart => _store.MeasuredStart;
     public IArtifactScope BeginStep() => this;
 }
 

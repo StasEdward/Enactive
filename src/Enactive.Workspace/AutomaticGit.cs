@@ -54,6 +54,47 @@ internal static class AutomaticGit
         catch { return (-1, ""); }
     }
 
+    /// <summary>
+    /// <see cref="RunAsync"/> with git's output written to <paramref name="destination"/> as bytes. A blob read as text
+    /// would come back decoded as UTF-8 and cut at 2 MB - not the bytes that were there, which is all a put-back may
+    /// write (ExactRestore). The exit code, or -1 where git was refused or did not finish.
+    /// </summary>
+    public static async Task<int> RunToFileAsync(string root, IReadOnlyList<string> args, string destination,
+        CancellationToken ct, int timeoutMs = 30000)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        lifetime.CancelAfter(timeoutMs);
+        try
+        {
+            var config = await RunProcessAsync(StartInfo(root,
+                ["config", "--includes", "--name-only", "--get-regexp", "^(filter\\.|diff\\.external$|diff\\..*\\.(command|textconv)$)"]), lifetime.Token);
+            if (config.Exit != 1) return -1;
+            using var process = new Process { StartInfo = StartInfo(root, args) };
+            if (!process.Start()) return -1;
+            process.StandardInput.Close();
+            var errors = process.StandardError.ReadToEndAsync(lifetime.Token);
+            try
+            {
+                await using (var file = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None))
+                    await process.StandardOutput.BaseStream.CopyToAsync(file, lifetime.Token);
+                await process.WaitForExitAsync(lifetime.Token);
+                await errors;
+                return process.ExitCode;
+            }
+            finally
+            {
+                if (!process.HasExited)
+                {
+                    try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+                    await process.WaitForExitAsync(CancellationToken.None);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return -1; }
+        catch (OperationCanceledException) { throw; }
+        catch { return -1; }
+    }
+
     private static async Task<(int Exit, string Output)> RunProcessAsync(ProcessStartInfo psi, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();

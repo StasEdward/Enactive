@@ -328,6 +328,8 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
 
     public WorkspaceSnapshot? StartCarriedOn => _priorStart;
 
+    public WorkspaceSnapshot? MeasuredStart => _runStart?.Snapshot;
+
     private static string StartPath(string root, Guid runId)
         => Path.Combine(Path.GetDirectoryName(JournalPath(root, runId))!, "start.json");
 

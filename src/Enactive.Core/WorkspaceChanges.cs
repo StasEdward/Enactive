@@ -21,6 +21,33 @@ public interface IWorkspaceChanges : IDisposable
     Task<IReadOnlyList<FileChange>?> ComparePathsAsync(
         WorkspaceSnapshot before, WorkspaceSnapshot after, CancellationToken ct)
         => CompareAsync(before, after, ct);
+
+    /// <summary>
+    /// Writes <paramref name="path"/> back as <paramref name="before"/> holds it, where those are exactly the bytes that
+    /// were there and the file is still as <paramref name="after"/> saw it; otherwise writes nothing and says why.
+    /// <paramref name="changedWithIt"/> is every path changed between the two.
+    /// </summary>
+    Task<PutBack> PutBackAsync(WorkspaceSnapshot before, WorkspaceSnapshot after, string path,
+        IReadOnlyCollection<string> changedWithIt, CancellationToken ct)
+        => Task.FromResult(PutBack.Left(PutBackReasons.NotGit));
+}
+
+/// <summary>Whether a file was put back, and, where it was not, why - in words a step is told.</summary>
+public sealed record PutBack(bool Done, string? Why)
+{
+    public static PutBack Back { get; } = new(true, null);
+    public static PutBack Left(string why) => new(false, why);
+}
+
+/// <summary>Why a file was not put back (<see cref="IWorkspaceChanges.PutBackAsync"/>).</summary>
+public static class PutBackReasons
+{
+    public const string NotGit = "not a git workspace";
+    public const string Conversion = "a line-ending conversion applies to it";
+    public const string ChangedAgain = "it changed again after the command";
+    public const string NotAFile = "it is not a regular file";
+    public const string Attributes = "the command changed a .gitattributes";
+    public const string NotExact = "its bytes could not be written back exactly";
 }
 
 /// <summary>One moment of the workspace: a git tree id, or the size, write time and (up to a limit) content hash of every file.</summary>

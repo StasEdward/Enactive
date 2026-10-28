@@ -171,6 +171,127 @@ public sealed class AChangeTheRequestLimitsIsJudgedAsItIsMadeTests
         Assert.Contains("went ahead unchecked", decision.Note, StringComparison.Ordinal);
     }
 
+    // ── after a command ───────────────────────────────────────────────────
+    //
+    // Bench build-error, 2026-10-18: refused twice on edit_file, the worker rewrote the file with PowerShell, which no
+    // question was put about. A command names no paths, so it is asked about after it ran, on what it changed.
+
+    private static readonly ToolCall Command = new("k1", "run_command", """{"command":"powershell -c \"(gc prices.txt) -replace 3,2 | sc prices.txt\""}""");
+
+    private static Task<ChangeLimitGuard.AfterTheFact> Made(ChangeLimitGuard guard, string path, int step = 1,
+        FileChangeKind kind = FileChangeKind.Modified)
+        => guard.CheckMadeAsync(step, "Correct the totals", "I will fix the price instead.", Command,
+            [new FileChange(path, kind, "-apple 3\n+apple 2", false)], default);
+
+    private static FileChange Changed(string path, string diff = "-apple 3\n+apple 2") => new(path, FileChangeKind.Modified, diff, false);
+
+    [Fact]
+    public async Task A_command_s_change_is_refused_after_the_fact()
+    {
+        var planner = new FakeChatProvider(Turn.Says("""{"refused":["prices.txt"],"reason":"the request says to leave the price list as it is"}"""));
+
+        var made = await Made(Guard(planner), "prices.txt");
+
+        Assert.Equal(["prices.txt"], made.Refused);
+        Assert.Equal("the request says to leave the price list as it is", made.Reason);
+        var question = string.Join("\n", planner.Requests[0].Messages.Select(m => m.Content));
+        Assert.Contains("-replace 3,2", question, StringComparison.Ordinal);   // the command
+        Assert.Contains("+apple 2", question, StringComparison.Ordinal);       // what it changed
+        Assert.Contains("A command a step of a plan ran has changed files", question, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_command_s_change_the_request_allows_stands()
+    {
+        var planner = new FakeChatProvider(Turn.Says("""{"refused":[],"reason":""}"""));
+
+        Assert.Empty((await Made(Guard(planner), "orders.txt")).Refused);
+    }
+
+    /// <summary>
+    /// One command, two files: the one the request asks for and the one it forbids. A single verdict for both put the
+    /// allowed one back too - work the step was asked to do, undone. Each file is answered on its own.
+    /// </summary>
+    [Fact]
+    public async Task Each_file_a_command_changed_is_answered_on_its_own()
+    {
+        var planner = new FakeChatProvider(Turn.Says("""{"refused":["prices.txt"],"reason":"leave the price list"}"""));
+        var guard = Guard(planner);
+
+        var made = await guard.CheckMadeAsync(1, "Correct the totals", null, Command, [Changed("orders.txt"), Changed("prices.txt")], default);
+
+        Assert.Equal(["prices.txt"], made.Refused);
+        Assert.Empty((await guard.CheckMadeAsync(1, "Correct the totals", null, Command, [Changed("orders.txt")], default)).Refused);
+        Assert.Single(planner.Requests);   // orders.txt was allowed: not asked again
+    }
+
+    /// <summary>A file refused three times is refused without asking - and does not take the other files with it.</summary>
+    [Fact]
+    public async Task A_spent_file_does_not_take_the_others_with_it()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("prices.txt", "apple 3");
+        var planner = new FakeChatProvider { WhenExhausted = Turn.Says("""{"allow":false,"reason":"leave the price list"}""") };
+        var guard = Guard(planner);
+        var store = new DiskArtifactStore(fx.Workspace).BeginStep();
+        for (var i = 0; i < ChangeLimitGuard.AsksPerFile; i++)
+            await Check(guard, fx, store, "prices.txt");
+        planner.WhenExhausted = Turn.Says("""{"refused":[],"reason":""}""");
+
+        var made = await guard.CheckMadeAsync(1, "Correct the totals", null, Command, [Changed("orders.txt"), Changed("prices.txt")], default);
+
+        Assert.Equal(["prices.txt"], made.Refused);
+        Assert.Contains("not asked again", made.Reason, StringComparison.Ordinal);
+        var question = planner.Requests[^1].Messages[1].Content!;
+        Assert.Contains("orders.txt", question, StringComparison.Ordinal);
+        Assert.DoesNotContain("It changed prices.txt", question, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A formatter over hundreds of files: every diff in full is more than a planner's window, the question fails, and the
+    /// forbidden change goes ahead unchecked. The first files are shown with their diffs, the rest by name.
+    /// </summary>
+    [Fact]
+    public async Task A_question_about_many_files_shows_their_diffs_up_to_a_limit_and_names_the_rest()
+    {
+        var planner = new FakeChatProvider(Turn.Says("""{"refused":[],"reason":""}"""));
+        var many = Enumerable.Range(1, ChangeLimitGuard.DiffsShown + 2).Select(i => Changed($"f{i:00}.txt", $"DIFF-{i:00}")).ToArray();
+
+        await Guard(planner).CheckMadeAsync(1, "Format", null, Command, many, default);
+
+        var question = planner.Requests[0].Messages[1].Content!;
+        Assert.Contains($"DIFF-{ChangeLimitGuard.DiffsShown:00}", question, StringComparison.Ordinal);
+        Assert.DoesNotContain($"DIFF-{ChangeLimitGuard.DiffsShown + 1:00}", question, StringComparison.Ordinal);
+        Assert.Contains($"f{ChangeLimitGuard.DiffsShown + 2:00}.txt", question, StringComparison.Ordinal);
+    }
+
+    /// <summary>An edit_file and a command share one allowance: a file allowed to the step is not asked about again.</summary>
+    [Fact]
+    public async Task A_file_allowed_by_an_edit_is_not_asked_about_after_a_command()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("orders.txt", "total 5");
+        var planner = new FakeChatProvider { WhenExhausted = Turn.Says("""{"allow":true,"reason":"correcting totals is the request"}""") };
+        var guard = Guard(planner);
+        Assert.Null((await Check(guard, fx, new DiskArtifactStore(fx.Workspace).BeginStep(), "orders.txt")).Refusal);
+
+        var made = await Made(guard, "orders.txt");
+
+        Assert.Empty(made.Refused);
+        Assert.Single(planner.Requests);
+    }
+
+    [Fact]
+    public async Task Without_an_answer_a_command_s_change_stands_and_is_said()
+    {
+        var planner = new FakeChatProvider { WhenExhausted = Turn.Says("I cannot say.") };
+
+        var made = await Made(Guard(planner), "prices.txt");
+
+        Assert.Empty(made.Refused);
+        Assert.Contains("went ahead unchecked", made.Note, StringComparison.Ordinal);
+    }
+
     // ── a run ─────────────────────────────────────────────────────────────
 
     /// <summary>

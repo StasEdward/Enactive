@@ -4922,7 +4922,33 @@ public sealed partial class Orchestrator : IOrchestrator
                 // would make that wording load-bearing.
                 if (readResult is null) yield return Invoked(call);
 
+                // A tool that names no paths, in a step under the request's limit on changes: measured around, and what it
+                // changed of the files the run found asked about after it ran (CommandEffect - bench build-error,
+                // 2026-10-18, a PowerShell rewrite of the forbidden file that no question was put about). Reads run side by
+                // side above are never such a tool, so only a call run here is measured.
+                var commandEffect = readResult is null && CommandEffect.Applies(changeLimits, frame, _tools.DefinitionOf(call.Name))
+                    ? new CommandEffect(changeLimits!, frame, stepTitle) : null;
+                var beforeCommand = commandEffect is null ? null : await commandEffect.BeforeAsync(ct);
+
                 var invocation = readResult ?? await ToolInvocation.ExecuteAsync(call, _tools, CallContext(), ct);
+                IReadOnlyList<WorkEvent> commandEvents = [];
+                string? commandRefusal = null;
+                if (commandEffect is not null)
+                {
+                    var held = await commandEffect.AfterAsync(call, beforeCommand,
+                        frame.Messages.LastOrDefault(m => m.Role == ChatRole.Assistant)?.Content, ct);
+                    // Into the result before it is accounted: the model, the journal and the review read the same words.
+                    // On a failed call, with its error - the line a failure is told by.
+                    if (held.Appended is { } refused)
+                        invocation = invocation with
+                        {
+                            Value = invocation.Value.Success
+                                ? invocation.Value with { Output = (invocation.Value.Output ?? "") + "\n" + refused }
+                                : invocation.Value with { Error = (invocation.Value.Error ?? "") + "\n" + refused }
+                        };
+                    commandRefusal = held.Appended;
+                    commandEvents = held.Events;
+                }
                 // A read of what an earlier run left is told as that, to the model and in the evidence alike: its account
                 // of what it found then, not a measurement of now (run 341c2f: an old report's figures handed on as found).
                 if (invocation.Value.Success && _tools.DefinitionOf(call.Name)?.FileCoverage == FileCoverageBehavior.Read
@@ -4944,6 +4970,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield return result.Success
                     ? Ev(EventKind.ToolResult, $"{call.Name} -> ok: {result.Output}")
                     : Ev(EventKind.ToolResult, $"{call.Name} -> failed: {result.Error}");
+                foreach (var ev in commandEvents)
+                    yield return ev;
 
                 foreach (var reference in result.Artifacts)
                 {
@@ -4977,9 +5005,13 @@ public sealed partial class Orchestrator : IOrchestrator
                 // which could work, and ended with a review of a diff the model never saw. The same
                 // class as every other defect this month: the record somebody works from is
                 // shortened, and nothing says so.
-                var reply = TestRunDescribed(call, result) ?? (result.Success
+                var testRun = TestRunDescribed(call, result);
+                var reply = testRun ?? (result.Success
                     ? (result.Output ?? "OK")
                     : $"ERROR: {failure}");
+                // A test run is told by its summary, which keeps the output's first line only: a refusal after the fact
+                // appended to the output was lost, and the step built on a file that had gone back (review, 2026-10-28).
+                if (testRun is not null && commandRefusal is not null) reply += "\n" + commandRefusal;
 
                 // A shell lookup that exited non-zero: not forgiven - its exit cannot tell "not there"
                 // from "went wrong" - but pointed at the tools that answer the question as a result,

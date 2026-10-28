@@ -366,6 +366,13 @@ public sealed class WorkspaceChanges : IWorkspaceChanges
                || (before.Hash is { } a && after.Hash is { } b ? a != b : before.Ticks != after.Ticks);
     }
 
+    /// <summary>Byte for byte from the git snapshot, or not at all (<see cref="ExactRestore"/>); outside git there are no bytes.</summary>
+    public Task<PutBack> PutBackAsync(WorkspaceSnapshot before, WorkspaceSnapshot after, string path,
+        IReadOnlyCollection<string> changedWithIt, CancellationToken ct)
+        => before.Tree is { } from && after.Tree is { } to
+            ? ExactRestore.PutBackAsync(_root, from, to, path, changedWithIt, ct)
+            : Task.FromResult(PutBack.Left(PutBackReasons.NotGit));
+
     private Task<(int Exit, string Output)> GitAsync(CancellationToken ct, params string[] args)
         => AutomaticGit.RunAsync(_root, args, ct, index: _index);
 
