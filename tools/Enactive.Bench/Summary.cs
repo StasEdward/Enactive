@@ -42,7 +42,8 @@ internal static class Summary
             string Delta(double? a, double? b) => a is { } x && b is { } y && y > 0 ? $" ({(x - y >= 0 ? "+" : "")}{N((x - y) / y * 100)}%)" : "";
             var coverage = r.Checks.Where(c => c.OutOf is not null).Select(c => $"{c.Found}/{c.OutOf}").FirstOrDefault() ?? "";
             var cached = m is null ? 0 : m.TokensByPurpose.Values.Sum(t => t.Cached);
-            sb.Append($"| {r.Scenario} | {r.Outcome} | {(r.TruthHolds ? "holds" : "fails")} | **{r.Verdict}**")
+            var truth = r.Verdict == Readiness.NotRun ? "-" : r.TruthHolds ? "holds" : "fails";
+            sb.Append($"| {r.Scenario} | {r.Outcome} | {truth} | **{r.Verdict}**")
               .Append(was is not null && was.Verdict != r.Verdict ? $" (was {was.Verdict})" : "")
               .Append($" | {N(m?.Seconds ?? r.WallSeconds)}{Delta(m?.Seconds, was?.Metrics?.Seconds)}")
               .Append($" | {m?.Steps} | {m?.ReviewsPassed}/{m?.ReviewsFailed} | {m?.ToolCalls}")
@@ -50,10 +51,14 @@ internal static class Summary
               .Append($" | {m?.CacheBreaks} | {coverage} |").AppendLine();
         }
 
-        var wrong = now.Results.Count(r => r.Verdict.StartsWith("FALSE", StringComparison.Ordinal));
-        sb.AppendLine().AppendLine($"False PASS: {now.Results.Count(r => r.Verdict == "FALSE PASS")}, false FAIL: "
-            + $"{now.Results.Count(r => r.Verdict == "FALSE FAIL")}, task success (truth holds): "
-            + $"{now.Results.Count(r => r.TruthHolds)} of {now.Results.Count}.");
+        // A scenario not run is no task this engine did or failed: counted apart, so "1 of 2" never hides a machine
+        // that could not judge the other.
+        var ran = now.Results.Where(r => r.Verdict != Readiness.NotRun).ToArray();
+        sb.AppendLine().AppendLine($"False PASS: {ran.Count(r => r.Verdict == "FALSE PASS")}, false FAIL: "
+            + $"{ran.Count(r => r.Verdict == "FALSE FAIL")}, task success (truth holds): "
+            + $"{ran.Count(r => r.TruthHolds)} of {ran.Length}.");
+        if (ran.Length < now.Results.Count)
+            sb.AppendLine().AppendLine($"Not run here: {now.Results.Count - ran.Length} (the truth turns down the reference solution on this machine).");
 
         foreach (var r in now.Results)
         {
@@ -65,7 +70,7 @@ internal static class Summary
             if (r.Note is not null) sb.AppendLine($"- Run: {r.Note}");
             if (r.Metrics?.Reason is { Length: > 0 } reason && reason != "null") sb.AppendLine($"- Engine's reason: {reason}");
             foreach (var c in failed) sb.AppendLine($"- Truth `{c.Id}`{(c.Required ? "" : " (optional)")}: {c.Detail}");
-            sb.AppendLine($"- Workspace left at `{r.Workspace}`");
+            if (r.Workspace.Length > 0) sb.AppendLine($"- Workspace left at `{r.Workspace}`");
         }
         return sb.ToString();
     }
