@@ -4,8 +4,8 @@ Date: 2026-10-16
 
 Status (2026-10-19): PR 0, PR 0b and Phases 1, 2, 3 and 4.2 are built and on `master` (PR #58, merge `283dca7`);
 the bench measurements for Phases 1-3 are in `aidlc-adoption-bench.md`. Still open: Phase 1.5 (defaults - a second
-measurement is due), the bench follow-ups (section "Bench follow-ups" below), the deferred 4.0/4.1/4.3, and Phase 5,
-which is not started.
+measurement was taken on 2026-10-28 with one run per side; more are due before a default changes), the bench
+follow-ups (section "Bench follow-ups" below), the deferred 4.0/4.1/4.3, and Phase 5, which is not started.
 
 | Part | Status | Commits |
 | --- | --- | --- |
@@ -261,8 +261,10 @@ The default obligation and the required declaration are distinct: omission is an
 
 **Status: open.** The flags are still opt-in (`EngineOptions` defaults them off), and the settings window has no
 toggles for them. The bench advised against turning them on until the results-key defect was fixed; it is fixed
-(`01b40ea`), but not measured since. Due: Phase 1 scenarios (`wiki-drift`, `test-coverage`) again, after `01b40ea`,
-with a strong planner and reviewer as well as the all-local setup.
+(`01b40ea`). Measured again on 2026-10-28 with a strong planner and reviewer (Sonnet 5.5, local Qwen3.6 worker),
+one run per side (`aidlc-adoption-bench.md`, "Phase 1.5"): no false verdicts with the flags on, `wiki-drift` cheaper
+by a third, the one `test-coverage` failure a worker's wrong number that the review caught. In favour, but one run per
+side is not enough to change a default; still due: more runs per side, and the all-local setup.
 
 - `StepOutputs`, `TypedCriteria`, `DynamicSteps` stay opt-in until the bench shows no regression with them on; then
   one PR turns on `StepOutputs` + `TypedCriteria` together (derived coverage needs both). `DynamicSteps` is judged

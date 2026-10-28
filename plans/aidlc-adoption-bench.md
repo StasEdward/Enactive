@@ -107,10 +107,44 @@ Global manifests `{"id":"build","fireOn":"Step","severity":"Blocking"}` and the 
 
 Stamps: raised `20261018-011302`, `20261018-012348`.
 
+## Phase 1.5 - flags off vs on with a strong planner/reviewer (2026-10-28)
+
+The second measurement Phase 1.5 asked for, after the results-key fix (`01b40ea`). `master` @0731c5c for both sides;
+the only difference is `Engine.StepOutputs` + `Engine.TypedCriteria` in `settings.json`. Plan and review:
+`Anthropic/claude-sonnet-5-5`; execute: `llama.cpp/Qwen3.6-35B-A3B-Q4_K_M` (the other roles' gemma binding was not
+loaded on the server). **One run per side** - read it as a direction, not a result.
+
+| Scenario | Side | Verdict | Steps | Reviews ✓/✗ | s | Tokens in / out | Plan + review tokens in | Coverage |
+| --- | --- | --- | ---: | --- | ---: | --- | ---: | --- |
+| wiki-drift | off | right PASS | 4 | 4/0 | 77 | 105k / 6k | 23k | 4/4 |
+| wiki-drift | on | right PASS | 2 | 2/0 | 46 | 71k / 3k | 16k | 4/4 |
+| test-coverage | off | right PASS | 3 | 3/0 | 208 | 558k / 9k | 68k | - |
+| test-coverage | on | right FAIL | 3 | 2/2 | 201 | 576k / 11k | 128k | - |
+
+- **No FALSE PASS and no FALSE FAIL on either side.** The results-key defect that cost the 2026-10-18 "after" runs did
+  not show: on `wiki-drift` the step handed its results on at once and the run passed with 4/4.
+- **`wiki-drift` is cheaper with the flags on:** half the steps, about a third fewer tokens in and less time.
+- **The `test-coverage` failure is the worker's, not the flags'.** The report step wrote the "before" branch coverage
+  of methods as 1/6 where the Cobertura output it had read says 3/6; the reviewer rejected it twice, naming the row
+  and the right value, and the rejected report was put back (`RevertRejectedSteps`), so no `.md` was left. The flags
+  did what they are for: the step handed its report on with `submit_step_output`, and the planner added
+  `file_exists <step 3's report>` as a typed criterion. The engine's own word (Failed) was right.
+- **Environment:** the C# fixtures target `net8.0` and this machine has only .NET 10/11. Without a runtime the tests do
+  not start at all - the worker's, the engine's checks' (reported NOT CHECKED) and the truth's alike, so the truth
+  turns down the reference solution and the bench scores a FALSE PASS that is no one's (`20261028-220204`,
+  `test-coverage`, not counted above). Rerun with `DOTNET_ROLL_FORWARD=Major`; `--fixtures`/`--solutions` agree under
+  it. Two things worth a follow-up: the bench should judge the solution before a live run and refuse to score a
+  scenario whose truth turns it down; and a run whose request asks for passing tests ended Completed with the test
+  check NOT CHECKED and the step review passing "tests added".
+
+Stamps: off `20261028-220204` (`wiki-drift`), `20261028-220935` (`test-coverage`); on `20261028-221352`.
+
 ## Answers for the plan
 
 1. Phase 1.5 - do **not** turn `StepOutputs` + `TypedCriteria` on by default yet: the hole is closed, but the results
    key defect turns right runs into failures. Fix it, then measure again (with a strong planner/reviewer as well).
+   *2026-10-28:* measured again with a strong planner/reviewer, one run per side: no false verdicts with the flags
+   on, `wiki-drift` cheaper, the one failure a worker's wrong number. In favour of turning them on, not yet enough to.
 2. Phase 2 - keep the per-kind limit at 1; no measured gain from 2 or 3.
 3. Phase 3 - the raise works as built and must stay opt-in; the pre-existing-failure wording is the next improvement.
 4. Scenario fixes: `disk-report` should accept `C` as well as `C:`.
