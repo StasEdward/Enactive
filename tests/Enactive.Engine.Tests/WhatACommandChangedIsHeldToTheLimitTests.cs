@@ -50,7 +50,7 @@ public sealed class WhatACommandChangedIsHeldToTheLimitTests
 
     private static EngineFixture Repository(params (string Path, string Content)[] files)
     {
-        var fx = new EngineFixture();
+        var fx = new EngineFixture { PlannerOverride = new Planner() };
         foreach (var (path, content) in files) fx.Write(path, content);
         TestGit.Repository(fx.Root);
         return fx;
@@ -59,7 +59,7 @@ public sealed class WhatACommandChangedIsHeldToTheLimitTests
     [Fact]
     public async Task Applies_only_with_a_limit_a_measured_step_and_a_tool_that_names_no_paths()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { PlannerOverride = new Planner() };
         using var changes = new WorkspaceChanges(fx.Root);
         var measured = await FrameAsync(fx, changes);
         var guard = Guard(new FakeChatProvider());
@@ -139,6 +139,100 @@ public sealed class WhatACommandChangedIsHeldToTheLimitTests
         Assert.Equal(["prices.txt"], revert.RevertedPaths());
         Assert.Equal(["old-prices.txt"], revert.KeptPaths());
         Assert.Contains("'old-prices.txt'", outcome.Appended, StringComparison.Ordinal);
+    }
+
+    // ── a run ─────────────────────────────────────────────────────────────
+
+    private static string Contract(bool limited) => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object?>
+    {
+        ["sources"] = new[] { new { id = "O001", assessment = "the whole request" } },
+        ["checks"] = Array.Empty<object>(), ["forbidden_effects"] = Array.Empty<object>(),
+        ["change_limits"] = limited ? new[] { new { source_quote = Limit } } : Array.Empty<object>(),
+        ["action_policy"] = null, ["unresolved"] = null
+    });
+
+    /// <summary>The planner: a quick action, the contract, and the guard's question answered by which file it is about.</summary>
+    private static FakeChatProvider Planner(bool limited = true) => new(
+        Turn.Says("""{"disposition":"quick_action","title":"orders"}"""),
+        Turn.Says(Contract(limited)))
+    {
+        Answering = r => r.Messages.Any(m => m.Content?.Contains("A command a step of a plan ran has changed files", StringComparison.Ordinal) == true)
+            ? Turn.Says(r.Messages.Any(m => m.Content?.Contains("It changed prices.txt", StringComparison.Ordinal) == true)
+                ? Refuse : """{"allow":true,"reason":"correcting the totals is what the request asks"}""")
+            : null
+    };
+
+    private static async Task<IReadOnlyList<WorkEvent>> RunAsync(EngineFixture fx, FakeChatProvider planner, string command)
+    {
+        var worker = new FakeChatProvider(
+            Turn.Calls1("run_command", System.Text.Json.JsonSerializer.Serialize(new { command }), "c1"),
+            Turn.Says("Done."));
+        return await fx.RunAsync(fx.Build(new MapProviderFactory(worker, (Routers.PlannerProviderId, planner)),
+            router: Routers.WithPlannerOn()), Request);
+    }
+
+    private static string? Result(IEnumerable<WorkEvent> events)
+        => events.FirstOrDefault(e => e.Kind == EventKind.ToolResult && e.Summary.StartsWith("run_command ->", StringComparison.Ordinal))?.Summary;
+
+    /// <summary>THE ONE THAT MATTERS: the bench's shape - a command rewrites the file the request says to leave.</summary>
+    [Fact]
+    public async Task A_command_that_rewrites_a_forbidden_file_is_refused_and_the_file_put_back()
+    {
+        using var fx = Repository(("prices.txt", "apple 3\r\n"), ("orders.txt", "2 apples: 5"));
+
+        var events = await RunAsync(fx, Planner(), "echo apple 2.5> prices.txt");
+
+        Assert.Equal("apple 3\r\n", fx.Read("prices.txt"));
+        Assert.Contains("REFUSED after the fact: this command changed 'prices.txt'", Result(events), StringComparison.Ordinal);
+        Assert.Contains(events, e => e.Kind == EventKind.ArtifactReverted && e.RevertedPaths()?.Contains("prices.txt") == true);
+    }
+
+    [Fact]
+    public async Task A_command_s_change_the_request_allows_stays()
+    {
+        using var fx = Repository(("prices.txt", "apple 3"), ("orders.txt", "2 apples: 5"));
+
+        var events = await RunAsync(fx, Planner(), "echo 2 apples: 6 > orders.txt");
+
+        Assert.Contains("2 apples: 6", fx.Read("orders.txt"), StringComparison.Ordinal);
+        Assert.DoesNotContain("REFUSED", Result(events), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Outside_git_the_file_is_named_and_the_step_told_why()
+    {
+        using var fx = new EngineFixture { PlannerOverride = new Planner() };
+        fx.Write("prices.txt", "apple 3");
+        fx.Write("orders.txt", "2 apples: 5");
+
+        var events = await RunAsync(fx, Planner(), "echo apple 2.5> prices.txt");
+
+        Assert.Contains("2.5", fx.Read("prices.txt"), StringComparison.Ordinal);
+        Assert.Contains("could not be put back (not a git workspace)", Result(events), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_command_that_fails_after_writing_is_still_held()
+    {
+        using var fx = Repository(("prices.txt", "apple 3"), ("orders.txt", "2 apples: 5"));
+
+        var events = await RunAsync(fx, Planner(), "echo apple 2.5> prices.txt & exit 3");
+
+        Assert.Equal("apple 3", fx.Read("prices.txt"));
+        Assert.StartsWith("run_command -> failed:", Result(events), StringComparison.Ordinal);
+        Assert.Contains("REFUSED after the fact", Result(events), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_step_without_a_limit_takes_no_snapshots()
+    {
+        using var fx = Repository(("prices.txt", "apple 3"), ("orders.txt", "2 apples: 5"));
+        var planner = Planner(limited: false);
+
+        await RunAsync(fx, planner, "echo apple 2.5> prices.txt");
+
+        Assert.Equal(2, planner.Requests.Count);
+        Assert.Contains("2.5", fx.Read("prices.txt"), StringComparison.Ordinal);
     }
 
     [Fact]
