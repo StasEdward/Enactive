@@ -23,7 +23,7 @@ public sealed class WhatACommandChangedIsHeldToTheLimitTests
 {
     private const string Limit = "Leave prices.txt as it is.";
     private const string Request = "Check the order totals against the price list. " + Limit + " Correct the totals in orders.txt.";
-    private const string Refuse = """{"allow":false,"reason":"the request says to leave the price list as it is"}""";
+    private const string Refuse = """{"refused":["prices.txt"],"reason":"the request says to leave the price list as it is"}""";
 
     private static readonly ToolCall Command = new("k1", "run_command", """{"command":"echo 2.5> prices.txt"}""");
     private static readonly ToolRegistry Tools = new(EngineFixture.ShippedTools());
@@ -37,9 +37,15 @@ public sealed class WhatACommandChangedIsHeldToTheLimitTests
 
     /// <summary>The effect of one "command": <paramref name="command"/> run between the two snapshots.</summary>
     private static async Task<CommandEffect.Outcome> AroundAsync(EngineFixture fx, FakeChatProvider planner, Action command,
-        Func<StepFrame, Task>? setUp = null)
+        Func<StepFrame, Task>? setUp = null, Action? sinceRunStart = null)
     {
         using var changes = new WorkspaceChanges(fx.Root);
+        if (sinceRunStart is not null)
+        {
+            // The run began here; what the run did before this step comes after.
+            fx.Artifacts.MeasuredFrom(new RunStart(changes, await changes.TakeAsync(default)));
+            sinceRunStart();
+        }
         var frame = await FrameAsync(fx, changes);
         if (setUp is not null) await setUp(frame);
         var effect = new CommandEffect(Guard(planner), frame, "Correct the totals");
@@ -87,6 +93,54 @@ public sealed class WhatACommandChangedIsHeldToTheLimitTests
         Assert.Equal(["prices.txt"], revert.RevertedPaths());
         Assert.Equal("apple 3\r\n", fx.Read("prices.txt"));
         Assert.Contains(outcome.Events, e => e.Kind == EventKind.UsageReported);
+        Assert.Contains("as the command left it: git tree ", revert.Summary, StringComparison.Ordinal);   // a person's lost edit can be had back
+    }
+
+    /// <summary>
+    /// <c>git checkout -- prices.txt</c> after an earlier step changed it: the command puts the file back as the run found
+    /// it, which no limit forbids - as restore_file is never asked about. Asked, it was refused and the earlier change
+    /// written back over it.
+    /// </summary>
+    [Fact]
+    public async Task A_command_that_puts_a_file_back_as_the_run_found_it_is_not_asked()
+    {
+        using var fx = Repository(("prices.txt", "apple 3"));
+        var planner = new FakeChatProvider(Turn.Says(Refuse));
+
+        var outcome = await AroundAsync(fx, planner, () => fx.Write("prices.txt", "apple 3"),
+            sinceRunStart: () => fx.Write("prices.txt", "apple 2"));
+
+        Assert.Empty(planner.Requests);
+        Assert.Null(outcome.Appended);
+        Assert.Equal("apple 3", fx.Read("prices.txt"));
+    }
+
+    /// <summary>One command, the file the request asks for and the one it forbids: only the forbidden one goes back.</summary>
+    [Fact]
+    public async Task An_allowed_change_stands_beside_a_refused_one()
+    {
+        using var fx = Repository(("prices.txt", "apple 3"), ("orders.txt", "2 apples: 5"));
+        var planner = new FakeChatProvider(Turn.Says(Refuse));
+
+        await AroundAsync(fx, planner, () => { fx.Write("prices.txt", "apple 2.5"); fx.Write("orders.txt", "2 apples: 6"); },
+            sinceRunStart: () => { });
+
+        Assert.Equal("apple 3", fx.Read("prices.txt"));
+        Assert.Equal("2 apples: 6", fx.Read("orders.txt"));
+    }
+
+    /// <summary>A call that could not be measured goes unchecked - and says so, so "not needed" is told from "could not".</summary>
+    [Fact]
+    public async Task A_call_that_could_not_be_measured_is_said()
+    {
+        using var fx = Repository(("prices.txt", "apple 3"));
+        using var changes = new WorkspaceChanges(fx.Root);
+        var effect = new CommandEffect(Guard(new FakeChatProvider()), await FrameAsync(fx, changes), "Correct the totals");
+
+        var outcome = await effect.AfterAsync(Command, before: null, null, default);
+
+        Assert.Contains(outcome.Events, e => e.Kind == EventKind.ErrorObserved
+            && e.Summary.Contains("went unmeasured against the request's limit", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -158,7 +212,7 @@ public sealed class WhatACommandChangedIsHeldToTheLimitTests
     {
         Answering = r => r.Messages.Any(m => m.Content?.Contains("A command a step of a plan ran has changed files", StringComparison.Ordinal) == true)
             ? Turn.Says(r.Messages.Any(m => m.Content?.Contains("It changed prices.txt", StringComparison.Ordinal) == true)
-                ? Refuse : """{"allow":true,"reason":"correcting the totals is what the request asks"}""")
+                ? Refuse : """{"refused":[],"reason":""}""")
             : null
     };
 
@@ -223,6 +277,38 @@ public sealed class WhatACommandChangedIsHeldToTheLimitTests
         Assert.Contains("REFUSED after the fact", Result(events), StringComparison.Ordinal);
     }
 
+    /// <summary>A command the engine reads as a test run: the step is told the tests' summary - and the refusal with it.</summary>
+    private sealed class Tested : Enactive.Core.Builds.IEcosystem
+    {
+        public string Name => "tested";
+        public Enactive.Core.Builds.EcosystemTargets? Detect(string workspaceRoot) => null;
+        public bool Owns(string relativePath) => false;
+        public string BuildCommand(string target) => "echo built";
+        public string TestCommand(string target) => "echo PASS t1";
+        public bool RunsTests(string command) => command.Contains("PASS", StringComparison.Ordinal);
+        public string? DescribeTests(string output) => output.Contains("PASS", StringComparison.Ordinal) ? "1 test passed." : null;
+        public IReadOnlyList<Enactive.Core.Builds.BuildDiagnostic> ParseDiagnostics(string output, string workspaceRoot) => [];
+        public Enactive.Core.Builds.TestRunReport? ParseTests(string output) => null;
+    }
+
+    [Fact]
+    public async Task A_refusal_reaches_the_step_when_the_command_runs_tests()
+    {
+        using var fx = Repository(("prices.txt", "apple 3"), ("orders.txt", "2 apples: 5"));
+        fx.EcosystemsOverride = [new Tested()];
+        var worker = new FakeChatProvider(
+            // Long enough to be cut: only then is a test run told by its summary (TestRunDescribed).
+            Turn.Calls1("run_command", """{"command":"echo apple 2.5> prices.txt & for /L %i in (1,1,6000) do @echo PASS t%i"}""", "c1"),
+            Turn.Says("Done."));
+
+        await fx.RunAsync(fx.Build(new MapProviderFactory(worker, (Routers.PlannerProviderId, Planner())),
+            router: Routers.WithPlannerOn()), Request);
+
+        var told = worker.Requests[1].Messages.Last(m => m.Role == ChatRole.Tool).Content;
+        Assert.Contains("1 test passed.", told, StringComparison.Ordinal);
+        Assert.Contains("REFUSED after the fact", told, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_step_without_a_limit_takes_no_snapshots()
     {
@@ -240,7 +326,8 @@ public sealed class WhatACommandChangedIsHeldToTheLimitTests
     {
         var files = Enumerable.Range(1, 12).Select(i => ($"f{i:00}.txt", "as it was")).ToArray();
         using var fx = Repository(files);
-        var planner = new FakeChatProvider(Turn.Says(Refuse));
+        var planner = new FakeChatProvider(Turn.Says(System.Text.Json.JsonSerializer.Serialize(
+            new { refused = files.Select(f => f.Item1).ToArray(), reason = "leave them as they are" })));
 
         var outcome = await AroundAsync(fx, planner, () => { foreach (var (path, _) in files) fx.Write(path, "formatted"); });
 

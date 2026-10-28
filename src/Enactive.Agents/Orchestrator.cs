@@ -4932,7 +4932,8 @@ public sealed partial class Orchestrator : IOrchestrator
 
                 var invocation = readResult ?? await ToolInvocation.ExecuteAsync(call, _tools, CallContext(), ct);
                 IReadOnlyList<WorkEvent> commandEvents = [];
-                if (commandEffect is not null && beforeCommand is not null)
+                string? commandRefusal = null;
+                if (commandEffect is not null)
                 {
                     var held = await commandEffect.AfterAsync(call, beforeCommand,
                         frame.Messages.LastOrDefault(m => m.Role == ChatRole.Assistant)?.Content, ct);
@@ -4945,6 +4946,7 @@ public sealed partial class Orchestrator : IOrchestrator
                                 ? invocation.Value with { Output = (invocation.Value.Output ?? "") + "\n" + refused }
                                 : invocation.Value with { Error = (invocation.Value.Error ?? "") + "\n" + refused }
                         };
+                    commandRefusal = held.Appended;
                     commandEvents = held.Events;
                 }
                 // A read of what an earlier run left is told as that, to the model and in the evidence alike: its account
@@ -5003,9 +5005,13 @@ public sealed partial class Orchestrator : IOrchestrator
                 // which could work, and ended with a review of a diff the model never saw. The same
                 // class as every other defect this month: the record somebody works from is
                 // shortened, and nothing says so.
-                var reply = TestRunDescribed(call, result) ?? (result.Success
+                var testRun = TestRunDescribed(call, result);
+                var reply = testRun ?? (result.Success
                     ? (result.Output ?? "OK")
                     : $"ERROR: {failure}");
+                // A test run is told by its summary, which keeps the output's first line only: a refusal after the fact
+                // appended to the output was lost, and the step built on a file that had gone back (review, 2026-10-28).
+                if (testRun is not null && commandRefusal is not null) reply += "\n" + commandRefusal;
 
                 // A shell lookup that exited non-zero: not forgiven - its exit cannot tell "not there"
                 // from "went wrong" - but pointed at the tools that answer the question as a result,

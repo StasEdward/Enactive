@@ -48,6 +48,13 @@ internal sealed class ChangeLimitGuard(
     /// <summary>How much of a change, and of the file as it is now, the question shows.</summary>
     internal const int ShownChars = 4000;
 
+    /// <summary>
+    /// How many of a command's files the question after it shows with their diffs; the rest are named. A formatter over
+    /// hundreds of files at <see cref="ShownChars"/> each is more than a planner's window: the question fails, and the
+    /// forbidden change goes ahead unchecked (review of the change, 2026-10-28).
+    /// </summary>
+    internal const int DiffsShown = 10;
+
     private readonly object _gate = new();
     // By step, file, and whether the change takes the file away: an edit allowed is not a removal allowed. Run 7f3435,
     // 2026-10-09: a step's edit of a test file the run found was allowed, and the same step then deleted the file -
@@ -149,16 +156,20 @@ internal sealed class ChangeLimitGuard(
         static bool Removal(FileChange c) => c.Kind is FileChangeKind.Deleted or FileChangeKind.Renamed;
         (int?, string, bool) Key(FileChange c) => (stepNo, ShellLookup.Normal(c.Path).ToLowerInvariant(), Removal(c));
 
+        // A file refused AsksPerFile times stands refused without asking - and only that file: one spent file refusing
+        // every file of the call put a formatter's whole work back (review, 2026-10-28). The rest are asked about.
         List<FileChange> asked;
+        string[] spent;
         lock (_gate)
         {
-            asked = made.Where(c => !_allowed.Contains(Key(c))).ToList();
-            if (asked.FirstOrDefault(c => _refused.GetValueOrDefault(Key(c)) >= AsksPerFile) is { } spent)
-                return new([.. asked.Select(c => c.Path)],
-                    $"this step's changes to '{spent.Path}' were refused {AsksPerFile} times against what the request says may "
-                    + "be changed, and it is not asked again", TokenUsage.None);
+            var open = made.Where(c => !_allowed.Contains(Key(c))).ToList();
+            spent = [.. open.Where(c => _refused.GetValueOrDefault(Key(c)) >= AsksPerFile).Select(c => c.Path)];
+            asked = [.. open.Where(c => !spent.Contains(c.Path))];
         }
-        if (asked.Count == 0) return AfterTheFact.Stands;
+        var spentReason = spent.Length == 0 ? null
+            : $"this step's changes to '{string.Join("', '", spent)}' were refused {AsksPerFile} times against what the request "
+              + "says may be changed, and it is not asked again";
+        if (asked.Count == 0) return spent.Length == 0 ? AfterTheFact.Stands : new(spent, spentReason, TokenUsage.None);
 
         var messages = new List<ChatMessage>
         {
@@ -168,21 +179,53 @@ internal sealed class ChangeLimitGuard(
         var round = await StructuredAnswer.AskAsync(provider, messages,
             current => new ChatRequest(model.Model, current, Temperature: 0, Purpose: GenerationPurpose.Planning,
                 OutputTokenLimit: Math.Max(1, outputBudget)),
-            (answer, _) => Read(answer),
-            errors => StructuredAnswer.Listed(errors, "Return ONLY JSON {\"allow\":true|false,\"reason\":\"...\"}."),
+            (answer, _) => ReadMade(answer, asked.Select(c => c.Path).ToHashSet(StringComparer.OrdinalIgnoreCase)),
+            errors => StructuredAnswer.Listed(errors, "Return ONLY JSON {\"refused\":[\"path\", ...],\"reason\":\"...\"}."),
             budget.TurnExhaustedAfter, requireComplete: true, ct);
 
         if (round.Value is not { } verdict)
-            return new([], null, round.Usage, $"A command's change to {string.Join(", ", asked.Select(c => c.Path))} went ahead "
-                       + $"unchecked against the request's limit on changes: {round.Shortfall("the question")}.");
+            return new(spent, spentReason, round.Usage, $"A command's change to {string.Join(", ", asked.Select(c => c.Path))} "
+                       + $"went ahead unchecked against the request's limit on changes: {round.Shortfall("the question")}.");
 
+        // Each file on its own: one verdict for the call put back the file the request asked for with the one it forbade.
         lock (_gate)
             foreach (var change in asked)
             {
-                if (verdict.Allow) _allowed.Add(Key(change));
+                if (!verdict.Refused.Contains(change.Path)) _allowed.Add(Key(change));
                 else _refused[Key(change)] = _refused.GetValueOrDefault(Key(change)) + 1;
             }
-        return verdict.Allow ? new([], null, round.Usage) : new([.. asked.Select(c => c.Path)], verdict.Reason, round.Usage);
+        var refused = asked.Where(c => verdict.Refused.Contains(c.Path)).Select(c => c.Path).Concat(spent).ToArray();
+        return new(refused, refused.Length == 0 ? null : string.Join("; ", new[] { verdict.Reason, spentReason }.Where(r => r is { Length: > 0 })),
+            round.Usage);
+    }
+
+    private sealed record MadeVerdict(IReadOnlySet<string> Refused, string Reason);
+
+    private static (MadeVerdict? Value, IReadOnlyList<string> Errors) ReadMade(string answer, IReadOnlySet<string> asked)
+    {
+        if (ModelText.ExtractJsonObject(ModelText.StripThink(answer)) is not { } json)
+            return (null, ["there is no JSON object in the answer"]);
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("refused", out var list) || list.ValueKind != JsonValueKind.Array)
+                return (null, ["\"refused\" must be a list of the paths refused - [] when none is"]);
+            var refused = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in list.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.String || ShellLookup.Normal(item.GetString()!) is not { Length: > 0 } path)
+                    return (null, ["each entry of \"refused\" must be a path, as written in the question"]);
+                if (!asked.Contains(path))
+                    return (null, [$"'{path}' is not one of the files asked about: {string.Join(", ", asked)}"]);
+                refused.Add(path);
+            }
+            var reason = root.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString()!.Trim() : "";
+            if (refused.Count > 0 && reason.Length == 0)
+                return (null, ["a refusal needs its \"reason\": it is what the step is told"]);
+            return (new MadeVerdict(refused, reason), []);
+        }
+        catch (JsonException) { return (null, ["the answer is not valid JSON"]); }
     }
 
     /// <summary>What asking cost, as the run counts it: against the run's budget, as a review.</summary>
@@ -206,11 +249,11 @@ internal sealed class ChangeLimitGuard(
 
     private const string AfterInstruction = """
         A command a step of a plan ran has changed files that were in the workspace before the run. The request limits
-        what may be changed, in its own words below. Decide whether the request allows THESE changes, made in THIS step,
-        for what the step is doing. A limit forbids what it names - judge by what the change is for: the same file may be
-        changed for one purpose the request asks for and not for another it forbids. A change the request itself asks for
-        is allowed. Return ONLY JSON {"allow":true|false,"reason":"..."}; the reason is said to the step when the change
-        is refused.
+        what may be changed, in its own words below. Decide, file by file, whether the request allows the change to it,
+        made in THIS step, for what the step is doing. A limit forbids what it names - judge by what the change is for:
+        the same file may be changed for one purpose the request asks for and not for another it forbids. A change the
+        request itself asks for is allowed. Return ONLY JSON {"refused":["path", ...],"reason":"..."}: the paths whose
+        change the request does not allow, as written below ([] when it allows them all); the reason is said to the step.
         """;
 
     private string MadeQuestion(string? stepTitle, string? saidByStep, ToolCall call, IReadOnlyList<FileChange> asked)
@@ -225,7 +268,7 @@ internal sealed class ChangeLimitGuard(
             sb.AppendLine("What the step said as it ran the command:").AppendLine(Cut(saidByStep.Trim()));
         sb.AppendLine();
         sb.AppendLine($"The command: {call.Name} {Cut(call.ArgumentsJson ?? "")}");
-        foreach (var change in asked)
+        foreach (var change in asked.Take(DiffsShown))
         {
             sb.AppendLine().AppendLine(change.Kind switch
             {
@@ -233,8 +276,10 @@ internal sealed class ChangeLimitGuard(
                 FileChangeKind.Renamed => $"It moved {change.Path} away from where it was.",
                 _ => $"It changed {change.Path}:"
             });
-            sb.AppendLine(change.Diff is { Length: > 0 } diff ? Cut(diff) : "(no diff: the workspace is not under git)");
+            sb.AppendLine(change.Diff is { Length: > 0 } diff ? Cut(diff) : "(no diff to show)");
         }
+        if (asked.Count > DiffsShown)
+            sb.AppendLine().AppendLine($"It also changed, not shown here: {string.Join(", ", asked.Skip(DiffsShown).Select(c => c.Path))}");
         return sb.ToString();
     }
 

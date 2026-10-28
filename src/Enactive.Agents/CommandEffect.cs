@@ -43,11 +43,24 @@ internal sealed class CommandEffect(ChangeLimitGuard guard, StepFrame frame, str
     public Task<WorkspaceSnapshot?> BeforeAsync(CancellationToken ct)
         => frame.Changes?.TakeAsync(ct) ?? Task.FromResult<WorkspaceSnapshot?>(null);
 
-    public async Task<Outcome> AfterAsync(ToolCall call, WorkspaceSnapshot before, string? saidByStep, CancellationToken ct)
+    /// <param name="before">The snapshot before the call; null when it could not be taken.</param>
+    public async Task<Outcome> AfterAsync(ToolCall call, WorkspaceSnapshot? before, string? saidByStep, CancellationToken ct)
     {
-        if (frame.Changes is not { } changes || await changes.TakeAsync(ct) is not { } after
-            || await changes.CompareAsync(before, after, ct) is not { Count: > 0 } found)
-            return Outcome.Nothing;
+        if (frame.Changes is not { } changes || before is null || await changes.TakeAsync(ct) is not { } after
+            || await changes.CompareAsync(before, after, ct) is not { } found)
+            // Said, not passed over: a run's record that shows no question cannot otherwise tell "nothing to ask" from
+            // "could not look" (review, 2026-10-28) - a git that timed out, a workspace past the scan's limit.
+            return new(null, [Event(EventKind.ErrorObserved, $"A {call.Name} call's changes went unmeasured against the request's "
+                + "limit on changes: the workspace could not be measured around it.", null)]);
+        if (found.Count == 0) return Outcome.Nothing;
+
+        // The run's start, read once for the call: asked path by path, each answer took the workspace again - a
+        // formatter's 300 files, 300 snapshots (review, 2026-10-28). What changed since then, also once.
+        var start = frame.Store.MeasuredStart;
+        var was = start is null ? null : await changes.PathsAsync(start, ct);
+        var sinceStart = start is null ? null : (await changes.ComparePathsAsync(start, after, ct))?
+            .SelectMany(c => c.OldPath is { } o ? new[] { c.Path, o } : [c.Path]).Select(ShellLookup.Normal)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var asked = new List<FileChange>();
         foreach (var change in found)
@@ -57,7 +70,14 @@ internal sealed class CommandEffect(ChangeLimitGuard guard, StepFrame frame, str
             if (path.Length == 0 || path.Equals(WorkspaceGuard.ReservedFolder, StringComparison.OrdinalIgnoreCase)
                 || path.StartsWith(WorkspaceGuard.ReservedFolder + "/", StringComparison.OrdinalIgnoreCase))
                 continue;
-            if ((await frame.Store.BeforeRunAsync(path, ct)).State == BeforeRunState.Absent) continue;   // the run made it
+            if (was is not null)
+            {
+                if (!was.Contains(path)) continue;                                            // the run made it
+                // As the run found it again - a `git checkout -- file` undoing an earlier step: no limit forbids that,
+                // as restore_file is never asked about. Asked, it was refused and the earlier change written back.
+                if (sinceStart is not null && !sinceStart.Contains(path)) continue;
+            }
+            else if ((await frame.Store.BeforeRunAsync(path, ct)).State == BeforeRunState.Absent) continue;   // the run made it
             asked.Add(change with { Path = path });
         }
         if (asked.Count == 0) return Outcome.Nothing;
@@ -96,7 +116,10 @@ internal sealed class CommandEffect(ChangeLimitGuard guard, StepFrame frame, str
         var step = frame.StepNo is { } n ? $"[{n}] " : "";
         var line = (putBack.Count > 0 ? $"{step}Put back after a command: {string.Join(", ", putBack)}." : $"{step}Not put back after a command.")
                    + string.Concat(left.Select(l => $" Left as it is: {l.Path} - {l.Why}."))
-                   + string.Concat(copies.Select(c => $" Left as it is: {c} - made by the command."));
+                   + string.Concat(copies.Select(c => $" Left as it is: {c} - made by the command."))
+                   // A change made in the window by someone else is taken for the command's and written over; the bytes
+                   // the command left are still in git, and this is where to find them (review, 2026-10-28).
+                   + (after.Tree is { } tree && putBack.Count > 0 ? $" Each file as the command left it: git tree {tree}." : "");
         events.Add(Event(EventKind.ArtifactReverted, line,
             WorkEventPayload.RevertPayload(frame.StepNo, putBack, [.. left.Select(l => l.Path), .. copies])));
         return new(said, events);
