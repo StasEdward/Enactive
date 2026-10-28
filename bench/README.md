@@ -40,7 +40,13 @@ dotnet run --project tools/Enactive.Bench -- --only missing-input --judge <works
 The live run builds the console host into the temp folder, needs the configured providers up (the local model
 server, the cloud planner/reviewer) and costs their tokens. Each run's folder under `bench/results/` holds
 `summary.md`, `results.json` and, per scenario, the console log and the engine's report; only `baseline.json` is kept
-in git. The exit code is 1 when any scenario is a false PASS or a false FAIL.
+in git. The exit code is 1 when any scenario is a false PASS, a false FAIL or NOT RUN.
+
+Before each live run the bench checks the scenario's truth on its reference solution, as `--solutions` does. Where the
+truth turns the solution down on this machine - a runtime or tool its checks need is missing - it would turn down a
+right run alike, so the scenario is not run: it is scored **NOT RUN**, with the solution's failed checks, and left out
+of the false-verdict and task-success counts. (A C# fixture targets `net8.0`; on a machine with only a later runtime,
+`DOTNET_ROLL_FORWARD=Major` lets its tests start.)
 
 ## Verdicts
 

@@ -32,6 +32,9 @@ internal static class Truth
         return results;
     }
 
+    /// <summary>The truth holds where every required check passed; an optional one only informs.</summary>
+    public static bool Holds(IEnumerable<CheckResult> checks) => checks.Where(c => c.Required).All(c => c.Passed);
+
     private static async Task<CheckResult> CheckOneAsync(Check check, string fixture, string workspace, CancellationToken ct)
     {
         switch (check.Kind)
