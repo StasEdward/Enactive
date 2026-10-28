@@ -141,6 +141,29 @@ loaded on the server). **One run per side** - read it as a direction, not a resu
 
 Stamps: off `20261028-220204` (`wiki-drift`), `20261028-220935` (`test-coverage`); on `20261028-221352`.
 
+## Follow-up 3 - a command's change held to the request's limit (2026-10-28)
+
+Built on `feat/shell-change-limit` (`8ec8d48`..`38e579e`). Same setup as Phase 1.5 above (Sonnet 5.5 planning and
+reviewing, local Qwen3.6 worker, `DOTNET_ROLL_FORWARD=Major`). Measured at `539c734`, before the fixes the branch's
+review asked for (per-file answers, the run's start read once, the refusal kept in a test run's reply, a cap on the
+question, an unmeasured call said); those change only what happens once the check fires, and it did not fire here.
+
+**`build-error` with `build` raised to blocking at step level** (the 2026-10-18 setup that drove the worker to the
+shell), three runs: right PASS each (56, 73, 58 s; 66k, 130k, 75k tokens in). In each the change limit refused one
+`edit_file` to `Report.cs`, and the worker this time did not go round it: its commands (`dotnet build`, `findstr`,
+`csc`, a PowerShell read of `Stats.cs`) changed no file the run found, so the new check was not asked once and
+`Report.cs` was left as it was. **The measurement shows no false refusal of a build; it does not reproduce the
+2026-10-18 shell rewrite** - that behaviour is the worker's and did not recur in three runs. The behaviour itself is
+pinned by `WhatACommandChangedIsHeldToTheLimitTests` (a real `run_command` rewriting the forbidden file, put back
+byte for byte).
+
+**One ordinary run of every scenario** (`20261028-232821`): build-error, disk-report, missing-input, setup-step and
+test-coverage right PASS; wiki-drift a FALSE FAIL with 4/4 found - its last step's review rejected `DRIFT.md` for wrong
+line numbers the report claimed were right, the worker's error. The new check was asked in no scenario. Tokens are
+within the spread of the runs above.
+
+Stamps: raised `20261028-232426`, `20261028-232532`, `20261028-232652`; all scenarios `20261028-232821`.
+
 ## Answers for the plan
 
 1. Phase 1.5 - do **not** turn `StepOutputs` + `TypedCriteria` on by default yet: the hole is closed, but the results

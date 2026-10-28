@@ -748,7 +748,7 @@ What `aidlc-adoption-bench.md` found besides the phases' own measurements, and w
 | --- | --- | --- |
 | 1 | Results keyed by something other than a consumed item were answered "never read", and right runs failed | Fixed: `01b40ea` (a key naming one item is resolved to it; a stranger key is said to be one, with the expected keys) |
 | 2 | A blocking step check failed the step for an error that predates it, and drove the worker at forbidden files | Fixed: `4347e13`, `dd7e1ec`, `6a946d4` (judged against the step's start; only a step with an old failure is told to leave it) |
-| 3 | A forbidden file rewritten through a shell command stayed changed after the step was rejected | **Partly fixed**; design for the rest decided 2026-10-28, not built - below |
+| 3 | A forbidden file rewritten through a shell command stayed changed after the step was rejected | Built 2026-10-28 (`8ec8d48`..`38e579e`): a command's change is held to the limit after the fact and put back byte for byte, or named; measured, the worker did not repeat the shell rewrite - below and `aidlc-adoption-bench.md` |
 | 4 | `disk-report` truth wants `C:` where `C` is right | Not checked - a scenario fix, not an engine one |
 | 5 | The planner made a file the request forbids changing a write-evidence item (`test-coverage`, `20261017-231237`) | Open, not looked at |
 
@@ -777,7 +777,7 @@ rejected step is, for a quick action too, and the revert's first line names what
   is not asked about (`WriteBoundary`'s own remarks say so). The shell is exactly how the worker got around two
   refusals. While the step runs, nothing holds a command's changes to the limit; only the step's review can.
 
-**Design - decided 2026-10-28, not built.** A command's changes are measured around the call and put to the same
+**Design - decided and built 2026-10-28.** As built, after the branch's review: the guard answers file by file (`{"refused":[...]}`), a spent file is refused alone, the run's start is read once per call (`IArtifactStore.MeasuredStart`) and a file the command put back as the run found it is not asked about; the question shows ten diffs and names the rest; a call that could not be measured says so. A command's changes are measured around the call and put to the same
 question as an `edit_file`'s, after the fact. Considered and not taken: asking before the call from the command's
 text (a model cannot tell from a one-liner, a script or `git checkout` which files it will change - a guess, not a
 boundary), and judging only at step end (`LeftByCommandsAsync` widened: one measurement a step, but the worker has
