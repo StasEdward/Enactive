@@ -748,7 +748,7 @@ What `aidlc-adoption-bench.md` found besides the phases' own measurements, and w
 | --- | --- | --- |
 | 1 | Results keyed by something other than a consumed item were answered "never read", and right runs failed | Fixed: `01b40ea` (a key naming one item is resolved to it; a stranger key is said to be one, with the expected keys) |
 | 2 | A blocking step check failed the step for an error that predates it, and drove the worker at forbidden files | Fixed: `4347e13`, `dd7e1ec`, `6a946d4` (judged against the step's start; only a step with an old failure is told to leave it) |
-| 3 | A forbidden file rewritten through a shell command stayed changed after the step was rejected | **Partly fixed** - below |
+| 3 | A forbidden file rewritten through a shell command stayed changed after the step was rejected | **Partly fixed**; design for the rest decided 2026-10-28, not built - below |
 | 4 | `disk-report` truth wants `C:` where `C` is right | Not checked - a scenario fix, not an engine one |
 | 5 | The planner made a file the request forbids changing a write-evidence item (`test-coverage`, `20261017-231237`) | Open, not looked at |
 
@@ -777,25 +777,91 @@ rejected step is, for a quick action too, and the revert's first line names what
   is not asked about (`WriteBoundary`'s own remarks say so). The shell is exactly how the worker got around two
   refusals. While the step runs, nothing holds a command's changes to the limit; only the step's review can.
 
-**Proposal - not decided.**
+**Design - decided 2026-10-28, not built.** A command's changes are measured around the call and put to the same
+question as an `edit_file`'s, after the fact. Considered and not taken: asking before the call from the command's
+text (a model cannot tell from a one-liner, a script or `git checkout` which files it will change - a guess, not a
+boundary), and judging only at step end (`LeftByCommandsAsync` widened: one measurement a step, but the worker has
+built on the change by then, and a step-long window cannot tell a person's edit from a command's).
 
-- In a step under a change limit (`ChangeLimitsFor` is not null), measure the workspace right before and right
-  after each call of a tool that changes the workspace without naming its paths. What changed in that window is the
-  call's, not a person's - which answers the "whose change is it" objection for that window. Read-only steps already
-  measure around a call (`CallAdmission`, `madeByThisStep`), so the mechanism exists.
-- Each file the run found that such a call changed is put to the same `ChangeLimitGuard` question as an `edit_file`
-  would be. Refused: the call's result says the change goes against the request, as a refusal does.
-- Put the file back only where the engine can produce the bytes the measurement saw before the call: in git, the
-  step-start blob through the repository's own filters (`git cat-file --filters`), restored only if its hash equals
-  the one measured before the call; otherwise named, as today. Open: a clean tracked file has no hash of its own in
-  the git-mode measurement (it hashes what `git status` lists), so its "before" hash has to be taken another way.
-- Outside git there are no bytes to put back: the file is named, and the step is told, at the call rather than at
-  its end.
-- Cost: a measurement per such call, only in steps under a change limit; the fingerprint's file limit applies.
+*When it applies* - all three at once, and nowhere else; elsewhere nothing changes:
 
-**Tests (for the proposal):** a shell rewrite of a forbidden file is refused after the fact and, in git, put back
-byte for byte; an allowed shell change is left alone; a person's edit between two calls is left alone; outside
-git the file is named at the call; a restore whose bytes would not match the measured hash is not attempted.
+- the step is under the request's change limit (`ChangeLimitsFor` returned a guard);
+- the step is measured: `frame.Changes` and `frame.StepStart` are set - the engine's existing sense of "this step runs
+  alone and the workspace can be measured" (steps side by side have no `StepStart`);
+- the call's tool is one `WriteBoundary.Unchecked` names: it changes the workspace and declares no paths - a shell,
+  PowerShell, git, docker, an MCP tool with an effect.
+
+*The call* - around `ToolInvocation.ExecuteAsync` in the tool loop (`Orchestrator.cs`):
+
+1. Before: `frame.Changes.TakeAsync`. No snapshot - the call runs unchecked, as today.
+2. The call runs as it does now.
+3. After: a second snapshot and `CompareAsync(before, after)`, with diffs where git makes them. Asked about: files
+   modified, deleted or renamed (by the old path), outside `.enactive` and the scratch, whose
+   `store.BeforeRunAsync(path)` is not `Absent` - the run did not make them; the run-start correction
+   (`_runStart.CorrectAsync`) already covers files an earlier command made. A file the call added is not asked about,
+   as the guard does not ask about a new file today.
+4. One question per call to `ChangeLimitGuard` (a new method beside `CheckAsync`), with the same per-step, per-file,
+   per-removal record of what was allowed and refused, and the same `AsksPerFile` cap. The question shows the command
+   and each file's diff, cut at `ShownChars`, in place of "the file as it is now". A file already allowed to this step
+   is not asked about again: an `edit_file` and a command share one allowance.
+5. Refused: put back (below) and told. No usable answer: the change stands, as an unanswered `edit_file` question
+   lets it, and an `ErrorObserved` event says it went ahead unchecked.
+
+New parts: `CommandEffect` (Agents) - steps 1-3, the snapshots and the selection, testable without a model; the
+guard's after-the-fact question; `ExactRestore` (Workspace) - the putting back.
+
+*Putting back - byte for byte, or not at all* (the owner's decision: never write what was not there).
+
+- Git only. Outside git a measurement keeps a size, a time and a hash, not the bytes: the file is named.
+- Only where the blob IS the bytes: `core.autocrlf` unset or `false`, and for the path no `eol`, `filter`, `ident` or
+  `working-tree-encoding` attribute, and `text` unset or unspecified. Otherwise the snapshot holds the file after a
+  conversion, which written back can differ from what was there: the file is named. (The snapshot is a whole tree -
+  `git add -A` into a private index, `write-tree` - so every file, a clean tracked one too, has its "before" blob in
+  it: `git ls-tree <before> -- <path>`. The earlier open question about a clean file's hash does not arise.)
+- Only regular files (`100644`, `100755`); a link or a submodule is named.
+- Only if the file is still as the "after" snapshot saw it: changed again since, it is no longer the command's change,
+  and it is named.
+- Written as `git cat-file blob` to a temporary file beside it, checked with `git hash-object --no-filters` against the
+  blob, and only then moved into place. A file the command deleted is written back the same way. A rename puts the
+  old path back; the copy at the new path was made by the command, is not the run's to delete, and is named.
+
+*What the step is told.* The command ran: the call stays a success and its other changes stand. Its result gets,
+in the words of an `edit_file` refusal: "REFUSED after the fact: this command changed 'X', which the request limits
+("...") - {the guard's reason}. It was put back as it was before the command." - or, where it was not: "It could not
+be put back ({not a git workspace | a line-ending conversion applies to it | it changed again after the command}).
+Put it back yourself, or hand on why the step cannot be done without changing it." The call counts as refused by rule
+(`frame.Open.RefusedByRule`), so a step that keeps going round the limit is counted as one refused again would be.
+
+*What the run records.* An `ArtifactReverted` event with the existing `RevertPayload(stepNo, putBack, left)`; the
+question's cost as `UsageReported` with purpose Review, as the guard's is now. The step's review reads the call's
+result with the refusal, and its diffs no longer hold a file put back. `LeftByCommandsAsync` is unchanged: a file put
+back no longer differs from the step's start and is not named; one left still is.
+
+*Cost.* Two snapshots per such call (about 100 ms each in git; outside git a scan with hashes up to 1 MB a file); a
+planning-model question only when a file the run found changed. Steps without a limit, and steps side by side, pay
+nothing.
+
+**Tests.** Through the orchestrator with a scripted provider answering the guard, real `run_command` calls and a
+temporary git workspace; each seen failing without the change.
+
+1. Under a limit, a command rewrites a file the run found, the guard refuses: the file is byte for byte as before;
+   the result says "REFUSED after the fact ... put back"; an `ArtifactReverted` event is recorded.
+2. The guard allows: the change stays.
+3. Outside git: not put back, named, and the result says why.
+4. Git with `core.autocrlf=true`, or a `text` attribute in `.gitattributes`: not put back, named.
+5. A file the command added, or one the run made earlier: not asked about.
+6. Steps side by side (no `StepStart`): no snapshots, no question - as today.
+7. A file this step was already allowed to change with `edit_file`: not asked about again after a command.
+8. Refused `AsksPerFile` times: refused without asking, and still put back.
+9. A step without a limit: commands run with no snapshots and no questions.
+
+`ExactRestore` on its own: a regular file; a deleted file written back; a link (`120000`) left; a file changed since
+the "after" snapshot left; a hash that does not match - nothing written.
+
+**Measurement** (bench, reported as a measurement, not a guarantee): several runs of `build-error` with `build` raised
+to blocking at step level (the 2026-10-18 setup that drove the worker to the shell); success is no run ending with
+`Report.cs` changed, and each run's record says whether the new check fired. Plus one ordinary run of every scenario:
+no regression, and no notable rise in tokens.
 
 ## What is deliberately not taken
 
