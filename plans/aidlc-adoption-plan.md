@@ -807,15 +807,20 @@ built on the change by then, and a step-long window cannot tell a person's edit 
 5. Refused: put back (below) and told. No usable answer: the change stands, as an unanswered `edit_file` question
    lets it, and an `ErrorObserved` event says it went ahead unchecked.
 
-New parts: `CommandEffect` (Agents) - steps 1-3, the snapshots and the selection, testable without a model; the
-guard's after-the-fact question; `ExactRestore` (Workspace) - the putting back.
+New parts: `CommandEffect` (Agents) - the snapshots, the selection, the question's outcome put into words and events;
+the guard's after-the-fact question; `ExactRestore` (Workspace), behind `IWorkspaceChanges.PutBackAsync` - the
+putting back. Implementation plan: `plans/shell-change-limit-implementation-plan.md`.
 
 *Putting back - byte for byte, or not at all* (the owner's decision: never write what was not there).
 
 - Git only. Outside git a measurement keeps a size, a time and a hash, not the bytes: the file is named.
 - Only where the blob IS the bytes: `core.autocrlf` unset or `false`, and for the path no `eol`, `filter`, `ident` or
   `working-tree-encoding` attribute, and `text` unset or unspecified. Otherwise the snapshot holds the file after a
-  conversion, which written back can differ from what was there: the file is named. (The snapshot is a whole tree -
+  conversion, which written back can differ from what was there: the file is named. Asked through `AutomaticGit`, as
+  the snapshot itself is made: it reads the repository's own configuration and `.gitattributes` and never the
+  global or system ones, so these are the settings the blob was made under (a global `core.autocrlf=true` does not
+  touch the snapshot). A call that changed a `.gitattributes` puts nothing back: the attributes it would be judged
+  by are no longer the ones the snapshot was made under. (The snapshot is a whole tree -
   `git add -A` into a private index, `write-tree` - so every file, a clean tracked one too, has its "before" blob in
   it: `git ls-tree <before> -- <path>`. The earlier open question about a clean file's hash does not arise.)
 - Only regular files (`100644`, `100755`); a link or a submodule is named.
@@ -829,8 +834,9 @@ guard's after-the-fact question; `ExactRestore` (Workspace) - the putting back.
 in the words of an `edit_file` refusal: "REFUSED after the fact: this command changed 'X', which the request limits
 ("...") - {the guard's reason}. It was put back as it was before the command." - or, where it was not: "It could not
 be put back ({not a git workspace | a line-ending conversion applies to it | it changed again after the command}).
-Put it back yourself, or hand on why the step cannot be done without changing it." The call counts as refused by rule
-(`frame.Open.RefusedByRule`), so a step that keeps going round the limit is counted as one refused again would be.
+Put it back yourself, or hand on why the step cannot be done without changing it." A step that keeps going round
+the limit is held by the guard's own count: refusals of a file are counted per step whether an `edit_file` or a
+command drew them, and after `AsksPerFile` the file is refused without asking.
 
 *What the run records.* An `ArtifactReverted` event with the existing `RevertPayload(stepNo, putBack, left)`; the
 question's cost as `UsageReported` with purpose Review, as the guard's is now. The step's review reads the call's
