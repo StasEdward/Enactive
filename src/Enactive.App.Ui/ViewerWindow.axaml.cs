@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Enactive.App.Ui.ViewModels;
 // SetTextAsync is an extension in Avalonia 12, not a member of IClipboard.
 using Avalonia.Input.Platform;
 
@@ -23,11 +24,17 @@ namespace Enactive.App.Ui;
 /// <para><b>The source is always one click away.</b> The log analysis window learnt that first:
 /// a renderer that handles a subset must never be the only way to see a file, because whatever it
 /// did not understand is only readable as itself.</para>
+///
+/// <para><b>A file a run wrote is reviewed as what the run changed</b> (<see cref="ShowReview"/>): a diff against how it
+/// was before the run, the whole file one switch away - as the service's Review shows it.</para>
 /// </summary>
 public sealed partial class ViewerWindow : Window
 {
     /// <summary>What Copy hands over: the file, not whatever a renderer made of it.</summary>
     private string _source = string.Empty;
+
+    /// <summary>What the switch goes back to from the source: a renderer's view of the file, or a review's diff of it.</summary>
+    private Control? _rendering;
 
     public ViewerWindow()
     {
@@ -47,7 +54,8 @@ public sealed partial class ViewerWindow : Window
         {
             var source = ShowSource.IsChecked == true;
             ContentBox.IsVisible = source;
-            Rendered.IsVisible = !source;
+            if (_rendering is not null)
+                _rendering.IsVisible = !source;
         };
     }
 
@@ -55,9 +63,11 @@ public sealed partial class ViewerWindow : Window
     /// The file's name, when this IS a file - it is the only thing that decides which viewer is
     /// used. Null for the app's own reports, which are text and are shown as text.
     /// </param>
-    public static void Show(Window owner, string title, string content, string? relativePath = null)
+    /// <param name="lead">A line above the document on what it is a reading of; none, nothing.</param>
+    public static void Show(Window owner, string title, string content, string? relativePath = null, string? lead = null)
     {
         var window = new ViewerWindow { Title = title };
+        window.Lead(lead);
         window._source = content;
         window.ContentBox.Text = content;
 
@@ -73,9 +83,7 @@ public sealed partial class ViewerWindow : Window
             try
             {
                 window.Body.Content = viewer.Build(content);
-                window.ContentBox.IsVisible = false;
-                window.Rendered.IsVisible = true;
-                window.ShowSource.IsVisible = true;
+                window.ShowRendering(window.Rendered);
                 measured += $" · shown as {viewer.Id}";
             }
             catch (Exception ex)
@@ -89,5 +97,51 @@ public sealed partial class ViewerWindow : Window
 
         window.StatusText.Text = measured;
         window.Show(owner);
+    }
+
+    /// <summary>
+    /// A file a run wrote, reviewed (<see cref="FileReviewViewModel"/>): the diff first, when there is one - it is what
+    /// Review is for - with the whole file as it is now one switch away, and what the diff is against said above it;
+    /// without one, the file as Show shows it, with why there is no diff said above it. Copy all hands over the file.
+    /// </summary>
+    internal static void ShowReview(Window owner, string title, string relativePath, FileReviewViewModel review)
+    {
+        if (review.Problem is { } problem)
+        {
+            Show(owner, title, problem);
+            return;
+        }
+        if (!review.HasDiff)
+        {
+            Show(owner, title, review.Text, relativePath, review.Note);
+            return;
+        }
+
+        var window = new ViewerWindow { Title = title };
+        window._source = review.Text;
+        window.ContentBox.Text = review.Text;
+        window.DiffRows.ItemsSource = review.Rows;
+        window.ShowRendering(window.DiffPane);
+        window.ShowSource.Content = "Whole file";
+        ToolTip.SetTip(window.ShowSource, "Show the whole file as it is now.");
+        window.Lead(review.Note);
+
+        window.StatusText.Text = review.Measured;
+        window.Show(owner);
+    }
+
+    /// <summary>Shows <paramref name="rendering"/> in place of the source, with the switch back to it.</summary>
+    private void ShowRendering(Control rendering)
+    {
+        _rendering = rendering;
+        ContentBox.IsVisible = false;
+        rendering.IsVisible = true;
+        ShowSource.IsVisible = true;
+    }
+
+    private void Lead(string? note)
+    {
+        LeadText.Text = note;
+        LeadText.IsVisible = note is { Length: > 0 };
     }
 }

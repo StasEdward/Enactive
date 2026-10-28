@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
+using Enactive.Application.Projections;
 using Enactive.Core.History;
 
 namespace Enactive.App.Ui;
@@ -193,6 +194,26 @@ internal static class Brand
     public static readonly IBrush PillFailedFill = new ImmutableSolidColorBrush(DangerColor, 0.18);
     public static readonly IBrush PillOpenFill = new ImmutableSolidColorBrush(Amber400, 0.18);
     public static readonly IBrush PillIdleFill = CardFill;
+
+    // ── A review's diff ─────────────────────────────────────────────────────
+    // An added or removed line is tinted across its row, so a change is seen in a long file at a glance and not only by
+    // the colour of its text - the service's review does the same (theme.css, .diff-row). Fainter than a pill: a diff
+    // can be all one colour for a page, and a pill's tint over a page is a wall.
+    public static readonly IBrush DiffAddedFill = new ImmutableSolidColorBrush(SuccessColor, 0.10);
+    public static readonly IBrush DiffRemovedFill = new ImmutableSolidColorBrush(DangerColor, 0.10);
+
+    /// <summary>
+    /// The tint behind a review's diff line. Here, beside the fills, and not as arms in Palette: the service's looks test
+    /// reads Palette's <c>DiffLineKind.X =&gt; Brand.Y</c> arms as the colour of a line's text, and a second table over
+    /// the same kinds there would be read as that one.
+    /// </summary>
+    public static IBrush DiffFill(DiffLineKind kind) => kind switch
+    {
+        DiffLineKind.Added => DiffAddedFill,
+        DiffLineKind.Removed => DiffRemovedFill,
+        DiffLineKind.Context => Brushes.Transparent,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "A diff line with no tint.")
+    };
 
     /// <summary>The tint behind a phase or a stored status.</summary>
     public static IBrush PhaseFill(string phase) => Phase(phase) switch

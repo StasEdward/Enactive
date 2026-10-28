@@ -139,6 +139,9 @@ internal static class Palette
         _ => throw Unknown(kind)
     });
 
+    /// <summary>A review's diff line, across its row: the change tinted, the rest bare (Brand.DiffFill).</summary>
+    public static readonly IValueConverter DiffRow = Map<DiffLineKind>(Brand.DiffFill);
+
     /// <summary>The open workspace's name: red when its folder is gone, so the run refusing to start is no surprise.</summary>
     public static readonly IValueConverter MissingName = Map<bool>(missing => missing ? Brand.Danger : Brand.Text);
 
