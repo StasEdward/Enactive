@@ -223,6 +223,13 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
             _ = new ChecksWindow(DesktopChecks.For(root, Enactive.Core.Checks.CheckScope.Workspace), _vm.WorkspaceName)
                 .ShowDialog(this);
         };
+        // A workspace's lessons and rules, from its card (Plan Phase 5.5). Modal, as its checks are.
+        _vm.LessonsRequested += () =>
+        {
+            if (WorkspaceRootOrNull() is not { } root)
+                return;
+            _ = new LessonsWindow(DesktopLessons.For(root, _vm.WorkspaceName)).ShowDialog(this);
+        };
         _vm.TimelineRequested += () => _ = ShowTimelineAsync();
         _vm.LogRequested += ShowLogWindow;
         _vm.EnvironmentRequested += () => _ = ShowEnvironmentAsync();
@@ -2421,11 +2428,29 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         }
 
         _vm.Runs.Show(history.Runs);
+        await LoadLessonsAsync(path);
         // The history has just changed, and a live row whose run is now IN it must go. See
         // RunColumn.Live: the window learns a run ended by two paths and they arrive in
         // whatever order they arrive in.
         RefreshLive();
     }
+
+    /// <summary>
+    /// The workspace's lessons for the Lessons tab (Plan Phase 5.2), read whenever its runs are: a run that ended has just
+    /// proposed its candidates (RunRecorder), and the workspace may be another one.
+    /// </summary>
+    private async Task LoadLessonsAsync(string path)
+    {
+        if (_vm.Lessons is not { } lessons || !string.Equals(_lessonsRoot, path, StringComparison.OrdinalIgnoreCase))
+        {
+            lessons = DesktopLessons.For(path, _vm.WorkspaceName);
+            _lessonsRoot = path;
+            _vm.Lessons = lessons;
+        }
+        await lessons.RefreshAsync();
+    }
+
+    private string? _lessonsRoot;
 
     private async Task ShowTimelineAsync()
     {

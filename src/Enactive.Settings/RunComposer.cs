@@ -322,7 +322,7 @@ public static class RunComposer
                     // The specification is recorded WITH the run, so reading it back later shows the
                     // template as it was rather than as it has since been edited.
                     new RunRecorder(RunStoreFactory.Create(workspace), memory, workspace.Id, runSettings, spec?.Snapshot(), checks,
-                        workspaceRules),
+                        workspaceRules, Attended(request) ? null : InboxStoreFactory.Create(workspace)),
                     engine.Log),
                 new Intent(request.Resume?.TaskId ?? request.TaskId ?? Guid.NewGuid(), request.Prompt, request.Source,
                     context, DateTimeOffset.UtcNow, workerId),

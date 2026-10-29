@@ -337,4 +337,105 @@ public sealed class LessonsBecomeRulesOnlyWhenConfirmedTests
             Enactive.Tests.SqlitePools.ClearUnder(fx.Root);
         }
     }
+
+    private sealed class KeptInbox : Enactive.Core.Inbox.IInboxStore
+    {
+        public List<Enactive.Core.Inbox.InboxItem> Items { get; } = [];
+        public Task AppendAsync(Enactive.Core.Inbox.InboxItem item, CancellationToken ct) { Items.Add(item); return Task.CompletedTask; }
+        public Task<IReadOnlyList<Enactive.Core.Inbox.InboxItem>> LoadAllAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<Enactive.Core.Inbox.InboxItem>>(Items);
+        public Task MarkReadAsync(Guid id, CancellationToken ct) => Task.CompletedTask;
+        public Task MarkAllReadAsync(CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private static async IAsyncEnumerable<WorkEvent> AFailedStep(Guid run)
+    {
+        var task = Guid.NewGuid();
+        yield return new WorkEvent(Guid.NewGuid(), task, run, DateTimeOffset.UtcNow, EventKind.IntentReceived, "Intent: write the report", null);
+        yield return new WorkEvent(Guid.NewGuid(), task, run, DateTimeOffset.UtcNow, EventKind.ReviewFailed,
+            $"[1] FAIL (step review): {Verdict}", WorkEventPayload.ReviewFailedPayload(1, Verdict));
+        await Task.Yield();
+        yield return new WorkEvent(Guid.NewGuid(), task, run, DateTimeOffset.UtcNow, EventKind.TaskCompleted, "done", null);
+    }
+
+    /// <summary>
+    /// A run nobody watched says in the Inbox that it left lessons to decide - the one place such a run reports back; a
+    /// watched run does not, its person sees them beside its artifacts.
+    /// </summary>
+    [Fact]
+    public async Task A_run_nobody_watched_says_in_the_inbox_that_it_left_lessons_and_a_watched_one_does_not()
+    {
+        using var fx = new EngineFixture();
+        try
+        {
+            var inbox = new KeptInbox();
+            var run = Guid.NewGuid();
+            await foreach (var _ in new RunRecorder(RunStoreFactory.Create(fx.Workspace), workspaceId: fx.Workspace.Id,
+                               rules: new SqliteRuleStore(fx.Workspace), lessonInbox: inbox).RecordAsync(AFailedStep(run), CancellationToken.None)) { }
+            var item = Assert.Single(inbox.Items);
+            Assert.Equal((LessonCandidates.InboxKind, run, fx.Workspace.Id, "1 lesson to decide"), (item.Kind, item.RunId, item.WorkspaceId, item.Title));
+            Assert.Contains(Verdict, item.Summary, StringComparison.Ordinal);
+
+            // Watched: no inbox handed in. And the same observation again proposes nothing, so says nothing.
+            await foreach (var _ in new RunRecorder(RunStoreFactory.Create(fx.Workspace), rules: new SqliteRuleStore(fx.Workspace))
+                               .RecordAsync(AFailedStep(Guid.NewGuid()), CancellationToken.None)) { }
+            await foreach (var _ in new RunRecorder(RunStoreFactory.Create(fx.Workspace), rules: new SqliteRuleStore(fx.Workspace), lessonInbox: inbox)
+                               .RecordAsync(AFailedStep(Guid.NewGuid()), CancellationToken.None)) { }
+            Assert.Single(inbox.Items);
+        }
+        finally
+        {
+            Enactive.Tests.SqlitePools.ClearUnder(fx.Root);
+        }
+    }
+
+    private sealed class Refusing(ILessonChanges inner) : ILessonChanges
+    {
+        public Task<IReadOnlyList<RuleEntry>> ListAsync(CancellationToken ct) => inner.ListAsync(ct);
+        public string? WhyNot(RuleScope scope) => scope == RuleScope.Global ? "not yours" : null;
+        public Task<string?> KeepAsync(RuleEntry entry, string? text, RuleScope scope, CancellationToken ct) => inner.KeepAsync(entry, text, scope, ct);
+        public Task<string?> DismissAsync(RuleEntry entry, CancellationToken ct) => inner.DismissAsync(entry, ct);
+        public Task<string?> DeleteAsync(RuleEntry entry, CancellationToken ct) => inner.DeleteAsync(entry, ct);
+        public Task<string?> AddAsync(string text, RuleScope scope, CancellationToken ct) => inner.AddAsync(text, scope, ct);
+    }
+
+    /// <summary>
+    /// The panel's list (the window's tab and window, the service's page): candidates apart from rules, the tab counting
+    /// what waits; a candidate kept in other words for every workspace lands in the Global layer as those words; a change
+    /// the host refuses is said and writes nothing.
+    /// </summary>
+    [Fact]
+    public async Task The_lessons_panel_keeps_a_candidate_in_the_person_s_words_and_says_a_refusal()
+    {
+        using var fx = new EngineFixture();
+        var workspace = new JsonRuleStore(fx.PathOf(Path.Combine(".enactive", "rules.json")));
+        var global = JsonRuleStore.Global(fx.PathOf("machine"));
+        var candidate = LessonCandidates.From(Run(Failed(1, Verdict)), [])[0];
+        await workspace.SaveAsync(candidate, CancellationToken.None);
+        await workspace.SaveAsync(Confirmed("kept earlier", RuleScope.Workspace, 1), CancellationToken.None);
+
+        var panel = new LessonsViewModel(new BookLessons(new RuleBook(workspace, global)), "Lessons - here");
+        await panel.RefreshAsync();
+        Assert.Equal("Lessons (1)", panel.TabLabel);
+        Assert.Equal(["kept earlier"], panel.Rules.Select(r => r.Text));
+        var row = Assert.Single(panel.Candidates);
+        Assert.Contains("step 1", row.Origin, StringComparison.Ordinal);
+        Assert.StartsWith("from run", row.Origin, StringComparison.Ordinal);
+        var written = new LessonRow(new RuleEntry(Guid.NewGuid(), RuleScope.Workspace, RuleHeading.Interpretations, "x", null,
+            DateTimeOffset.UnixEpoch, RuleStatus.Confirmed) { Origin = "written by a person" }, true, (_, _) => Task.CompletedTask);
+        Assert.Equal("this workspace · written by a person", written.Meta);
+
+        row.Text = RuleText;
+        row.Global = true;
+        await row.KeepCommand.ExecuteAsync();
+        Assert.Null(panel.Said);
+        Assert.Equal("Lessons", panel.TabLabel);
+        Assert.Equal((RuleScope.Global, RuleText), (Assert.Single(await global.ListAsync(CancellationToken.None)) is var g ? (g.Scope, g.Text) : default));
+        Assert.Equal([RuleText, "kept earlier"], panel.Rules.Select(r => r.Text));
+
+        var refused = new LessonsViewModel(new Refusing(new BookLessons(new RuleBook(workspace, global))), "Lessons - here")
+            { NewText = "for everywhere", NewGlobal = true };
+        await refused.AddCommand.ExecuteAsync();
+        Assert.Equal("not yours", refused.Said);
+        Assert.Single(await global.ListAsync(CancellationToken.None));
+    }
 }
