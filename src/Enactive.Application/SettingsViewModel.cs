@@ -143,6 +143,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private bool _allowImplicitToolCalls;
     private string _reviewRetriesText = "1";
     private bool _revertRejectedSteps;
+    private bool _stepOutputs;
+    private bool _typedCriteria;
     private string _maxParallelStepsText;
     private string _evidenceBudgetText;
     private string _logRetentionDaysText;
@@ -347,6 +349,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
         _allowImplicitToolCalls = _working.Engine.AllowImplicitToolCalls;
         _reviewRetriesText = _working.Engine.ReviewRetries.ToString();
         _revertRejectedSteps = _working.Engine.RevertRejectedSteps;
+        _stepOutputs = _working.Engine.StepOutputs;
+        _typedCriteria = _working.Engine.TypedCriteria;
         _maxParallelStepsText = _working.Engine.MaxParallelSteps.ToString();
         // Blank is automatic (EngineOptions.EvidenceBudget); EvidenceBudgetAuto says what that comes to.
         _evidenceBudgetText = _working.Engine.EvidenceBudget?.ToString() ?? string.Empty;
@@ -437,6 +441,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
     public bool AllowImplicitToolCalls { get => _allowImplicitToolCalls; set => Set(ref _allowImplicitToolCalls, value); }
     public string ReviewRetriesText { get => _reviewRetriesText; set => Set(ref _reviewRetriesText, value); }
     public bool RevertRejectedSteps { get => _revertRejectedSteps; set => Set(ref _revertRejectedSteps, value); }
+    public bool StepOutputs { get => _stepOutputs; set => Set(ref _stepOutputs, value); }
+    public bool TypedCriteria { get => _typedCriteria; set => Set(ref _typedCriteria, value); }
     public string MaxParallelStepsText { get => _maxParallelStepsText; set => Set(ref _maxParallelStepsText, value); }
     public string EvidenceBudgetText { get => _evidenceBudgetText; set => Set(ref _evidenceBudgetText, value); }
 
@@ -666,6 +672,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
             AllowImplicitToolCalls = AllowImplicitToolCalls,
             ReviewRetries = ReviewRetriesText,
             RevertRejectedSteps = RevertRejectedSteps,
+            StepOutputs = StepOutputs,
+            TypedCriteria = TypedCriteria,
             MaxParallelSteps = MaxParallelStepsText,
             EvidenceBudget = EvidenceBudgetText
         }.ApplyTo(_working.Engine);

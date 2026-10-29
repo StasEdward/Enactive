@@ -367,7 +367,8 @@ public sealed partial class AppSettings
     // 7: restore_file reaches the saved teams (WorkerTools.WithImplied, run on every version bump).
     // 8: run_tests does.
     // 9: the evidence budget is automatic unless a person set one; an 8's written-out default is read as automatic.
-    public const int CurrentSchemaVersion = 9;
+    // 10: StepOutputs and TypedCriteria are on; a 9's written-out off is read as on.
+    public const int CurrentSchemaVersion = 10;
 
     /// <summary>
     /// The evidence budget every build before schema 9 wrote when nobody had set one: its default, written out as a
@@ -840,6 +841,16 @@ public sealed partial class AppSettings
             // until a build from before 9 saves the file again: that save writes it as schema 8, and the next load here
             // reads it as that build's written-out default, which is automatic.
             Engine = Engine with { EvidenceBudget = null };
+        }
+
+        if (SchemaVersion < 10)
+        {
+            // StepOutputs and TypedCriteria were off by default before 10, and no settings page had a box for either:
+            // every file holds them as false because every save wrote the default out, not because somebody chose it.
+            // Kept, that false would keep the measured improvement (plans/aidlc-adoption-bench.md, Phase 1.5) from
+            // everybody who has opened the window once - the way restore_file and edit_file once reached nobody. From 10
+            // on each has a box, and off is a choice that is kept.
+            Engine = Engine with { StepOutputs = true, TypedCriteria = true };
         }
 
         // Deliberately "< CurrentSchemaVersion" rather than "< 4": every future tool added to the

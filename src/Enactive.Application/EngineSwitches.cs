@@ -24,6 +24,8 @@ internal sealed class EngineSwitches
     public bool AllowImplicitToolCalls { get; set; }
     public string ReviewRetries { get; set; } = "";
     public bool RevertRejectedSteps { get; set; }
+    public bool StepOutputs { get; set; }
+    public bool TypedCriteria { get; set; }
     public string MaxParallelSteps { get; set; } = "";
     public string EvidenceBudget { get; set; } = "";
 
@@ -42,6 +44,8 @@ internal sealed class EngineSwitches
         AllowImplicitToolCalls = engine.AllowImplicitToolCalls,
         ReviewRetries = engine.ReviewRetries.ToString(),
         RevertRejectedSteps = engine.RevertRejectedSteps,
+        StepOutputs = engine.StepOutputs,
+        TypedCriteria = engine.TypedCriteria,
         MaxParallelSteps = engine.MaxParallelSteps.ToString(),
         // Blank is automatic (EngineOptions.EvidenceBudget): the box shows a number only where a person set one.
         EvidenceBudget = engine.EvidenceBudget?.ToString() ?? ""
@@ -77,6 +81,8 @@ internal sealed class EngineSwitches
             // show one number while the engine quietly runs another.
             ReviewRetries = Math.Clamp(NumberOr(ReviewRetries, engineDefault.ReviewRetries, _ => true), 0, 5),
             RevertRejectedSteps = RevertRejectedSteps,
+            StepOutputs = StepOutputs,
+            TypedCriteria = TypedCriteria,
             MaxParallelSteps = PositiveOr(MaxParallelSteps, engineDefault.MaxParallelSteps),
             // Blank is automatic - the budget follows each reviewer's window (ReviewEvidence) - and so is anything that is
             // not a number: a number typed wrong is not a choice. A number below the floor is raised to it: somebody who

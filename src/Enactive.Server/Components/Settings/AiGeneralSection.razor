@@ -93,6 +93,14 @@
     <HintMark Text="@SettingsAdvice.RevertRejectedSteps" Of="Put a rejected step's files back" />
 </span>
 <span class="settings-label-row">
+    <label class="check"><input type="checkbox" @bind="Vm.StepOutputs" /> Steps hand their results on as values — a longer planner prompt</label>
+    <HintMark Text="@SettingsAdvice.StepOutputs" Of="Steps hand their results on as values" />
+</span>
+<span class="settings-label-row">
+    <label class="check"><input type="checkbox" @bind="Vm.TypedCriteria" /> The planner adds checks the engine runs itself — files, contents, tests</label>
+    <HintMark Text="@SettingsAdvice.TypedCriteria" Of="The planner adds checks the engine runs itself" />
+</span>
+<span class="settings-label-row">
     <label class="check"><input type="checkbox" @bind="Vm.AllowImplicitToolCalls" /> Run tool calls the model only described in text — unsafe, off by default</label>
     <HintMark Text="@SettingsAdvice.AllowImplicitToolCalls" Of="Run tool calls the model only described" />
 </span>
