@@ -48,10 +48,19 @@ public static class PutBackReasons
     public const string NotAFile = "it is not a regular file";
     public const string Attributes = "the command changed a .gitattributes";
     public const string NotExact = "its bytes could not be written back exactly";
+    public const string Settings = "the command changed the repository's own settings (its config or info/attributes)";
 }
 
 /// <summary>One moment of the workspace: a git tree id, or the size, write time and (up to a limit) content hash of every file.</summary>
-public sealed record WorkspaceSnapshot(string? Tree, IReadOnlyDictionary<string, (long Size, long Ticks, string? Hash)>? Files);
+public sealed record WorkspaceSnapshot(string? Tree, IReadOnlyDictionary<string, (long Size, long Ticks, string? Hash)>? Files)
+{
+    /// <summary>
+    /// The repository's own settings as they stood when the tree was made - its config and info/attributes, as a hash. A
+    /// blob is the file's bytes only under the settings it was made with; read after a command, settings the command
+    /// changed (core.autocrlf set false) answered for a blob made under the old ones (review of PR #65). Null outside git.
+    /// </summary>
+    public string? Settings { get; init; }
+}
 
 public enum FileChangeKind { Added, Modified, Deleted, Renamed }
 
