@@ -1,3 +1,4 @@
 [
-  "Write in a report only what a command you ran printed. The computer's name, the operating system, a volume's label, type or role (system, EFI, recovery): state them only when a command's output shows them; otherwise leave them out."
+  "Write in a report only what a command you ran printed, or what the application gave you about this machine (its name, operating system and processors). A volume's label, type or role (system, EFI, recovery): state it only when a command's output shows it; otherwise leave it out.",
+  "Work every total and percentage out from the figures the commands printed, and check it against them before you write it."
 ]

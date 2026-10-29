@@ -324,6 +324,27 @@ the second review failed it - the review's one retry (`ReviewRetries = 1`), not 
 the review is shown what the application gave (`d94b835`), those are shown, and the rule now asks for less than the engine
 allows. The review rightly put a person's rule above the application's facts and failed the header for them (`194159`,
 `194700`). That is what confirmed rules do: they last until a person changes them - the Lessons panel is where. The
-measurement file is left as it was measured.
+rule as measured is quoted above; the file was rewritten after these runs (see "The rule rewritten" below).
 
 Stamps: worker only `20261029-193817`, `194041`, `194323`, `194533`; reviewer too `193941`, `194159`, `194431`, `194700`.
+
+## The rule rewritten (2026-10-29)
+
+The rule of the Phase 5 measurement asked the worker to name the computer and the OS only from a command's output - less
+than the engine allows since the review is shown what the application gave (`d94b835`), and the review held the worker to
+it. Rewritten, as a person would after the measurement (`bench/rules/report-only-what-was-shown.json`), in two rules:
+
+1. "Write in a report only what a command you ran printed, or what the application gave you about this machine (its name,
+   operating system and processors). A volume's label, type or role (system, EFI, recovery): state it only when a
+   command's output shows it; otherwise leave it out."
+2. "Work every total and percentage out from the figures the commands printed, and check it against them before you
+   write it." - for the other rejection seen in the earlier runs: totals 100 and 2000 GB off.
+
+Live, `disk-report` with both rules, four runs at `ea096fe`: right PASS 3, right FAIL 1. No review failed the machine's
+name or OS any more (with the old rule: 2 of 4). What the reviews still failed: a volume called "system" with no output
+behind it (`222838`, put right), a fourth volume left out of the table (`223000`, put right), and in the failing run
+(`223150`) drive letters tied to disk models by a guess - put right with Get-Partition on the repair, whose summary
+totals then no longer matched its own table, and the one retry was spent. In one run the worker found its own wrong
+totals and corrected them before the review (`222838`); one run passed with no rejection (`223411`).
+
+Stamps: `20261029-222838`, `223000`, `223150`, `223411`.
