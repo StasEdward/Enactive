@@ -339,8 +339,11 @@ public sealed class SettingsTests : ComponentHost
         Assert.Equal(MailPassword, AppSettings.Load(Engine.SettingsFile).Smtp.Password);
 
         screen.WaitForAssertion(() => Assert.Contains(screen.FindAll(".settings-pane label.check"), l => l.TextContent.Contains("Remove the stored password")));
-        screen.FindAll(".settings-pane label.check").Single(l => l.TextContent.Contains("Remove the stored password"))
-            .QuerySelector("input")!.Change(true);
+        // Found and changed in one turn of the renderer, as Press clicks: the page goes on drawing after its Save, and a box
+        // found a moment before was one whose handler the next render had replaced - UnknownEventHandlerIdException, under
+        // load only (seen with the engine suite running beside it).
+        screen.InvokeAsync(() => screen.FindAll(".settings-pane label.check").Single(l => l.TextContent.Contains("Remove the stored password"))
+            .QuerySelector("input")!.Change(true)).GetAwaiter().GetResult();
         Press(screen, "Save");
 
         screen.WaitForAssertion(() => Assert.Equal("", AppSettings.Load(Engine.SettingsFile).Smtp.Password));
