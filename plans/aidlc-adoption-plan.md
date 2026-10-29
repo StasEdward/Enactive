@@ -752,7 +752,7 @@ What `aidlc-adoption-bench.md` found besides the phases' own measurements, and w
 | 2 | A blocking step check failed the step for an error that predates it, and drove the worker at forbidden files | Fixed: `4347e13`, `dd7e1ec`, `6a946d4` (judged against the step's start; only a step with an old failure is told to leave it) |
 | 3 | A forbidden file rewritten through a shell command stayed changed after the step was rejected | Built 2026-10-28 (`8ec8d48`..`38e579e`): a command's change is held to the limit after the fact and put back byte for byte, or named; measured, the worker did not repeat the shell rewrite - below and `aidlc-adoption-bench.md` |
 | 4 | `disk-report` truth wants `C:` where `C` is right | Not checked - a scenario fix, not an engine one |
-| 5 | The planner made a file the request forbids changing a write-evidence item (`test-coverage`, `20261017-231237`) | Open, not looked at |
+| 5 | The planner made a file the request forbids changing a write-evidence item (`test-coverage`, `20261017-231237`) | Fixed 2026-10-29 (`c71e8c2`): the request forbade nothing - the planner put write evidence on "the files with gaps", and the right work writes tests elsewhere. An item whose own file is unchanged while the step changed files that are no item of the list is now the reviewer's to judge, not the check's to reject; without an approving verdict the step is done, not confirmed (`CoverageWrittenElsewhere`) |
 
 ### 3. A forbidden file rewritten through a shell command
 

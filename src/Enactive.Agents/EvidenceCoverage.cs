@@ -62,6 +62,10 @@ public static class EvidenceCoverage
     /// </summary>
     internal const string ExcludedField = "excluded";
 
+    /// <summary>How many of the files a step changed are kept with an item it did not change (ItemEvidence.WroteInstead):
+    /// enough to say where the work went; the rest are in the step's calls.</summary>
+    private const int WroteInsteadNamed = 5;
+
     /// <summary>
     /// For every item of every results field in a submission, what the step had shown for it: recorded
     /// when the result is handed on, from the step's own reads, calls and recorded changes.
@@ -104,7 +108,11 @@ public static class EvidenceCoverage
                 var wrote = written.Any(p => Same(p, item));
                 if (naming.Length > 0 || whole || wrote) complete.Add(EvidenceKind.Call);
                 if (wrote) complete.Add(EvidenceKind.FileWrite);
-                items.Add(new ItemEvidence(field.Name, item, complete, gap));
+                // Files no item of the list names: a change to another item's file is that item's work, not this one's - a
+                // step that fixed two pages of three and only read the third has nothing to show for it.
+                var instead = wrote ? [] : written.Where(p => !field.Items.Any(i => Same(i, p)))
+                    .Select(Normal).Distinct(StringComparer.OrdinalIgnoreCase).Take(WroteInsteadNamed).ToArray();
+                items.Add(new ItemEvidence(field.Name, item, complete, gap) { WroteInstead = instead.Length > 0 ? instead : null });
             }
         }
         return items;
@@ -392,8 +400,10 @@ public static class EvidenceCoverage
 
         var uncovered = items.Where(i => !i.Covered).Select(i => $"{i.Item} ({i.Why})").ToList();
         var covered = items.Count - uncovered.Count;
+        var elsewhere = items.Count(i => i.WrittenElsewhere);
         return uncovered.Count == 0
-            ? Result(CriterionOutcome.Passed, $"covered {covered} of {items.Count}: {AccountedFor(typed.Evidence ?? EvidenceKind.Call)}.")
+            ? Result(CriterionOutcome.Passed, $"covered {covered} of {items.Count}: {AccountedFor(typed.Evidence ?? EvidenceKind.Call)}"
+                + (elsewhere > 0 ? $" - {elsewhere} of them by changes to other files, which the step's review judged" : "") + ".")
             : Result(CriterionOutcome.Failed, $"covered {covered} of {items.Count}; not covered: "
                 + string.Join("; ", uncovered.Take(12)) + (uncovered.Count > 12 ? $"; and {uncovered.Count - 12} more" : "") + ".");
     }
@@ -429,9 +439,22 @@ public static class EvidenceCoverage
 
         public bool Excluding => Excluded is not null;
 
+        /// <summary>The files the step changed in place of this item's own (ItemEvidence.WroteInstead).</summary>
+        public IReadOnlyList<string>? WroteInstead { get; init; }
+
+        /// <summary>
+        /// A result under write evidence, the item's own file unchanged and other files changed by the step: counted, and
+        /// not confirmed until a review approves the work (StepCoverageGate.Outcome.WrittenElsewhere). The right work on
+        /// an item can land in another file - tests for a source file - and only a reviewer can tell it from work left
+        /// undone; rejected here, the only way through was to change the code under test (bench test-coverage,
+        /// 20261017-231237). A step that changed no file has no write to show, and stays not covered.
+        /// </summary>
+        public bool WrittenElsewhere => Required == EvidenceKind.FileWrite && HasResult && !Excluding
+            && !Found.Contains(EvidenceKind.FileWrite) && WroteInstead is { Count: > 0 };
+
         /// <summary>A result backed as required - or, for a step that filters, left out with a reason and nothing else.</summary>
-        public bool Covered => !Subset ? HasResult && Found.Contains(Required)
-            : HasResult ? !Excluding && Found.Contains(Required)
+        public bool Covered => !Subset ? HasResult && (Found.Contains(Required) || WrittenElsewhere)
+            : HasResult ? !Excluding && (Found.Contains(Required) || WrittenElsewhere)
             : Excluding && !string.IsNullOrWhiteSpace(Excluded);
 
         /// <summary>Left out with a reason, and not processed as well: an exclusion a reviewer is asked to permit.</summary>
@@ -536,7 +559,8 @@ public static class EvidenceCoverage
             return new ItemAccount(item, kind, result.Name is not null, backed?.Complete ?? [], backed?.Gap, result.Text)
             {
                 Subset = typed.Subset,
-                Excluded = reason.Name is null ? null : reason.Reason.Trim()
+                Excluded = reason.Name is null ? null : reason.Reason.Trim(),
+                WroteInstead = backed?.WroteInstead
             };
         }).ToArray();
     }
