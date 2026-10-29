@@ -228,7 +228,10 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         {
             if (WorkspaceRootOrNull() is not { } root)
                 return;
-            _ = new LessonsWindow(DesktopLessons.For(root, _vm.WorkspaceName)).ShowDialog(this);
+            var lessons = DesktopLessons.For(root, _vm.WorkspaceName);
+            var window = new LessonsWindow(lessons);
+            lessons.CheckRequested += (row, id) => _ = MakeCheckAsync(lessons, row, id, root, window);
+            _ = window.ShowDialog(this);
         };
         _vm.TimelineRequested += () => _ = ShowTimelineAsync();
         _vm.LogRequested += ShowLogWindow;
@@ -2444,6 +2447,8 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         if (_vm.Lessons is not { } lessons || !string.Equals(_lessonsRoot, path, StringComparison.OrdinalIgnoreCase))
         {
             lessons = DesktopLessons.For(path, _vm.WorkspaceName);
+            var made = lessons;
+            lessons.CheckRequested += (row, id) => _ = MakeCheckAsync(made, row, id, path, this);
             _lessonsRoot = path;
             _vm.Lessons = lessons;
         }
@@ -2451,6 +2456,19 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     }
 
     private string? _lessonsRoot;
+
+    /// <summary>
+    /// A lesson made into a check (Plan Phase 5.4): the workspace's Checks list, over <paramref name="owner"/>, with a new
+    /// check's form filled in from the lesson - its command left for the person. Saved, the lesson is set aside.
+    /// </summary>
+    private async Task MakeCheckAsync(LessonsViewModel lessons, LessonRow row, string id, string root, Window owner)
+    {
+        var checks = DesktopChecks.For(root, Enactive.Core.Checks.CheckScope.Workspace);
+        checks.AddFrom(id, row.Text);
+        await new ChecksWindow(checks, _vm.WorkspaceName).ShowDialog(owner);
+        if (checks.LastSaved is { } saved)
+            await lessons.MadeIntoCheckAsync(row, saved);
+    }
 
     private async Task ShowTimelineAsync()
     {

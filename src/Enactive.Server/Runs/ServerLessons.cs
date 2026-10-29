@@ -46,6 +46,31 @@ internal sealed class ServerLessons(UserStore users, ServerFolders folders, Know
             : account.Role >= Role.Operator ? null : "Your role does not include changing a workspace's rules.";
     }
 
+    /// <summary>A candidate of the workspace, by its id, for its Checks screen to make into a check - or null.</summary>
+    public async Task<RuleEntry?> CandidateAsync(ClaimsPrincipal user, string root, Guid id, CancellationToken ct)
+    {
+        if (ServerAuth.StillValid(users, user) is null || workspaces.Find(root) is not { } known)
+            return null;
+        return (await Book(known.RootPath).ListAsync(ct)).FirstOrDefault(r => r.Id == id && r.Status == RuleStatus.Candidate);
+    }
+
+    /// <summary>
+    /// The candidate became a check, saved as the person on the Checks screen (ServerChecks, audited there): set aside as
+    /// the window sets it aside (LessonsViewModel.MadeIntoCheckAsync), and audited here. Null when done, or why not.
+    /// </summary>
+    public async Task<string?> MadeIntoCheckAsync(ClaimsPrincipal user, string root, RuleEntry entry, string checkId, CancellationToken ct)
+    {
+        if (WhyNot(user, entry.Scope) is { } why)
+            return why;
+        if (workspaces.Find(root) is not { } known)
+            return Unknown;
+        var aside = entry with { Origin = (entry.Origin is { Length: > 0 } o ? o + "; " : "") + $"made into the check '{checkId}'" };
+        if (await BookLessons.Said(() => Book(known.RootPath).DismissAsync(aside, ct), "Not set aside") is { } said)
+            return said;
+        Audited(user, "lesson made into a check", aside, entry.Scope, known.RootPath);
+        return null;
+    }
+
     private RuleBook Book(string root)
         => new(RuleStoreFactory.Create(WorkspaceInfo.For(root)), JsonRuleStore.Global(folders.Data));
 

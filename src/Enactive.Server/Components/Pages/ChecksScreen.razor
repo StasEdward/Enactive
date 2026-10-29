@@ -6,6 +6,8 @@
 @using Enactive.Server.Runs
 @using Microsoft.AspNetCore.Components.Authorization
 @inject ServerChecks Checks
+@inject ServerLessons Lessons
+@implements IDisposable
 @inject ServerHistory History
 @inject WorkspaceIds Ids
 @inject ChosenWorkspace Chosen
@@ -40,6 +42,13 @@
     /// <summary>The workspace, by its id (WorkspaceIds); none, the one used last. Read as text, as the Templates screen does.</summary>
     [SupplyParameterFromQuery(Name = "ws")] private string? Ws { get; set; }
 
+    /// <summary>A lesson to make into a check (Plan Phase 5.4), from the Lessons screen: the form opens filled in from it.</summary>
+    [SupplyParameterFromQuery(Name = "lesson")] private string? Lesson { get; set; }
+
+    private Enactive.Core.Rules.RuleEntry? _lesson;
+    private string? _root;
+    private System.Security.Claims.ClaimsPrincipal? _user;
+
     private IReadOnlyList<SwitcherRow> _switcher = [];
     private ChecksViewModel? _list;
     private string? _problem;
@@ -60,6 +69,34 @@
                 : "The service does not know that workspace.");
             return;
         }
+        Follow(null);
         (_list, _problem) = Checks.Workspace(user, selected.RootPath);
+        (_root, _user, _lesson) = (selected.RootPath, user, null);
+        // The form from a lesson, for a person the list lets change checks: the command left for them to write.
+        if (_list is { CanChange: true } list && Guid.TryParse(Lesson, out var lessonId)
+            && await Lessons.CandidateAsync(user, selected.RootPath, lessonId, CancellationToken.None) is { } lesson)
+        {
+            _lesson = lesson;
+            list.AddFrom(LessonsViewModel.CheckIdFor(lesson.Text), lesson.Text);
+            Follow(list);
+        }
     }
+
+    // Saved from the lesson's form: the lesson is set aside, once, as the window does after its Checks window closes.
+    private void Follow(ChecksViewModel? list)
+    {
+        if (_list is { } old) old.PropertyChanged -= Saved;
+        if (list is not null) list.PropertyChanged += Saved;
+    }
+
+    private void Saved(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(ChecksViewModel.LastSaved) || _lesson is not { } lesson || _list?.LastSaved is not { } id
+            || _root is null || _user is null)
+            return;
+        _lesson = null;
+        _ = Lessons.MadeIntoCheckAsync(_user, _root, lesson, id, CancellationToken.None);
+    }
+
+    public void Dispose() => Follow(null);
 }
