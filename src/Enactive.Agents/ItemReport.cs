@@ -24,6 +24,7 @@ internal static class ItemReport
         OutcomeCause.ReviewUnprocessable => "Unconfirmed: the review could not be processed",
         OutcomeCause.ReviewUndecided => "Unconfirmed: the reviewer could not decide",
         OutcomeCause.CoverageMentionedOnly => "Unconfirmed: its items were only mentioned",
+        OutcomeCause.CoverageWrittenElsewhere => "Unconfirmed: its items were worked on in other files",
         OutcomeCause.CoverageExclusionsUnapproved => "Unconfirmed: no review approved the items it left out",
         OutcomeCause.ItemsNotCovered => "Unconfirmed: not every item is covered",
         OutcomeCause.NotReached => "Not reached",

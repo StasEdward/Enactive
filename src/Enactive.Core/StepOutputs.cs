@@ -131,4 +131,12 @@ public enum EvidenceKind
 /// <summary>What one item's result was backed by when it was handed on, and, when not by a whole read, why.</summary>
 /// <param name="Complete">The kinds of complete evidence the step had for the item.</param>
 /// <param name="Gap">What was missing for a file read: never read, seen as an excerpt, the lines not read.</param>
-public sealed record ItemEvidence(string Field, string Item, IReadOnlyList<EvidenceKind> Complete, string? Gap);
+public sealed record ItemEvidence(string Field, string Item, IReadOnlyList<EvidenceKind> Complete, string? Gap)
+{
+    /// <summary>
+    /// The files the step changed when this item's own file was not among them, other items' files left out - null when
+    /// it was, or when the step changed none but those. Under write evidence such an item is the reviewer's to judge, not the engine's to reject: the right
+    /// work on an item can land in another file (bench test-coverage, 20261017-231237 - tests for a source file).
+    /// </summary>
+    public IReadOnlyList<string>? WroteInstead { get; init; }
+}

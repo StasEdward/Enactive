@@ -141,6 +141,22 @@ internal static class StepCoverageGate
             .SelectMany(c => c.Items.Where(i => i.Covered && !i.Excluding && i.Found.All(k => k == EvidenceKind.Call)).Select(i => i.Item))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
+        /// <summary>
+        /// The covered items of a criterion that asked for a change to each file, whose step changed other files and not
+        /// theirs (EvidenceCoverage.ItemAccount.WrittenElsewhere): the engine cannot tell the work on an item done in
+        /// another file from work left undone, so the step stands on them only with an approving verdict - as on a mention.
+        /// </summary>
+        public IReadOnlyList<EvidenceCoverage.ItemAccount> WrittenElsewhere => Checks
+            .SelectMany(c => c.Items.Where(i => i.WrittenElsewhere))
+            .DistinctBy(i => EvidenceCoverage.Normal(i.Item), StringComparer.OrdinalIgnoreCase).ToArray();
+
+        /// <summary>What a step is told, and its end says, when items were worked on in other files and no review confirmed it.</summary>
+        public static string ElsewhereOnly(IReadOnlyList<EvidenceCoverage.ItemAccount> items)
+            => $"{items.Count} item(s) were to be shown by a change to each file, and the step changed other files instead: "
+               + string.Join("; ", items.Take(NamedInLine).Select(i => $"{i.Item} (changed instead: {string.Join(", ", i.WroteInstead!)})"))
+               + (items.Count > NamedInLine ? $"; and {items.Count - NamedInLine} more" : "")
+               + ". Whether that is the work on each is a reviewer's to judge, and no review confirmed it.";
+
         /// <summary>What a step or a join is told, and its end says, when items rest on a mention and no review confirmed them.</summary>
         public static string MentionedOnly(IReadOnlyList<string> mentioned)
             => $"{mentioned.Count} item(s) were only mentioned - named in a call that succeeded, and not read, written or run: "
@@ -163,9 +179,14 @@ internal static class StepCoverageGate
             var leftOut = approved.Exclusions ? null : Unapproved();
             var mentioned = OnlyMentioned.Where(i => !approved.Mentioned(i)).ToArray();
             var onlyMentioned = mentioned.Length > 0 ? MentionedOnly(mentioned) : null;
-            if (leftOut is null && onlyMentioned is null) return null;
-            return (string.Join(" ", new[] { leftOut, onlyMentioned }.OfType<string>()),
-                leftOut is not null ? OutcomeCause.CoverageExclusionsUnapproved : OutcomeCause.CoverageMentionedOnly);
+            // Approved on the mention's terms: a pass from any review that judged the work saw the calls that changed
+            // the other files.
+            var elsewhere = WrittenElsewhere.Where(i => !approved.Mentioned(i.Item)).ToArray();
+            var writtenElsewhere = elsewhere.Length > 0 ? ElsewhereOnly(elsewhere) : null;
+            if (leftOut is null && onlyMentioned is null && writtenElsewhere is null) return null;
+            return (string.Join(" ", new[] { leftOut, writtenElsewhere, onlyMentioned }.OfType<string>()),
+                leftOut is not null ? OutcomeCause.CoverageExclusionsUnapproved
+                : writtenElsewhere is not null ? OutcomeCause.CoverageWrittenElsewhere : OutcomeCause.CoverageMentionedOnly);
         }
 
         /// <summary>The reason a person reads, and the step is rejected with: the failed criteria, one line each.</summary>
@@ -325,7 +346,7 @@ internal static class StepCoverageGate
                 sb.AppendLine(ExclusionsHeading);
                 Emit(excluded.Select(i => (i.Item, $"- {i.Item}: excluded - {Clip(i.Excluded!, ReasonChars)}")).ToArray(), "item(s) left out");
             }
-            bool Weak(EvidenceCoverage.ItemAccount i) => !i.Covered || (!i.Excluding && i.Found.All(k => k == EvidenceKind.Call));
+            bool Weak(EvidenceCoverage.ItemAccount i) => !i.Covered || i.WrittenElsewhere || (!i.Excluding && i.Found.All(k => k == EvidenceKind.Call));
             var strong = c.Items.Where(i => !Weak(i) && !i.ExcludedWithReason).ToArray();
             if (strong.Length > 0)
                 sb.AppendLine($"Backed as required: {strong.Length} of {c.Items.Count - excluded.Length} - "
@@ -340,6 +361,7 @@ internal static class StepCoverageGate
                                               || x.Action.ChangedPaths?.Any(p => EvidenceCoverage.Same(p, i.Item)) == true)
                     .Select(x => $"{x.Action.Tool} {Clip(x.Action.Arguments, CallChars)}").ToArray();
                 return (i.Item, $"- {i.Item}: required {EvidenceCoverage.NameOf(i.Required)}; found {Found(i)}; "
+                    + (i.WrittenElsewhere ? $"the file itself unchanged, changed instead: {string.Join(", ", i.WroteInstead!)} - is that the work on it? " : "")
                     + (behind.Length == 0 ? "by no recorded call" : "by " + string.Join(", ", behind.Take(3)) + (behind.Length > 3 ? $" and {behind.Length - 3} more" : ""))
                     + $"; result: {(i.HasResult ? Clip(i.Result ?? "", ResultChars) : "none")}");
             }).ToArray(), "item(s) with no more than a mention behind them, or less than required");

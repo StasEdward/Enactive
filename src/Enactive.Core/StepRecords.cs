@@ -109,7 +109,15 @@ public enum OutcomeCause
     /// Not sent back for a failure that was there before it began - and not confirmed by a check that said nothing about
     /// it. Last, so no stored value moves.
     /// </summary>
-    CheckFailedBefore
+    CheckFailedBefore,
+
+    /// <summary>
+    /// Items of a list the step consumes were to be shown by a change to each file, and the step changed other files
+    /// instead - tests written for a source file - and no review approved the work: done, not confirmed. Whether that is
+    /// the work on the item is a reviewer's to judge (StepCoverageGate.Outcome.WrittenElsewhere). Last, so no stored
+    /// value moves.
+    /// </summary>
+    CoverageWrittenElsewhere
 }
 
 /// <summary>
