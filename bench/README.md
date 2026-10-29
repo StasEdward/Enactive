@@ -35,12 +35,14 @@ dotnet run --project tools/Enactive.Bench                    # the live run, all
 dotnet run --project tools/Enactive.Bench -- --only wiki-drift --timeout 30
 dotnet run --project tools/Enactive.Bench -- --save-baseline # this run becomes what later runs are compared with
 dotnet run --project tools/Enactive.Bench -- --only missing-input --judge <workspace>  # the truth again, on a workspace a run left
+dotnet run --project tools/Enactive.Bench -- --only disk-report --rules rules.json  # each run given these confirmed rules (Plan Phase 5)
 ```
 
 The live run builds the console host into the temp folder, needs the configured providers up (the local model
 server, the cloud planner/reviewer) and costs their tokens. Each run's folder under `bench/results/` holds
 `summary.md`, `results.json` and, per scenario, the console log and the engine's report; only `baseline.json` is kept
-in git. The exit code is 1 when any scenario is a false PASS, a false FAIL or NOT RUN.
+in git. `--rules` takes a JSON array of rule texts and keeps them as confirmed rules in each run's own workspace - never
+the machine's Global layer; `results.json` says how many a run was given (`rulesGiven`). The exit code is 1 when any scenario is a false PASS, a false FAIL or NOT RUN.
 
 Before each live run the bench checks the scenario's truth on its reference solution, as `--solutions` does. Where the
 truth turns the solution down on this machine - a runtime or tool its checks need is missing - it would turn down a

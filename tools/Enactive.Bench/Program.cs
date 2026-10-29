@@ -35,6 +35,8 @@ var scenariosRoot = Option("--scenarios") ?? Path.Combine(repo, "bench", "scenar
 var resultsRoot = Option("--out") ?? Path.Combine(repo, "bench", "results");
 var only = Option("--only")?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 var timeout = TimeSpan.FromMinutes(double.TryParse(Option("--timeout"), out var minutes) ? minutes : 40);
+// Confirmed rules every run is given (Plan Phase 5 measurement): a JSON array of rule texts, kept in each run's workspace.
+var rulesFile = Option("--rules") is { } rf ? Path.GetFullPath(rf) : null;
 
 var scenarios = Directory.GetDirectories(scenariosRoot)
     .Where(d => File.Exists(Path.Combine(d, "scenario.json")))
@@ -152,6 +154,8 @@ async Task<ScenarioResult> RunScenarioAsync(Scenario scenario)
     foreach (var git in new[] { "git init -q", "git config user.email bench@enactive.local", "git config user.name bench",
                  "git config core.autocrlf false", "git add -A", "git commit -q -m fixture" })
         await Truth.RunAsync("cmd", git, work, cts.Token);
+    if (rulesFile is not null)
+        Console.WriteLine($"   given {await Rules.SeedAsync(work, rulesFile, cts.Token)} rule(s) from {rulesFile}");
 
     var clock = Stopwatch.StartNew();
     var psi = new ProcessStartInfo(console)

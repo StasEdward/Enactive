@@ -26,6 +26,9 @@ internal sealed record RunMetrics(
     int CacheBreaks,
     int CacheRewrites)
 {
+    /// <summary>The confirmed rules the run was given (Plan Phase 5), from its settings: what a measured run is compared on.</summary>
+    public int RulesGiven { get; init; }
+
     public long TokensIn => TokensByPurpose.Values.Sum(t => t.In);
     public long TokensOut => TokensByPurpose.Values.Sum(t => t.Out);
 
@@ -66,7 +69,10 @@ internal sealed record RunMetrics(
             Count("DecisionRequested"),
             Count("ContextTrimmed"),
             cacheNotes.Count(e => e.Summary.Contains("only grew", StringComparison.Ordinal)),
-            cacheNotes.Count(e => e.Summary.Contains("was rewritten", StringComparison.Ordinal)));
+            cacheNotes.Count(e => e.Summary.Contains("was rewritten", StringComparison.Ordinal)))
+        {
+            RulesGiven = record.Settings?.Rules?.Rules.Count ?? 0
+        };
     }
 
     private static string? Field(string? payload, string name)

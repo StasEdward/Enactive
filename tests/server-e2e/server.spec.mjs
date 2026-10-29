@@ -635,6 +635,9 @@ test('a template edited from Settings is edited over Settings, and closing it co
   await expect(menu.getByRole('link', { name: 'Templates' })).toHaveAttribute('aria-current', 'page');
   await card.getByRole('link', { name: 'Duplicate Code Review' }).click();
   await expect(editor).toBeVisible();
+  // The dialog takes the focus once its script has loaded (Dialog.razor.js), after it is drawn: an Escape pressed before
+  // went to the page, and the editor stayed open - PR #70 and PR #73 on CI, as the drawer's case below did (PR #58).
+  await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[role=dialog]'))).toBe(true);
   await page.keyboard.press('Escape');
   await expect(page).toHaveURL(/\/settings\/ai-templates$/);
 
