@@ -42,6 +42,18 @@
             <p class="said lessons-said" role="status">@vm.Said</p>
         }
 
+        @if (vm.HasConflict)
+        {
+            @* A workspace rule that goes against a Global one, held until the person says (Plan Phase 5.2). *@
+            <div class="card lessons-conflict" role="status">
+                <p>@vm.Conflict</p>
+                <div class="settings-section-actions">
+                    <button type="button" class="btn small lesson-keep-anyway" @onclick="() => RunAsync(vm.KeepAnywayCommand)">Keep it anyway</button>
+                    <button type="button" class="btn small lesson-change-it" @onclick="() => RunAsync(vm.ChangeItCommand)">Change it</button>
+                </div>
+            </div>
+        }
+
         @if (vm.HasCandidates)
         {
             <PanelHeader Text="WAITING ON YOU" />

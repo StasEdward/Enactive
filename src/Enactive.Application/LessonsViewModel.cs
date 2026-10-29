@@ -68,11 +68,83 @@ internal sealed class LessonsViewModel : ObservableObject
     private string _newText = "";
     private bool _newGlobal;
 
-    public LessonsViewModel(ILessonChanges changes, string heading)
+    private readonly Func<string, IReadOnlyList<RuleEntry>, CancellationToken, Task<Enactive.Agents.RuleConflict?>>? _consistency;
+    private IReadOnlyList<RuleEntry> _all = [];
+    private Func<Task>? _held;
+    private string? _conflict;
+    private string? _notChecked;
+
+    /// <param name="consistency">Whether a workspace rule goes against a Global one (RuleConsistency) - null with no model to
+    /// ask, and the rule is kept without the question.</param>
+    public LessonsViewModel(ILessonChanges changes, string heading,
+        Func<string, IReadOnlyList<RuleEntry>, CancellationToken, Task<Enactive.Agents.RuleConflict?>>? consistency = null)
     {
         _changes = changes;
         Heading = heading;
+        _consistency = consistency;
         AddCommand = new AsyncRelayCommand(AddAsync, () => !string.IsNullOrWhiteSpace(_newText));
+        KeepAnywayCommand = new AsyncRelayCommand(KeepAnywayAsync, () => _held is not null);
+        ChangeItCommand = new RelayCommand(() => Hold(null, null));
+    }
+
+    /// <summary>
+    /// A workspace rule held back because it goes against a Global one (Plan Phase 5.2): which, and why. The person keeps it
+    /// anyway - the store takes what they confirm - or changes it; nothing is kept until they say.
+    /// </summary>
+    public string? Conflict => _conflict;
+    public bool HasConflict => _conflict is not null;
+    public AsyncRelayCommand KeepAnywayCommand { get; }
+    public RelayCommand ChangeItCommand { get; }
+
+    private void Hold(Func<Task>? keep, string? conflict)
+    {
+        _held = keep;
+        _conflict = conflict;
+        OnPropertyChanged(nameof(Conflict));
+        OnPropertyChanged(nameof(HasConflict));
+        KeepAnywayCommand.RaiseCanExecuteChanged();
+    }
+
+    private async Task KeepAnywayAsync()
+    {
+        var keep = _held;
+        Hold(null, null);
+        if (keep is not null)
+            await keep();
+    }
+
+    /// <summary>
+    /// Whether <paramref name="text"/>, about to be kept for this workspace, goes against a Global rule - asked only when there
+    /// are Global rules, and an answer that fails is no answer: an aid does not stop a person keeping what they decided.
+    /// </summary>
+    private async Task<Enactive.Agents.RuleConflict?> AgainstGlobalAsync(string text)
+    {
+        var global = _all.Where(r => r.Scope == RuleScope.Global && r.Status == RuleStatus.Confirmed).ToArray();
+        if (_consistency is null || global.Length == 0)
+            return null;
+        try { return await _consistency(text, global, CancellationToken.None); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Kept all the same, and said: a check that did not happen must not read as one that found nothing.
+            _notChecked = "Kept without checking it against the rules every workspace is given: " + ex.Message + ".";
+            return null;
+        }
+    }
+
+    /// <summary>Keeps it now, or holds it back with the Global rule it goes against.</summary>
+    private async Task KeepUnlessAgainstGlobalAsync(string text, RuleScope scope, Func<Task> keep)
+    {
+        if (scope == RuleScope.Workspace && await AgainstGlobalAsync(text) is { } conflict)
+        {
+            Hold(keep, $"This goes against a rule every workspace is given: \"{conflict.GlobalRule}\""
+                       + (conflict.Why.Length > 0 ? $" - {conflict.Why}" : "") + " Keep it anyway, or change it.");
+            return;
+        }
+        Hold(null, null);
+        await keep();
+        if (_notChecked is { } note && Said is null)
+            Said = note;
+        _notChecked = null;
     }
 
     public string Heading { get; }
@@ -145,6 +217,7 @@ internal sealed class LessonsViewModel : ObservableObject
             return;
         }
 
+        _all = all;
         Candidates.Clear();
         Rules.Clear();
         foreach (var entry in all.Where(e => e.Status == RuleStatus.Candidate).OrderByDescending(e => e.At))
@@ -207,12 +280,24 @@ internal sealed class LessonsViewModel : ObservableObject
             Said = why;
             return;
         }
-        var said = action switch
+        if (action == LessonAction.Keep)
         {
-            LessonAction.Keep => await _changes.KeepAsync(row.Entry, row.Text, scope, CancellationToken.None),
-            LessonAction.Dismiss => await _changes.DismissAsync(row.Entry, CancellationToken.None),
-            _ => await _changes.DeleteAsync(row.Entry, CancellationToken.None)
-        };
+            // Asked when this keep makes a workspace rule say something new: a candidate kept, or a rule's words changed -
+            // not a rule saved again as it was.
+            var text = row.Text;
+            var unchanged = row.Entry.Status == RuleStatus.Confirmed && row.Entry.Scope == scope && row.Entry.Text == text.Trim();
+            async Task Keep() => await Done(await _changes.KeepAsync(row.Entry, text, scope, CancellationToken.None));
+            if (unchanged) await Keep();
+            else await KeepUnlessAgainstGlobalAsync(text, scope, Keep);
+            return;
+        }
+        await Done(action == LessonAction.Dismiss
+            ? await _changes.DismissAsync(row.Entry, CancellationToken.None)
+            : await _changes.DeleteAsync(row.Entry, CancellationToken.None));
+    }
+
+    private async Task Done(string? said)
+    {
         Said = said;
         if (said is null)
             await RefreshAsync();
@@ -221,13 +306,21 @@ internal sealed class LessonsViewModel : ObservableObject
     private async Task AddAsync()
     {
         var scope = _newGlobal ? RuleScope.Global : RuleScope.Workspace;
-        var said = _changes.WhyNot(scope) ?? await _changes.AddAsync(_newText, scope, CancellationToken.None);
-        Said = said;
-        if (said is not null)
+        if (_changes.WhyNot(scope) is { } why)
+        {
+            Said = why;
             return;
-        NewText = "";
-        NewGlobal = false;
-        await RefreshAsync();
+        }
+        var text = _newText;
+        await KeepUnlessAgainstGlobalAsync(text, scope, async () =>
+        {
+            Said = await _changes.AddAsync(text, scope, CancellationToken.None);
+            if (Said is not null)
+                return;
+            NewText = "";
+            NewGlobal = false;
+            await RefreshAsync();
+        });
     }
 }
 

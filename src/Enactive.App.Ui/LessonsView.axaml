@@ -14,6 +14,17 @@
                    Text="No lessons yet. A run whose step a review or a check sent back proposes one." />
         <TextBlock Classes="hint" TextWrapping="Wrap" IsVisible="{Binding HasSaid}" Text="{Binding Said}"
                    Foreground="{DynamicResource Brand.Warning}" />
+        <!-- A workspace rule that goes against a Global one, held until the person says (Plan Phase 5.2): an aid, not a bar. -->
+        <Border IsVisible="{Binding HasConflict}" Background="{DynamicResource Brand.CardFill}" BorderBrush="{DynamicResource Brand.Warning}"
+                BorderThickness="2,0,0,0" CornerRadius="4" Padding="10">
+            <StackPanel Spacing="6">
+                <TextBlock TextWrapping="Wrap" Text="{Binding Conflict}" />
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Button Content="Keep it anyway" Command="{Binding KeepAnywayCommand}" FontSize="11" Padding="8,2" />
+                    <Button Content="Change it" Command="{Binding ChangeItCommand}" FontSize="11" Padding="8,2" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
 
         <StackPanel Spacing="6" IsVisible="{Binding HasCandidates}">
             <TextBlock Classes="panelHeader" Text="WAITING ON YOU" Margin="0" />

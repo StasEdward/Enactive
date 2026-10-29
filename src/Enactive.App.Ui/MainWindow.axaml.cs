@@ -228,7 +228,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
         {
             if (WorkspaceRootOrNull() is not { } root)
                 return;
-            var lessons = DesktopLessons.For(root, _vm.WorkspaceName);
+            var lessons = DesktopLessons.For(root, _vm.WorkspaceName, consistency: AgainstGlobal);
             var window = new LessonsWindow(lessons);
             lessons.CheckRequested += (row, id) => _ = MakeCheckAsync(lessons, row, id, root, window);
             _ = window.ShowDialog(this);
@@ -2446,7 +2446,7 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     {
         if (_vm.Lessons is not { } lessons || !string.Equals(_lessonsRoot, path, StringComparison.OrdinalIgnoreCase))
         {
-            lessons = DesktopLessons.For(path, _vm.WorkspaceName);
+            lessons = DesktopLessons.For(path, _vm.WorkspaceName, consistency: AgainstGlobal);
             var made = lessons;
             lessons.CheckRequested += (row, id) => _ = MakeCheckAsync(made, row, id, path, this);
             _lessonsRoot = path;
@@ -2456,6 +2456,14 @@ public sealed partial class MainWindow : Window, IDecisionPresenter
     }
 
     private string? _lessonsRoot;
+
+    /// <summary>
+    /// Whether a rule goes against a Global one, asked of the engine as it is when the person keeps the rule - not as it was
+    /// when the panel was made: the settings may have built another since, or the first one since the window opened.
+    /// </summary>
+    private Task<Enactive.Agents.RuleConflict?> AgainstGlobal(string text, IReadOnlyList<Enactive.Core.Rules.RuleEntry> global,
+        CancellationToken ct)
+        => _engine?.RuleConsistency() is { } ask ? ask(text, global, ct) : Task.FromResult<Enactive.Agents.RuleConflict?>(null);
 
     /// <summary>
     /// A lesson made into a check (Plan Phase 5.4): the workspace's Checks list, over <paramref name="owner"/>, with a new

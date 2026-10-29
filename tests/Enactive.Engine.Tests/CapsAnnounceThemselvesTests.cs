@@ -160,6 +160,7 @@ public sealed class CapsAnnounceThemselvesTests
         ["ExecutionJournal.MinReadChars"] = nameof(TheReviewerSeesWhatWasReadTests.Many_reads_name_their_files_say_what_they_show_and_keep_to_the_budget),
         // What the step review asks to answer in - named so its evidence budget keeps room for it. A review cut off at it is
         // refused, never read as a verdict.
+        ["RuleConsistency.AnswerTokens"] = nameof(ARuleAgainstAGlobalOneIsHeldTests.An_answer_cut_off_at_its_limit_is_not_read_and_the_rule_is_kept_saying_so),
         ["StepVerdictReview.AnswerTokens"] = nameof(AutomaticEvidenceBudgetTests.A_review_cut_off_at_its_answer_limit_is_refused_not_read)
     };
 

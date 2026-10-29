@@ -118,7 +118,9 @@ public sealed class WorkspaceColumnTests : ComponentHost
         // What an Operator is offered on the same screen - so the Viewer's absence of it is the role, not an empty page.
         var operating = Screen("alice", $"/?ws={IdOf(root)}", "tidy the notes");
         operating.Find("button.ws-card").Click();
-        Assert.Contains("Add workspace…", Offered(operating));
+        // The switcher is drawn after the click is handled, not by it: read at once, it was not there yet on a CI runner
+        // (PR #78), as the checks form was (PR #58).
+        operating.WaitForAssertion(() => Assert.Contains("Add workspace…", Offered(operating)));
         Assert.Contains("Delete these 1", Offered(operating));
         Assert.Contains(Offered(operating), o => o.StartsWith("Resume", StringComparison.Ordinal));
         Assert.Contains("Delete: it can no longer be resumed", Offered(operating));

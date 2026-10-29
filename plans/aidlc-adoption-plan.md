@@ -21,8 +21,8 @@ follow-ups (section "Bench follow-ups" below), the deferred 4.0/4.1/4.3, and Pha
 | Phase 5.2 - Lessons panel, service page, Inbox item; 5.5 in part | Built 2026-10-29 (`feat/phase5-lessons-panel`) | - |
 | Phase 5 bench measurement | Done 2026-10-29: one rule, 4 runs a side - in favour, not settled (`aidlc-adoption-bench.md`) | - |
 | Phase 5.4 - lesson -> check | Built 2026-10-29 (`feat/lesson-to-check`, PR #76) | - |
-| Phase 5: reviewer given rules | Built 2026-10-29 (`feat/reviewer-given-rules`), measured: 4/4 right PASS with the rule | - |
-| Phase 5: consistency check against Global | Open | - |
+| Phase 5: reviewer given rules | Built 2026-10-29 (`feat/reviewer-given-rules`, PR #77), measured: 4/4 right PASS with the rule | - |
+| Phase 5: consistency check against Global | Built 2026-10-29 (`feat/rule-consistency`, PR #78) | - |
 
 Written against `master` at `7dc8866`; the line numbers below are from that commit and will drift.
 Revised after two reviews (`aidlc-adoption-review.md`, `aidlc-adoption-resolution.md`); staged-run checks (Phase 3.2) and an unresolved coverage contract (Phase 1.2) are decided.
@@ -747,6 +747,15 @@ the run rather than per step:
 - Before a write to Workspace, an advisory consistency check against Global rules (one strong-model call, only when
   Global has rules under the same heading); a contradiction is shown with keep / revise / skip. It is an aid, not a
   boundary - the store accepts what the person confirms.
+
+**Consistency check, built 2026-10-29** (`feat/rule-consistency`). Before a rule is kept for one workspace - a candidate
+kept, a rule's words changed, a rule written - and only when there are Global rules, one question to the model the
+default worker reviews with (`RuleConsistency`, `ComposedEngine.RuleConsistency`): does it contradict one, so that an
+agent given both could not follow both? A contradiction holds the keep, naming the Global rule and why; the person keeps
+it anyway or changes it. A rule kept for every workspace is not asked about, nor one saved again unchanged. An answer
+that fails or says nothing keeps the rule: an aid, not a bar. Asked of all confirmed Global rules, not only those under
+the same heading - a candidate is filed under Deviations and a rule a person writes under Interpretations, so the heading
+would have kept most contradictions from being asked about.
 
 ### 5.3 Injection
 

@@ -11,8 +11,11 @@ using Enactive.Workspace;
 internal static class DesktopLessons
 {
     /// <param name="globalFolder">Where the Global rules are; null, next to the window's settings. A test's own.</param>
-    public static LessonsViewModel For(string workspaceRoot, string workspaceName, string? globalFolder = null)
+    /// <param name="consistency">The engine's question whether a rule goes against a Global one (ComposedEngine.RuleConsistency);
+    /// null without an engine.</param>
+    public static LessonsViewModel For(string workspaceRoot, string workspaceName, string? globalFolder = null,
+        Func<string, IReadOnlyList<Enactive.Core.Rules.RuleEntry>, CancellationToken, Task<Enactive.Agents.RuleConflict?>>? consistency = null)
         => new(new BookLessons(new RuleBook(RuleStoreFactory.Create(WorkspaceInfo.For(Path.GetFullPath(workspaceRoot))),
                 JsonRuleStore.Global(globalFolder))),
-            $"Lessons - {workspaceName}");
+            $"Lessons - {workspaceName}", consistency);
 }

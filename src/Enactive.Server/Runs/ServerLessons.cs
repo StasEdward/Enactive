@@ -21,7 +21,7 @@ using Enactive.Workspace;
 /// <para><b>When.</b> Any time, unlike a check: a run reads its rules once, when it is composed, and keeps them in its
 /// settings, so a change while one works is the next run's and undoes nothing.</para>
 /// </summary>
-internal sealed class ServerLessons(UserStore users, ServerFolders folders, KnownWorkspaces workspaces)
+internal sealed class ServerLessons(UserStore users, ServerFolders folders, KnownWorkspaces workspaces, ServerEngine engine)
 {
     private const string Ended = "Your session has ended. Sign in again.";
     private const string Unknown = "The service does not know that folder as a workspace.";
@@ -33,7 +33,9 @@ internal sealed class ServerLessons(UserStore users, ServerFolders folders, Know
             return (null, Ended);
         if (workspaces.Find(root) is not { } known)
             return (null, Unknown);
-        return (new LessonsViewModel(new AsThePerson(this, user, Book(known.RootPath), known.RootPath), $"Lessons - {name}"), null);
+        // Whether a rule goes against a Global one, asked of the service's engine as it is when the rule is kept (Plan 5.2).
+        return (new LessonsViewModel(new AsThePerson(this, user, Book(known.RootPath), known.RootPath), $"Lessons - {name}",
+            (text, global, ct) => engine.Current?.RuleConsistency() is { } ask ? ask(text, global, ct) : Task.FromResult<Enactive.Agents.RuleConflict?>(null)), null);
     }
 
     /// <summary>Why this person may not change <paramref name="scope"/>, or null.</summary>
