@@ -239,10 +239,14 @@ internal sealed class LessonRow : ObservableObject
     }
 
     /// <summary>"from run "...", step 2: [2] FAIL (step review)" - for the person, never for a model.</summary>
-    public string Origin => Entry.Origin is { Length: > 0 } origin ? "from " + origin : "";
+    // "from" only for what a run proposed: a rule a person wrote says so as it is ("from written by a person", on screen).
+    public string Origin => Entry.Origin is { Length: > 0 } origin ? Entry.SourceRunId is null ? origin : "from " + origin : "";
     public bool HasOrigin => Entry.Origin is { Length: > 0 };
 
     public string ScopeText => Entry.Scope == RuleScope.Global ? "every workspace" : "this workspace";
+
+    /// <summary>A rule's line under its text: "this workspace · written by a person".</summary>
+    public string Meta => HasOrigin ? $"{ScopeText} · {Origin}" : ScopeText;
 
     /// <summary>"Keep" for a candidate, "Save" for a rule whose words or layer are being changed.</summary>
     public string KeepText => IsCandidate ? "Keep" : "Save";

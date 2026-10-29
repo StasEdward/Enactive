@@ -47,10 +47,7 @@
                         <Border Background="{DynamicResource Brand.CardFill}" CornerRadius="4" Padding="10" Margin="0,0,0,6">
                             <StackPanel Spacing="4">
                                 <TextBox Text="{Binding Text}" TextWrapping="Wrap" IsEnabled="{Binding CanChange}" />
-                                <TextBlock Classes="hint" FontSize="11" TextWrapping="Wrap">
-                                    <Run Text="{Binding ScopeText}" />
-                                    <Run Text="{Binding Origin}" />
-                                </TextBlock>
+                                <TextBlock Classes="hint" FontSize="11" TextWrapping="Wrap" Text="{Binding Meta}" />
                                 <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding CanChange}">
                                     <CheckBox Content="Every workspace" IsChecked="{Binding Global}" FontSize="11" />
                                     <Button Content="{Binding KeepText}" Command="{Binding KeepCommand}" FontSize="11" Padding="8,2" />

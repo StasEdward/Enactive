@@ -82,7 +82,7 @@
                     <li class="card settings-card lesson-row rule">
                         <span class="settings-card-text">
                             <textarea class="lesson-text" rows="2" disabled="@(!row.CanChange)" @bind="row.Text" @bind:event="oninput"></textarea>
-                            <span class="card-meta lesson-origin">@row.ScopeText @row.Origin</span>
+                            <span class="card-meta lesson-origin">@row.Meta</span>
                         </span>
                         @if (row.CanChange)
                         {

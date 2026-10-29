@@ -419,6 +419,10 @@ public sealed class LessonsBecomeRulesOnlyWhenConfirmedTests
         Assert.Equal(["kept earlier"], panel.Rules.Select(r => r.Text));
         var row = Assert.Single(panel.Candidates);
         Assert.Contains("step 1", row.Origin, StringComparison.Ordinal);
+        Assert.StartsWith("from run", row.Origin, StringComparison.Ordinal);
+        var written = new LessonRow(new RuleEntry(Guid.NewGuid(), RuleScope.Workspace, RuleHeading.Interpretations, "x", null,
+            DateTimeOffset.UnixEpoch, RuleStatus.Confirmed) { Origin = "written by a person" }, true, (_, _) => Task.CompletedTask);
+        Assert.Equal("this workspace · written by a person", written.Meta);
 
         row.Text = RuleText;
         row.Global = true;
