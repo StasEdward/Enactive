@@ -129,7 +129,8 @@ public sealed partial class Orchestrator
                 ? at with { ScopeNote = session.ScopeNotes.GetValueOrDefault(number) } : null,
             step.OutputSlot.Values is { } handed ? CitedPlaces.TextOf(handed) : null, step.Criteria, step.OutputSlot.Values,
             session.Builds, step.Reads, context.Restrictions, result.KeptBack,
-            saidBlocked: SaidBlockedOnly(result) ? result.Reason : null, coverage: coverage)) with
+            saidBlocked: SaidBlockedOnly(result) ? result.Reason : null, coverage: coverage,
+            earlierReviews: step.EarlierReviews)) with
             {
                 Coverage = coverage, ChecksNotRun = checks?.NotRun, ChecksNotRunCause = checks?.NotRunCause ?? OutcomeCause.CheckNotRun
             };
@@ -269,6 +270,7 @@ public sealed partial class Orchestrator
                     {
                         result.SentBack = true;
                         result.Keep = notDone.Keep;
+                        step.EarlierReviews.Add(notDone.Notes);
                         RetryAfterReview(step.Messages, notDone.RepairAdvice + " " + NotABlock, stepNumber is null ? "the work" : "this step");
                         continue;
                     }
@@ -320,6 +322,7 @@ public sealed partial class Orchestrator
             {
                 result.SentBack = true;
                 result.Keep = fail.Keep;
+                step.EarlierReviews.Add(fail.Notes);
                 RetryAfterReview(step.Messages, fail.RepairAdvice, stepNumber is null ? "the work" : "this step");
                 continue;
             }
