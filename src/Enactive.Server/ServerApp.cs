@@ -181,6 +181,7 @@ internal static class ServerApp
         services.AddSingleton<Runs.ServerSettings>();
         services.AddSingleton<Runs.ServerLibrary>();
         services.AddSingleton<Runs.ServerChecks>();
+        services.AddSingleton<Runs.ServerLessons>();
         services.AddSingleton<Runs.ServerLogs>();
         // The Timeline and Environment pages (ServerReports): the environment is the service's own machine, probed as the
         // window probes its own.

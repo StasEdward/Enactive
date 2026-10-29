@@ -243,6 +243,8 @@ internal static class Palette
         "error" => Brand.Danger,
         // Paused by somebody, resumed from where it stopped (Plan Phase 4.2): neither done nor wrong - open, as its run is.
         "paused" => Brand.Amber,
+        // Lessons a run nobody watched left to decide (Plan Phase 5.2): waiting on a person.
+        "lesson" => Brand.Amber,
         _ => Brand.TextMuted
     });
 

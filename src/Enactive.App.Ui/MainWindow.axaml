@@ -277,6 +277,10 @@
                     <Button Content="Checks…" FontSize="11" Padding="8,1" HorizontalAlignment="Left"
                             Command="{Binding ChecksCommand}"
                             ToolTip.Tip="The checks that judge runs in this workspace: its own, the global ones, and the engine's build and test." />
+                    <!-- What its runs proposed for next time, and the rules every new run here is given (Plan Phase 5.5). -->
+                    <Button Content="Lessons…" FontSize="11" Padding="8,1" HorizontalAlignment="Left"
+                            Command="{Binding LessonsCommand}"
+                            ToolTip.Tip="What runs here proposed for next time, and the rules you kept: every new run is given them." />
                 </StackPanel>
 
                 <!-- The line between "where" and "what happened there". -->
@@ -612,6 +616,9 @@
                             Content="{Binding ArtifactsTabLabel}" Command="{Binding ShowArtifactsCommand}" />
                     <Button Classes="tab" Classes.on="{Binding IsLogTab}"
                             Content="Log" Command="{Binding ShowLogCommand}" />
+                    <!-- What the runs here proposed for next time (Plan Phase 5.2): the workspace's, not this run's alone. -->
+                    <Button Classes="tab" Classes.on="{Binding IsLessonsTab}"
+                            Content="{Binding LessonsTabLabel}" Command="{Binding ShowLessonsCommand}" />
                 </StackPanel>
             </Border>
 
@@ -641,6 +648,13 @@
                                 <local:CheckLinesView DataContext="{Binding RunChecks}" />
                             </StackPanel>
                         </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Lessons: the workspace's candidates and rules (Plan Phase 5.2). -->
+                    <ScrollViewer IsVisible="{Binding IsLessonsTab}"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto">
+                        <local:LessonsView Margin="16,12,10,12" DataContext="{Binding Lessons}" />
                     </ScrollViewer>
 
                     <!-- Artifacts: what the run wrote, and what is waiting on you. -->

@@ -7,7 +7,7 @@ namespace Enactive.Core.Inbox;
 public sealed record InboxItem(
     Guid Id,
     Guid WorkspaceId,
-    string Kind,        // "result" | "decision" | "error" | "paused"
+    string Kind,        // "result" | "decision" | "error" | "paused" | "lesson"
     string Title,
     string Summary,
     Guid RunId,
