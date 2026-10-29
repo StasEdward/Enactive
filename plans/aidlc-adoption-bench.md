@@ -249,6 +249,40 @@ put back, and the truth found no file.
 
 Stamps: `20261029-150951`, `20261029-151116`, `20261029-151242`, `20261029-151356`.
 
+## Phase 5 - one confirmed rule against a recurring rejection (2026-10-29)
+
+The plan's measurement for Phase 5: two sets of runs of one scenario, one given a confirmed rule that addresses the
+first set's rejection. The bench gives the rule with `--rules` (new): a JSON array of texts kept as confirmed rules in
+each run's own workspace - not the machine's Global layer, which the desktop's runs share (`rules.json` there was empty
+throughout). `results.json` says how many rules a run was given (`rulesGiven`).
+
+**The rejection.** `disk-report`, all four runs at `91ac265` (stamps under Follow-up 4): the step review failed the
+report because it stated what no call showed - the computer's name, the OS, a volume called "system" or "EFI". The
+rule, written from those notes as a person would edit the candidate (`bench/rules/report-only-what-was-shown.json`):
+"Write in a report only what a command you ran printed. The computer's name, the operating system, a volume's label,
+type or role (system, EFI, recovery): state them only when a command's output shows them; otherwise leave them out."
+
+**Runs**, at `feddd5a`, alternated so drift in the models falls on both sides:
+
+| | verdicts | first rejection was for unshown facts | no rejection | tokens | seconds |
+| --- | --- | --- | --- | --- | --- |
+| without the rule (4) | right PASS 3, right FAIL 1 | 3 of 4 (`183018`, `183253`, `183936`) | 0 | 99k-290k | 60-218 |
+| with the rule (4) | right PASS 4 | 2 of 4 (`183408`, `183846`) | 1 (`184041`) | 61k-133k | 44-72 |
+
+Without the rule the fourth run's first rejection was a broken HTML file (`183503`), and it ended a right FAIL after its
+repair. With the rule one run's rejection was arithmetic - totals 100 GB off (`183134`). Counting the four earlier runs
+too, unshown facts were the first rejection in 7 of 8 runs without the rule and 2 of 4 with it. In favour of the rule,
+not settled by it: four runs a side, and the rule did not stop the worker in half its runs.
+
+**Why it did not.** The "unshown" facts are not invented. The engine itself gives the worker `Host: Microsoft Windows
+10.0.26300 (X64), 32 CPUs ...; machine EDWARD_PC` - `EnvironmentInfo.Summary()` in `Orchestrator.BuildUserPrompt` - and
+the reports copy exactly that line (one wrote "32 ядра", the CPU count from the same line). The step reviewer is shown
+the step's calls, not that block, so it judges the engine's own facts unsupported. A rule that says "only what a command
+printed" asks the worker to distrust what it was told, and it did so in half the runs. That is an engine defect, not a
+lesson: the reviewer should judge a claim against everything the step was given, the run's context included. Open.
+
+Stamps: without `20261029-183018`, `183253`, `183503`, `183936`; with `183134`, `183408`, `183846`, `184041`.
+
 ## The step review is shown what the application gave (2026-10-29)
 
 The defect the Phase 5 measurement found: the worker's prompt carries the workspace, the git branch and the host line

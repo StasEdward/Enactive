@@ -438,4 +438,30 @@ public sealed class LessonsBecomeRulesOnlyWhenConfirmedTests
         Assert.Equal("not yours", refused.Said);
         Assert.Single(await global.ListAsync(CancellationToken.None));
     }
+
+    /// <summary>
+    /// The bench's --rules (Plan Phase 5 measurement): each text kept as a confirmed rule of the run's own workspace, in the
+    /// store a run there reads, in the order given - so a measured run is given them, and the machine's Global layer is not
+    /// touched.
+    /// </summary>
+    [Fact]
+    public async Task The_bench_gives_a_measured_run_its_rules_in_the_run_s_own_workspace()
+    {
+        using var fx = new EngineFixture();
+        try
+        {
+            var file = fx.PathOf("rules.json");
+            File.WriteAllText(file, """["Name a computer only from a command's output.", " ", "Second."]""");
+            await Enactive.Bench.Rules.SeedAsync(fx.Root, file, CancellationToken.None);
+
+            var kept = await RuleStoreFactory.Create(fx.Workspace).ListAsync(CancellationToken.None);
+            Assert.All(kept, r => Assert.Equal((RuleStatus.Confirmed, RuleScope.Workspace), (r.Status, r.Scope)));
+            Assert.Equal(["Name a computer only from a command's output.", "Second."],
+                AppliedRules.Compose([], kept).Rules.Select(r => r.Text));
+        }
+        finally
+        {
+            Enactive.Tests.SqlitePools.ClearUnder(fx.Root);
+        }
+    }
 }
