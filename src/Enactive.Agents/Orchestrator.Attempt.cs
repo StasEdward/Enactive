@@ -130,7 +130,7 @@ public sealed partial class Orchestrator
             step.OutputSlot.Values is { } handed ? CitedPlaces.TextOf(handed) : null, step.Criteria, step.OutputSlot.Values,
             session.Builds, step.Reads, context.Restrictions, result.KeptBack,
             saidBlocked: SaidBlockedOnly(result) ? result.Reason : null, coverage: coverage,
-            earlierReviews: step.EarlierReviews)) with
+            earlierReviews: step.EarlierReviews, given: GivenFacts(context))) with
             {
                 Coverage = coverage, ChecksNotRun = checks?.NotRun, ChecksNotRunCause = checks?.NotRunCause ?? OutcomeCause.CheckNotRun
             };

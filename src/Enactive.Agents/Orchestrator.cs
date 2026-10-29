@@ -5298,14 +5298,16 @@ public sealed partial class Orchestrator : IOrchestrator
               + (rules.Left > 0 ? $"; {rules.Left} more confirmed rule(s) left out, over the {Enactive.Core.Rules.AppliedRules.MaxChars}-character limit - prune them" : "")
               + ".";
 
-    private string BuildUserPrompt(Intent intent)
+    /// <summary>
+    /// The facts the application gives the worker about where it works - the workspace, the git branch, the host - as its
+    /// prompt has them. One text for the worker and for the step review (StepVerdictInput.Given): a report that repeats the
+    /// machine's name from here is shown by the engine, and the review, told only the calls, failed it as shown by nothing.
+    /// </summary>
+    internal string GivenFacts(WorkContext context)
     {
-        var context = intent.Context;
         var sb = new StringBuilder();
-        sb.AppendLine("## Context (provided by the application)");
         sb.AppendLine($"Workspace root: {_workspace.RootPath}");
         sb.AppendLine($"Workspace name: {_workspace.Name}");
-        sb.AppendLine(LocalTime.Line() + " - a date or time you write comes from this or from the system, never from memory.");
         if (context.GitBranch is { } branch)
             sb.AppendLine($"Git branch: {branch}");
         if (context.Environment is { } env)
@@ -5314,6 +5316,16 @@ public sealed partial class Orchestrator : IOrchestrator
             foreach (var line in env.Summary().Split('\n'))
                 sb.AppendLine("  " + line);
         }
+        return sb.ToString();
+    }
+
+    private string BuildUserPrompt(Intent intent)
+    {
+        var context = intent.Context;
+        var sb = new StringBuilder();
+        sb.AppendLine("## Context (provided by the application)");
+        sb.Append(GivenFacts(context));
+        sb.AppendLine(LocalTime.Line() + " - a date or time you write comes from this or from the system, never from memory.");
         sb.AppendLine("File paths you pass to tools are RELATIVE to the workspace root.");
 
         // The rules a person confirmed after earlier runs (Plan Phase 5.3) - instructions, unlike the history below, which

@@ -35,7 +35,12 @@ internal sealed record StepVerdictInput(
     // What the reviews before this one said, oldest first - each failed an attempt of this step, and the worker was told
     // to put right exactly that. Judged without them, the review after a repair took the repair for the worker's own
     // claim and failed it in other words: bench test-coverage, 2026-10-29 (TheRetryReviewSeesItsEarlierVerdictTests).
-    IReadOnlyList<string>? Earlier = null);
+    IReadOnlyList<string>? Earlier = null,
+    // What the application told the worker before the step began - the workspace, the git branch, the host
+    // (Orchestrator.GivenFacts), lines its prompt has word for word. Not shown them, the review failed reports for the
+    // machine's name and OS as stated by no call, when the engine had stated them: bench disk-report, 2026-10-29, the first
+    // rejection in 7 runs of 8 (plans/aidlc-adoption-bench.md, "Phase 5").
+    string? Given = null);
 
 /// <summary>
 /// One short verdict on one step: did the worker do what this step was for, and is what it reported true? Pass or fail,
@@ -56,7 +61,8 @@ internal static class StepVerdictReview
     internal const string Instruction = """
         You check one step of a run: did the worker do what this step is for, and is what it reported true?
         Judge from the evidence shown - the tool calls the engine recorded, and the files as they are now. The worker's
-        report is its claim: a claim counts only where a call or a file shows it.
+        report is its claim: a claim counts only where a call or a file shows it, or where it repeats what the application
+        gave the step (GIVEN BY THE APPLICATION) - the engine's own facts, not the worker's.
         A call marked NOTHING THERE ran and answered - a file that is absent, a search that found nothing: it is no error, and
         can be exactly what shows a step done.
         Return ONLY one JSON object: {"verdict":"pass"|"fail"|"unreachable","reason":"...","calls":[n],"files":["path"]}
@@ -161,6 +167,9 @@ internal static class StepVerdictReview
         var sb = new StringBuilder();
         sb.AppendLine("The request the run is for (context - this step does a part of it):").AppendLine(input.Request).AppendLine();
         sb.AppendLine(LocalTime.Line() + " - a date or time the work states is judged against this, not against what you remember.");
+        if (input.Given is { Length: > 0 } given)
+            sb.AppendLine("GIVEN BY THE APPLICATION - facts the engine put in the worker's instructions before the step began, "
+                + "not from a call; a claim that repeats one of them is shown by it:").AppendLine(given.TrimEnd());
         sb.AppendLine();
         sb.AppendLine(input.StepNumber is { } no ? $"THIS STEP ({no}): {input.StepTitle}" : $"THE WORK: {input.StepTitle}");
         if (input.ScopeNote is { Length: > 0 } scope)
