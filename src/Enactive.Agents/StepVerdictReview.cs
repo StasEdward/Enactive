@@ -31,7 +31,11 @@ internal sealed record StepVerdictInput(
     // The engine's account of the lists the step consumes, item by item (StepCoverageGate.ReviewerBlock): a section of its
     // own, with its room taken out of the evidence budget, not a call among the calls - there it was given an equal share
     // and cut in the middle, where the weakly backed items are.
-    string? Coverage = null);
+    string? Coverage = null,
+    // What the reviews before this one said, oldest first - each failed an attempt of this step, and the worker was told
+    // to put right exactly that. Judged without them, the review after a repair took the repair for the worker's own
+    // claim and failed it in other words: bench test-coverage, 2026-10-29 (TheRetryReviewSeesItsEarlierVerdictTests).
+    IReadOnlyList<string>? Earlier = null);
 
 /// <summary>
 /// One short verdict on one step: did the worker do what this step was for, and is what it reported true? Pass or fail,
@@ -176,6 +180,18 @@ internal static class StepVerdictReview
         if (input.OtherSteps.Count > 0)
             sb.AppendLine("Other steps of the plan (theirs, not this step's): " + string.Join("; ", input.OtherSteps));
         sb.AppendLine();
+        // Only after a fail: the first review of a step is asked exactly as before.
+        if (input.Earlier is { Count: > 0 } earlier)
+        {
+            sb.AppendLine("EARLIER REVIEWS of this step - each failed an attempt, and the worker was told to put right exactly "
+                + "what it said; the work below is the repair:");
+            for (var i = 0; i < earlier.Count; i++) sb.AppendLine($"{i + 1}. {earlier[i]}");
+            sb.AppendLine("Check each of their points against the work as it is now. A point put right as a review asked is "
+                + "right: do not fail it again in other words. Where an earlier review was itself wrong, say so, and say "
+                + "concretely what is right. A new point is for what the repair brought in, or for what the step's purpose "
+                + "depends on.");
+            sb.AppendLine();
+        }
         sb.AppendLine("REPORT - the worker's claim:").AppendLine(input.Report).AppendLine();
         if (input.HandedOn is { Length: > 0 } handed)
             sb.AppendLine("HANDED ON by the step (accepted values):").AppendLine(handed).AppendLine();

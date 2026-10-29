@@ -161,6 +161,12 @@ internal sealed record StepAttemptState(
     /// </summary>
     public List<string> LoadedTools { get; } = [];
 
+    /// <summary>
+    /// What each review that sent this step back said, oldest first - shown to the review of the repair
+    /// (StepVerdictInput.Earlier). Kept with the step for the reason the conversation is: the repair is made to them.
+    /// </summary>
+    public List<string> EarlierReviews { get; } = [];
+
     /// <summary>The hand-over as the whole run offers it (see StepOutputContract.RunTool), or null for a run without one.</summary>
     public Enactive.Core.Tools.ToolDefinition? SubmitTool { get; init; }
 

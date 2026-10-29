@@ -195,3 +195,20 @@ Stamps: raised `20261028-232426`, `20261028-232532`, `20261028-232652`; all scen
 2. Phase 2 - keep the per-kind limit at 1; no measured gain from 2 or 3.
 3. Phase 3 - the raise works as built and must stay opt-in; the pre-existing-failure wording is the next improvement.
 4. Scenario fixes: `disk-report` should accept `C` as well as `C:`.
+
+## The review of a repair is shown the reviews before it (2026-10-29)
+
+Diagnosis, on the Phase 1.5 `test-coverage` failures (`20261029-112618`, `20261028-221352`): the review after a repair
+was shown the work alone, not what the review before it had asked for, and failed the step on the very point the worker
+had put right as asked - a line number in one run, a branch count (1/6 asked, then 3/6) in the other. With
+`ReviewRetries = 1` the second fail rejected the step and skipped the three after it. Fixed on
+`feat/retry-review-sees-its-verdict` (`1b2abac`): `StepVerdictInput.Earlier` carries each fail that sent the step back,
+and the review of the repair checks their points; the first review of a step is asked as before. Pinned by
+`TheRetryReviewSeesItsEarlierVerdictTests`. The criteria review (`SemanticCriteria`, off by default) is unchanged.
+
+Measured at `1b2abac`, same setup as Phase 1.5 with `StepOutputs` + `TypedCriteria` on, `test-coverage` five times:
+**right PASS 5/5** (before: 2/3 with the flags on, 1/3 off). Two runs had a repair reviewed - step 2 of `141141`, step 3
+of `141529` - and both passed it, the second saying point by point that each earlier point was put right. No false
+verdicts. 152-268 s, 303k-960k tokens in; the spread is the worker's (the costliest run read the HTML coverage report).
+
+Stamps: `20261029-140434`, `20261029-140756`, `20261029-141141`, `20261029-141529`, `20261029-142010`.
