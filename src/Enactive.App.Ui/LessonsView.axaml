@@ -28,7 +28,10 @@
                                 <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding CanChange}">
                                     <CheckBox Content="Every workspace" IsChecked="{Binding Global}" FontSize="11" />
                                     <Button Content="{Binding KeepText}" Command="{Binding KeepCommand}" FontSize="11" Padding="8,2" />
-                                    <Button Content="Dismiss" Command="{Binding DismissCommand}" FontSize="11" Padding="8,2" />
+                                    <Button Content="Dismiss" Command="{Binding DismissCommand}" FontSize="11" Padding="8,2" />
+                                    <!-- Plan Phase 5.4: a check runs every time; a rule only asks. The command is the person's to write. -->
+                                    <Button Content="Make a check…" Command="{Binding CheckCommand}" FontSize="11" Padding="8,2"
+                                            ToolTip.Tip="Opens the workspace's checks with this lesson as a new check's description. You write its command; nothing runs until you do." />
                                 </StackPanel>
                             </StackPanel>
                         </Border>

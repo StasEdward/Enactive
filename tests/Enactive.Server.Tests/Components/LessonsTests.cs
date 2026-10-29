@@ -126,4 +126,34 @@ public sealed class LessonsTests : ComponentHost
         Assert.Single(Audited("lesson dismissed"));
         Assert.Single(Audited("rule added"));
     }
+
+    /// <summary>
+    /// Plan Phase 5.4 on the service: "Make a check…" opens the workspace's Checks screen with a new check's form filled in
+    /// from the lesson - its id and words, no command; the Operator writes the command and saves, and the lesson is set
+    /// aside, audited, as in the window.
+    /// </summary>
+    [Fact]
+    public async Task An_operator_makes_a_lesson_into_a_check_whose_command_they_write()
+    {
+        var candidate = await CandidateAsync();
+        var screen = Screen("alice");
+        var href = screen.Find(".candidate .lesson-check").GetAttribute("href");
+        Assert.Equal($"checks?ws={WorkspaceInfo.For(_root).Id}&lesson={candidate.Id:N}", href);
+
+        Services.GetRequiredService<NavigationManager>().NavigateTo("/" + href);
+        var checks = Render<ChecksScreen>();
+        checks.WaitForAssertion(() => checks.Find("#check-id"));
+        var id = LessonsViewModelId(Seen);
+        Assert.Equal(id, checks.Find("#check-id").GetAttribute("value"));
+        Assert.Equal("", checks.Find("#check-command").GetAttribute("value") ?? "");
+        checks.Find("#check-command").Change("dotnet build");
+        checks.Find(".check-save").Click();
+
+        checks.WaitForAssertion(() => Assert.True(File.Exists(Path.Combine(_root, ".enactive", "checks", id + ".json"))));
+        var aside = Assert.Single(await WorkspaceRules.ListAsync(CancellationToken.None));
+        Assert.Equal(RuleStatus.Dismissed, aside.Status);
+        Assert.Equal("alice", Assert.Single(Audited("lesson made into a check")).Account);
+    }
+
+    private static string LessonsViewModelId(string text) => Enactive.Application.LessonsViewModel.CheckIdFor(text);
 }

@@ -162,8 +162,44 @@ internal sealed class LessonsViewModel : ObservableObject
     private LessonRow Row(RuleEntry entry)
         => new(entry, _changes.WhyNot(entry.Scope) is null, Act);
 
+    /// <summary>
+    /// A person asked to make a candidate into a check (Plan Phase 5.4): the host opens its Checks form with
+    /// <see cref="CheckIdFor"/> and the lesson's words filled in, and calls <see cref="MadeIntoCheckAsync"/> once it is saved.
+    /// </summary>
+    public event Action<LessonRow, string>? CheckRequested;
+
+    /// <summary>
+    /// The candidate became the check <paramref name="checkId"/>: it is set aside, saying so, so the same observation is not
+    /// put to the person again - the check holds it now, and runs it every time, which a rule could only ask for.
+    /// </summary>
+    public async Task MadeIntoCheckAsync(LessonRow row, string checkId)
+    {
+        var entry = row.Entry with { Origin = (row.Entry.Origin is { Length: > 0 } o ? o + "; " : "") + $"made into the check '{checkId}'" };
+        Said = await _changes.DismissAsync(entry, CancellationToken.None)
+               ?? $"The lesson is the check '{checkId}' now, and is set aside here.";
+        await RefreshAsync();
+    }
+
+    /// <summary>
+    /// A check id for a lesson: its first words, as a check id may be written (lower-case letters, digits, '-', starting with
+    /// a letter - CheckStore). Only a suggestion, in an editable field: what the check is called is the person's.
+    /// </summary>
+    public static string CheckIdFor(string text)
+    {
+        var words = new string(text.ToLowerInvariant().Select(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' ? c : ' ').ToArray())
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(4);
+        var id = string.Join('-', words);
+        if (id.Length > 40) id = id[..40].TrimEnd('-');
+        return id.Length > 0 && id[0] is >= 'a' and <= 'z' ? id : "lesson" + (id.Length > 0 ? "-" + id : "");
+    }
+
     private async Task Act(LessonRow row, LessonAction action)
     {
+        if (action == LessonAction.Check)
+        {
+            CheckRequested?.Invoke(row, CheckIdFor(row.Text));
+            return;
+        }
         var scope = row.Global ? RuleScope.Global : RuleScope.Workspace;
         // Moving a rule between layers is a change to both.
         if ((_changes.WhyNot(scope) ?? _changes.WhyNot(row.Entry.Scope)) is { } why)
@@ -195,7 +231,7 @@ internal sealed class LessonsViewModel : ObservableObject
     }
 }
 
-internal enum LessonAction { Keep, Dismiss, Delete }
+internal enum LessonAction { Keep, Dismiss, Delete, Check }
 
 /// <summary>
 /// One candidate or rule: its text, editable before it is kept (a candidate is the observation as the engine made it; the
@@ -215,6 +251,7 @@ internal sealed class LessonRow : ObservableObject
         KeepCommand = new AsyncRelayCommand(() => act(this, LessonAction.Keep), () => CanChange && !string.IsNullOrWhiteSpace(_text));
         DismissCommand = new AsyncRelayCommand(() => act(this, LessonAction.Dismiss), () => CanChange);
         DeleteCommand = new AsyncRelayCommand(() => act(this, LessonAction.Delete), () => CanChange);
+        CheckCommand = new AsyncRelayCommand(() => act(this, LessonAction.Check), () => CanChange && IsCandidate);
     }
 
     public RuleEntry Entry { get; }
@@ -254,4 +291,7 @@ internal sealed class LessonRow : ObservableObject
     public AsyncRelayCommand KeepCommand { get; }
     public AsyncRelayCommand DismissCommand { get; }
     public AsyncRelayCommand DeleteCommand { get; }
+
+    /// <summary>Make it a check (Plan Phase 5.4) - for what a command can tell every time, rather than a rule a model may follow.</summary>
+    public AsyncRelayCommand CheckCommand { get; }
 }

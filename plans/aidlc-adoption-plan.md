@@ -20,7 +20,7 @@ follow-ups (section "Bench follow-ups" below), the deferred 4.0/4.1/4.3, and Pha
 | Phase 5.1, 5.3 and a console gate - store, candidates, injection | Built 2026-10-29 (`feat/phase5-lessons`) | - |
 | Phase 5.2 - Lessons panel, service page, Inbox item; 5.5 in part | Built 2026-10-29 (`feat/phase5-lessons-panel`) | - |
 | Phase 5 bench measurement | Done 2026-10-29: one rule, 4 runs a side - in favour, not settled (`aidlc-adoption-bench.md`) | - |
-| Phase 5.4 | Open (`feat/lesson-to-check`, PR #76) | - |
+| Phase 5.4 - lesson -> check | Built 2026-10-29 (`feat/lesson-to-check`, PR #76) | - |
 | Phase 5: reviewer given rules | Built 2026-10-29 (`feat/reviewer-given-rules`), measured: 4/4 right PASS with the rule | - |
 | Phase 5: consistency check against Global | Open | - |
 
@@ -768,6 +768,13 @@ the run rather than per step:
 - A candidate of kind "recurring check" (the person ticks "make this a check") scaffolds a Phase 3 manifest in
   `.enactive/checks/` with the command left for the person to fill in - the scaffold never invents a command.
   AI-DLC's `SENSOR_PROPOSED`.
+
+**Built 2026-10-29** (`feat/lesson-to-check`). A candidate has "Make a check…": the workspace's Checks form opens with an
+id from the lesson's first words, the lesson as its description, fired at the run's end, and **no command** - the store
+refuses a new check without one, so nothing runs until the person writes it. A step check would have to name its paths
+(matches), which a lesson does not say, so the form opens on the run's end; the person may change both. Saved, the
+candidate is set aside ("made into the check 'id'") and not proposed again. Desktop: from the Lessons tab and window
+(the Checks window over it). Service: a link to `checks?ws=..&lesson=..`, audited as "lesson made into a check".
 
 ### 5.5 Rules UI
 
