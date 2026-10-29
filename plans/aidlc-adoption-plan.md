@@ -2,10 +2,10 @@
 
 Date: 2026-10-16
 
-Status (2026-10-29): everything but the deferred 4.0/4.1/4.3 is built and on `master` - PR 0, PR 0b and Phases 1-3
-and 4.2 (PR #58, merge `283dca7`; Phase 1.5's defaults in PR #66), and Phase 5 (PRs #70-#78). The bench measurements
-are in `aidlc-adoption-bench.md`, and the six bench follow-ups are fixed (section "Bench follow-ups" below). Still open:
-the deferred 4.0/4.1/4.3, which wait on open question 4, and open question 2.
+Status (2026-10-29): done, but for 4.1 and 4.3, which the owner decided not to do until a concrete failure asks for
+them - PR 0, PR 0b and Phases 1-3 and 4.2 (PR #58, merge `283dca7`; Phase 1.5's defaults in PR #66), Phase 5 (PRs
+#70-#78) and 4.0 (`TheStepCommitOrderIsPinnedTests`). The bench measurements are in `aidlc-adoption-bench.md`, and the
+six bench follow-ups are fixed (section "Bench follow-ups" below). Every open question is answered.
 
 | Part | Status | Commits |
 | --- | --- | --- |
@@ -16,7 +16,8 @@ the deferred 4.0/4.1/4.3, which wait on open question 4, and open question 2.
 | Phase 2 - obligation loop | Done; `PerKind = 1` kept, as the bench advised | `9817187`, `4d47b74`, `3f72f23` |
 | Phase 3.1-3.3, 3.5 - check manifests, execution, records, UI | Done | `1f1fa0e`..`bbc728d` |
 | Phase 3.4 - disappeared tests, protected files | Done | `03526bc`, `86b90ce`, `0b47952`, `5bc3f12` |
-| Phase 4.0, 4.1, 4.3 | Deferred by design (state ownership not settled) | - |
+| Phase 4.0 - pin the step commit's order | Done 2026-10-29: `TheStepCommitOrderIsPinnedTests` | - |
+| Phase 4.1, 4.3 | Not done, by the owner's decision: until a concrete failure asks for them (open question 4) | - |
 | Phase 4.2 - pause after the current step | Done | `ea7ecf3`..`f58d33c` |
 | Phase 5.1, 5.3 and a console gate - store, candidates, injection | Done 2026-10-29 | PR #70 |
 | Phase 5.2, 5.5 - Lessons panel and window, service page, Inbox item | Done 2026-10-29 | PRs #71, #72 |
@@ -319,7 +320,7 @@ it before 1.5 turns the flags on.
 ## Phase 2 - an obligation loop that releases on no progress
 
 **Status: done** (`9817187`, `4d47b74`, `3f72f23`, 2026-10-17). Measured at limits 1, 2 and 3: no gain above 1, so
-`PerKind = 1` stays. Open question 2 is answered for the local setup only.
+`PerKind = 1` stays, under the hard cap of 3 in code - open question 2, answered by the owner 2026-10-29.
 
 ### Problem
 
@@ -582,8 +583,12 @@ opt-in, and a pre-existing failure needs saying to the worker.
 
 ## Phase 4 - a clean pause; step commit and directives deferred
 
-**Status: 4.2 done** (`ea7ecf3`..`f58d33c`, 2026-10-17). **4.0, 4.1 and 4.3 deferred**, as planned: open question
-4 (who owns state, what happens when persistence fails) is not answered.
+**Status: 4.2 done** (`ea7ecf3`..`f58d33c`, 2026-10-17); **4.0 done** 2026-10-29 (`TheStepCommitOrderIsPinnedTests`:
+for a step that succeeds, is done but not verified, is rejected and put back, is blocked, and for a plan grown into item
+steps and joined - the order of the commit's events and what each checkpoint records, whole; moving the checkpoint
+before MarkDone fails four of them). **4.1 and 4.3 are not done**, by the owner's decision on open question 4: no
+behaviour asks for them, the code they would move is the run's centre and its order is load-bearing, so they wait for a
+concrete failure that needs them. 4.0 is what any change there is checked against first.
 
 Ship pause/resume independently of the state refactor. Sections 4.0, 4.1 and 4.3 describe deferred work;
 they are not prerequisites for 4.2 and have no implementation commitment until the ownership design is settled.
@@ -959,15 +964,13 @@ no regression, and no notable rise in tokens.
 
 ## Open questions for the owner
 
-Still open:
+All answered:
 
-2. Phase 2: who picks the new nudge limits - the bench numbers alone, or a fixed ceiling as well? (`PerKind = 1` is kept,
-   as the bench advised; no ceiling is set.)
-4. Deferred Phase 4.1: who exclusively owns state, and what is the commit/recovery protocol when persistence fails?
-   (Phases 4.0, 4.1 and 4.3 wait on it.)
-
-Answered:
-
+2. Phase 2 nudge limits (owner, 2026-10-29): 1 per kind by default, as the bench measured, under the hard cap of 3 in
+   code (`ObligationLoop.HardPerKind`: any setting is clamped to 0..3). Measured with a cloud planner and reviewer and a
+   local worker; measure again when the models change.
+4. Phase 4.1 state ownership (owner, 2026-10-29): 4.1 and 4.3 are not done until a concrete failure asks for them; 4.0,
+   the characterisation of today's order, is done (`TheStepCommitOrderIsPinnedTests`).
 1. Phase 1.5 defaults: on - `StepOutputs` and `TypedCriteria` are on by default since PR #66, after the bench showed no
    false verdict either way.
 3. Phase 3 global checks: yes, both layers - a machine's global manifests (next to the desktop's settings, in the
