@@ -4928,10 +4928,11 @@ public sealed partial class Orchestrator : IOrchestrator
 
                 // A tool that names no paths, in a step under the request's limit on changes: measured around, and what it
                 // changed of the files the run found asked about after it ran (CommandEffect - bench build-error,
-                // 2026-10-18, a PowerShell rewrite of the forbidden file that no question was put about). Reads run side by
-                // side above are never such a tool, so only a call run here is measured.
+                // 2026-10-18, a PowerShell rewrite of the forbidden file that no question was put about) - or, in a step planned
+                // read-only, put back without a question (bench test-coverage, 2026-10-29, a package swapped in the project
+                // file). Reads run side by side above are never such a tool, so only a call run here is measured.
                 var commandEffect = readResult is null && CommandEffect.Applies(changeLimits, frame, _tools.DefinitionOf(call.Name))
-                    ? new CommandEffect(changeLimits!, frame, stepTitle) : null;
+                    ? new CommandEffect(changeLimits, frame, stepTitle) : null;
                 var beforeCommand = commandEffect is null ? null : await commandEffect.BeforeAsync(ct);
 
                 var invocation = readResult ?? await ToolInvocation.ExecuteAsync(call, _tools, CallContext(), ct);

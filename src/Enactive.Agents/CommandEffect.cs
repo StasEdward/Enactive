@@ -17,8 +17,15 @@ using Enactive.Core.Tools;
 ///
 /// <para>A refused file is put back only byte for byte (<see cref="IWorkspaceChanges.PutBackAsync"/>), and named where it
 /// cannot be. The command did run: its call stays as it went, and the step is told in its result.</para>
+///
+/// <para><b>A step planned read-only</b> is held to its plan the same way, and without a question: it changes no file, so
+/// what a command changed of the files that were there when the step began is put back - its own new files (a coverage
+/// report a test run wrote) and build output are not touched. Bench test-coverage, 2026-10-29 (run 20261029-112041): the
+/// read-only "measure coverage" step swapped the project's coverage package with <c>dotnet remove/add package</c>; the
+/// review failed it for the change, the step was refused when it edited the file back (WriteBoundary.ReadOnlyRefusal),
+/// and the rejected step left the project changed - "Left as it is, changed by a command" - for the rest of the run.</para>
 /// </summary>
-internal sealed class CommandEffect(ChangeLimitGuard guard, StepFrame frame, string? stepTitle)
+internal sealed class CommandEffect(ChangeLimitGuard? guard, StepFrame frame, string? stepTitle)
 {
     /// <summary>How many files the step is told by name; the rest are counted. A formatter can change hundreds, and a
     /// line that lists them all hides the one that matters - every path is in the event's payload all the same.</summary>
@@ -36,8 +43,15 @@ internal sealed class CommandEffect(ChangeLimitGuard guard, StepFrame frame, str
     /// workspace and names no paths. Anywhere else nothing is measured and nothing asked, as before.
     /// </summary>
     public static bool Applies(ChangeLimitGuard? guard, StepFrame frame, ToolDefinition? definition)
-        => guard is not null && frame.Changes is not null && frame.StepStart is not null
+        => (guard is not null || ReadOnly(frame)) && frame.Changes is not null && frame.StepStart is not null
            && definition is not null && WriteBoundary.Unchecked(definition);
+
+    private static bool ReadOnly(StepFrame frame) => frame.Boundary?.ReadOnly == true;
+
+    /// <summary>Under a folder that is build or dependency output, or the engine's own (WorkspaceGuard.SkippedFolders): what a
+    /// build or a test run rewrites as it runs is not a change a read-only step made to the project.</summary>
+    private static bool Generated(string path)
+        => path.Split('/').SkipLast(1).Any(segment => WorkspaceGuard.SkippedFolders.Contains(segment, StringComparer.OrdinalIgnoreCase));
 
     /// <summary>The workspace right before the call, or null when it cannot be measured - and then the call is not held.</summary>
     public Task<WorkspaceSnapshot?> BeforeAsync(CancellationToken ct)
@@ -50,13 +64,16 @@ internal sealed class CommandEffect(ChangeLimitGuard guard, StepFrame frame, str
             || await changes.CompareAsync(before, after, ct) is not { } found)
             // Said, not passed over: a run's record that shows no question cannot otherwise tell "nothing to ask" from
             // "could not look" (review, 2026-10-28) - a git that timed out, a workspace past the scan's limit.
-            return new(null, [Event(EventKind.ErrorObserved, $"A {call.Name} call's changes went unmeasured against the request's "
-                + "limit on changes: the workspace could not be measured around it.", null)]);
+            return new(null, [Event(EventKind.ErrorObserved, $"A {call.Name} call's changes went unmeasured against "
+                + (ReadOnly(frame) && guard is null ? "the step's plan to change no file" : "the request's limit on changes")
+                + ": the workspace could not be measured around it.", null)]);
         if (found.Count == 0) return Outcome.Nothing;
 
         // The run's start, read once for the call: asked path by path, each answer took the workspace again - a
-        // formatter's 300 files, 300 snapshots (review, 2026-10-28). What changed since then, also once.
-        var start = frame.Store.MeasuredStart;
+        // formatter's 300 files, 300 snapshots (review, 2026-10-28). What changed since then, also once. A read-only step
+        // is held to the step's start instead: a file an earlier step made is not its to change either.
+        var readOnly = ReadOnly(frame);
+        var start = readOnly ? frame.StepStart : frame.Store.MeasuredStart;
         var was = start is null ? null : await changes.PathsAsync(start, ct);
         var sinceStart = start is null ? null : (await changes.ComparePathsAsync(start, after, ct))?
             .SelectMany(c => c.OldPath is { } o ? new[] { c.Path, o } : [c.Path]).Select(ShellLookup.Normal)
@@ -77,14 +94,20 @@ internal sealed class CommandEffect(ChangeLimitGuard guard, StepFrame frame, str
                 // as restore_file is never asked about. Asked, it was refused and the earlier change written back.
                 if (sinceStart is not null && !sinceStart.Contains(path)) continue;
             }
-            else if ((await frame.Store.BeforeRunAsync(path, ct)).State == BeforeRunState.Absent) continue;   // the run made it
+            else if (readOnly || (await frame.Store.BeforeRunAsync(path, ct)).State == BeforeRunState.Absent) continue;   // the run made it, or unknown
+            if (readOnly && Generated(path)) continue;
             asked.Add(change with { Path = path });
         }
         if (asked.Count == 0) return Outcome.Nothing;
 
-        var decided = await guard.CheckMadeAsync(frame.StepNo, stepTitle, saidByStep, call, asked, ct);
+        // Read-only: nothing to ask - the plan already said this step changes no file. Under the request's limit only, the
+        // guard is asked as before.
+        var decided = readOnly
+            ? new ChangeLimitGuard.AfterTheFact(asked.Select(c => c.Path).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                "this step was planned as read-only: it looks and reports, and changes no file", Enactive.Core.Chat.TokenUsage.None)
+            : await guard!.CheckMadeAsync(frame.StepNo, stepTitle, saidByStep, call, asked, ct);
         var events = new List<WorkEvent>();
-        if (decided.Usage.Any) events.Add(guard.UsageEvent(frame.TaskId, frame.RunId, frame.StepNo, decided.Usage));
+        if (decided.Usage.Any) events.Add(guard!.UsageEvent(frame.TaskId, frame.RunId, frame.StepNo, decided.Usage));
         if (decided.Note is { } note) events.Add(Event(EventKind.ErrorObserved, note, null));
         if (decided.Refused.Count == 0) return new(null, events);
 
@@ -102,8 +125,11 @@ internal sealed class CommandEffect(ChangeLimitGuard guard, StepFrame frame, str
             .Select(c => found.First(f => f.OldPath is { } o && ShellLookup.Normal(o) == c.Path).Path)
             .Select(ShellLookup.Normal).ToArray();
 
-        var said = $"REFUSED after the fact: this command changed {Names(decided.Refused)}, which the request limits "
-                   + $"({string.Join("; ", guard.Limits.Select(l => $"\"{l}\""))}) - {decided.Reason}.";
+        var said = readOnly
+            ? $"REFUSED after the fact: this command changed {Names(decided.Refused)} - {decided.Reason}. This does not stop "
+              + "the step: finish it with what you found; the steps after it make the changes."
+            : $"REFUSED after the fact: this command changed {Names(decided.Refused)}, which the request limits "
+              + $"({string.Join("; ", guard!.Limits.Select(l => $"\"{l}\""))}) - {decided.Reason}.";
         if (putBack.Count > 0)
             said += putBack.Count == decided.Refused.Count ? " It was put back as it was before the command."
                 : $" {Names(putBack)} put back as it was before the command.";
