@@ -19,7 +19,8 @@ follow-ups (section "Bench follow-ups" below), the deferred 4.0/4.1/4.3, and Pha
 | Phase 4.2 - pause after the current step | Done | `ea7ecf3`..`f58d33c` |
 | Phase 5.1, 5.3 and a console gate - store, candidates, injection | Built 2026-10-29 (`feat/phase5-lessons`) | - |
 | Phase 5.2 - Lessons panel, service page, Inbox item; 5.5 in part | Built 2026-10-29 (`feat/phase5-lessons-panel`) | - |
-| Phase 5.4, reviewer given rules, bench measurement | Open | - |
+| Phase 5 bench measurement | Done 2026-10-29: one rule, 4 runs a side - in favour, not settled (`aidlc-adoption-bench.md`) | - |
+| Phase 5.4, reviewer given rules | Open | - |
 
 Written against `master` at `7dc8866`; the line numbers below are from that commit and will drift.
 Revised after two reviews (`aidlc-adoption-review.md`, `aidlc-adoption-resolution.md`); staged-run checks (Phase 3.2) and an unresolved coverage contract (Phase 1.2) are decided.
