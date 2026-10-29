@@ -38,6 +38,14 @@ internal static class ServerApp
         // Into the Application log as "Enactive", the source the installer registers; left to the default it is the
         // assembly's name, which nothing registered, and the service's own entries were lost.
         builder.Services.Configure<Microsoft.Extensions.Logging.EventLog.EventLogSettings>(s => s.SourceName = ServiceName);
+        // Only as the service, though: the builder adds the Event Log on every Windows start, and run any other way - from
+        // a console, under a test - the source is not registered, registering it needs an administrator, and the first
+        // warning threw out of the request that logged it ("Cannot open log for source 'Enactive'", CI, 2026-10-29: a
+        // client refused for its subnet got that instead of a 403). The log file and the page's log are there either way.
+        if (!Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService())
+            foreach (var eventLog in builder.Services.Where(d => d.ServiceType == typeof(Microsoft.Extensions.Logging.ILoggerProvider)
+                         && d.ImplementationType == typeof(Microsoft.Extensions.Logging.EventLog.EventLogLoggerProvider)).ToArray())
+                builder.Services.Remove(eventLog);
         // Before the services, as it always was: the authentication state provider of ServerAuth must be the one
         // registered last, and the components' own registrations are not to land after it.
         builder.Services.AddRazorComponents().AddInteractiveServerComponents();
