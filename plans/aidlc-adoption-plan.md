@@ -3,8 +3,7 @@
 Date: 2026-10-16
 
 Status (2026-10-19): PR 0, PR 0b and Phases 1, 2, 3 and 4.2 are built and on `master` (PR #58, merge `283dca7`);
-the bench measurements for Phases 1-3 are in `aidlc-adoption-bench.md`. Still open: Phase 1.5 (defaults - a second
-measurement was taken on 2026-10-28 with one run per side; more are due before a default changes), the bench
+the bench measurements for Phases 1-3 are in `aidlc-adoption-bench.md`. Still open: the bench
 follow-ups (section "Bench follow-ups" below), the deferred 4.0/4.1/4.3, and Phase 5, which is not started.
 
 | Part | Status | Commits |
@@ -259,7 +258,10 @@ The default obligation and the required declaration are distinct: omission is an
 
 ### 1.5 Defaults
 
-**Status: open.** The flags are still opt-in (`EngineOptions` defaults them off), and the settings window has no
+**Status: done 2026-10-29.** `StepOutputs` and `TypedCriteria` are on by default, schema 10 reads an older file's
+written-out off as on, and both settings pages have a box for each; `DynamicSteps` stays off. Three runs a side
+(`aidlc-adoption-bench.md`, "Phase 1.5"): no false verdict either way, `wiki-drift` in half the steps, `test-coverage`
+two of three through against one. The history: the flags were opt-in, and the settings window had no
 toggles for them. The bench advised against turning them on until the results-key defect was fixed; it is fixed
 (`01b40ea`). Measured again on 2026-10-28 with a strong planner and reviewer (Sonnet 5.5, local Qwen3.6 worker),
 one run per side (`aidlc-adoption-bench.md`, "Phase 1.5"): no false verdicts with the flags on, `wiki-drift` cheaper

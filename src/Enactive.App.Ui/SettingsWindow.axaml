@@ -519,6 +519,20 @@
                             </StackPanel>
 
                             <StackPanel Orientation="Horizontal" Spacing="6">
+                                <CheckBox IsChecked="{Binding StepOutputs}"
+                                          Content="Steps hand their results on as values — a longer planner prompt" />
+                                <local:HintView Text="{x:Static core:SettingsAdvice.StepOutputs}"
+                                                VerticalAlignment="Center" />
+                            </StackPanel>
+
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <CheckBox IsChecked="{Binding TypedCriteria}"
+                                          Content="The planner adds checks the engine runs itself — files, contents, tests" />
+                                <local:HintView Text="{x:Static core:SettingsAdvice.TypedCriteria}"
+                                                VerticalAlignment="Center" />
+                            </StackPanel>
+
+                            <StackPanel Orientation="Horizontal" Spacing="6">
                                 <TextBlock Classes="label" Text="Review retries" />
                                 <local:HintView Text="{x:Static core:SettingsAdvice.ReviewRetries}"
                                                 VerticalAlignment="Center" />

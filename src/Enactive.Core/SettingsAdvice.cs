@@ -41,6 +41,16 @@ public static class SettingsAdvice
         + "Failed while the rejected version stays in your workspace — which is the one you would "
         + "open next. A file you changed after the step wrote it is left alone and named in the log.";
 
+    public const string StepOutputs =
+        "A planned step may say what it hands on - a list of files, a set of findings - and hands it on as values; the steps "
+        + "after it get those instead of the model's own retelling. The planner's prompt is longer, and a step that "
+        + "declared outputs must hand them on before it ends. On the bench it made plans shorter and cheaper.";
+
+    public const string TypedCriteria =
+        "The planner may add checks the engine runs itself - a file exists, a file contains something, the tests pass - "
+        + "on top of the request's own. A check can only make a result stricter, never pass work that is not done. "
+        + "Works with step outputs: together they tell when an item was left out.";
+
     public const string ReviewRetries =
         "How many times a rejected step may be redone before the run gives up. 1 means two tries in "
         + "total. Each retry costs another run of the worker AND another reviewer call, so this is "
@@ -101,6 +111,8 @@ public static class SettingsAdvice
         (nameof(DisableThinking), DisableThinking),
         (nameof(VerifyWrites), VerifyWrites),
         (nameof(RevertRejectedSteps), RevertRejectedSteps),
+        (nameof(StepOutputs), StepOutputs),
+        (nameof(TypedCriteria), TypedCriteria),
         (nameof(ReviewRetries), ReviewRetries),
         (nameof(AllowImplicitToolCalls), AllowImplicitToolCalls),
         (nameof(MaxParallelSteps), MaxParallelSteps),

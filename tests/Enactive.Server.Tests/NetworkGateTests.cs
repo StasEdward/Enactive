@@ -69,6 +69,17 @@ public sealed class NetworkGateTests : IAsyncLifetime
         return _client.SendAsync(request);
     }
 
+    /// <summary>
+    /// The Application log is the service's, under the source its installer registers. Run any other way - from a
+    /// console, under a test - the source is not there, writing one needs an administrator, and the first warning threw
+    /// out of the request that logged it: CI, 2026-10-29, a refused client answered with "Cannot open log for source
+    /// 'Enactive'" instead of a 403, now and then.
+    /// </summary>
+    [Fact]
+    public void Run_other_than_as_the_service_it_writes_nothing_to_the_event_log()
+        => Assert.DoesNotContain(_app.Services.GetServices<Microsoft.Extensions.Logging.ILoggerProvider>(),
+            p => p is Microsoft.Extensions.Logging.EventLog.EventLogLoggerProvider);
+
     [Theory]
     [InlineData("10.20.3.4")]
     [InlineData("::ffff:10.20.3.4")]   // an IPv4 client on a dual-stack listener

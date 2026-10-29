@@ -91,16 +91,19 @@ public sealed record EngineOptions
 
     /// <summary>
     /// Phase 2: a planned step may declare what it hands on as values, and must then hand it on with submit_step_output;
-    /// the steps after it receive the values instead of a retelling. Off until runs show it helps - it changes the
-    /// planner's prompt and what a declared step needs to finish.
+    /// the steps after it receive the values instead of a retelling. It changes the planner's prompt and what a declared
+    /// step needs to finish. On since 2026-10-29, with <see cref="TypedCriteria"/> (derived coverage needs both): three
+    /// bench runs a side with a strong planner and reviewer gave no false verdict either way, wiki-drift in half the steps
+    /// and a third fewer tokens, test-coverage two runs of three through against one (plans/aidlc-adoption-bench.md).
     /// </summary>
-    public bool StepOutputs { get; init; }
+    public bool StepOutputs { get; init; } = true;
 
     /// <summary>
     /// Phase 3: the planner may state acceptance criteria as types the engine checks itself - file_exists,
-    /// file_contains, tests_pass - added to, never instead of, the run's own criteria. Off until runs show it helps.
+    /// file_contains, tests_pass - added to, never instead of, the run's own criteria. On since 2026-10-29, with
+    /// <see cref="StepOutputs"/> - see there for the measurement.
     /// </summary>
-    public bool TypedCriteria { get; init; }
+    public bool TypedCriteria { get; init; } = true;
 
     /// <summary>
     /// Phase 5.3: a step may be declared "for each" item an earlier step hands on, and the plan grows by one step per

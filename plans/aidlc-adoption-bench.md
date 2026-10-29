@@ -141,6 +141,27 @@ loaded on the server). **One run per side** - read it as a direction, not a resu
 
 Stamps: off `20261028-220204` (`wiki-drift`), `20261028-220935` (`test-coverage`); on `20261028-221352`.
 
+**Two more runs a side, 2026-10-29** (`master` @24348b7, same models, `DOTNET_ROLL_FORWARD=Major`) - three a side with
+the runs above:
+
+| Scenario | Side | Verdicts | Steps | s | Tokens in |
+| --- | --- | --- | --- | --- | --- |
+| wiki-drift | off | right PASS ×3 (4/4 each) | 4, 5, 4 | 77, 108, 86 | 105k, 159k, 128k |
+| wiki-drift | on | right PASS ×3 (4/4 each) | 2, 2, 2 | 46, 50, 51 | 71k, 80k, 80k |
+| test-coverage | off | right PASS ×1, right FAIL ×2 | 3, 4, 4 | 208, 206, 94 | 558k, 881k, 121k |
+| test-coverage | on | right PASS ×2, right FAIL ×1 | 3, 3, 3 | 201, 175, 200 | 576k, 472k, 486k |
+
+- No false verdict on either side in six runs each.
+- `wiki-drift` with the flags on: half the steps, about half the time, a third to a half fewer tokens, every run.
+- Every `test-coverage` failure is a worker's mistake a strict review caught: off, step 1 ("measure coverage") was
+  rejected twice - once for switching the project to `coverlet.msbuild`, once for a wrong account of an uncovered
+  branch - and with `ReviewRetries = 1` the step failed and the three after it were skipped; on, the one failure is the
+  report's wrong "before" number (above). One wrong side claim failing the whole run is worth a look of its own.
+- Decision: `StepOutputs` + `TypedCriteria` on by default (schema 10 reads an older file's written-out off as on),
+  with a box for each in both settings pages. `DynamicSteps` stays off - not measured.
+
+Stamps: off `20261029-112041`, `20261029-112618`; on `20261029-112955`, `20261029-113358`.
+
 ## Follow-up 3 - a command's change held to the request's limit (2026-10-28)
 
 Built on `feat/shell-change-limit` (`8ec8d48`..`38e579e`). Same setup as Phase 1.5 above (Sonnet 5.5 planning and
@@ -170,6 +191,7 @@ Stamps: raised `20261028-232426`, `20261028-232532`, `20261028-232652`; all scen
    key defect turns right runs into failures. Fix it, then measure again (with a strong planner/reviewer as well).
    *2026-10-28:* measured again with a strong planner/reviewer, one run per side: no false verdicts with the flags
    on, `wiki-drift` cheaper, the one failure a worker's wrong number. In favour of turning them on, not yet enough to.
+   *2026-10-29:* three runs a side - turned on by default.
 2. Phase 2 - keep the per-kind limit at 1; no measured gain from 2 or 3.
 3. Phase 3 - the raise works as built and must stay opt-in; the pre-existing-failure wording is the next improvement.
 4. Scenario fixes: `disk-report` should accept `C` as well as `C:`.
