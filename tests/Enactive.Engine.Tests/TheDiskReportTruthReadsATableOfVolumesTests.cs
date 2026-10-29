@@ -19,13 +19,9 @@ public sealed class TheDiskReportTruthReadsATableOfVolumesTests : IDisposable
         try { Directory.Delete(_workspace, true); } catch (IOException) { }
     }
 
-    private static string ScenarioFolder()
-    {
-        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
-            if (File.Exists(Path.Combine(dir.FullName, "bench", "scenarios", "disk-report", "scenario.json")))
-                return Path.Combine(dir.FullName, "bench", "scenarios", "disk-report");
-        throw new InvalidOperationException("bench/scenarios/disk-report not found above " + AppContext.BaseDirectory);
-    }
+    // The checkout the tests were built from (TestRepository), not a walk up from the binaries: CI runs these from an
+    // artifacts folder outside the repository, where no walk finds bench/ (PR #70, "Test with external artifacts").
+    private static string ScenarioFolder() => Path.Combine(TestRepository.Root, "bench", "scenarios", "disk-report");
 
     /// <summary>The machine's fixed volumes, as the truth's own command finds them.</summary>
     private static string[] Volumes()
