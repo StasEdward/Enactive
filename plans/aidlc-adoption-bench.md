@@ -299,3 +299,31 @@ do not cover it, and the review still failed it (`190321`), a folder nobody aske
 data (`190111`). One run passed with no rejection (`190520`). Tokens 32k-232k, against 99k-290k before.
 
 Stamps: `20261029-190111`, `190216`, `190321`, `190520`.
+
+## The step review is given the rules (2026-10-29)
+
+The worker and the planner were given the confirmed rules; the step review was not, so a rule was one the worker could
+follow or not. On `feat/reviewer-given-rules` (`f2b4b4f`) the review is given them, as WORKSPACE RULES, and told to fail
+a step that goes against one unless the request asks for it - the request wins. Pinned by
+`TheStepReviewIsGivenTheRulesTests` (fails with the review not given them; a run with no rules is reviewed as before).
+
+Live, `disk-report` with the one rule of the Phase 5 measurement, four runs a side, alternated: the side without is the
+console built from `master` at `b9a0cbf` (`--console`), the rule given to the worker only.
+
+| | verdicts | first rejection cites the rule |
+| --- | --- | --- |
+| rule to the worker only (4) | right PASS 2, right FAIL 1, FALSE FAIL 1 | - |
+| rule to the reviewer too (4) | right PASS 4 | 3 (`194159`, `194431`, `194700`) |
+
+With the rule the review held the worker to it: a volume called "system", "EFI" or "recovery" that no call showed, and
+the machine's name and OS in the header - each put right on the repair, every run a right PASS. No false verdict on that
+side. The FALSE FAIL is on the other side (`194041`): the repair of a wrong "100 %" brought two new unshown claims and
+the second review failed it - the review's one retry (`ReviewRetries = 1`), not the rule.
+
+**The rule is stale since the fix above it.** It says to name the computer and the OS only from a command's output; since
+the review is shown what the application gave (`d94b835`), those are shown, and the rule now asks for less than the engine
+allows. The review rightly put a person's rule above the application's facts and failed the header for them (`194159`,
+`194700`). That is what confirmed rules do: they last until a person changes them - the Lessons panel is where. The
+measurement file is left as it was measured.
+
+Stamps: worker only `20261029-193817`, `194041`, `194323`, `194533`; reviewer too `193941`, `194159`, `194431`, `194700`.

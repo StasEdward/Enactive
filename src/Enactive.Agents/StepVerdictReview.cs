@@ -40,7 +40,11 @@ internal sealed record StepVerdictInput(
     // (Orchestrator.GivenFacts), lines its prompt has word for word. Not shown them, the review failed reports for the
     // machine's name and OS as stated by no call, when the engine had stated them: bench disk-report, 2026-10-29, the first
     // rejection in 7 runs of 8 (plans/aidlc-adoption-bench.md, "Phase 5").
-    string? Given = null);
+    string? Given = null,
+    // The rules a person confirmed after earlier runs (Plan Phase 5.3), as the worker was given them: told only the
+    // request, the review passed a step that went against a standing instruction the worker had been given, and a rule
+    // nobody checks is a rule the worker may follow or not. The request still wins where the two disagree.
+    IReadOnlyList<string>? Rules = null);
 
 /// <summary>
 /// One short verdict on one step: did the worker do what this step was for, and is what it reported true? Pass or fail,
@@ -181,6 +185,12 @@ internal static class StepVerdictReview
             else if (rule.Effect == ForbiddenTaskEffect.FileChange)
                 sb.AppendLine($"The request limits what may be changed (\"{rule.SourceQuote}\"): a step whose changes go against "
                     + "it fails, whatever else it did.");
+        if (input.Rules is { Count: > 0 } rules)
+        {
+            sb.AppendLine("WORKSPACE RULES - standing instructions a person confirmed for work here; the worker was given them. "
+                + "A step that goes against one fails, naming the rule - unless the request asks for it: the request wins:");
+            foreach (var rule in rules) sb.AppendLine("- " + rule);
+        }
         if (input.Owns is { Count: > 0 } owns)
         {
             sb.AppendLine("Lines of the request the plan gives this step - it does or checks its part of each; the step is not done while a part of one that is its own is not:");
