@@ -83,7 +83,9 @@ public sealed class WorkspaceChanges : IWorkspaceChanges
                     return null;
 
                 var tree = await GitAsync(ct, "write-tree");
-                return tree.Exit == 0 && tree.Output.Trim() is { Length: > 0 } id ? new WorkspaceSnapshot(id, null) : null;
+                return tree.Exit == 0 && tree.Output.Trim() is { Length: > 0 } id
+                    ? new WorkspaceSnapshot(id, null) { Settings = await SettingsAsync(ct) }
+                    : null;
             }
 
             var files = await ScanAsync(_root, ct, fingerprints: _fingerprints);
@@ -367,11 +369,46 @@ public sealed class WorkspaceChanges : IWorkspaceChanges
     }
 
     /// <summary>Byte for byte from the git snapshot, or not at all (<see cref="ExactRestore"/>); outside git there are no bytes.</summary>
-    public Task<PutBack> PutBackAsync(WorkspaceSnapshot before, WorkspaceSnapshot after, string path,
+    public async Task<PutBack> PutBackAsync(WorkspaceSnapshot before, WorkspaceSnapshot after, string path,
         IReadOnlyCollection<string> changedWithIt, CancellationToken ct)
-        => before.Tree is { } from && after.Tree is { } to
-            ? ExactRestore.PutBackAsync(_root, from, to, path, changedWithIt, ct)
-            : Task.FromResult(PutBack.Left(PutBackReasons.NotGit));
+    {
+        if (before.Tree is not { } from || after.Tree is not { } to)
+            return PutBack.Left(PutBackReasons.NotGit);
+        // The settings the blob was made under, and the ones the conversion is read under now (ExactRestore), are one:
+        // unchanged from before the command to now. Unknown on either side is not proven unchanged.
+        if (before.Settings is null || before.Settings != after.Settings || before.Settings != await SettingsAsync(ct))
+            return PutBack.Left(PutBackReasons.Settings);
+        return await ExactRestore.PutBackAsync(_root, from, to, path, changedWithIt, ct);
+    }
+
+    private string[]? _settingsFiles;
+
+    /// <summary>
+    /// A hash of the repository's own config and info/attributes as they are now - what decides whether git converted a
+    /// file's bytes on the way into a blob (the global ones are never read: AutomaticGit). Null when they cannot be read.
+    /// </summary>
+    private async Task<string?> SettingsAsync(CancellationToken ct)
+    {
+        if (_settingsFiles is null)
+        {
+            var paths = await AutomaticGit.RunAsync(_root, ["rev-parse", "--path-format=absolute", "--git-path", "config",
+                "--git-path", "info/attributes"], ct);
+            if (paths.Exit != 0) return null;
+            _settingsFiles = paths.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        }
+        try
+        {
+            using var sha = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+            foreach (var file in _settingsFiles)
+            {
+                sha.AppendData(System.Text.Encoding.UTF8.GetBytes(file));
+                if (File.Exists(file)) sha.AppendData(await File.ReadAllBytesAsync(file, ct));
+                sha.AppendData([0]);
+            }
+            return Convert.ToHexString(sha.GetHashAndReset());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
 
     private Task<(int Exit, string Output)> GitAsync(CancellationToken ct, params string[] args)
         => AutomaticGit.RunAsync(_root, args, ct, index: _index);

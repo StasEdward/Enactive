@@ -137,4 +137,65 @@ public sealed class AFileIsPutBackOnlyByteForByteTests : IDisposable
 
         Assert.False(await ExactRestore.VerifiedAsync(_root, Full("candidate"), "0000000000000000000000000000000000000000", default));
     }
+
+    /// <summary>
+    /// A command that changed the repository's own settings: the blob was made under the old ones, and read under the new
+    /// ones the check would answer for settings that never made it (review of PR #65: core.autocrlf set false passed).
+    /// </summary>
+    [Fact]
+    public async Task A_command_that_changed_the_repository_s_settings_puts_nothing_back()
+    {
+        var (result, changes) = await AroundAsync(() =>
+        {
+            File.WriteAllText(Full("prices.bin"), "rewritten");
+            TestGit.Run(_root, "config", "core.autocrlf", "false");
+        }, beforeSnapshots: () => TestGit.Run(_root, "config", "core.autocrlf", "true"));
+        using (changes)
+        {
+            Assert.Equal(PutBack.Left(PutBackReasons.Settings), result);
+            Assert.Equal("rewritten", File.ReadAllText(Full("prices.bin")));
+        }
+    }
+
+    /// <summary>
+    /// The file is the file again, not a new one: a ReadOnly file stays ReadOnly - before, the move over it was refused and
+    /// it was reported as not put back exactly - and nothing of the put-back is left in the project, only in the engine's
+    /// own folder, which it empties (review of PR #65: a crash left ".prices.bin.enactive-putback" beside the file).
+    /// </summary>
+    [Fact]
+    public async Task A_read_only_file_is_put_back_read_only_and_nothing_is_left_beside_it()
+    {
+        var (result, changes) = await AroundAsync(() =>
+        {
+            File.SetAttributes(Full("prices.bin"), FileAttributes.Normal);
+            File.WriteAllText(Full("prices.bin"), "rewritten");
+            File.SetAttributes(Full("prices.bin"), FileAttributes.ReadOnly);
+        });
+        using (changes)
+        {
+            Assert.Equal(PutBack.Back, result);
+            Assert.Equal(Original, File.ReadAllBytes(Full("prices.bin")));
+            if (OperatingSystem.IsWindows())
+                Assert.True(File.GetAttributes(Full("prices.bin")).HasFlag(FileAttributes.ReadOnly));
+            Assert.Equal(["prices.bin"], Directory.GetFiles(_root).Select(Path.GetFileName));
+            Assert.Empty(Directory.GetFiles(Path.Combine(_root, ".enactive", "putback")));
+        }
+    }
+
+    /// <summary>Outside Windows, an executable stays executable, as the snapshot recorded it (review of PR #65).</summary>
+    [Fact]
+    public async Task An_executable_is_put_back_executable()
+    {
+        if (OperatingSystem.IsWindows()) return;   // no exec bit to keep
+        var (result, changes) = await AroundAsync(() => File.WriteAllText(Full("prices.bin"), "rewritten"), beforeSnapshots: () =>
+        {
+            File.SetUnixFileMode(Full("prices.bin"), File.GetUnixFileMode(Full("prices.bin")) | UnixFileMode.UserExecute);
+            TestGit.Commit(_root);
+        });
+        using (changes)
+        {
+            Assert.Equal(PutBack.Back, result);
+            Assert.True(File.GetUnixFileMode(Full("prices.bin")).HasFlag(UnixFileMode.UserExecute));
+        }
+    }
 }

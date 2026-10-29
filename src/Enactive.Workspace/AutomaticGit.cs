@@ -7,9 +7,12 @@ using System.Text;
 internal static class AutomaticGit
 {
     /// <param name="worktree">
-    /// The work tree git is held to; null for <paramref name="root"/>. A caller that found the repository's top above a
-    /// workspace that is one of its folders gives it, or git would read the folder as the whole tree (StateFingerprints).
-    /// Never taken from the repository's own configuration: a core.worktree there could point git anywhere.
+    /// The work tree given as <c>-c core.worktree</c>; null for <paramref name="root"/>. A caller that found the repository's
+    /// top above a workspace that is one of its folders gives it, or git would read the folder as the whole tree
+    /// (StateFingerprints). Given on the command line, it outranks a core.worktree in the repository's own configuration,
+    /// which could point git anywhere. It does not hold git to <paramref name="root"/> by itself: where git finds the
+    /// repository by walking up from the working directory to a <c>.git</c> folder, it takes that folder's parent as the
+    /// work tree and core.worktree does not apply - which is the same tree whenever the workspace is the repository's top.
     /// </param>
     internal static ProcessStartInfo StartInfo(string root, IEnumerable<string> args, string? index = null, string? worktree = null)
     {

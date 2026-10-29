@@ -131,8 +131,11 @@ internal sealed class CommandEffect(ChangeLimitGuard? guard, StepFrame frame, st
             : $"REFUSED after the fact: this command changed {Names(decided.Refused)}, which the request limits "
               + $"({string.Join("; ", guard!.Limits.Select(l => $"\"{l}\""))}) - {decided.Reason}.";
         if (putBack.Count > 0)
-            said += putBack.Count == decided.Refused.Count ? " It was put back as it was before the command."
-                : $" {Names(putBack)} put back as it was before the command.";
+            // In the number of files said: "'a', 'b' put back as it was" read as one file (review of PR #65).
+            said += putBack.Count == decided.Refused.Count
+                ? putBack.Count == 1 ? " It was put back as it was before the command." : " They were put back as they were before the command."
+                : putBack.Count == 1 ? $" {Names(putBack)} was put back as it was before the command."
+                : $" {Names(putBack)} were put back as they were before the command.";
         foreach (var (path, why) in left.Take(Named))
             said += $" '{path}' could not be put back ({why}). Put it back yourself, or hand on why the step cannot be done "
                     + "without changing it.";
