@@ -2,9 +2,10 @@
 
 Date: 2026-10-16
 
-Status (2026-10-19): PR 0, PR 0b and Phases 1, 2, 3 and 4.2 are built and on `master` (PR #58, merge `283dca7`);
-the bench measurements for Phases 1-3 are in `aidlc-adoption-bench.md`. Still open: the bench
-follow-ups (section "Bench follow-ups" below), the deferred 4.0/4.1/4.3, and Phase 5, which is not started.
+Status (2026-10-29): everything but the deferred 4.0/4.1/4.3 is built and on `master` - PR 0, PR 0b and Phases 1-3
+and 4.2 (PR #58, merge `283dca7`; Phase 1.5's defaults in PR #66), and Phase 5 (PRs #70-#78). The bench measurements
+are in `aidlc-adoption-bench.md`, and the six bench follow-ups are fixed (section "Bench follow-ups" below). Still open:
+the deferred 4.0/4.1/4.3, which wait on open question 4, and open question 2.
 
 | Part | Status | Commits |
 | --- | --- | --- |
@@ -17,12 +18,12 @@ follow-ups (section "Bench follow-ups" below), the deferred 4.0/4.1/4.3, and Pha
 | Phase 3.4 - disappeared tests, protected files | Done | `03526bc`, `86b90ce`, `0b47952`, `5bc3f12` |
 | Phase 4.0, 4.1, 4.3 | Deferred by design (state ownership not settled) | - |
 | Phase 4.2 - pause after the current step | Done | `ea7ecf3`..`f58d33c` |
-| Phase 5.1, 5.3 and a console gate - store, candidates, injection | Built 2026-10-29 (`feat/phase5-lessons`) | - |
-| Phase 5.2 - Lessons panel, service page, Inbox item; 5.5 in part | Built 2026-10-29 (`feat/phase5-lessons-panel`) | - |
-| Phase 5 bench measurement | Done 2026-10-29: one rule, 4 runs a side - in favour, not settled (`aidlc-adoption-bench.md`) | - |
-| Phase 5.4 - lesson -> check | Built 2026-10-29 (`feat/lesson-to-check`, PR #76) | - |
-| Phase 5: reviewer given rules | Built 2026-10-29 (`feat/reviewer-given-rules`, PR #77), measured: 4/4 right PASS with the rule | - |
-| Phase 5: consistency check against Global | Built 2026-10-29 (`feat/rule-consistency`, PR #78) | - |
+| Phase 5.1, 5.3 and a console gate - store, candidates, injection | Done 2026-10-29 | PR #70 |
+| Phase 5.2, 5.5 - Lessons panel and window, service page, Inbox item | Done 2026-10-29 | PRs #71, #72 |
+| Phase 5 bench measurement | Done 2026-10-29: one rule, 4 runs a side - in favour, not settled (`aidlc-adoption-bench.md`); it found the review blind to the application's facts, fixed | PRs #73, #74 |
+| Phase 5.4 - lesson -> check | Done 2026-10-29 | PR #76 |
+| Phase 5: reviewer given rules | Done 2026-10-29; measured: 4/4 right PASS with the rule | PR #77 |
+| Phase 5: consistency check against Global | Done 2026-10-29 | PR #78 |
 
 Written against `master` at `7dc8866`; the line numbers below are from that commit and will drift.
 Revised after two reviews (`aidlc-adoption-review.md`, `aidlc-adoption-resolution.md`); staged-run checks (Phase 3.2) and an unresolved coverage contract (Phase 1.2) are decided.
@@ -665,8 +666,10 @@ and a second "parked" would be ambiguous in code, events and UI.
 
 ## Phase 5 - lessons confirmed by a person, applied from the next run
 
-**Status: core built 2026-10-29 (`feat/phase5-lessons`); the window's and the service's gate, 5.4 and 5.5 open.** Open
-question 5 decided: two layers, Workspace and Global; a team layer can be added later at the end of `RuleScope`.
+**Status: done 2026-10-29** (PRs #70-#78): the store, the candidates and the injection; the gate in the window, on the
+service and in the console; 5.4; the rules list (5.5, as the Lessons window from a workspace's card); the step review
+given the rules; the consistency check against Global; the measurement. Open question 5 decided: two layers, Workspace
+and Global; a team layer can be added later at the end of `RuleScope`.
 
 What the first PR has, and where it differs from the text below:
 
@@ -815,7 +818,7 @@ What `aidlc-adoption-bench.md` found besides the phases' own measurements, and w
 | 3 | A forbidden file rewritten through a shell command stayed changed after the step was rejected | Built 2026-10-28 (`8ec8d48`..`38e579e`): a command's change is held to the limit after the fact and put back byte for byte, or named; measured, the worker did not repeat the shell rewrite - below and `aidlc-adoption-bench.md` |
 | 4 | `disk-report` truth wants `C:` where `C` is right | Fixed 2026-10-29: a bare letter heading a row of a table of volumes counts, a letter inside a word or a path does not (`TheDiskReportTruthReadsATableOfVolumesTests`) |
 | 5 | The planner made a file the request forbids changing a write-evidence item (`test-coverage`, `20261017-231237`) | Fixed 2026-10-29 (`c71e8c2`): the request forbade nothing - the planner put write evidence on "the files with gaps", and the right work writes tests elsewhere. An item whose own file is unchanged while the step changed files that are no item of the list is now the reviewer's to judge, not the check's to reject; without an approving verdict the step is done, not confirmed (`CoverageWrittenElsewhere`) |
-| 6 | A read-only step changed the project file with a command (`test-coverage`, `20261029-112041`: `dotnet remove/add package`); the review failed it, the step was refused when it edited the file back, and the rejected step left the change | Fixed 2026-10-29 (`fix/read-only-command-put-back`): in a step planned read-only, what a command changed of the files there when the step began is put back right after it, with no question - the step's own new files and build output are left (`AReadOnlyStepsCommandIsPutBackTests`). Not measured live: it needs a worker that runs such a command |
+| 6 | A read-only step changed the project file with a command (`test-coverage`, `20261029-112041`: `dotnet remove/add package`); the review failed it, the step was refused when it edited the file back, and the rejected step left the change | Fixed 2026-10-29 (PR #75): in a step planned read-only, what a command changed of the files there when the step began is put back right after it, with no question - the step's own new files and build output are left (`AReadOnlyStepsCommandIsPutBackTests`). Not measured live: it needs a worker that runs such a command |
 
 ### 3. A forbidden file rewritten through a shell command
 
@@ -956,11 +959,20 @@ no regression, and no notable rise in tokens.
 
 ## Open questions for the owner
 
-1. Phase 1.5: turn `StepOutputs` + `TypedCriteria` on by default after the bench, or keep them opt-in?
-2. Phase 2: who picks the new nudge limits - the bench numbers alone, or a fixed ceiling as well?
-3. Phase 3: is a global (machine-wide) check layer wanted, or workspace only?
+Still open:
+
+2. Phase 2: who picks the new nudge limits - the bench numbers alone, or a fixed ceiling as well? (`PerKind = 1` is kept,
+   as the bench advised; no ceiling is set.)
 4. Deferred Phase 4.1: who exclusively owns state, and what is the commit/recovery protocol when persistence fails?
-5. Phase 5: is "Global" enough as the broader layer, or is a per-team layer (server, several operators) needed?
+   (Phases 4.0, 4.1 and 4.3 wait on it.)
+
+Answered:
+
+1. Phase 1.5 defaults: on - `StepOutputs` and `TypedCriteria` are on by default since PR #66, after the bench showed no
+   false verdict either way.
+3. Phase 3 global checks: yes, both layers - a machine's global manifests (next to the desktop's settings, in the
+   service's data folder) under each workspace's own, shadowed by id (Phase 3.1).
+5. Phase 5 layers: Workspace and Global are enough for now; a team layer can be added at the end of `RuleScope` (PR #70).
 
 Decided since the reviews: staged-run checks (Phase 3.2 - `Unknown` during the run, a manual "Run checks now"
 with a persisted, fingerprinted record) and an unresolved coverage contract (Phase 1.2 - asked once when attended,
