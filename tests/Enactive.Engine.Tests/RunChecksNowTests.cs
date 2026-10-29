@@ -44,7 +44,9 @@ public sealed class RunChecksNowTests
         {
             Planner = new Planner(checksAuditEnabled: false),
             Approvals = new ApprovalStore(Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-permissions.json")),
-            GlobalChecks = Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-global-checks")
+            GlobalChecks = Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-global-checks"),
+            // Not the machine's Global rules: a test run would be given whatever the person running it confirmed.
+            RulesFolder = Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-rules")
         };
     }
 

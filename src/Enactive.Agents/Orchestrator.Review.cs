@@ -225,7 +225,9 @@ public sealed partial class Orchestrator
         switch (review.Verdict)
         {
             case ReviewVerdict.Fail fail:
-                await Emit(EventKind.ReviewFailed, $"FAIL ({mode} review): {fail.Notes}");
+                // The notes as a value too, for the lesson candidates read from the record (LessonCandidates).
+                await publish(scope.Event(EventKind.ReviewFailed, prefix + $"FAIL ({mode} review): {fail.Notes}",
+                    WorkEventPayload.ReviewFailedPayload(stepNumber, fail.Notes)));
                 break;
             case ReviewVerdict.Pass pass:
                 await Emit(EventKind.ReviewPassed,

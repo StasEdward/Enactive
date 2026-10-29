@@ -9,6 +9,7 @@ using Enactive.Core.Intents;
 using Enactive.Core.Orchestration;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
+using Enactive.Core.Rules;
 using Enactive.Core.Storage;
 using Enactive.Core.Templates;
 using Enactive.Core.Tools;
@@ -258,8 +259,14 @@ public static class RunComposer
             // The history says which worker the run was ON - the template's, when it named one - and by its
             // role, which is what a person reads. It said the host's pick, which a template overrides, and in
             // the console's runs an id where the window's said a role.
+            var workspaceRules = RuleStoreFactory.Create(workspace);
             var runSettings = request.Resume?.Settings
-                ?? new RunSettings(autonomy, AutonomyTiers.Describe(autonomy), engine.Workers.Get(workerId).Role, staged);
+                ?? new RunSettings(autonomy, AutonomyTiers.Describe(autonomy), engine.Workers.Get(workerId).Role, staged)
+                {
+                    // The confirmed rules, read ONCE, here (Plan Phase 5.3) - and kept with the settings, so a resumed run
+                    // is given these and not the rules as they are when it is resumed, as it keeps its permissions.
+                    Rules = await ConfirmedRulesAsync(engine.GlobalRules, workspaceRules, engine.Log, ct)
+                };
             var policy = request.Resume?.Settings is { } was
                 ? EngineComposition.PolicyFor(engine.Settings, was.Autonomy)
                 // A template's permissions are already the INTERSECTION of its own ceiling and the
@@ -307,14 +314,15 @@ public static class RunComposer
             }, engine.EngineOptions);
 
             var context = await new ContextProvider(workspace, new EnvironmentProbe(), memory)
-                .BuildAsync(new IntentFocus(workspace.Id), ct);
+                .BuildAsync(new IntentFocus(workspace.Id), ct) with { Rules = runSettings.Rules ?? AppliedRules.None };
 
             return new ComposedRun(
                 new Recorded(
                     orchestrator,
                     // The specification is recorded WITH the run, so reading it back later shows the
                     // template as it was rather than as it has since been edited.
-                    new RunRecorder(RunStoreFactory.Create(workspace), memory, workspace.Id, runSettings, spec?.Snapshot(), checks),
+                    new RunRecorder(RunStoreFactory.Create(workspace), memory, workspace.Id, runSettings, spec?.Snapshot(), checks,
+                        workspaceRules),
                     engine.Log),
                 new Intent(request.Resume?.TaskId ?? request.TaskId ?? Guid.NewGuid(), request.Prompt, request.Source,
                     context, DateTimeOffset.UtcNow, workerId),
@@ -383,6 +391,26 @@ public static class RunComposer
     /// when it was written had drifted apart on exactly this: one recorded, and the one that did not
     /// looked correct - a run that ran, changed files, and then did not appear in the history at all.</para>
     /// </summary>
+    /// <summary>
+    /// The confirmed rules of both layers (AppliedRules.Compose). A layer that cannot be read is said in the log and given
+    /// as none: a run is not refused for a store of suggestions, and the log is where a missing rule is looked for.
+    /// </summary>
+    internal static async Task<AppliedRules?> ConfirmedRulesAsync(IRuleStore global, IRuleStore workspace, LogHub log, CancellationToken ct)
+    {
+        async Task<IReadOnlyList<RuleEntry>> Read(IRuleStore store, string layer)
+        {
+            try { return await store.ListAsync(ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                log.Warn(LogSource.System, $"The {layer} rules could not be read, so this run is given none of them: {ex.Message}");
+                return [];
+            }
+        }
+        // None is recorded as none: a run with no rules keeps the settings record every run had before rules existed.
+        var applied = AppliedRules.Compose(await Read(global, "Global"), await Read(workspace, "workspace"));
+        return applied.Rules.Count == 0 && applied.Left == 0 ? null : applied;
+    }
+
     private sealed class Recorded(IOrchestrator inner, RunRecorder recorder, LogHub log) : IOrchestrator
     {
         public IAsyncEnumerable<WorkEvent> SubmitIntentAsync(Intent intent, CancellationToken ct)

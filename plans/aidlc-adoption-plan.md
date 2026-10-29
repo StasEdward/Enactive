@@ -11,13 +11,14 @@ follow-ups (section "Bench follow-ups" below), the deferred 4.0/4.1/4.3, and Pha
 | PR 0 - a still-failing criterion is not `Succeeded` | Done | `47b7258` |
 | PR 0b - report a failed step before its join is released | Done | `c2d6f6d` |
 | Phase 1.1-1.4 - consumes, derived coverage, gate, filtered hand-off | Done | `ece18f5`..`7709dcb`; after the bench `01b40ea`, `9e23313` |
-| Phase 1.5 - defaults | Open: still opt-in; no toggles in the settings window yet | - |
+| Phase 1.5 - defaults | Done 2026-10-29: `StepOutputs` + `TypedCriteria` on by default, a box for each in settings | PR #66 |
 | Phase 2 - obligation loop | Done; `PerKind = 1` kept, as the bench advised | `9817187`, `4d47b74`, `3f72f23` |
 | Phase 3.1-3.3, 3.5 - check manifests, execution, records, UI | Done | `1f1fa0e`..`bbc728d` |
 | Phase 3.4 - disappeared tests, protected files | Done | `03526bc`, `86b90ce`, `0b47952`, `5bc3f12` |
 | Phase 4.0, 4.1, 4.3 | Deferred by design (state ownership not settled) | - |
 | Phase 4.2 - pause after the current step | Done | `ea7ecf3`..`f58d33c` |
-| Phase 5 - lessons confirmed by a person | Not started | - |
+| Phase 5.1, 5.3 and a console gate - store, candidates, injection | Built 2026-10-29 (`feat/phase5-lessons`) | - |
+| Phase 5.2 panel and page, 5.4, 5.5 | Open | - |
 
 Written against `master` at `7dc8866`; the line numbers below are from that commit and will drift.
 Revised after two reviews (`aidlc-adoption-review.md`, `aidlc-adoption-resolution.md`); staged-run checks (Phase 3.2) and an unresolved coverage contract (Phase 1.2) are decided.
@@ -660,7 +661,30 @@ and a second "parked" would be ambiguous in code, events and UI.
 
 ## Phase 5 - lessons confirmed by a person, applied from the next run
 
-**Status: not started.** Open question 5 (is Global enough, or is a per-team layer needed) is still open.
+**Status: core built 2026-10-29 (`feat/phase5-lessons`); the window's and the service's gate, 5.4 and 5.5 open.** Open
+question 5 decided: two layers, Workspace and Global; a team layer can be added later at the end of `RuleScope`.
+
+What the first PR has, and where it differs from the text below:
+
+- **Store (5.1).** `Core/Rules.cs`: `RuleEntry` (with `Origin` for the person and `Source`, the observation's key),
+  `RuleScope`, `RuleStatus`, `IRuleStore` (list / save by id / delete). A workspace's rules go where its runs go
+  (`RuleStoreFactory`, ENACTIVE_STORE: SQLite table `rules`, JSON `.enactive/rules.json`, MySQL table scoped by workspace);
+  the **Global layer is a file next to the host's settings.json** (`JsonRuleStore.Global`), as the global checks are -
+  under MySQL too. A write throws (a keep that did not keep is worse than an error); a run's read is caught and logged.
+- **Candidates.** `LessonCandidates.From(RunRecord)`, written by `RunRecorder` at the end of every run: each step's
+  first failed review or failed engine check, its notes as the text, at most 5 a run, none whose `Source` is already
+  in the store whatever its status - so a dismissed one does not come back. The notes are a payload field now
+  (`WorkEventPayload.ReviewFailedPayload`, `EngineCheckPayload(notes:)`), not read from the summary. Refused calls,
+  decisions and coverage misses that never failed a step are not candidates yet.
+- **Injection (5.3).** `AppliedRules.Compose`: confirmed only, Global first, each oldest first, a rule cut at 500
+  characters, the set at 3000 - the newest left out and counted. Kept whole in `RunSettings.Rules`, which the run's
+  record and checkpoint already carry, so a resume is given the text it started with (no new store column). Given to
+  the **worker** (`BuildUserPrompt`, after the stable system prompt) and to the **planner** (`Planner.Where`); not yet
+  to the step reviewer - whether a reviewer should judge against rules needs its own bench measurement of verdict
+  stability. The run's log names the set by its hash.
+- **Gate, for now.** `enactive rules "workspace" [keep ID [--text ...] [--global] | dismiss ID | delete ID | add "text"]`
+  (`RuleBook`, `RulesCommand`), the same class the panel will call. Keep `--global` moves the entry to the Global layer.
+- Tests: `LessonsBecomeRulesOnlyWhenConfirmedTests`. Not measured on the bench yet (see Measurement below).
 
 ### Adaptation
 

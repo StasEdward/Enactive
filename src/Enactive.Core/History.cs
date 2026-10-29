@@ -26,7 +26,16 @@ public sealed record RunEventRecord(
 /// what it was allowed to do, and a setting read off the window today is the setting as it is NOW,
 /// not as it was when the run happened.
 /// </summary>
-public sealed record RunSettings(int Autonomy, string AutonomyName, string? Worker, bool Staged);
+public sealed record RunSettings(int Autonomy, string AutonomyName, string? Worker, bool Staged)
+{
+    /// <summary>
+    /// The confirmed rules the run was given (Plan Phase 5.3), whole. Here, with what the run was allowed to do, because it
+    /// is as much how the run was set up - and the settings are already what its record and its checkpoint keep, so a
+    /// resumed run is given the rules it started with, not the ones confirmed or deleted since. Null: no rules, or a
+    /// record from before them.
+    /// </summary>
+    public Enactive.Core.Rules.AppliedRules? Rules { get; init; }
+}
 
 /// <summary>
 /// What one model was asked to do in a run, and what that cost.

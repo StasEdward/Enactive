@@ -624,14 +624,32 @@ public static class WorkEventPayload
     /// The declared workspace check whose failure this is (Plan Phase 3.2), when it is one and not the coverage count -
     /// so a card says which check sent the step back. Empty when it is a check whose id is not known any more.
     /// </param>
-    public static string EngineCheckPayload(int? stepNo, string? checkId = null)
+    /// <param name="notes">What the check found, as the step was told it - see <see cref="ReviewFailedPayload"/>.</param>
+    public static string EngineCheckPayload(int? stepNo, string? checkId = null, string? notes = null)
     {
-        var parts = new List<string>(3);
+        var parts = new List<string>(4);
         if (stepNo is { } n) parts.Add($"\"step\":{n}");
         parts.Add("\"engineCheck\":true");
         if (checkId is not null) parts.Add($"\"checkId\":{Quote(checkId)}");
+        if (!string.IsNullOrWhiteSpace(notes)) parts.Add($"\"notes\":{Quote(notes)}");
         return "{" + string.Join(',', parts) + "}";
     }
+
+    /// <summary>
+    /// The payload of a reviewer's FAIL: the step, and what the review found wrong, as a value. A lesson candidate is
+    /// built from it at the end of the run (Plan Phase 5.1), and the summary it would otherwise be read from is a
+    /// sentence whose wording is free to change.
+    /// </summary>
+    public static string ReviewFailedPayload(int? stepNo, string notes)
+    {
+        var parts = new List<string>(2);
+        if (stepNo is { } n) parts.Add($"\"step\":{n}");
+        parts.Add($"\"notes\":{Quote(notes)}");
+        return "{" + string.Join(',', parts) + "}";
+    }
+
+    /// <summary>What a failed review or check found (<see cref="ReviewFailedPayload"/>), or null for an event without it.</summary>
+    public static string? ReviewNotes(this WorkEvent ev) => StringField(ev, "notes");
 
     /// <summary>
     /// The declared check the engine's verdict came from (Plan Phase 3.2), or null when it was the coverage check or no

@@ -43,6 +43,7 @@ if (args is ["--help"] or ["-h"])
         Enactive CLI
         enactive "request" "workspace" [--role developer] [--autonomy execute] [--approve allow|deny]
         enactive timeline "workspace"
+        enactive rules "workspace" [keep ID [--text "..."] [--global] | dismiss ID | delete ID | add "text" [--global]]
         enactive --template TEMPLATE --workspace PATH [--param name=value] [--report FILE]
         enactive --due
         While a run runs: P pauses it after the steps running now (--resume carries it on); Ctrl+C stops it.
@@ -218,6 +219,12 @@ if (args.Length > 0 && string.Equals(args[0], "inbox", StringComparison.OrdinalI
         }
     return 0;
 }
+
+// "rules" as the first argument lists the workspace's lessons and rules, or decides on one (Plan Phase 5.2), and exits.
+// A candidate reaches no run until it is kept here - the window's Lessons panel is still to come.
+if (args.Length > 0 && string.Equals(args[0], "rules", StringComparison.OrdinalIgnoreCase))
+    return await RulesCommand.RunAsync(
+        new RuleBook(RuleStoreFactory.Create(workspace), JsonRuleStore.Global()), args.Skip(2).ToArray(), Console.Out);
 
 using var http = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
 
