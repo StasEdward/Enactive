@@ -217,8 +217,12 @@ test('the command bar takes the window\'s keys: Ctrl+K to focus, Ctrl+Enter a ne
   // From nowhere in particular: Ctrl+K is the page's, not the box's.
   await page.evaluate(() => document.activeElement?.blur());
   await expect(box).not.toBeFocused();
-  await page.keyboard.press('Control+k');
-  await expect(box).toBeFocused();
+  // The keys are attached by a script the page loads after it is drawn (CommandBar.razor.js): a Ctrl+K pressed before that
+  // does nothing - PR #79 on CI. Pressed until it lands; one that comes too early changes nothing to press again over.
+  await expect(async () => {
+    await page.keyboard.press('Control+k');
+    await expect(box).toBeFocused({ timeout: 1000 });
+  }).toPass();
 
   await page.keyboard.type('first line');
   await page.keyboard.press('Control+Enter');
