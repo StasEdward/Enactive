@@ -751,7 +751,7 @@ What `aidlc-adoption-bench.md` found besides the phases' own measurements, and w
 | 1 | Results keyed by something other than a consumed item were answered "never read", and right runs failed | Fixed: `01b40ea` (a key naming one item is resolved to it; a stranger key is said to be one, with the expected keys) |
 | 2 | A blocking step check failed the step for an error that predates it, and drove the worker at forbidden files | Fixed: `4347e13`, `dd7e1ec`, `6a946d4` (judged against the step's start; only a step with an old failure is told to leave it) |
 | 3 | A forbidden file rewritten through a shell command stayed changed after the step was rejected | Built 2026-10-28 (`8ec8d48`..`38e579e`): a command's change is held to the limit after the fact and put back byte for byte, or named; measured, the worker did not repeat the shell rewrite - below and `aidlc-adoption-bench.md` |
-| 4 | `disk-report` truth wants `C:` where `C` is right | Not checked - a scenario fix, not an engine one |
+| 4 | `disk-report` truth wants `C:` where `C` is right | Fixed 2026-10-29: a bare letter heading a row of a table of volumes counts, a letter inside a word or a path does not (`TheDiskReportTruthReadsATableOfVolumesTests`) |
 | 5 | The planner made a file the request forbids changing a write-evidence item (`test-coverage`, `20261017-231237`) | Open, not looked at |
 
 ### 3. A forbidden file rewritten through a shell command

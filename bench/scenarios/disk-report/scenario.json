@@ -13,13 +13,13 @@
     },
     {
       "id": "every-drive-named",
-      "about": "Every fixed disk volume of this machine, by its letter, as 'C:'. Volumes, not every drive letter: a network share or a cloud drive mapped to a letter (Z:, O: on the machine it ran on, 2026-09-30) is not a disk of the computer, and a run that reported the disks' volumes without them was judged wrong.",
+      "about": "Every fixed disk volume of this machine, by its letter: 'C:', or the bare letter heading a row of a table of volumes ('| C |', or 'C   248,61   3476,32' as Get-PSDrive prints it). Every run of 2026-10-17/18 named the volumes so, in a right table, and was scored FALSE PASS for want of the colon. A letter inside a word or a path ('C#', 'x/C', 'x\\C') is not one. Volumes, not every drive letter: a network share or a cloud drive mapped to a letter (Z:, O: on the machine it ran on, 2026-09-30) is not a disk of the computer, and a run that reported the disks' volumes without them was judged wrong.",
       "kind": "file_contains",
       "glob": "**/*.{md,txt}",
       "exclude": [ "README.md", ".enactive/**" ],
       "patternsFrom": {
         "shell": "powershell",
-        "command": "Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' -and $_.Size -gt 0 } | ForEach-Object { '\\b' + $_.DriveLetter + ':' }"
+        "command": "Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' -and $_.Size -gt 0 } | ForEach-Object { $l = $_.DriveLetter; '\\b' + $l + ':|(?<![\\w\\\\/.#+-])' + $l + '(?=[ \\t]*\\||[ \\t]+\\d)' }"
       }
     }
   ]
