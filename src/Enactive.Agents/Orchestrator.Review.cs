@@ -69,7 +69,8 @@ public sealed partial class Orchestrator
         IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null, System.Text.Json.Nodes.JsonObject? handedValues = null,
         IReadOnlyList<BuildBaseline>? measuredBefore = null, ReadLedger? reads = null,
         IReadOnlyList<TaskRestriction>? restrictions = null, string? keptBack = null, string? saidBlocked = null,
-        StepCoverageGate.Outcome? coverage = null, IReadOnlyList<string>? earlierReviews = null)
+        StepCoverageGate.Outcome? coverage = null, IReadOnlyList<string>? earlierReviews = null,
+        string? given = null)
     {
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
         ValueTask Emit(EventKind kind, string summary) => publish(scope.Ev(kind, prefix + summary, stepNumber));
@@ -188,7 +189,7 @@ public sealed partial class Orchestrator
                 LastAssistant(messages), handedOn, files, evidence, obligations?.ScopeNote,
                 obligations?.Owned().Select(o => $"{o.Unit.Id}: {o.Unit.Text.Trim()}"
                     + (o.AlsoTo.Count > 0 ? $" (also given to step {string.Join(", ", o.AlsoTo.Select(scope => scope.TrimStart('S')))})" : "")).ToArray(),
-                restrictions, account, earlierReviews?.ToArray());
+                restrictions, account, earlierReviews?.ToArray(), given);
 
         // The evidence budget of THIS review: the number a person set, or one worked out from the window of the model this
         // review goes to, after what its prompt holds without the evidence and what its answer is given (ReviewEvidence).

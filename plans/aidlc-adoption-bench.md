@@ -282,3 +282,20 @@ printed" asks the worker to distrust what it was told, and it did so in half the
 lesson: the reviewer should judge a claim against everything the step was given, the run's context included. Open.
 
 Stamps: without `20261029-183018`, `183253`, `183503`, `183936`; with `183134`, `183408`, `183846`, `184041`.
+
+## The step review is shown what the application gave (2026-10-29)
+
+The defect the Phase 5 measurement found: the worker's prompt carries the workspace, the git branch and the host line
+(OS, CPUs, machine name), and the step review was shown only the calls - so it failed reports that repeated the
+engine's own facts. Fixed on `fix/reviewer-sees-given-facts` (`d94b835`): one text, `Orchestrator.GivenFacts`, goes into
+the worker's prompt and into the step review as GIVEN BY THE APPLICATION, and the review is told a claim that repeats it
+is shown by it. The criteria review is not changed: it takes evidence only of the kinds each criterion allows. Pinned by
+`TheStepReviewIsShownWhatTheApplicationGaveTests` (fails with the review not given them).
+
+Live, `disk-report`, four runs, no rules: right PASS 4/4. All four reports name the machine and the OS, as before, and
+no review failed them for it (before: the first rejection in 7 runs of 8). The rejections left are real ones, each put
+right on the repair: totals 2000 GB off (`190216`), a volume called "EFI / boot" that no call showed - the given facts
+do not cover it, and the review still failed it (`190321`), a folder nobody asked for and a "rate of filling" with no
+data (`190111`). One run passed with no rejection (`190520`). Tokens 32k-232k, against 99k-290k before.
+
+Stamps: `20261029-190111`, `190216`, `190321`, `190520`.
