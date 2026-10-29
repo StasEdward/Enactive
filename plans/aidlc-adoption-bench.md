@@ -231,3 +231,20 @@ consumed a list, so the changed path was not reached. Tokens in 790k-1322k, abov
 spread (the costliest run 56 calls); nothing changed for runs without a consumed list.
 
 Stamps: `20261029-144602`, `20261029-145040`, `20261029-145505`.
+
+## Follow-up 4 - `disk-report` reads a table of volumes (2026-10-29)
+
+The truth `every-drive-named` asked for each fixed volume as `C:`. The runs of 2026-10-17/18 wrote the volumes as a
+Get-PSDrive table (`C      248,61  3476,32 ...`) and were scored FALSE PASS for want of the colon. Now a volume also
+counts as named where its bare letter heads a row of a table - followed by `|`, or by blanks and a figure - and not
+where the letter is inside a word or a path (`C#`, `x/C`, `x\C`). Pinned by `TheDiskReportTruthReadsATableOfVolumesTests`
+with this machine's own volumes: the Get-PSDrive table from `20261018-004059` failed before the change and holds now.
+`--fixtures`: the truth still fails on the fixture.
+
+Live, four runs: right PASS 2 (`151242`, `151356`), right FAIL 2 (`150951`, `151116`). Both passing reports wrote `C:`,
+so the new pattern was not reached live. In both failures the worker named the unlettered volume "system partition /
+EFI" with no call behind it. The review failed it, the repair corrected some of the passages and missed others, and
+the second review failed it again. That is the review rule on derived claims, not the truth: the rejected report was
+put back, and the truth found no file.
+
+Stamps: `20261029-150951`, `20261029-151116`, `20261029-151242`, `20261029-151356`.
