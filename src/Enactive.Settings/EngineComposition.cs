@@ -62,6 +62,17 @@ public sealed record ComposedEngine(
     /// </summary>
     public string? GlobalChecks { get; init; }
 
+    /// <summary>
+    /// Where the machine's Global rules file is (Plan Phase 5.1); null for %APPDATA%/Enactive. Set by the service, whose
+    /// settings are elsewhere, and by tests: a test's run would otherwise be given whatever rules the person running it
+    /// confirmed.
+    /// </summary>
+    public string? RulesFolder { get; init; }
+
+    /// <summary>The machine's Global rules (Plan Phase 5.1).</summary>
+    public Enactive.Core.Rules.IRuleStore GlobalRules
+        => JsonRuleStore.Global(RulesFolder);
+
     /// <summary>The settings' own section, as it stood when the engine was built: a record, so the editor's later changes are a new one.</summary>
     public EngineOptions EngineOptions { get; } = Settings.Engine;
 

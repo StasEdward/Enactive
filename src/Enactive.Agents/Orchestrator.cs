@@ -513,6 +513,10 @@ public sealed partial class Orchestrator : IOrchestrator
             $"Workspace '{_workspace.Name}' at {_workspace.RootPath}"
             + (intent.Context.GitBranch is { } branch ? $" (git: {branch})" : "")
             + (intent.Context.Environment is { } envInfo ? $" · {envInfo.OneLine()}" : ""));
+        // Which confirmed rules the run is given (Plan Phase 5.3), said once: a run that goes differently from the last
+        // one may do so because of a rule, and the log is where somebody looks for why.
+        if (RulesNote(intent.Context.Rules) is { } rulesNote)
+            yield return scope.Ev(EventKind.ContextAssembled, rulesNote);
 
         var models = ResolveModels(intent, budget);
         var worker = models.Worker;
@@ -5287,6 +5291,13 @@ public sealed partial class Orchestrator : IOrchestrator
             + (c.Required ? "" : " (optional)")
             + (string.IsNullOrWhiteSpace(c.PlanningReason) ? "" : $" - why: {c.PlanningReason}")));
 
+    /// <summary>What a run's log says about the rules it was given, or null with none given and none left out.</summary>
+    internal static string? RulesNote(Enactive.Core.Rules.AppliedRules rules)
+        => rules.Rules.Count == 0 && rules.Left == 0 ? null
+            : $"Workspace rules given to this run: {rules.Rules.Count} ({rules.Hash})"
+              + (rules.Left > 0 ? $"; {rules.Left} more confirmed rule(s) left out, over the {Enactive.Core.Rules.AppliedRules.MaxChars}-character limit - prune them" : "")
+              + ".";
+
     private string BuildUserPrompt(Intent intent)
     {
         var context = intent.Context;
@@ -5304,6 +5315,15 @@ public sealed partial class Orchestrator : IOrchestrator
                 sb.AppendLine("  " + line);
         }
         sb.AppendLine("File paths you pass to tools are RELATIVE to the workspace root.");
+
+        // The rules a person confirmed after earlier runs (Plan Phase 5.3) - instructions, unlike the history below, which
+        // was the engine's own retelling. In the user message, after the stable system prompt, so a rule confirmed or
+        // edited does not break the prompt cache of every run that follows (APrefixCacheThatBreaksIsToldTests).
+        if (context.Rules.Block() is { Length: > 0 } rules)
+        {
+            sb.AppendLine();
+            sb.Append(rules);
+        }
 
         // What this project already knows - NOT given to the worker any more (2026-09-28).
         //

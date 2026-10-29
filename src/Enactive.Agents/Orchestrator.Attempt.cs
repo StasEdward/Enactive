@@ -49,7 +49,7 @@ public sealed partial class Orchestrator
                 // engine's, so nobody reads a reviewer's judgement into a count.
                 await publish(scope.Event(EventKind.ReviewFailed,
                     $"[{checkedNo}] FAIL (the engine's coverage check - no reviewer was asked): {coverage.Notes}",
-                    WorkEventPayload.EngineCheckPayload(checkedNo)));
+                    WorkEventPayload.EngineCheckPayload(checkedNo, notes: coverage.Notes)));
                 return new(new ReviewResult(new ReviewVerdict.Fail(coverage.Notes, coverage.RepairAdvice, [])), ByGate: true);
             }
             await publish(scope.Ev(EventKind.ContextAssembled, $"[{checkedNo}] The engine's coverage check passed: "
@@ -72,7 +72,7 @@ public sealed partial class Orchestrator
         {
             await publish(scope.Event(EventKind.ReviewFailed,
                 $"{(stepNumber is { } lostNo ? $"[{lostNo}] " : "")}FAIL (the engine's check '{lost.CheckId}' - no reviewer was asked): {lost.Notes}",
-                WorkEventPayload.EngineCheckPayload(stepNumber, lost.CheckId)));
+                WorkEventPayload.EngineCheckPayload(stepNumber, lost.CheckId, lost.Notes)));
             return new(new ReviewResult(new ReviewVerdict.Fail(lost.Notes, lost.Advice, [])), ByGate: true) { ByCheck = lost.CheckId };
         }
         var checks = measure is not null ? await StepChecksAsync(session, step, stepNumber, context, measure, changes, before, publish, ct) : null;
@@ -85,7 +85,7 @@ public sealed partial class Orchestrator
                         + (string.IsNullOrWhiteSpace(failedCheck.Result.Detail) ? "" : ": " + Gist(failedCheck.Result.Detail!, 300));
             await publish(scope.Event(EventKind.ReviewFailed,
                 $"{(stepNumber is { } failedNo ? $"[{failedNo}] " : "")}FAIL (the engine's check '{failedCheck.Check.Id}' - no reviewer was asked): {notes}",
-                WorkEventPayload.EngineCheckPayload(stepNumber, failedCheck.Check.Id)));
+                WorkEventPayload.EngineCheckPayload(stepNumber, failedCheck.Check.Id, notes)));
             return new(new ReviewResult(new ReviewVerdict.Fail(notes, advice, [])), ByGate: true) { ByCheck = failedCheck.Check.Id };
         }
 

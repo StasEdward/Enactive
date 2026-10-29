@@ -44,6 +44,9 @@ public sealed class CapsAnnounceThemselvesTests
     private static readonly Dictionary<string, string> Covered = new(StringComparer.Ordinal)
     {
         ["ModelTurn.ProgressEveryChars"] = "A_long_tool_call_says_it_is_still_being_written",
+        ["AppliedRules.MaxChars"] = "Only_confirmed_rules_are_given_global_first_and_the_cap_leaves_the_newest_out_and_says_so",
+        ["AppliedRules.MaxRuleChars"] = "Only_confirmed_rules_are_given_global_first_and_the_cap_leaves_the_newest_out_and_says_so",
+        ["LessonCandidates.NotesChars"] = "A_run_proposes_a_step_s_first_failure_a_few_at_most_and_nothing_already_decided",
         ["ChangeLimitGuard.ShownChars"] = "A_long_file_is_shown_in_part_and_says_so",
         // A test run told to the model: so much of each failure's message.
         ["DotnetEcosystem.FailureMessageChars"] = "A_long_failure_message_is_cut_and_says_so",

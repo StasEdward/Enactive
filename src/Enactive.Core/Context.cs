@@ -114,6 +114,13 @@ public sealed record WorkContext(
     public IReadOnlyList<MemoryEntry> Memory { get; init; } = Array.Empty<MemoryEntry>();
 
     /// <summary>
+    /// The confirmed rules this run is given (Plan Phase 5.3) - a person's standing instructions, unlike
+    /// <see cref="Memory"/>, which is the engine's own account and reaches no prompt. Set by whoever composes the run,
+    /// from the run's settings, so a resumed run has the rules it was started with.
+    /// </summary>
+    public Enactive.Core.Rules.AppliedRules Rules { get; init; } = Enactive.Core.Rules.AppliedRules.None;
+
+    /// <summary>
     /// How much of what there is, by folder — see <see cref="WorkspaceCensus"/>. Read by the
     /// planner, which otherwise sizes steps against a workspace it has never seen.
     ///

@@ -291,8 +291,11 @@ public sealed class Planner
 
         // Labelled as not being the request, because it is about to sit immediately above one. A
         // planner that reads "Git branch: engeen_v2" as something to act on would plan to act on it.
+        // The rules a person confirmed (Plan Phase 5.3) are not background: a plan that ignores one sets the worker against
+        // it. Given here, after the place and before the request, as the worker is given them.
         return "Where this runs (background, NOT the request):\n"
              + string.Join("\n", lines.Select(l => "  " + l))
+             + (context.Rules.Block() is { Length: > 0 } rules ? "\n\n" + rules.TrimEnd() : "")
              + "\n\nThe request:\n";
     }
 

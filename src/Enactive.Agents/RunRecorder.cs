@@ -20,6 +20,7 @@ public sealed class RunRecorder
     private readonly RunSettings? _settings;
     private readonly string? _spec;
     private readonly Enactive.Core.Checks.CheckSnapshot? _checks;
+    private readonly Enactive.Core.Rules.IRuleStore? _rules;
 
     /// <param name="spec">
     /// The resolved specification this run was started from, as its canonical JSON - null for a run
@@ -31,7 +32,8 @@ public sealed class RunRecorder
     /// </param>
     public RunRecorder(
         IRunStore store, IMemoryStore? memory = null, Guid workspaceId = default,
-        RunSettings? settings = null, string? spec = null, Enactive.Core.Checks.CheckSnapshot? checks = null)
+        RunSettings? settings = null, string? spec = null, Enactive.Core.Checks.CheckSnapshot? checks = null,
+        Enactive.Core.Rules.IRuleStore? rules = null)
     {
         _store = store;
         _memory = memory;
@@ -44,6 +46,8 @@ public sealed class RunRecorder
         // Handed in for the same reason as the settings: the manifests are files, and by the time anybody reads the
         // record they may say something else.
         _checks = checks;
+        // Where the run's lesson candidates go (Plan Phase 5.1): the workspace's rules, as candidates nobody has confirmed.
+        _rules = rules;
     }
 
     public async IAsyncEnumerable<WorkEvent> RecordAsync(
@@ -97,6 +101,7 @@ public sealed class RunRecorder
             {
                 var record = Build(events, _settings, _spec) with { CheckSnapshot = _checks };
                 await _store.SaveAsync(record, CancellationToken.None);
+                await ProposeLessonsAsync(record);
 
                 // Fold each resolved decision into the project's durable memory -
                 // but only what this project actually learned. See ProjectFacts: memory is written for the
@@ -138,6 +143,25 @@ public sealed class RunRecorder
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Puts what the engine saw go wrong in this run in front of a person, as candidates (Plan Phase 5.1). Every run, not
+    /// only one worth remembering: a candidate is a question, and an errand's is dismissed rather than silently kept - the
+    /// automatic memory lines that once reached the prompt are what this replaces for lessons. Best-effort: a run that
+    /// finished is not failed by a store that could not take a suggestion about it.
+    /// </summary>
+    private async Task ProposeLessonsAsync(RunRecord record)
+    {
+        if (_rules is null)
+            return;
+        try
+        {
+            var known = await _rules.ListAsync(CancellationToken.None);
+            foreach (var candidate in Enactive.Core.Rules.LessonCandidates.From(record, known))
+                await _rules.SaveAsync(candidate, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { /* best-effort, as above */ }
     }
 
     /// <summary>

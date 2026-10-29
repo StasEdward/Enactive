@@ -25,7 +25,9 @@ public sealed class RunComposerFailureTests
         }, http, log) with
         {
             // Never the machine's own %APPDATA% checks: a run here must not depend on who runs the suite.
-            GlobalChecks = Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-global-checks")
+            GlobalChecks = Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-global-checks"),
+            // Not the machine's Global rules: a test run would be given whatever the person running it confirmed.
+            RulesFolder = Path.Combine(Path.GetTempPath(), "enactive-tests", Guid.NewGuid().ToString("N") + "-rules")
         };
         var request = new RunRequest(fx.Workspace, "answer", IntentSource.CommandBar) { Defaults = new(2) };
         var oldStore = Environment.GetEnvironmentVariable("ENACTIVE_STORE");
