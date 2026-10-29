@@ -494,6 +494,33 @@ internal sealed class ChecksViewModel : ObservableObject
         Draft = new CheckDraft(null, null, isNew: true, hasCommand: true, SaveDraft, CloseDraft);
     }
 
+    /// <summary>
+    /// The form for a new check with its id and description filled in - a lesson made into a check (Plan Phase 5.4). The
+    /// command is left empty for the person: the store refuses a new check without one, so nothing runs until they write
+    /// it, and nothing here guesses it.
+    /// </summary>
+    public void AddFrom(string id, string description)
+    {
+        Add();
+        if (Draft is { } draft)
+        {
+            draft.Id = id;
+            draft.Description = description;
+            // At the run's end: a check on a step's changes must name the paths it is about (matches), and a lesson says
+            // what went wrong, not where - a guess at the paths would be the scaffold inventing what the person decides.
+            draft.FireOn = nameof(CheckFire.Run);
+        }
+    }
+
+    /// <summary>The id of the check the form last saved, or null - for what opened the form to hear it was kept.</summary>
+    public string? LastSaved
+    {
+        get => _lastSaved;
+        private set => Set(ref _lastSaved, value);
+    }
+
+    private string? _lastSaved;
+
     private void Edit(CheckRow row)
     {
         if (!(row.CanEdit || row.CanRaise))
@@ -521,6 +548,7 @@ internal sealed class ChecksViewModel : ObservableObject
             return;
         }
         Said = $"Saved '{id}' to {Folder}.";
+        LastSaved = id;
         CloseDraft();
         Refresh();
     }

@@ -62,6 +62,9 @@
                                 <label class="hint"><input type="checkbox" @bind="row.Global" /> Every workspace</label>
                                 <button type="button" class="btn small lesson-keep" @onclick="() => RunAsync(row.KeepCommand)">@row.KeepText</button>
                                 <button type="button" class="btn small lesson-dismiss" @onclick="() => RunAsync(row.DismissCommand)">Dismiss</button>
+                                @* Plan Phase 5.4: the workspace's Checks screen, a new check's form filled in from it - the command the person's. *@
+                                <a class="btn small lesson-check" href="@Links.CheckFromLesson(_wsId, row.Entry.Id)"
+                                   title="Opens the workspace's checks with this lesson as a new check's description. You write its command; nothing runs until you do.">Make a check…</a>
                             </span>
                         }
                     </li>
@@ -118,6 +121,7 @@
     private IReadOnlyList<SwitcherRow> _switcher = [];
     private LessonsViewModel? _list;
     private string? _problem;
+    private Guid _wsId;
 
     // Read per address (Pages/_Imports.razor): choosing another workspace is a link to this same page.
     protected override async Task OnParametersSetAsync()
@@ -136,6 +140,8 @@
                 : "The service does not know that workspace.");
             return;
         }
+        // The id the switcher links by (WorkspaceIds), so the Checks screen opens on this same workspace.
+        _wsId = _switcher.FirstOrDefault(r => r.IsCurrent)?.Id ?? Guid.Empty;
         (_list, _problem) = Lessons.Workspace(user, selected.RootPath, selected.Name);
         Follow(_list);
         if (_list is not null)

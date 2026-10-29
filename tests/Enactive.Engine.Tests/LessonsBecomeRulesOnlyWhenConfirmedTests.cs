@@ -464,4 +464,51 @@ public sealed class LessonsBecomeRulesOnlyWhenConfirmedTests
             Enactive.Tests.SqlitePools.ClearUnder(fx.Root);
         }
     }
+
+    /// <summary>
+    /// A lesson made into a check (Plan Phase 5.4): the panel asks for the Checks form with an id suggested from the lesson;
+    /// the form opens with the id and the lesson's words, and NO command - saved without one it is refused and nothing is
+    /// written, so the scaffold never runs a guess; saved with the person's command it is a check, and the lesson is set
+    /// aside saying what it became.
+    /// </summary>
+    [Fact]
+    public async Task A_lesson_made_into_a_check_opens_the_form_without_a_command_and_is_set_aside_once_saved()
+    {
+        Assert.Equal("never-change-the-project", LessonsViewModel.CheckIdFor("Never change the project file, ever."));
+        Assert.Equal("lesson-12-volumes", LessonsViewModel.CheckIdFor("12 volumes!"));
+        Assert.Equal("lesson", LessonsViewModel.CheckIdFor("…"));
+
+        using var fx = new EngineFixture();
+        var workspace = new JsonRuleStore(fx.PathOf(Path.Combine(".enactive", "rules.json")));
+        var candidate = LessonCandidates.From(Run(Failed(1, "the build was not run after the change")), [])[0];
+        await workspace.SaveAsync(candidate, CancellationToken.None);
+        var panel = new LessonsViewModel(new BookLessons(new RuleBook(workspace, JsonRuleStore.Global(fx.PathOf("machine")))), "Lessons");
+        await panel.RefreshAsync();
+        (LessonRow Row, string Id)? asked = null;
+        panel.CheckRequested += (row, id) => asked = (row, id);
+        await panel.Candidates[0].CheckCommand.ExecuteAsync();
+        Assert.Equal("the-build-was-not", asked!.Value.Id);
+
+        var checksFolder = fx.PathOf("global-checks");
+        var store = new Enactive.Workspace.CheckStore(fx.Root, checksFolder);
+        var checks = new ChecksViewModel(store, Enactive.Core.Checks.CheckScope.Workspace, new StoreCheckChanges(store, fx.Root));
+        checks.AddFrom(asked.Value.Id, asked.Value.Row.Text);
+        Assert.Equal(("the-build-was-not", "the build was not run after the change", ""),
+            (checks.Draft!.Id, checks.Draft.Description, checks.Draft.Command));
+        Assert.Equal("Run", checks.Draft.FireOn);
+        checks.Draft.SaveCommand.Execute(null);
+        Assert.Null(checks.LastSaved);
+        Assert.False(File.Exists(fx.PathOf(Path.Combine(".enactive", "checks", "the-build-was-not.json"))));
+
+        checks.Draft!.Command = "dotnet build";
+        checks.Draft.SaveCommand.Execute(null);
+        Assert.True(checks.LastSaved == "the-build-was-not", checks.Draft?.Problems);
+        Assert.True(File.Exists(fx.PathOf(Path.Combine(".enactive", "checks", "the-build-was-not.json"))));
+
+        await panel.MadeIntoCheckAsync(asked.Value.Row, checks.LastSaved!);
+        Assert.Empty(panel.Candidates);
+        var aside = Assert.Single(await workspace.ListAsync(CancellationToken.None));
+        Assert.Equal(RuleStatus.Dismissed, aside.Status);
+        Assert.EndsWith("made into the check 'the-build-was-not'", aside.Origin, StringComparison.Ordinal);
+    }
 }
