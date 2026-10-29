@@ -132,6 +132,8 @@ internal static class Looks
         "error" => "tone-failed",
         // Paused by somebody, resumed from where it stopped (Plan Phase 4.2): open, as an unfinished run's pill is.
         "paused" => "tone-open",
+        // Lessons a run nobody watched left to decide (Plan Phase 5.2): waiting on a person.
+        "lesson" => "tone-open",
         _ => "tone-idle"
     };
 

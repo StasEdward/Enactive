@@ -231,6 +231,7 @@ internal sealed class MainWindowViewModel : ObservableObject
         ShowExecutionCommand = new RelayCommand(() => SelectedTab = 0);
         ShowArtifactsCommand = new RelayCommand(() => SelectedTab = 1);
         ShowLogCommand = new RelayCommand(() => SelectedTab = 2);
+        ShowLessonsCommand = new RelayCommand(() => SelectedTab = 3);
 
         BackToLiveCommand = new RelayCommand(() => ShowLiveRun());
 
@@ -555,12 +556,53 @@ internal sealed class MainWindowViewModel : ObservableObject
             OnPropertyChanged(nameof(IsExecutionTab));
             OnPropertyChanged(nameof(IsArtifactsTab));
             OnPropertyChanged(nameof(IsLogTab));
+            OnPropertyChanged(nameof(IsLessonsTab));
         }
     }
 
     public bool IsExecutionTab => _selectedTab == 0;
     public bool IsArtifactsTab => _selectedTab == 1;
     public bool IsLogTab => _selectedTab == 2;
+    public bool IsLessonsTab => _selectedTab == 3;
+
+    /// <summary>
+    /// The workspace's lessons (Plan Phase 5.2), beside the run's artifacts: a run that ends proposes them, and this is
+    /// where a person sees them first. Set by the window with the workspace, read again when its runs are.
+    /// </summary>
+    public LessonsViewModel? Lessons
+    {
+        get => _lessons;
+        set
+        {
+            if (_lessons is not null)
+                _lessons.PropertyChanged -= LessonsChanged;
+            if (!Set(ref _lessons, value))
+                return;
+            if (value is not null)
+                value.PropertyChanged += LessonsChanged;
+            OnPropertyChanged(nameof(LessonsTabLabel));
+        }
+    }
+
+    private LessonsViewModel? _lessons;
+
+    private void LessonsChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(LessonsViewModel.TabLabel))
+            OnPropertyChanged(nameof(LessonsTabLabel));
+    }
+
+    /// <summary>"Lessons (2)": the candidates waiting on a person.</summary>
+    public string LessonsTabLabel => _lessons?.TabLabel ?? "Lessons";
+
+    public RelayCommand ShowLessonsCommand { get; }
+
+    /// <summary>The workspace's lessons and rules in a window of their own, from its card (Plan Phase 5.5).</summary>
+    public RelayCommand LessonsCommand => _lessonsCommand ??= new RelayCommand(() => LessonsRequested?.Invoke());
+
+    private RelayCommand? _lessonsCommand;
+
+    public event Action? LessonsRequested;
 
     /// <summary>
     /// The workspace's run history, which lives under the workspace card in the same column: you

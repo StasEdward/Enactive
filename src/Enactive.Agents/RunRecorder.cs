@@ -21,6 +21,7 @@ public sealed class RunRecorder
     private readonly string? _spec;
     private readonly Enactive.Core.Checks.CheckSnapshot? _checks;
     private readonly Enactive.Core.Rules.IRuleStore? _rules;
+    private readonly Enactive.Core.Inbox.IInboxStore? _lessonInbox;
 
     /// <param name="spec">
     /// The resolved specification this run was started from, as its canonical JSON - null for a run
@@ -33,7 +34,7 @@ public sealed class RunRecorder
     public RunRecorder(
         IRunStore store, IMemoryStore? memory = null, Guid workspaceId = default,
         RunSettings? settings = null, string? spec = null, Enactive.Core.Checks.CheckSnapshot? checks = null,
-        Enactive.Core.Rules.IRuleStore? rules = null)
+        Enactive.Core.Rules.IRuleStore? rules = null, Enactive.Core.Inbox.IInboxStore? lessonInbox = null)
     {
         _store = store;
         _memory = memory;
@@ -48,6 +49,9 @@ public sealed class RunRecorder
         _checks = checks;
         // Where the run's lesson candidates go (Plan Phase 5.1): the workspace's rules, as candidates nobody has confirmed.
         _rules = rules;
+        // Where a run nobody watched says it left lessons to decide (Plan Phase 5.2) - null for one somebody watched, who
+        // sees them beside its artifacts.
+        _lessonInbox = lessonInbox;
     }
 
     public async IAsyncEnumerable<WorkEvent> RecordAsync(
@@ -158,11 +162,23 @@ public sealed class RunRecorder
         try
         {
             var known = await _rules.ListAsync(CancellationToken.None);
-            foreach (var candidate in Enactive.Core.Rules.LessonCandidates.From(record, known))
+            var proposed = Enactive.Core.Rules.LessonCandidates.From(record, known);
+            foreach (var candidate in proposed)
                 await _rules.SaveAsync(candidate, CancellationToken.None);
+            // A headless run's candidates wait for a person who was not there: the Inbox is where such a run reports back,
+            // so it says they are waiting - without it they wait where nobody looks until the next run is watched.
+            if (proposed.Count > 0 && _lessonInbox is not null)
+                await _lessonInbox.AppendAsync(LessonItem(record, proposed), CancellationToken.None);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException) { /* best-effort, as above */ }
     }
+
+    /// <summary>The Inbox item saying a run left lessons to decide: how many, and the first, as the engine saw it.</summary>
+    internal Enactive.Core.Inbox.InboxItem LessonItem(RunRecord record, IReadOnlyList<Enactive.Core.Rules.RuleEntry> proposed)
+        => new(Guid.NewGuid(), _workspaceId, Enactive.Core.Rules.LessonCandidates.InboxKind,
+            proposed.Count == 1 ? "1 lesson to decide" : $"{proposed.Count} lessons to decide",
+            $"From \"{record.Title}\": {Enactive.Core.Rules.RuleText.Flat(proposed[0].Text, 200)} - keep or dismiss it under Lessons.",
+            record.RunId, "unread", record.FinishedAt);
 
     /// <summary>
     /// Writes what killed the run INTO the run: an error to look at, and a terminal outcome that

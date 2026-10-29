@@ -43,6 +43,9 @@ internal static class Links
     /// <summary>A workspace's Checks screen (Plan Phase 3.5), by its id (WorkspaceIds); with none, the one used last.</summary>
     public static string Checks(Guid? workspace) => workspace is { } id ? $"checks?ws={id}" : "checks";
 
+    /// <summary>A workspace's Lessons screen (Plan Phase 5.2), by its id; with none, the one used last.</summary>
+    public static string Lessons(Guid? workspace) => workspace is { } id ? $"lessons?ws={id}" : "lessons";
+
     /// <summary>
     /// The template editor on a template of a workspace: its own (<paramref name="copy"/> false) or a copy of it.
     /// </summary>

@@ -1,0 +1,166 @@
+@page "/lessons"
+@using System.Collections.Specialized
+@using System.ComponentModel
+@using Enactive.Application
+@using Enactive.Application.Mvvm
+@using Enactive.Server.Components.Runs
+@using Enactive.Server.Components.Ui
+@using Enactive.Server.Runs
+@using Microsoft.AspNetCore.Components.Authorization
+@implements IDisposable
+@inject ServerLessons Lessons
+@inject ServerHistory History
+@inject WorkspaceIds Ids
+@inject ChosenWorkspace Chosen
+
+<PageTitle>Lessons - Enactive</PageTitle>
+
+@* A workspace's lessons (Plan Phase 5.2), as the window shows them beside a run's artifacts (LessonsView): what its runs
+   proposed, waiting on a person, and the rules kept, which every new run is given. Read by anybody signed in, changed as
+   the person's role allows (ServerLessons, audited). The workspace is chosen in the switcher, as on the Checks screen. *@
+
+<div class="checks-screen lessons-screen">
+    <div class="templates-top">
+        <PanelHeader Text="WORKSPACE" />
+        <WorkspaceSwitcher Rows="_switcher" Current="_switcher.FirstOrDefault(r => r.IsCurrent)" Href="@(row => Links.Lessons(row.Id))" />
+    </div>
+
+    @if (_problem is { } problem)
+    {
+        <p class="said">@problem</p>
+    }
+    else if (_list is { } vm)
+    {
+        <p class="label">@vm.Heading</p>
+        <p class="hint">What went wrong in this workspace's runs, as the engine saw it. Keep one and every new run here is given it; dismiss it and it is not proposed again.</p>
+        @if (vm.IsEmpty)
+        {
+            <p class="hint lessons-empty">No lessons yet. A run whose step a review or a check sent back proposes one.</p>
+        }
+        @if (vm.HasSaid)
+        {
+            <p class="said lessons-said" role="status">@vm.Said</p>
+        }
+
+        @if (vm.HasCandidates)
+        {
+            <PanelHeader Text="WAITING ON YOU" />
+            <ul class="cards settings-cards lessons-candidates" aria-label="Lessons waiting">
+                @foreach (var row in vm.Candidates)
+                {
+                    <li class="card settings-card lesson-row candidate">
+                        <span class="settings-card-text">
+                            <textarea class="lesson-text" rows="2" disabled="@(!row.CanChange)" @bind="row.Text" @bind:event="oninput"></textarea>
+                            @if (row.HasOrigin)
+                            {
+                                <span class="card-meta lesson-origin">@row.Origin</span>
+                            }
+                        </span>
+                        @if (row.CanChange)
+                        {
+                            <span class="row-icons">
+                                <label class="hint"><input type="checkbox" @bind="row.Global" /> Every workspace</label>
+                                <button type="button" class="btn small lesson-keep" @onclick="() => RunAsync(row.KeepCommand)">@row.KeepText</button>
+                                <button type="button" class="btn small lesson-dismiss" @onclick="() => RunAsync(row.DismissCommand)">Dismiss</button>
+                            </span>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+
+        @if (vm.HasRules)
+        {
+            <PanelHeader Text="RULES - GIVEN TO EVERY NEW RUN" />
+            @if (vm.HasLeftOut)
+            {
+                <p class="said lessons-left-out">@vm.LeftOut</p>
+            }
+            <ul class="cards settings-cards lessons-rules" aria-label="Rules">
+                @foreach (var row in vm.Rules)
+                {
+                    <li class="card settings-card lesson-row rule">
+                        <span class="settings-card-text">
+                            <textarea class="lesson-text" rows="2" disabled="@(!row.CanChange)" @bind="row.Text" @bind:event="oninput"></textarea>
+                            <span class="card-meta lesson-origin">@row.Meta</span>
+                        </span>
+                        @if (row.CanChange)
+                        {
+                            <span class="row-icons">
+                                <label class="hint"><input type="checkbox" @bind="row.Global" /> Every workspace</label>
+                                <button type="button" class="btn small lesson-keep" @onclick="() => RunAsync(row.KeepCommand)">@row.KeepText</button>
+                                <button type="button" class="btn small destructive lesson-delete" @onclick="() => RunAsync(row.DeleteCommand)">Delete</button>
+                            </span>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+
+        @if (vm.CanAdd)
+        {
+            <PanelHeader Text="A RULE OF YOUR OWN" />
+            <textarea class="lesson-new" rows="2" placeholder="Anything for next time" @bind="vm.NewText" @bind:event="oninput"></textarea>
+            <div class="settings-section-actions">
+                <label class="hint"><input type="checkbox" @bind="vm.NewGlobal" /> Every workspace</label>
+                <button type="button" class="btn small lesson-add" disabled="@string.IsNullOrWhiteSpace(vm.NewText)" @onclick="() => RunAsync(vm.AddCommand)">Add</button>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> Auth { get; set; } = default!;
+
+    /// <summary>The workspace, by its id (WorkspaceIds); none, the one used last. Read as text, as the Checks screen does.</summary>
+    [SupplyParameterFromQuery(Name = "ws")] private string? Ws { get; set; }
+
+    private IReadOnlyList<SwitcherRow> _switcher = [];
+    private LessonsViewModel? _list;
+    private string? _problem;
+
+    // Read per address (Pages/_Imports.razor): choosing another workspace is a link to this same page.
+    protected override async Task OnParametersSetAsync()
+    {
+        var user = (await Auth).User;
+        var known = History.Workspaces(user);
+        Guid? wanted = Chosen.Wanted(Ws is { Length: > 0 } ? Guid.TryParse(Ws, out var id) ? id : Guid.Empty : null, known, Ids, user);
+        var selected = WorkspaceColumnState.Choose(known, wanted, Ids);
+        Chosen.Shown(selected, Ids, user);
+        _switcher = WorkspaceColumnState.Switcher(known, selected, Ids);
+        Follow(null);
+        if (selected is null)
+        {
+            (_list, _problem) = (null, wanted is null
+                ? "The service knows no workspace yet. An Operator adds one on the Runs screen."
+                : "The service does not know that workspace.");
+            return;
+        }
+        (_list, _problem) = Lessons.Workspace(user, selected.RootPath, selected.Name);
+        Follow(_list);
+        if (_list is not null)
+            await _list.RefreshAsync();
+    }
+
+    private async Task RunAsync(System.Windows.Input.ICommand command)
+    {
+        if (command is AsyncRelayCommand run)
+            await run.ExecuteAsync();
+        else
+            command.Execute(null);
+        StateHasChanged();
+    }
+
+    /// <summary>What the list says when it changes - read again after a keep, a refusal - is drawn, not only on this page's next event.</summary>
+    private void Follow(LessonsViewModel? vm)
+    {
+        if (_list is { } old)
+            old.PropertyChanged -= Changed;
+        if (vm is not null)
+            vm.PropertyChanged += Changed;
+    }
+
+    private void Changed(object? sender, PropertyChangedEventArgs e) => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Follow(null);
+}

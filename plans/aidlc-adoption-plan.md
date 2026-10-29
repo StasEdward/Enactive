@@ -18,7 +18,8 @@ follow-ups (section "Bench follow-ups" below), the deferred 4.0/4.1/4.3, and Pha
 | Phase 4.0, 4.1, 4.3 | Deferred by design (state ownership not settled) | - |
 | Phase 4.2 - pause after the current step | Done | `ea7ecf3`..`f58d33c` |
 | Phase 5.1, 5.3 and a console gate - store, candidates, injection | Built 2026-10-29 (`feat/phase5-lessons`) | - |
-| Phase 5.2 panel and page, 5.4, 5.5 | Open | - |
+| Phase 5.2 - Lessons panel, service page, Inbox item; 5.5 in part | Built 2026-10-29 (`feat/phase5-lessons-panel`) | - |
+| Phase 5.4, reviewer given rules, bench measurement | Open | - |
 
 Written against `master` at `7dc8866`; the line numbers below are from that commit and will drift.
 Revised after two reviews (`aidlc-adoption-review.md`, `aidlc-adoption-resolution.md`); staged-run checks (Phase 3.2) and an unresolved coverage contract (Phase 1.2) are decided.
@@ -685,6 +686,24 @@ What the first PR has, and where it differs from the text below:
 - **Gate, for now.** `enactive rules "workspace" [keep ID [--text ...] [--global] | dismiss ID | delete ID | add "text"]`
   (`RuleBook`, `RulesCommand`), the same class the panel will call. Keep `--global` moves the entry to the Global layer.
 - Tests: `LessonsBecomeRulesOnlyWhenConfirmedTests`. Not measured on the bench yet (see Measurement below).
+
+The gate (5.2), built 2026-10-29 on top of it (`feat/phase5-lessons-panel`):
+
+- One list for both hosts, `LessonsViewModel` over `ILessonChanges`: candidates (editable text, an "Every workspace"
+  switch, Keep / Dismiss), rules (edit, move between layers, Delete), a rule of the person's own, and the count of
+  confirmed rules over the cap. The window's changes go straight through `RuleBook` (`BookLessons`).
+- **Desktop.** A "Lessons (N)" tab beside Artifacts in the run view, read again whenever the workspace's runs are (so a
+  run that just ended shows its candidates), and "Lessons…" on the workspace card, a window over the same list - which
+  is also the 5.5 rules list.
+- **Service.** `/lessons` (`LessonsScreen`), linked from the workspace column as Checks is. `ServerLessons`: anybody signed
+  in reads; a workspace's rules are an Operator's, Global rules an Admin's, in the service's data folder; every change
+  audited ("rule kept", "lesson dismissed", "rule deleted", "rule added"). Unlike checks, not refused while a run works
+  there: a run reads its rules once, at composition.
+- **Headless.** A run nobody watched (`!RunComposer.Attended`) that proposed candidates files an Inbox item of kind
+  `lesson` ("2 lessons to decide", with the first); a watched run does not - its person has the tab. The item opens the
+  run, as every Inbox item does; the summary says where to decide.
+- Not done: "Promote to global" is the "Every workspace" switch on a kept rule; the advisory consistency check against
+  Global rules is not built; nobody has looked at the desktop panel on screen yet, only through its view model.
 
 ### Adaptation
 

@@ -162,6 +162,9 @@ public static class LessonCandidates
     /// </summary>
     public const int PerRun = 5;
 
+    /// <summary>The Inbox kind of "a run nobody watched left lessons to decide" (RunRecorder).</summary>
+    public const string InboxKind = "lesson";
+
     /// <summary>How much of a failure's notes a candidate keeps - enough to tell what was wrong, short of a rule's cap.</summary>
     private const int NotesChars = AppliedRules.MaxRuleChars;
 

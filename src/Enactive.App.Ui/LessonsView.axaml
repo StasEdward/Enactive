@@ -1,0 +1,73 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:app="using:Enactive.Application"
+             x:Class="Enactive.App.Ui.LessonsView"
+             x:DataType="app:LessonsViewModel">
+
+    <!-- A workspace's lessons (Plan Phase 5.2): what its runs proposed, waiting on you, and the rules you kept, which every
+         new run is given. A candidate reaches no run until it is kept; edit it into an instruction first if it reads as a
+         report. Workspace is the default: tick "Every workspace" only for what holds everywhere. -->
+    <StackPanel Spacing="8">
+        <TextBlock Classes="hint" TextWrapping="Wrap"
+                   Text="What went wrong in this workspace's runs, as the engine saw it. Keep one and every new run here is given it; dismiss it and it is not proposed again." />
+        <TextBlock Classes="hint" TextWrapping="Wrap" IsVisible="{Binding IsEmpty}"
+                   Text="No lessons yet. A run whose step a review or a check sent back proposes one." />
+        <TextBlock Classes="hint" TextWrapping="Wrap" IsVisible="{Binding HasSaid}" Text="{Binding Said}"
+                   Foreground="{DynamicResource Brand.Warning}" />
+
+        <StackPanel Spacing="6" IsVisible="{Binding HasCandidates}">
+            <TextBlock Classes="panelHeader" Text="WAITING ON YOU" Margin="0" />
+            <ItemsControl ItemsSource="{Binding Candidates}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="app:LessonRow">
+                        <Border Background="{DynamicResource Brand.CardFill}" BorderBrush="{DynamicResource Brand.Amber}"
+                                BorderThickness="2,0,0,0" CornerRadius="4" Padding="10" Margin="0,0,0,6">
+                            <StackPanel Spacing="4">
+                                <TextBox Text="{Binding Text}" TextWrapping="Wrap" IsEnabled="{Binding CanChange}" />
+                                <TextBlock Classes="hint" FontSize="11" TextWrapping="Wrap" Text="{Binding Origin}" IsVisible="{Binding HasOrigin}" />
+                                <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding CanChange}">
+                                    <CheckBox Content="Every workspace" IsChecked="{Binding Global}" FontSize="11" />
+                                    <Button Content="{Binding KeepText}" Command="{Binding KeepCommand}" FontSize="11" Padding="8,2" />
+                                    <Button Content="Dismiss" Command="{Binding DismissCommand}" FontSize="11" Padding="8,2" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+
+        <StackPanel Spacing="6" IsVisible="{Binding HasRules}">
+            <TextBlock Classes="panelHeader" Text="RULES - GIVEN TO EVERY NEW RUN" Margin="0" />
+            <TextBlock Classes="hint" TextWrapping="Wrap" IsVisible="{Binding HasLeftOut}" Text="{Binding LeftOut}"
+                       Foreground="{DynamicResource Brand.Warning}" />
+            <ItemsControl ItemsSource="{Binding Rules}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="app:LessonRow">
+                        <Border Background="{DynamicResource Brand.CardFill}" CornerRadius="4" Padding="10" Margin="0,0,0,6">
+                            <StackPanel Spacing="4">
+                                <TextBox Text="{Binding Text}" TextWrapping="Wrap" IsEnabled="{Binding CanChange}" />
+                                <TextBlock Classes="hint" FontSize="11" TextWrapping="Wrap" Text="{Binding Meta}" />
+                                <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding CanChange}">
+                                    <CheckBox Content="Every workspace" IsChecked="{Binding Global}" FontSize="11" />
+                                    <Button Content="{Binding KeepText}" Command="{Binding KeepCommand}" FontSize="11" Padding="8,2" />
+                                    <Button Content="Delete" Command="{Binding DeleteCommand}" FontSize="11" Padding="8,2"
+                                            Foreground="{DynamicResource Brand.Danger}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+
+        <StackPanel Spacing="4" IsVisible="{Binding CanAdd}">
+            <TextBlock Classes="panelHeader" Text="A RULE OF YOUR OWN" Margin="0" />
+            <TextBox Text="{Binding NewText}" TextWrapping="Wrap" Watermark="Anything for next time" />
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <CheckBox Content="Every workspace" IsChecked="{Binding NewGlobal}" FontSize="11" />
+                <Button Content="Add" Command="{Binding AddCommand}" FontSize="11" Padding="8,2" />
+            </StackPanel>
+        </StackPanel>
+    </StackPanel>
+</UserControl>
