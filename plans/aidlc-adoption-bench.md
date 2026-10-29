@@ -195,3 +195,23 @@ Stamps: raised `20261028-232426`, `20261028-232532`, `20261028-232652`; all scen
 2. Phase 2 - keep the per-kind limit at 1; no measured gain from 2 or 3.
 3. Phase 3 - the raise works as built and must stay opt-in; the pre-existing-failure wording is the next improvement.
 4. Scenario fixes: `disk-report` should accept `C` as well as `C:`.
+
+## Follow-up 5 - an item worked on in another file (2026-10-29)
+
+Read again: in `20261017-231237` the request ("check the coverage, add tests if needed, report in MD") forbade nothing.
+The local planner consumed step 3's `gaps` (`Shelf/Inventory.cs`) into "add tests" with `file_write` evidence; the step
+wrote the tests into `InventoryTests.cs`, left the library as it should, and the coverage check rejected it twice ("no
+file_write evidence") - the only way through was to change the code under test. The same plan shape came up in
+`20261018-001423`, which failed earlier on another step. Neither has recurred with Sonnet planning.
+
+Fixed on `fix/forbidden-file-not-write-evidence` (`c71e8c2`): under write evidence, an item whose own file the step left
+unchanged while it changed files that are no item of the list is counted, shown to the reviewer in full with the files
+changed in its place, and stands only on an approving verdict - without one the step is done, not confirmed
+(`CoverageWrittenElsewhere`). A step that changed nothing, or only other items' files, is rejected as before. Pinned by
+`AnItemWorkedOnInAnotherFileIsTheReviewersTests`.
+
+A regression check, not a measurement of the fix: `test-coverage` three times at `c71e8c2`, right PASS 3/3; no plan
+consumed a list, so the changed path was not reached. Tokens in 790k-1322k, above the morning's 303k-960k - the worker's
+spread (the costliest run 56 calls); nothing changed for runs without a consumed list.
+
+Stamps: `20261029-144602`, `20261029-145040`, `20261029-145505`.
