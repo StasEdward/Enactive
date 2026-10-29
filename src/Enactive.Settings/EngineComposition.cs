@@ -69,6 +69,19 @@ public sealed record ComposedEngine(
     /// </summary>
     public string? RulesFolder { get; init; }
 
+    /// <summary>
+    /// Whether a workspace rule about to be kept goes against a Global one (Plan Phase 5.2), asked of the model the default
+    /// worker reviews with - judging, not producing work, as the log's analysis is - or its own. Null with no model to ask:
+    /// the panel then keeps the rule without the question, as it would if the question failed.
+    /// </summary>
+    public Func<string, IReadOnlyList<Enactive.Core.Rules.RuleEntry>, CancellationToken, Task<RuleConflict?>>? RuleConsistency()
+    {
+        var worker = Workers.Default;
+        if ((Router.Resolve(ModelPurpose.Review, worker) ?? worker.ModelPolicy.Preferred) is not { } model)
+            return null;
+        return (text, global, ct) => Enactive.Agents.RuleConsistency.CheckAsync(text, global, Providers.Create(model.ProviderId), model.Model, ct);
+    }
+
     /// <summary>The machine's Global rules (Plan Phase 5.1).</summary>
     public Enactive.Core.Rules.IRuleStore GlobalRules
         => JsonRuleStore.Global(RulesFolder);
